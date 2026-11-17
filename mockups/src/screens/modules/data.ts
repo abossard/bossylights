@@ -5,6 +5,8 @@ export interface Module {
   name: string;
   /** One short line under the name */
   sub?: string;
+  /** One thing to know, on the card */
+  note?: string;
   /** The whole interface */
   iface: string[];
   hides: string[];
@@ -22,7 +24,7 @@ export interface Module {
 
 export const MODULES: Module[] = [
   { id: "engine", name: "Engine", sub: "commands in, state out", iface: ["send", "subscribe", "query"], hides: ["a listed set of commands", "transports: UI, MCP, OSC", "versions", "permissions"], ifaceSize: 3, hidesSize: 6, core: false, screens: ["console", "songs", "looks", "patch", "dmx", "inout"], x: 360, y: 150, h: 70 },
-  { id: "mixer", name: "Mixer", iface: ["apply", "frame"], hides: ["layers", "fades", "launch on beat", "flash", "release", "masters", "blackout"], ifaceSize: 2, hidesSize: 8, core: true, screens: ["console", "songs", "looks", "dmx"], x: 545, y: 165 },
+  { id: "mixer", name: "Mixer", note: "All who-wins rules live here, in one table. No screen and no other module decides between two values for the same light.", iface: ["apply", "frame"], hides: ["the who-wins rules, one table", "fades", "launch on beat", "flash", "release", "masters", "blackout"], ifaceSize: 2, hidesSize: 8, core: true, screens: ["console", "songs", "looks", "dmx"], x: 545, y: 165 },
   { id: "sources", name: "Sources", iface: ["evaluate"], hides: ["chases", "movement maths", "pixel matrices", "audio scripts", "palettes", "laser shapes"], ifaceSize: 1, hidesSize: 8, core: true, screens: [], x: 680, y: 270 },
   { id: "clock", name: "Clock", iface: ["now", "follow"], hides: ["tap", "audio beat", "MIDI clock", "DJ position", "timecode", "smoothing"], ifaceSize: 2, hidesSize: 6, core: true, screens: ["songs", "inout"], x: 545, y: 350 },
   { id: "rig", name: "Rig", iface: ["fixtures", "groups", "resolve"], hides: ["addresses", "modes", "16-bit", "colour mixing", "pan and tilt limits", "curves", "fixture swap"], ifaceSize: 3, hidesSize: 9, core: true, screens: ["patch", "dmx"], x: 680, y: 165 },

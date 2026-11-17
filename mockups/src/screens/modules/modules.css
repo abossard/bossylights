@@ -161,6 +161,15 @@
   fill: var(--ink);
 }
 
+.mm-note {
+  margin-top: var(--sp-2);
+  padding-left: var(--sp-2);
+  border-left: var(--rule) solid var(--paper);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  line-height: 1.3;
+}
+
 .mm-card-sub {
   font-weight: 600;
   color: var(--mute);

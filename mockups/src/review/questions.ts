@@ -24,8 +24,8 @@ const q = (source: Question["source"], number: number, question: string, a = "",
 });
 
 export const QUESTIONS: Question[] = [
-  q("Theory", 1, "Who wins inside a layer?", "Top layer wins for everything", "Intensity adds up, so two washes are brighter"),
-  q("Theory", 2, "How many layers?", "Three, fixed", "The user can add layers"),
+  q("Theory", 1, "Who wins?", "Top layer wins for everything", "Intensity adds up, so two washes are brighter", "Manual beats show beats autopilot. Among equals the latest wins. Brightness can be set to \"highest wins\"."),
+  q("Theory", 2, "How many layers?", "Three, fixed", "The user can add layers", "None to manage. The layer idea was dropped: only steps, sequences and patterns play."),
   q("Theory", 3, "What does recording store?", "Commands: editable, follows rig changes", "DMX values: exact, but frozen"),
   q("Theory", 4, "Where do raw channels live?", "Only on the DMX screen", "Everywhere"),
   q("Theory", 5, "DJ software and audio disagree on the beat", "The feed you picked wins", "The most confident feed wins"),

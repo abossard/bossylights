@@ -1,4 +1,4 @@
-// The whole theory in one picture: writers, layers, frame, rig, output.
+// The whole theory in one picture: writers, the three ranks, frame, rig, output.
 // Commands travel along it as dots.
 import { createSignal, For, onCleanup, Show } from "solid-js";
 import { CLOCK_START, lookById, store } from "../../fake/store";
@@ -23,7 +23,7 @@ const WRITERS: Box[] = [
   { id: "showw", x: 16, y: 208, w: 196, h: 54, title: "Show", sub: "replays commands" },
   { id: "autow", x: 16, y: 272, w: 196, h: 54, title: "Autopilot", sub: "commands from music" },
 ];
-const LAYERS: Box[] = [
+const RANKS: Box[] = [
   { id: "manual", x: 400, y: 26, w: 250, h: 84, title: "Manual", sub: "your hands", layer: "manual" },
   { id: "show", x: 400, y: 128, w: 250, h: 84, title: "Show", layer: "show" },
   { id: "auto", x: 400, y: 230, w: 250, h: 84, title: "Autopilot", layer: "autopilot" },
@@ -93,11 +93,11 @@ export function Flow(props: {
     return { x: p.x, y: p.y };
   };
 
-  const plays = (layer: Box["id"]) => {
+  const plays = (rank: Box["id"]) => {
     const ids =
-      layer === "manual"
-        ? store.runningManual().map((b) => b.lookId)
-        : layer === "show"
+      rank === "manual"
+        ? store.heldManual().map((b) => b.lookId)
+        : rank === "show"
           ? store.showLooksNow()
           : store.autopilotNow().map((l) => l.id);
     const names = [...new Set(ids)].map((id) => lookById(id).name);
@@ -124,19 +124,17 @@ export function Flow(props: {
     </g>
   );
 
-  const added = () => store.state.layers.filter((l) => l.kind === "extra").map((l) => l.name);
-
   return (
-    <svg class="fl" viewBox="0 0 1200 340" role="img" aria-label="Five writers send commands to the layers. The layers make a frame 44 times a second. The rig turns it into DMX for the output.">
+    <svg class="fl" viewBox="0 0 1200 340" role="img" aria-label="Five writers send commands. Manual beats show, show beats autopilot. Together they make a frame 44 times a second. The rig turns it into DMX for the output.">
       <defs>
         <marker id="fl-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
           <path d="M0,0 L10,5 L0,10 z" class="fl-arrowhead" />
         </marker>
       </defs>
       <text x="16" y="12" class="fl-col">Five writers</text>
-      <text x="400" y="16" class="fl-col">Layers, top wins</text>
+      <text x="400" y="16" class="fl-col">Three ranks: manual beats show beats autopilot</text>
       <text x="400" y="334" class="fl-sub">
-        {added().length ? `Plus ${added().join(", ")}, added on the Console` : "Three to start. Add more on the Console."}
+        The rules live in one place: Who wins, on the DMX screen.
       </text>
 
       <For each={Object.entries(PATHS)}>
@@ -152,7 +150,7 @@ export function Flow(props: {
       </For>
 
       <For each={WRITERS}>{BoxView}</For>
-      <For each={LAYERS}>{BoxView}</For>
+      <For each={RANKS}>{BoxView}</For>
 
       <g class="fl-node fl-frame" classList={{ "is-dim": !isLit("frame") }}>
         <circle cx="788" cy="170" r="44" />

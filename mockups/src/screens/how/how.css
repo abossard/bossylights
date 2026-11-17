@@ -168,8 +168,18 @@
   font-weight: 700;
 }
 
+.how-win-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px 6px;
+}
+
+.how-win-list li > .how-win-row:not(:first-of-type) {
+  margin-left: calc(72px + var(--sp-2));
+}
+
 .how-under {
-  width: 100%;
   font-size: var(--text-sm);
   font-weight: 600;
   font-stretch: var(--tight);

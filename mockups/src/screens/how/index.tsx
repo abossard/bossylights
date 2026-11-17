@@ -1,5 +1,6 @@
 import { createSignal, For, onCleanup, Show } from "solid-js";
-import { lookById, store } from "../../fake/store";
+import { lookById, PROPS, store } from "../../fake/store";
+import type { GroupId } from "../../fake/data";
 import { Button, Fader, Pad, Region, Segmented, type PadState } from "../../kit";
 import type { Issue } from "../../shell/registry";
 import { createDots, Flow } from "./Flow";
@@ -10,7 +11,7 @@ export const title = "How it works";
 export const order = 7;
 export const issues: Issue[] = [
   { number: 100, title: "Review the theory and the module boundary map" },
-  { number: 72, title: "Layers: base, override, flash" },
+  { number: 72, title: "Who wins: manual, show, autopilot" },
   { number: 94, title: "Record what you busk" },
 ];
 
@@ -44,9 +45,9 @@ const WALKS: { id: string; name: string; steps: Step[] }[] = [
     steps: [
       { say: "Recording on: your commands are written down with their time.", lit: ["you", "p-you", "manual"], route: ["p-you"] },
       { say: "That list is now a show.", lit: ["showw"] },
-      { say: "The show replays the same commands on the Show layer.", lit: ["showw", "p-showw", "show", "p-show", "frame"], route: ["p-showw", "p-show"] },
-      { say: "Grab a fader: Manual is on top, you win.", lit: ["you", "p-you", "manual", "p-manual", "frame"], route: ["p-you", "p-manual"] },
-      { say: "Let go: the show is back.", lit: ["show", "p-show", "frame"], route: ["p-show"] },
+      { say: "The show replays the same commands.", lit: ["showw", "p-showw", "show", "p-show", "frame"], route: ["p-showw", "p-show"] },
+      { say: "Press a pad: manual beats show, you win.", lit: ["you", "p-you", "manual", "p-manual", "frame"], route: ["p-you", "p-manual"] },
+      { say: "Press Release: the show is back.", lit: ["show", "p-show", "frame"], route: ["p-show"] },
     ],
   },
   {
@@ -54,9 +55,9 @@ const WALKS: { id: string; name: string; steps: Step[] }[] = [
     name: "The autopilot yields",
     steps: [
       { say: "The autopilot plays a rising look on every light.", lit: ["autow", "p-autow", "auto", "p-auto", "frame"], route: ["p-autow", "p-auto"] },
-      { say: "You hold Strobe on the PARs.", lit: ["you", "p-you", "manual"], route: ["p-you"] },
-      { say: "PARs follow you, movers follow the autopilot.", lit: ["manual", "auto", "p-manual", "p-auto", "frame"] },
-      { say: "Release: the PARs go back to the autopilot, no cut.", lit: ["auto", "p-auto", "frame"], route: ["p-auto"] },
+      { say: "You press Strobe: you now hold the brightness of the PARs.", lit: ["you", "p-you", "manual"], route: ["p-you"] },
+      { say: "Their brightness is yours. Their colour and the movers stay with the autopilot.", lit: ["manual", "auto", "p-manual", "p-auto", "frame"] },
+      { say: "Press Release: the PARs go back to the autopilot, no cut.", lit: ["auto", "p-auto", "frame"], route: ["p-auto"] },
     ],
   },
 ];
@@ -68,7 +69,7 @@ interface Chip {
   dur?: number;
 }
 
-const LAYER_NAME = { manual: "Manual", show: "Show", autopilot: "Autopilot" } as const;
+const RANK_NAME = { manual: "Manual", show: "Show", autopilot: "Autopilot" } as const;
 
 export function Screen() {
   const dots = createDots();
@@ -114,7 +115,7 @@ export function Screen() {
   };
   const padState = (id: string): PadState => store.lookState(id) ?? "idle";
 
-  // ---- replay on the Show layer
+  // ---- replay as the show
   const [replaying, setReplaying] = createSignal(false);
   const timers: number[] = [];
   const stopReplay = () => {
@@ -155,17 +156,18 @@ export function Screen() {
   };
   onCleanup(stopReplay);
 
-  // ---- who wins, per group: every layer that speaks, top first
-  const speakers = (groupId: string) => {
-    const g = groupId as "movers" | "pars" | "bars" | "laser";
-    const manual = [...store.runningManual()].reverse().find((b) => lookById(b.lookId).groups.includes(g));
-    const show = store.showLooksNow().find((id) => lookById(id).groups.includes(g));
-    const auto = store.autopilotNow().find((l) => l.groups.includes(g));
-    return [
-      manual && { layer: "manual" as const, look: lookById(manual.lookId).name },
-      show && { layer: "show" as const, look: lookById(show).name },
-      auto && { layer: "autopilot" as const, look: auto.name },
-    ].filter((x) => !!x);
+  // ---- who wins, per group: asked from the one rule table, property by property
+  const decided = (groupId: string) => {
+    const g = groupId as GroupId;
+    const out: { rank: "manual" | "show" | "autopilot"; look: string; props: string[]; note: string }[] = [];
+    for (const prop of PROPS) {
+      const w = store.winner(g, prop);
+      if (!w) continue;
+      const same = out.find((x) => x.rank === w.rank && x.look === w.look.name);
+      if (same) same.props.push(prop);
+      else out.push({ rank: w.rank, look: w.look.name, props: [prop], note: w.padOff ? "pad off, held until Release" : w.left ? "ended, stays" : "" });
+    }
+    return out;
   };
 
   const sendAuto = () => dots.send(ROUTE_AUTO);
@@ -175,7 +177,7 @@ export function Screen() {
 
   return (
     <div class="how-screen">
-      <Region id="flow" title="The whole theory in one picture" class="how-flow" aside={<span class="mute">Every frame is computed fresh from what plays on the layers.</span>}>
+      <Region id="flow" title="The whole theory in one picture" class="how-flow" aside={<span class="mute">Every frame is computed fresh from what plays: manual over show over autopilot.</span>}>
         <Flow dots={dots} lit={current()?.lit ?? []} />
       </Region>
 
@@ -217,6 +219,9 @@ export function Screen() {
             <Button variant="layer" layer="show" pressed={replaying()} disabled={recording() || !chips().length} reason={recording() ? "Stop recording first" : "Record something first"} onClick={() => (replaying() ? stopReplay() : replay())}>
               {replaying() ? "Stop replay" : "Replay on Show"}
             </Button>
+            <Button variant="layer" layer="manual" disabled={!store.holds().length} reason="You hold nothing" onClick={() => store.releaseAll()}>
+              Release
+            </Button>
           </div>
           <ol class="how-chips" aria-label="Written down">
             <For each={chips()} fallback={<li class="mute">{recording() ? "Press a pad: it gets written down here." : "Press Record, then a few pads."}</li>}>
@@ -230,24 +235,25 @@ export function Screen() {
           </ol>
         </Region>
 
-        <Region id="wins" title="Who wins" class="how-wins" aside={<span class="mute">Top layer that speaks</span>}>
+        <Region id="wins" title="Who wins" class="how-wins" aside={<span class="mute">Manual beats show beats autopilot</span>}>
           <ul class="how-win-list">
             <For each={store.groups}>
               {(g) => (
                 <li>
                   <b>{g.name}</b>
-                  <Show when={speakers(g.id)[0]} fallback={<span class="mute">dark: no layer speaks</span>}>
-                    {(top) => (
-                      <span class={`how-winner layer-${top().layer}`}>
-                        {LAYER_NAME[top().layer]}: {top().look}
+                  <For each={decided(g.id)} fallback={<span class="mute">dark: nobody wants it</span>}>
+                    {(d) => (
+                      <span class="how-win-row">
+                        <span class={`how-winner layer-${d.rank}`}>
+                          {RANK_NAME[d.rank]}: {d.look}
+                        </span>
+                        <span class="how-under">
+                          {d.props.join(" and ")}
+                          {d.note ? `, ${d.note}` : ""}
+                        </span>
                       </span>
                     )}
-                  </Show>
-                  <Show when={speakers(g.id).length > 1}>
-                    <span class="how-under">
-                      under it: {speakers(g.id).slice(1).map((s) => `${LAYER_NAME[s.layer]} ${s.look}`).join(", ")}
-                    </span>
-                  </Show>
+                  </For>
                 </li>
               )}
             </For>

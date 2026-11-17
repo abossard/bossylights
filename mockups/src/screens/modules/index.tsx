@@ -175,6 +175,9 @@ export function Screen() {
           <ul class="mm-hides">
             <For each={mod().hides}>{(h) => <li>{h}</li>}</For>
           </ul>
+          <Show when={mod().note}>
+            <p class="mm-note">{mod().note}</p>
+          </Show>
         </section>
         <section aria-label={`Depth: interface ${mod().ifaceSize}, hides ${mod().hidesSize}`}>
           <h3 class="mm-h">Depth</h3>
