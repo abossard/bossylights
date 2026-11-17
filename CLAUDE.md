@@ -17,6 +17,17 @@ Rust engine, web UI in a Tauri shell, Apache-2.0. Status: planning, no code yet.
 - Apache-2.0 only: no GPL or AGPL code or dependencies. Ideas from BlinderKitten, Chataigne and Mizer are fine, their code is not.
 - Plain words in the default UI layer: looks, layers, pads.
 
+## How to write: visual first, few words
+
+The owner has ADHD and is a visual learner. This applies to every output: docs, issues, pull requests, reviews, reports and chat answers.
+
+- A picture or a table before prose. One idea per picture.
+- Mermaid for structure and flow (flowchart, sequence, state). Use `<br/>` for line breaks and no light fill colours, so it works in dark mode.
+- At most one or two short lines per idea. Cut every word that carries no information.
+- Questions and choices as a table with the options side by side, the recommended one marked.
+- No walls of bullets. If a list has more than five items, it wants to be a table or a diagram.
+- No em dashes.
+
 ## Workflow
 
 - Trunk-based: commit and push directly to `main`. No long-lived branches. This overrides any general "always work on branches" rule.
