@@ -19,6 +19,12 @@ export interface ScreenReview {
 
 const KEY = "bossylights.review.v1";
 
+/** An answer to one review question: A, B or none, plus free words. */
+export interface Answer {
+  choice: "A" | "B" | null;
+  text: string;
+}
+
 const empty = (): ScreenReview => ({ verdict: null, rating: null, comment: "", regions: {} });
 
 function load(): Record<string, ScreenReview> {
@@ -68,6 +74,29 @@ function build() {
   const noteCount = (screen: string) =>
     Object.values(get(screen).regions).filter((r) => r.note.trim()).length;
 
+  // ---- answers to the review questions ----------------------------------
+  const ANSWERS_KEY = "bossylights.answers.v1";
+  const [answers, setAnswers] = createStore<Record<string, Answer>>(
+    (() => {
+      try {
+        return JSON.parse(localStorage.getItem(ANSWERS_KEY) ?? "{}") as Record<string, Answer>;
+      } catch {
+        return {};
+      }
+    })(),
+  );
+  createEffect(() => {
+    const json = JSON.stringify(answers);
+    try {
+      localStorage.setItem(ANSWERS_KEY, json);
+    } catch {
+      // kept in memory until exported
+    }
+  });
+  const answerOf = (id: string): Answer => answers[id] ?? { choice: null, text: "" };
+  const setChoice = (id: string, choice: Answer["choice"]) => setAnswers(id, { ...answerOf(id), choice });
+  const setAnswerText = (id: string, text: string) => setAnswers(id, { ...answerOf(id), text });
+
   // ---- panel and comment mode ------------------------------------------
   const [panelOpen, setPanelOpen] = createSignal(false);
   const [commentMode, setCommentMode] = createSignal(false);
@@ -88,6 +117,10 @@ function build() {
   }
 
   return {
+    answers,
+    answerOf,
+    setChoice,
+    setAnswerText,
     reviews,
     get,
     setVerdict,

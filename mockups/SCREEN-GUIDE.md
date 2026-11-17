@@ -17,6 +17,7 @@ For anyone adding or replacing one of the seven screens (Console, Show, Songs, L
 | `nowStrip` | `boolean`, optional | `false` on screens that show the full timetable (Console, Show). |
 
 - The shell finds screens with `import.meta.glob`. Adding or replacing a screen means creating or overwriting files in its folder. Never edit `src/shell`, `src/kit`, `src/fake`, `src/review` or another screen's folder for your screen.
+- Never import `src/shell/registry` values from a screen: the registry imports every screen, so that is a circular import (only `import type { Issue }` is safe).
 - Import CSS from `index.tsx` (`import "./<id>.css"`) and prefix every class with the screen id (`.patch-...`) so screens never restyle each other.
 - The screen fills `.screen-host`, which scrolls vertically. Fit 1280 x 800 without scrolling where the brief allows; at 1024 x 768 vertical scroll is fine, horizontal scroll never.
 - The stubs use `src/shell/Stub.tsx`. A built screen stops using it.

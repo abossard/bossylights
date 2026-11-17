@@ -1,4 +1,5 @@
 import { ISSUE_URL, screens } from "../shell/registry";
+import { QUESTIONS } from "./questions";
 import { review, type Verdict } from "./store";
 
 const VERDICT: Record<Verdict, string> = { approve: "Approve", change: "Change", rethink: "Rethink" };
@@ -19,6 +20,20 @@ export function exportData() {
         regionNotes: Object.entries(r.regions)
           .filter(([, n]) => n.note.trim())
           .map(([region, n]) => ({ region, title: n.title, note: n.note })),
+      };
+    }),
+    questions: QUESTIONS.map((q) => {
+      const a = review.answerOf(q.id);
+      return {
+        id: q.id,
+        source: q.source,
+        number: q.number,
+        question: q.question,
+        optionA: q.a || null,
+        optionB: q.b || null,
+        choice: a.choice,
+        answer: a.choice === "A" ? q.a : a.choice === "B" ? q.b : null,
+        text: a.text,
       };
     }),
   };
@@ -48,6 +63,12 @@ export function toMarkdown(): string {
     }
     lines.push("");
   }
+  lines.push("## Questions", "");
+  for (const q of data.questions) {
+    const said = [q.choice ? `${q.choice}: ${q.answer}` : "", q.text.trim().replace(/\n+/g, " ")].filter(Boolean).join(". ");
+    lines.push(`- ${q.source} ${q.number}, ${q.question} ${said || "not answered"}`);
+  }
+  lines.push("");
   return lines.join("\n");
 }
 

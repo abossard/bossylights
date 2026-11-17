@@ -1,0 +1,329 @@
+.mm-screen {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 360px;
+  grid-template-areas: "map card" "q q";
+  gap: var(--sp-4);
+  padding: var(--sp-3) var(--gutter) var(--sp-5);
+}
+
+.mm-map {
+  grid-area: map;
+}
+
+.mm-card {
+  grid-area: card;
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--s1);
+  gap: var(--sp-4);
+}
+
+.mm-questions {
+  grid-area: q;
+}
+
+/* ---------------- the map ---------------- */
+.mm-svg {
+  display: block;
+  width: 100%;
+}
+
+.mm-core {
+  fill: none;
+  stroke: var(--paper);
+  stroke-width: 2;
+  stroke-dasharray: 8 6;
+}
+
+.mm-core-label {
+  font: 700 16px var(--font-ui);
+  letter-spacing: 0.04em;
+  fill: var(--paper);
+}
+
+.mm-arrow {
+  fill: none;
+  stroke: var(--mute);
+  stroke-width: 2.5;
+}
+
+.mm-arrow.is-state {
+  stroke-dasharray: 5 5;
+}
+
+.mm-arrow.is-traced {
+  stroke: var(--paper);
+  stroke-width: 4;
+}
+
+.mm-head {
+  fill: var(--mute);
+}
+
+.mm-writer rect {
+  fill: none;
+  stroke: var(--line);
+  stroke-width: 2;
+  stroke-dasharray: 5 4;
+}
+
+.mm-writer text {
+  font: 600 18px var(--font-ui);
+  fill: var(--mute);
+}
+
+.mm-node {
+  cursor: pointer;
+}
+
+.mm-node rect {
+  fill: var(--s1);
+  stroke: var(--line);
+  stroke-width: 2;
+  transition: fill var(--t-fast), stroke var(--t-fast);
+}
+
+.mm-node.is-core rect {
+  fill: var(--s2);
+}
+
+.mm-node.is-door rect {
+  stroke: var(--paper);
+  stroke-width: 4;
+}
+
+.mm-node text {
+  font: 700 19px var(--font-ui);
+  font-stretch: 82%;
+  fill: var(--paper);
+  pointer-events: none;
+}
+
+.mm-node:hover rect {
+  stroke: var(--paper);
+}
+
+.mm-node:focus-visible {
+  outline: none;
+}
+
+.mm-node:focus-visible rect {
+  stroke: var(--paper);
+  stroke-width: 4;
+}
+
+.mm-node.is-selected rect {
+  fill: var(--paper);
+  stroke: var(--paper);
+}
+
+.mm-node.is-selected text {
+  fill: var(--ink);
+}
+
+/* the module the press is in right now */
+.mm-node.is-traced rect {
+  stroke: var(--paper);
+  stroke-width: 6;
+}
+
+.mm-dot {
+  fill: var(--paper);
+  stroke: var(--ink);
+  stroke-width: 3;
+}
+
+.mm-caption {
+  min-height: 1.6em;
+  font-weight: 600;
+}
+
+.mm-screen code {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.95em;
+}
+
+/* ---------------- the card ---------------- */
+.mm-card-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2) var(--sp-3);
+}
+
+.mm-card-head h2 {
+  font-size: var(--display-lg);
+}
+
+.mm-core-chip {
+  padding: 3px 7px;
+  border: var(--rule) dashed var(--paper);
+  font-size: var(--text-sm);
+  font-weight: 700;
+}
+
+.mm-card section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mm-h {
+  font-size: var(--text-sm);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--mute);
+}
+
+.mm-iface {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.mm-iface code {
+  padding: 4px 8px;
+  background: var(--paper);
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.mm-hides {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  font-weight: 600;
+}
+
+.mm-hides li::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 6px;
+  vertical-align: 2px;
+  background: var(--mute);
+}
+
+.mm-depth {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 6px var(--sp-2);
+}
+
+.mm-depth-label {
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.mm-bar {
+  height: 16px;
+}
+
+.mm-bar.is-iface {
+  background: var(--paper);
+}
+
+.mm-bar.is-hides {
+  background: none;
+  border: var(--rule) solid var(--paper);
+}
+
+.mm-screens {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.mm-screen-link {
+  min-height: 36px;
+  padding: 0 10px;
+}
+
+/* ---------------- questions ---------------- */
+.mm-q-cols {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-5);
+}
+
+.mm-q-cols section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.mm-q-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.mm-q {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-bottom: var(--sp-3);
+  border-bottom: 1px solid var(--line);
+}
+
+.mm-q-text {
+  font-weight: 600;
+}
+
+.mm-q-opts {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.mm-q-opt {
+  min-height: var(--target);
+  padding: 6px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border: var(--rule) solid var(--line);
+  line-height: 1.25;
+}
+
+.mm-q-opt:hover {
+  border-color: var(--mute);
+}
+
+.mm-q-opt b {
+  font-size: var(--text-sm);
+}
+
+.mm-q-opt em {
+  font-style: normal;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--mute);
+}
+
+.mm-q-opt[aria-checked="true"],
+.mm-q-opt[aria-checked="true"]:hover {
+  background: var(--paper);
+  border-color: var(--paper);
+  color: var(--ink);
+}
+
+.mm-q-opt[aria-checked="true"] em {
+  color: var(--ink);
+}
+
+@media (max-width: 1180px) {
+  .mm-screen {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "map" "card" "q";
+    gap: var(--sp-3);
+  }
+
+  .mm-q-cols {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
