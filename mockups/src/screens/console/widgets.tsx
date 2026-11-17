@@ -1,6 +1,6 @@
 // The widgets a console page is built from, and what each one draws.
 import { createSignal, For, Match, Switch } from "solid-js";
-import { lookById, PAD_PAGES, store, type FaderId } from "../../fake/store";
+import { lookById, store, type FaderId } from "../../fake/store";
 import { Button, Fader, Pad, Region, Segmented, XYPad, type PadState } from "../../kit";
 
 export type WidgetKind = "pads" | "faders" | "xy" | "button" | "slider" | "cuelist" | "speed" | "label" | "frame";
@@ -156,7 +156,7 @@ export function WidgetBody(props: { widget: Widget; editing: boolean; pageId: st
     <Switch>
       <Match when={w().kind === "pads"}>
         {(() => {
-          const bank = () => PAD_PAGES[w().ref ?? "main"] ?? PAD_PAGES.main;
+          const bank = () => store.state.pads[w().ref ?? "main"] ?? store.state.pads.main;
           return (
             <Region id={`${props.pageId}-${w().id}`} title={w().title} bare class="w-pads">
               <div class="pads" style={{ "--pad-rows": Math.ceil(bank().length / 8) }}>

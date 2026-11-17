@@ -2,6 +2,7 @@
 // everywhere that reads this store.
 import { createRoot, createSignal } from "solid-js";
 import { createStore, produce, reconcile } from "solid-js/store";
+import { GOBOS, initialLibrary, type Entry, type Item, type Pattern, type Sequence, type Step } from "./library";
 import {
   CLOCK_START,
   GROUPS,
@@ -13,6 +14,8 @@ import {
   SONGS,
   TEMPO,
   lookById,
+  PAD_PAGES,
+  setLookResolver,
   type Fixture,
   type GroupId,
   type Layer,
@@ -22,6 +25,7 @@ import {
 } from "./data";
 
 export * from "./data";
+export * from "./library";
 
 /** Where the beat comes from. */
 export type ClockFeed = "tap" | "audio" | "midi" | "vdj" | "timecode";
@@ -154,6 +158,10 @@ interface State {
   /** Channels held by hand on the DMX screen, universe 1: address -> 0..255. */
   held: Record<number, number>;
   clockFeed: ClockFeed;
+  /** Steps, sequences and patterns, by id. */
+  library: Record<string, Item>;
+  /** The Console's pad banks, by page. */
+  pads: Record<string, string[]>;
   /** Looks the Show layer replays right now from a recording (How it works). */
   replay: string[];
   /** false: the cued deck has nothing loaded (an edge state to look at) */
@@ -199,6 +207,8 @@ function build() {
     held: { 66: 255, 93: 180, 33: 96 },
     clockFeed: "vdj",
     replay: [],
+    library: initialLibrary(),
+    pads: JSON.parse(JSON.stringify(PAD_PAGES)) as Record<string, string[]>,
     cuedDeckLoaded: true,
     blackout: false,
     blackoutHold: false,
@@ -725,6 +735,97 @@ function build() {
   /** The Show layer replays these looks (no undo: a replay is a performance). */
   const setReplay = (ids: string[]) => set("replay", ids);
 
+  // ---- looks library ---------------------------------------------------
+  const item = (id: string): Item | undefined => state.library[id];
+  const items = () => Object.values(state.library);
+
+  /** Colours a thing shows: a step's own, a pattern's step, everything in a sequence. */
+  function colorsOf(id: string, seen = new Set<string>()): string[] {
+    const it = item(id);
+    if (!it || seen.has(id)) return [];
+    seen.add(id);
+    if (it.kind === "step") return it.colour ?? [];
+    if (it.kind === "pattern") return it.colours ? colorsOf(it.colours, seen) : it.ownColours;
+    return [...new Set(it.entries.flatMap((x) => colorsOf(x.ref, seen)))];
+  }
+  /** Fixture groups a thing reaches. */
+  function fixturesOf(id: string, seen = new Set<string>()): GroupId[] {
+    const it = item(id);
+    if (!it || seen.has(id)) return [];
+    seen.add(id);
+    if (it.kind === "step") return it.fixtures;
+    if (it.kind === "pattern") return [it.on];
+    return [...new Set(it.entries.flatMap((x) => fixturesOf(x.ref, seen)))];
+  }
+  /** Beats per loop. Steps have none. */
+  const measureOf = (id: string): number | null => {
+    const it = item(id);
+    if (!it || it.kind === "step") return null;
+    if (it.kind === "pattern") return it.measure;
+    return Math.max(0, ...it.entries.map((x) => x.start + x.width));
+  };
+  /** Every sequence that uses this thing directly. */
+  const usedIn = (id: string): Sequence[] =>
+    items().filter((i): i is Sequence => i.kind === "sequence" && i.entries.some((x) => x.ref === id));
+  const allGroups = () => [...new Set(items().flatMap((i) => i.groups))].sort();
+
+  // every library item plays like a look on the layers
+  setLookResolver((id) => {
+    const it = state.library[id];
+    if (!it) return undefined;
+    const colors = colorsOf(id);
+    return { id, name: it.name, colors: colors.length ? colors : ["#000000"], groups: fixturesOf(id), kind: it.lookKind };
+  });
+
+  /** Change one item, as one undo step (coalesced per item and field). */
+  function editItem(id: string, label: string, fn: (it: Item) => void, key?: string) {
+    const before = JSON.parse(JSON.stringify(state.library[id])) as Item;
+    set("library", id, produce((it: Item) => fn(it)));
+    record(label, () => set("library", id, reconcile(before)), key);
+  }
+
+  function setStep<K extends "colour" | "position" | "gobo" | "dimmer" | "spin" | "fixtures">(id: string, prop: K, value: Step[K] | undefined) {
+    editItem(id, `${state.library[id]?.name}: ${prop}`, (it) => {
+      if (it.kind !== "step") return;
+      if (value === undefined) delete it[prop];
+      else (it as Step)[prop] = value as Step[K];
+    }, `step:${id}:${prop}`);
+  }
+
+  function setEntry(seqId: string, entryId: string, patch: Partial<Entry>, label = "Change item") {
+    editItem(seqId, label, (it) => {
+      if (it.kind !== "sequence") return;
+      const x = it.entries.find((en) => en.id === entryId);
+      if (x) Object.assign(x, patch);
+    }, `entry:${entryId}:${Object.keys(patch).join()}`);
+  }
+
+  function setPattern(id: string, patch: Partial<Pattern>) {
+    editItem(id, `${state.library[id]?.name}: pattern`, (it) => {
+      if (it.kind === "pattern") Object.assign(it, patch);
+    }, `pattern:${id}:${Object.keys(patch).join()}`);
+  }
+
+  function addToGroup(id: string, group: string) {
+    const g = group.trim();
+    if (!g || state.library[id]?.groups.includes(g)) return;
+    editItem(id, `Add to ${g}`, (it) => void it.groups.push(g));
+  }
+  function removeFromGroup(id: string, group: string) {
+    editItem(id, `Remove from ${group}`, (it) => {
+      it.groups = it.groups.filter((x) => x !== group);
+    });
+  }
+
+  /** Put a look on the Console: the last pad of the Main page. */
+  function putOnConsole(id: string) {
+    const before = [...state.pads.main];
+    if (before.includes(id)) return before.indexOf(id) + 1;
+    set("pads", "main", before.length - 1, id);
+    record(`Put ${state.library[id]?.name} on Console`, () => set("pads", "main", before));
+    return before.length;
+  }
+
   /** Space bar: blackout only while held. */
   const setBlackoutHold = (on: boolean) => set("blackoutHold", on);
   const isDark = () => state.blackout || state.blackoutHold;
@@ -1030,6 +1131,20 @@ function build() {
     setClockFeed,
     setTempo,
     setReplay,
+    item,
+    items,
+    colorsOf,
+    fixturesOf,
+    measureOf,
+    usedIn,
+    allGroups,
+    setStep,
+    setEntry,
+    setPattern,
+    addToGroup,
+    removeFromGroup,
+    putOnConsole,
+    gobos: GOBOS,
     looks: LOOKS,
     songs: SONGS,
     groups: GROUPS,

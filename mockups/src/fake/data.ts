@@ -183,15 +183,25 @@ export const LOOKS: Look[] = [
   look("gobo-spin", "Gobo spin", "#d7b8ff", ["movers"], "movement"),
 ];
 
+let resolve: ((id: string) => Look | undefined) | null = null;
+/** The store hands in the looks library here, so every library item can be played by id. */
+export const setLookResolver = (fn: (id: string) => Look | undefined) => {
+  resolve = fn;
+};
+
 export const lookById = (id: string): Look => {
-  const found = LOOKS.find((l) => l.id === id);
+  const found = resolve?.(id) ?? LOOKS.find((l) => l.id === id);
   if (!found) throw new Error(`unknown look ${id}`);
   return found;
 };
 
 /** Console pages: 32 pads each, by look id. */
 export const PAD_PAGES: Record<string, string[]> = {
-  main: LOOKS.map((l) => l.id),
+  // the last row plays the new library items: the Looks screen tells the same story
+  main: [
+    ...LOOKS.slice(0, 24).map((l) => l.id),
+    "build-up-end-a", "build-up-end-b", "drop-opener", "colour-chase", "lazy-chase", "mover-run", "flicker", "plasma",
+  ],
   movers: [
     "fan-out", "circle", "tilt-wave", "center", "crowd-sweep", "dj-spot", "gobo-spin", "sunset",
     "red-alert", "flash-white", "blackout-hold", "warm-wash", "cold-wash", "deep-blue", "uv", "strobe",
