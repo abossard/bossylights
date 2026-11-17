@@ -1,4 +1,4 @@
-import { For } from "solid-js";
+import { For, Show } from "solid-js";
 import type { Layer } from "../fake/data";
 
 export interface EnergySpan {
@@ -13,6 +13,7 @@ export interface EnergyCurveProps {
   spans: EnergySpan[];
   from: number;
   to: number;
+  /** The NOW line. Outside from..to it is not drawn. */
   now: number;
   layer?: Layer;
   label: string;
@@ -52,7 +53,9 @@ export function EnergyCurve(props: EnergyCurveProps) {
         <path class="energy-area" d={area()} />
         <path class="energy-line" d={path()} vector-effect="non-scaling-stroke" />
       </svg>
-      <span class="energy-now" style={{ left: `${nowPct()}%` }} />
+      <Show when={props.now >= props.from && props.now <= props.to}>
+        <span class="energy-now" style={{ left: `${nowPct()}%` }} />
+      </Show>
     </div>
   );
 }

@@ -40,7 +40,7 @@ For anyone adding or replacing one of the seven screens (Console, Show, Songs, L
 | `Fader` | `value 0..100, onChange, label, orientation?, layer?, valueText?, bare?` |
 | `Pad` | `label, colors, state: idle, autopilot, show, held, flash, onDown, onUp(heldMs), disabled?`. A running pad fills with its layer's colour and carries the NOW flag. |
 | `XYPad` | `x, y (0..100, y up), onChange(x, y), label, layer?` |
-| `RigView` | `fixtures, lookOf(f) => { color, level }, zones?: { label, layer, fixtureIds }[], onFixture?, selected?` |
+| `RigView` | `fixtures, lookOf(f) => { color, level }, zones?: { label, layer?, fixtureIds }[]` (no layer: neutral group outline), `onFixture?, onMove?(f, x, y)` (drag and arrow keys), `selected?` |
 | `Timetable` | `from, to, now, lanes, tickEvery, format, laneHeight?, labelWidth?, laneControls?(lane), plain?` |
 | `Decks` | `decks, compact?`: the two VirtualDJ decks, on-air title largest. A deck with `song: null` shows "Nothing loaded". |
 | `NowStrip` | `from, to, now, lanes, decks, onActivate` (the shell already shows it) |
@@ -61,6 +61,10 @@ Missing a control? Build it in your screen folder from these pieces. Do not add 
 - Commands: `start(lookId)`, `stop(lookId)`, `hold(lookId)` and `release(lookId)` for a flash, `releaseAll()` (the Manual layer), `surprise()`, `setMaster(v)`, `setBlackout(on)`, `setLive(on)`, `toggleIndicator("dj" | "record" | "autopilot" | "lock")`, `setFader(id, v)`, `setXY(pan, tilt)`, `setAutopilot(key, value)`, `toggleGroup(g)`, `skipLook(id)`, `moreLikeThis(id)`, `skipPick(section)`, `morePick(section)`, `keepPick(section)` (an autopilot pick becomes show clips), `moveClip(id, start, end)`, `undo()`.
 - Lanes from `lanes(from, to)` carry `chip` (one state word: holding, playing, idle, waiting, off), `on` (the chip is filled) and `status` (one short line).
 - Edge states to design for: `store.state.lightsConnected` false, a deck with nothing loaded (`setLightsConnected`, `setCuedDeckLoaded`; the review panel has switches for both), LIVE off.
+- Songs: `sectionLooksOf(song, i)`, `setSectionLooks(song, i, ids)`, `fillFromStyle(song)`, `analysisOf(song)`, `markReviewed(song)`. The autopilot plays what a section holds.
+- Patch: `store.rig` is reactive. `moveFixture(id, x, y)`, `setAddress(id, a)`, `addFixture(f)`, `setIdentify(id | null)` (the fixture flashes), `conflicts()`, `inConflict(id)`, `freeAddress(channels, universe?, except?)`.
+- DMX: `attributes(f)` (channel names), `channelValues(universe, phase?)` (index 1..512; a phase shift shows what changes with the beat), `state.held`, `holdChannel(a, v)`, `releaseChannel(a)`, `releaseAllChannels()`.
+- In/Out: `outputs()` (the USB adapter drops out and reconnects every 45 s, on load too; Art-Net has an error), `state.clockFeed`, `setClockFeed(feed)`, `setTempo(bpm)`.
 - Undo for your own screen state: `store.record(label, undoFn, key?)`. Calls with the same key within about a second merge into one step (one fader drag, one undo).
 - The LIVE switch: lights follow the app whether LIVE is on or off, there is no preview. LIVE on means the night is running: `followsDj()`, `isRecording()`, `autopilotArmed()` and `surfaceLocked()` are true unless that indicator was turned off. `inEffect(i)` is the general form. With `lightsConnected` false the shell shows "No lights connected".
 - Derived: `lookState(id)`, `fixtureState(f)`, `runningManual()`, `overrides()`, `handsOff()`, `lanes(from, to)`, `currentSection()`, `nextSection()`, `currentSong()`, `currentSongSections()`, `autopilotLooks(section)`, `autopilotNow()`, `pickReason(section)`, `covered(section)` (the show owns it, the autopilot leaves it), `activeClips()`, `decks()`, `setList()`, `sectionsBetween(from, to)`, `isDark()`.

@@ -1,7 +1,7 @@
 // One fake state store drives every screen. A pad pressed on the Console shows up
 // everywhere that reads this store.
 import { createRoot, createSignal } from "solid-js";
-import { createStore, produce } from "solid-js/store";
+import { createStore, produce, reconcile } from "solid-js/store";
 import {
   CLOCK_START,
   GROUPS,
@@ -22,6 +22,22 @@ import {
 } from "./data";
 
 export * from "./data";
+
+/** Where the beat comes from. */
+export type ClockFeed = "tap" | "audio" | "midi" | "vdj" | "timecode";
+
+/** A device that sends light data out. */
+export interface Output {
+  id: string;
+  universe: number | null;
+  device: string;
+  kind: "USB DMX" | "Art-Net" | "sACN" | "DDP";
+  state: "connected" | "reconnecting" | "error";
+  /** frames per second actually sent */
+  fps: number;
+  errors: number;
+  detail: string;
+}
 
 export type FaderId = "wash" | "movers" | "pixels" | "strobeRate" | "laser";
 export type AutopilotStyle = "chill" | "club" | "peak" | "no-strobe";
@@ -127,6 +143,17 @@ interface State {
   /** The LIVE switch: the night is running. Lights follow the app either way. */
   night: { live: boolean; indicators: Record<Indicator, boolean> };
   lightsConnected: boolean;
+  /** The patch: every fixture with its place and address. */
+  rig: Fixture[];
+  /** A fixture flashing so you can find it in the room (Patch). */
+  identify: string | null;
+  /** Looks per song section set in the Song Director, by "songId:index". */
+  sectionLooks: Record<string, string[]>;
+  /** Songs whose analysis someone checked by hand. */
+  reviewed: string[];
+  /** Channels held by hand on the DMX screen, universe 1: address -> 0..255. */
+  held: Record<number, number>;
+  clockFeed: ClockFeed;
   /** false: the cued deck has nothing loaded (an edge state to look at) */
   cuedDeckLoaded: boolean;
   blackout: boolean;
@@ -162,6 +189,13 @@ function build() {
     master: MASTER,
     night: { live: true, indicators: { dj: true, record: true, autopilot: true, lock: true } },
     lightsConnected: true,
+    rig: RIG.map((f) => ({ ...f })),
+    identify: null,
+    sectionLooks: {},
+    reviewed: [],
+    // three channels held by hand: PAR 1 red, PAR 5 dimmer, Mover R1 pan
+    held: { 66: 255, 93: 180, 33: 96 },
+    clockFeed: "vdj",
     cuedDeckLoaded: true,
     blackout: false,
     blackoutHold: false,
@@ -302,9 +336,51 @@ function build() {
   };
 
   /** What the autopilot plays in a section, after style, groups and skips. */
+  // ---- song director ---------------------------------------------------
+  const sectionKey = (song: Song, index: number) => `${song.id}:${index}`;
+  /** The looks a song section holds: set in the Song Director, else the sample data. */
+  const sectionLooksOf = (song: Song, index: number): string[] =>
+    state.sectionLooks[sectionKey(song, index)] ?? song.sections[index].looks;
+
+  function setSectionLooks(song: Song, index: number, ids: string[], label = "Change section") {
+    const key = sectionKey(song, index);
+    const before = state.sectionLooks[key];
+    set("sectionLooks", key, ids);
+    record(label, () =>
+      set("sectionLooks", produce((s: Record<string, string[]>) => {
+        if (before) s[key] = before;
+        else delete s[key];
+      })),
+    );
+  }
+
+  /** Fill every empty section from the autopilot's style. One undo step. */
+  function fillFromStyle(song: Song) {
+    const before = { ...state.sectionLooks };
+    let n = 0;
+    song.sections.forEach((sec, i) => {
+      if (sectionLooksOf(song, i).length) return;
+      const ids = FALLBACK[energyWord(sec.energy)].filter(
+        (id) => !(state.autopilot.style === "no-strobe" && lookById(id).kind === "strobe"),
+      );
+      set("sectionLooks", sectionKey(song, i), ids);
+      n++;
+    });
+    if (n) record(`Fill ${song.title}`, () => set("sectionLooks", reconcile(before)));
+    return n;
+  }
+
+  const analysisOf = (song: Song): Song["analysis"] => (state.reviewed.includes(song.id) ? "analysed" : song.analysis);
+  function markReviewed(song: Song) {
+    if (state.reviewed.includes(song.id)) return;
+    set("reviewed", (r) => [...r, song.id]);
+    record(`Checked ${song.title}`, () => set("reviewed", (r) => r.filter((x) => x !== song.id)));
+  }
+
+  /** What the autopilot plays in a section, after style, groups and skips. */
   function autopilotLooks(p: PlacedSection): Look[] {
-    const ids =
-      state.autopilot.swaps[p.key] ?? (p.section.looks.length ? p.section.looks : FALLBACK[energyWord(p.section.energy)]);
+    const held = sectionLooksOf(p.song, p.index);
+    const ids = state.autopilot.swaps[p.key] ?? (held.length ? held : FALLBACK[energyWord(p.section.energy)]);
     return ids
       .map(lookById)
       .filter((l) => !(state.autopilot.style === "no-strobe" && l.kind === "strobe"))
@@ -474,6 +550,175 @@ function build() {
   const setLightsConnected = (on: boolean) => set("lightsConnected", on);
   const setCuedDeckLoaded = (on: boolean) => set("cuedDeckLoaded", on);
 
+  // ---- patch ----------------------------------------------------------
+  const fixtureById = (id: string) => state.rig.find((f) => f.id === id);
+  const lastAddress = (f: Fixture) => f.address + f.channels - 1;
+  /** Fixtures whose addresses overlap another fixture in the same universe. */
+  function conflicts(): { a: Fixture; b: Fixture; from: number; to: number }[] {
+    const out: { a: Fixture; b: Fixture; from: number; to: number }[] = [];
+    state.rig.forEach((a, i) =>
+      state.rig.slice(i + 1).forEach((b) => {
+        if (a.universe !== b.universe) return;
+        const from = Math.max(a.address, b.address);
+        const to = Math.min(lastAddress(a), lastAddress(b));
+        if (from <= to) out.push({ a, b, from, to });
+      }),
+    );
+    return out;
+  }
+  const inConflict = (id: string) => conflicts().some((c) => c.a.id === id || c.b.id === id);
+
+  /** The first address where `channels` fit without touching anything. */
+  function freeAddress(channels: number, universe = 1, except?: string) {
+    const used = state.rig.filter((f) => f.universe === universe && f.id !== except);
+    for (let a = 1; a + channels - 1 <= 512; a++) {
+      const b = a + channels - 1;
+      if (!used.some((f) => a <= lastAddress(f) && f.address <= b)) return a;
+    }
+    return null;
+  }
+
+  function moveFixture(id: string, x: number, y: number) {
+    const f = fixtureById(id);
+    if (!f) return;
+    const before = { x: f.x, y: f.y };
+    set("rig", (r) => r.id === id, { x: Math.max(0.03, Math.min(0.97, x)), y: Math.max(0.08, Math.min(0.9, y)) });
+    record(`Move ${f.name}`, () => set("rig", (r) => r.id === id, before), `move:${id}`);
+  }
+
+  function setAddress(id: string, address: number) {
+    const f = fixtureById(id);
+    if (!f) return;
+    const before = f.address;
+    const a = Math.max(1, Math.min(513 - f.channels, Math.round(address)));
+    set("rig", (r) => r.id === id, "address", a);
+    record(`Address ${f.name}`, () => set("rig", (r) => r.id === id, "address", before), `addr:${id}`);
+  }
+
+  function addFixture(f: Fixture) {
+    set("rig", (r) => [...r, f]);
+    record(`Add ${f.name}`, () => set("rig", (r) => r.filter((x) => x.id !== f.id)));
+  }
+
+  const setIdentify = (id: string | null) => set("identify", id);
+
+  // ---- DMX --------------------------------------------------------------
+  /** Channel names per fixture, in plain words where they fit. */
+  function attributes(f: Fixture): string[] {
+    if (f.kind === "par") return ["Dimmer", "Red", "Green", "Blue", "White", "Strobe", "Program"].slice(0, f.channels);
+    if (f.kind === "mover")
+      return ["Pan", "Pan fine", "Tilt", "Tilt fine", "Speed", "Dimmer", "Shutter", "Red", "Green", "Blue", "White", "Colour", "Gobo", "Gobo spin", "Prism", "Focus"].slice(0, f.channels);
+    if (f.kind === "bar") return Array.from({ length: f.channels }, (_, i) => `${["Red", "Green", "Blue"][i % 3]} ${Math.floor(i / 3) + 1}`);
+    return ["Mode", "Pattern", "Size", "Rotate", "X", "Y", "Red", "Green", "Blue", "Speed"].slice(0, f.channels);
+  }
+
+  const rgb = (hex: string) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+
+  /** The 512 values of a universe (index 1..512). phase shifts the beat, to find what changes. */
+  function channelValues(universe: number, phase = 0): number[] {
+    const v = new Array<number>(513).fill(0);
+    const bp = (beatPhase() + phase) % 1;
+    for (const f of state.rig) {
+      if (f.universe !== universe) continue;
+      const { look, level } = fixtureState(f);
+      const [r, g, b] = look ? rgb(look.colors[0]) : [0, 0, 0];
+      const dim = Math.round(level * 255);
+      const names = attributes(f);
+      names.forEach((name, i) => {
+        let x = 0;
+        if (name === "Dimmer") x = dim;
+        else if (name === "Red") x = r;
+        else if (name === "Green") x = g;
+        else if (name === "Blue") x = b;
+        else if (name === "White") x = look && r > 200 && g > 200 && b > 200 ? 255 : 0;
+        else if (name === "Strobe") x = look?.kind === "strobe" ? Math.round((state.faders.strobeRate / 100) * 255) : 0;
+        else if (name === "Pan") x = Math.round((state.xy.pan / 100) * 255);
+        else if (name === "Tilt") x = Math.round((state.xy.tilt / 100) * 255);
+        else if (name === "Shutter") x = dim ? 255 : 0;
+        else if (name === "Speed") x = 40;
+        else if (f.kind === "bar") {
+          // pixel chases run along the bar with the beat
+          const px = Math.floor(i / 3);
+          const wave = look?.kind === "pixels" ? Math.max(0, 1 - Math.abs(((px / 8 - bp + 1) % 1) - 0.5) * 3) : 1;
+          x = Math.round([r, g, b][i % 3] * level * wave);
+        } else if (f.kind === "laser") x = level ? [64, 12, 128, Math.round(bp * 255), 128, 128, r, g, b, 90][i] ?? 0 : 0;
+        else x = 0;
+        v[f.address + i] = x;
+      });
+    }
+    if (universe === 1) for (const [a, x] of Object.entries(state.held)) v[Number(a)] = x;
+    return v;
+  }
+
+  function holdChannel(address: number, value: number) {
+    const before = state.held[address];
+    set("held", address, Math.max(0, Math.min(255, Math.round(value))));
+    record(`Hold channel ${address}`, () =>
+      set("held", produce((h: Record<number, number>) => {
+        if (before === undefined) delete h[address];
+        else h[address] = before;
+      })),
+      `held:${address}`,
+    );
+  }
+  function releaseChannel(address: number) {
+    const before = state.held[address];
+    if (before === undefined) return;
+    set("held", produce((h: Record<number, number>) => void delete h[address]));
+    record(`Release channel ${address}`, () => set("held", address, before));
+  }
+  function releaseAllChannels() {
+    const before = { ...state.held };
+    if (!Object.keys(before).length) return;
+    set("held", reconcile({}));
+    record("Release all channels", () => set("held", reconcile(before)));
+  }
+
+  // ---- outputs and clock -------------------------------------------------
+  /** The output devices. The USB adapter drops out now and then and reconnects. */
+  function outputs(): Output[] {
+    const sec = elapsed() / 1000;
+    const usbDown = sec % 45 < 6;
+    const jitter = Math.floor(sec) % 3 === 0 ? 43 : 44;
+    return [
+      {
+        id: "usb",
+        universe: 1,
+        device: "USB DMX adapter",
+        kind: "USB DMX",
+        state: usbDown ? "reconnecting" : "connected",
+        fps: usbDown ? 0 : jitter,
+        errors: 2,
+        detail: usbDown ? "Lost the adapter, trying again" : "Sending",
+      },
+      {
+        id: "artnet",
+        universe: 2,
+        device: "Art-Net node 2.0.0.12",
+        kind: "Art-Net",
+        state: "error",
+        fps: 0,
+        errors: 12 + Math.floor(sec / 5),
+        detail: "No reply since 22:41",
+      },
+      { id: "sacn", universe: 3, device: "sACN, bar wall", kind: "sACN", state: "connected", fps: 40, errors: 0, detail: "Sending" },
+      { id: "ddp", universe: null, device: "Pixel controller 10.0.0.40", kind: "DDP", state: "connected", fps: 60, errors: 0, detail: "Sending, 480 pixels" },
+    ];
+  }
+
+  function setClockFeed(feed: ClockFeed) {
+    const before = state.clockFeed;
+    if (before === feed) return;
+    set("clockFeed", feed);
+    record("Clock", () => set("clockFeed", before));
+  }
+
+  function setTempo(bpm: number) {
+    const before = state.tempo;
+    set("tempo", Math.max(40, Math.min(220, Math.round(bpm * 10) / 10)));
+    record("Tempo", () => set("tempo", before), "tempo");
+  }
+
   /** Space bar: blackout only while held. */
   const setBlackoutHold = (on: boolean) => set("blackoutHold", on);
   const isDark = () => state.blackout || state.blackoutHold;
@@ -579,6 +824,9 @@ function build() {
       bars: state.faders.pixels,
       laser: state.faders.laser,
     };
+    if (state.identify === f.id) {
+      return { look: { id: "identify", name: "Identify", colors: ["#ffffff"], groups: [f.group], kind: "strobe" }, layer: null, level: beatPhase() < 0.5 ? 1 : 0.15 };
+    }
     const level = isDark() || !look ? 0 : (state.master / 100) * (groupFader[f.group] / 100);
     return { look, layer, level };
   }
@@ -748,7 +996,30 @@ function build() {
     decks,
     setList,
     autopilotNow,
-    rig: RIG,
+    get rig() {
+      return state.rig;
+    },
+    sectionLooksOf,
+    setSectionLooks,
+    fillFromStyle,
+    analysisOf,
+    markReviewed,
+    fixtureById,
+    conflicts,
+    inConflict,
+    freeAddress,
+    moveFixture,
+    setAddress,
+    addFixture,
+    setIdentify,
+    attributes,
+    channelValues,
+    holdChannel,
+    releaseChannel,
+    releaseAllChannels,
+    outputs,
+    setClockFeed,
+    setTempo,
     looks: LOOKS,
     songs: SONGS,
     groups: GROUPS,

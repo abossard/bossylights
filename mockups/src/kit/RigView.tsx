@@ -10,7 +10,8 @@ export interface FixtureLook {
 
 export interface RigZone {
   label: string;
-  layer: Layer;
+  /** The layer the zone belongs to. Without one it is a neutral outline (a group in Patch). */
+  layer?: Layer;
   fixtureIds: string[];
 }
 
@@ -22,6 +23,8 @@ export interface RigViewProps {
   zones?: RigZone[];
   /** Makes fixtures pressable (select in Looks, Patch). */
   onFixture?: (f: Fixture) => void;
+  /** Makes fixtures draggable. x and y are 0..1 of the stage. */
+  onMove?: (f: Fixture, x: number, y: number) => void;
   selected?: string[];
   label?: string;
   class?: string;
@@ -83,7 +86,7 @@ export function RigView(props: RigViewProps) {
         {(z) => {
           const b = () => zoneBox(z);
           return (
-            <g class={`rig-zone layer-${z.layer}`}>
+            <g class={`rig-zone ${z.layer ? `layer-${z.layer}` : "rig-zone-neutral"}`}>
               <line x1={`${b().x0}%`} x2={`${b().x0}%`} y1={`${b().yTop}%`} y2={`${b().yLow}%`} />
               <line x1={`${b().x1}%`} x2={`${b().x1}%`} y1={`${b().yTop}%`} y2={`${b().yLow}%`} />
               <svg y={`${b().yTop}%`} overflow="visible">
@@ -112,18 +115,58 @@ export function RigView(props: RigViewProps) {
           const opacity = () => (lit() ? 0.55 + 0.45 * look().level : 0);
           const selected = () => props.selected?.includes(f.id) ?? false;
           const press = () => props.onFixture?.(f);
+          // drag to move; a press that does not move is a click
+          let moved = false;
+          const down = (e: PointerEvent) => {
+            if (!props.onMove || e.button > 0) return;
+            const g = e.currentTarget as SVGGElement;
+            try {
+              g.setPointerCapture(e.pointerId);
+            } catch {
+              // synthetic pointer: drag still works
+            }
+            moved = false;
+            const x0 = e.clientX;
+            const y0 = e.clientY;
+            const move = (ev: PointerEvent) => {
+              if (!moved && Math.hypot(ev.clientX - x0, ev.clientY - y0) < 5) return;
+              moved = true;
+              const r = svg.getBoundingClientRect();
+              props.onMove?.(f, (ev.clientX - r.left) / r.width, (ev.clientY - r.top) / r.height);
+            };
+            const up = () => {
+              g.removeEventListener("pointermove", move);
+              g.removeEventListener("pointerup", up);
+              g.removeEventListener("pointercancel", up);
+            };
+            g.addEventListener("pointermove", move);
+            g.addEventListener("pointerup", up);
+            g.addEventListener("pointercancel", up);
+          };
+          const key = (e: KeyboardEvent) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              press();
+              return;
+            }
+            const d: Record<string, [number, number]> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+            if (!props.onMove || !d[e.key]) return;
+            e.preventDefault();
+            props.onMove(f, f.x + d[e.key][0] * 0.02, f.y + d[e.key][1] * 0.02);
+          };
           const plateY = f.kind === "bar" ? 0 : f.kind === "mover" ? 34 : 26;
           return (
             <svg x={`${f.x * 100}%`} y={`${f.y * 100}%`} overflow="visible">
               <g
                 class={`rig-fx rig-${f.kind}`}
-                classList={{ "is-selected": selected(), "is-pressable": !!props.onFixture }}
+                classList={{ "is-selected": selected(), "is-pressable": !!props.onFixture, "is-draggable": !!props.onMove }}
                 role={props.onFixture ? "button" : undefined}
                 tabIndex={props.onFixture ? 0 : undefined}
                 aria-label={props.onFixture ? f.name : undefined}
                 aria-pressed={props.onFixture ? selected() : undefined}
-                onClick={press}
-                onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), press())}
+                onPointerDown={down}
+                onClick={() => (moved ? (moved = false) : press())}
+                onKeyDown={key}
               >
                 <Show when={props.onFixture}>
                   <rect class="rig-hit" x="-24" y="-24" width="48" height="48" />

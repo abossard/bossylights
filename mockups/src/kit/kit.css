@@ -172,7 +172,9 @@
 
 .btn.has-reason:disabled {
   opacity: 1;
+  background: none;
   color: var(--mute);
+  border-color: var(--line);
   border-style: dashed;
 }
 
@@ -1088,6 +1090,24 @@ button.list-body:hover {
   fill: none;
   stroke: var(--layer);
   stroke-width: 2;
+}
+
+.rig-zone-neutral {
+  --layer: var(--mute);
+}
+
+.rig-zone-neutral line {
+  stroke-dasharray: 5 4;
+  stroke-width: 1.5;
+}
+
+.rig-zone-neutral text {
+  fill: var(--ink);
+}
+
+.rig-fx.is-draggable {
+  cursor: grab;
+  touch-action: none;
 }
 
 .rig-zone .rig-zone-chip {
