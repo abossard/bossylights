@@ -124,15 +124,20 @@ export function Flow(props: {
     </g>
   );
 
+  const added = () => store.state.layers.filter((l) => l.kind === "extra").map((l) => l.name);
+
   return (
-    <svg class="fl" viewBox="0 0 1200 340" role="img" aria-label="Five writers send commands to three layers. The layers make a frame 44 times a second. The rig turns it into DMX for the output.">
+    <svg class="fl" viewBox="0 0 1200 340" role="img" aria-label="Five writers send commands to the layers. The layers make a frame 44 times a second. The rig turns it into DMX for the output.">
       <defs>
         <marker id="fl-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
           <path d="M0,0 L10,5 L0,10 z" class="fl-arrowhead" />
         </marker>
       </defs>
       <text x="16" y="12" class="fl-col">Five writers</text>
-      <text x="400" y="16" class="fl-col">Three layers, top wins</text>
+      <text x="400" y="16" class="fl-col">Layers, top wins</text>
+      <text x="400" y="334" class="fl-sub">
+        {added().length ? `Plus ${added().join(", ")}, added on the Console` : "Three to start. Add more on the Console."}
+      </text>
 
       <For each={Object.entries(PATHS)}>
         {([id, d]) => (

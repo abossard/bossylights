@@ -19,7 +19,7 @@ export interface Module {
 }
 
 export const MODULES: Module[] = [
-  { id: "door", name: "Door", iface: ["send", "subscribe", "query"], hides: ["transports: UI, MCP, OSC", "versions", "permissions"], ifaceSize: 3, hidesSize: 6, core: false, screens: ["console", "songs", "looks", "patch", "dmx", "inout"], x: 360, y: 150, h: 70 },
+  { id: "door", name: "Engine", iface: ["send", "subscribe", "query"], hides: ["a listed set of commands", "transports: UI, MCP, OSC", "versions", "permissions"], ifaceSize: 3, hidesSize: 6, core: false, screens: ["console", "songs", "looks", "patch", "dmx", "inout"], x: 360, y: 150, h: 70 },
   { id: "mixer", name: "Mixer", iface: ["apply", "frame"], hides: ["layers", "fades", "launch on beat", "flash", "release", "masters", "blackout"], ifaceSize: 2, hidesSize: 8, core: true, screens: ["console", "songs", "looks", "dmx"], x: 545, y: 165 },
   { id: "sources", name: "Sources", iface: ["evaluate"], hides: ["chases", "movement maths", "pixel matrices", "audio scripts", "palettes", "laser shapes"], ifaceSize: 1, hidesSize: 8, core: true, screens: [], x: 680, y: 270 },
   { id: "clock", name: "Clock", iface: ["now", "follow"], hides: ["tap", "audio beat", "MIDI clock", "DJ position", "timecode", "smoothing"], ifaceSize: 2, hidesSize: 6, core: true, screens: ["songs", "inout"], x: 545, y: 350 },
@@ -67,6 +67,6 @@ export const TRACE: { path: string; at: string; say: string; reverse?: boolean }
   { path: "door-mixer", at: "mixer", say: "apply(command)" },
   { path: "mixer-rig", at: "rig", say: "frame(time) gives a look, 44 times a second" },
   { path: "rig-output", at: "output", say: "resolve(look) gives universes: bytes go out" },
-  { path: "mixer-door", at: "door", say: "The new state comes back through the Door" },
+  { path: "mixer-door", at: "door", say: "The new state comes back through the Engine" },
   { path: "surface-door", at: "surface", say: "reflect(state): the pad lights up", reverse: true },
 ];

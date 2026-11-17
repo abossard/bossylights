@@ -28,7 +28,7 @@ export const QUESTIONS: Question[] = [
   q("Theory", 5, "DJ software and audio disagree on the beat", "The feed you picked wins", "The most confident feed wins"),
   q("Theory", 6, "What is Song Director?", "An editor for a show whose blocks follow song sections", "Its own thing"),
   q("Theory", 7, "Anything you rely on in QLC+ that these nine ideas cannot say?"),
-  q("Modules", 1, "Is a Door with three operations believable?", "Yes, commands are data", "No, it hides a giant \"do anything\""),
+  q("Modules", 1, "Is the Engine (first called Door) believable with three operations?", "Yes, commands are data", "No, it hides a giant \"do anything\""),
   q("Modules", 2, "Can you play something that is not saved?", "No, everything playable lives in Project", "Yes, scratch sources exist"),
   q("Modules", 3, "Where does controller mapping live?", "In Surface, next to the widgets", "In In/Out, like QLC+ profiles"),
   q("Modules", 4, "Music and Autopilot", "Two modules: knowing vs deciding", "One module"),

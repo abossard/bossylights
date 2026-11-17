@@ -175,7 +175,7 @@ export function Screen() {
 
   return (
     <div class="how-screen">
-      <Region id="flow" title="The whole theory in one picture" class="how-flow" aside={<span class="mute">Every frame is computed fresh from what plays on three layers.</span>}>
+      <Region id="flow" title="The whole theory in one picture" class="how-flow" aside={<span class="mute">Every frame is computed fresh from what plays on the layers.</span>}>
         <Flow dots={dots} lit={current()?.lit ?? []} />
       </Region>
 

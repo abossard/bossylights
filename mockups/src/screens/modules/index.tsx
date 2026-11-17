@@ -25,7 +25,7 @@ export function Screen() {
   const mod = () => MODULES.find((m) => m.id === selected())!;
   const paths: Record<string, SVGPathElement> = {};
 
-  // ---- trace a press: a dot hops Surface, Door, Mixer, Rig, Output and back
+  // ---- trace a press: a dot hops Surface, Engine, Mixer, Rig, Output and back
   const [trace, setTrace] = createSignal<{ t0: number } | null>(null);
   const [tick, setTick] = createSignal(0);
   let raf = 0;
@@ -105,7 +105,7 @@ export function Screen() {
           </Button>
         }
       >
-        <svg class="mm-svg" viewBox="0 0 940 446" role="img" aria-label="The twelve modules. Every writer goes through the Door. The core never calls outward.">
+        <svg class="mm-svg" viewBox="0 0 940 446" role="img" aria-label="The twelve modules. Every writer goes through the Engine. The core never calls outward.">
           <defs>
             <marker id="mm-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
               <path d="M0,0 L10,5 L0,10 z" class="mm-head" />
