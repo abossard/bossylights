@@ -60,9 +60,9 @@
         "displayName": "Tempo",
         "purpose": "The tempo numeral. The largest text on any screen."
       },
-      "on-air": {
-        "displayName": "On air",
-        "purpose": "Title of the song on air."
+      "playing": {
+        "displayName": "Playing",
+        "purpose": "Title of the song that plays."
       },
       "title": {
         "displayName": "Title",
@@ -148,7 +148,7 @@
   ],
   "narrative": {
     "northStar": "Running Order",
-    "overview": "Tonight is a timetable, like the set-times board at a festival. Three lanes (Manual, Show, Autopilot), a NOW line, flat blocks of colour with dark text. Made for a laptop in a dark room next to DJ decks, and for a touch screen. The eye finds the song on air first, then the NOW line, then what is running. Everything else stays quiet.",
+    "overview": "Tonight is a timetable, like the set-times board at a festival. One lane per layer (three to start: Manual, Show, Autopilot; more can be added), a NOW line, flat blocks of colour with dark text. Made for a laptop in a dark room next to DJ decks, and for a touch screen. The eye finds the song that plays first, then the NOW line, then what is running. Everything else stays quiet.",
     "keyCharacteristics": [
       "Flat colour, square corners, no gradients, glow or shadows",
       "One colour per layer, used for nothing else",
@@ -168,7 +168,7 @@
       },
       {
         "name": "The Red Rule",
-        "body": "Red is for blackout, recording and errors only.",
+        "body": "Red is for blackout, recording and errors only. Recording is red while it is on.",
         "section": "colors"
       },
       {
@@ -178,7 +178,12 @@
       },
       {
         "name": "The Tempo Rule",
-        "body": "The tempo is the largest text. The song on air is second. Nothing else exceeds 26 px.",
+        "body": "The tempo is the largest text. The song that plays is second. Nothing else exceeds 26 px.",
+        "section": "typography"
+      },
+      {
+        "name": "The Case Rule",
+        "body": "Sentence case everywhere. Capitals only for LIVE and NOW.",
         "section": "typography"
       }
     ],

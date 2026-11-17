@@ -19,7 +19,7 @@ typography:
     fontSize: "38px"
     fontWeight: 900
     lineHeight: 1
-  on-air:
+  playing:
     fontFamily: "Big Shoulders Display, Archivo Narrow, sans-serif"
     fontSize: "32px"
     fontWeight: 800
@@ -109,13 +109,13 @@ Built in `mockups/` (tokens in `mockups/src/styles/tokens.css`, components in `m
 
 **Creative North Star: "Running Order"**
 
-Tonight is a timetable, like the set-times board at a festival. Three lanes (Manual, Show, Autopilot), a NOW line, flat blocks of colour with dark text. Made for a laptop in a dark room next to DJ decks, and for a touch screen.
+Tonight is a timetable, like the set-times board at a festival. One lane per layer (three to start: Manual, Show, Autopilot; more can be added), a NOW line, flat blocks of colour with dark text. Made for a laptop in a dark room next to DJ decks, and for a touch screen.
 
 What the eye finds, in this order:
 
 | Order | What | How it wins |
 |---|---|---|
-| 1 | The song on air | 32 px title, the only text that size |
+| 1 | The song that plays | 32 px title, the only text that size |
 | 2 | The NOW line | A paper line through every lane, with its flag |
 | 3 | What is running | Solid fills in the layer's colour |
 | 4 | Everything else | Quiet: dark surfaces, 18 px headings, 13 to 14 px labels |
@@ -148,14 +148,16 @@ Warm off-black and paper, plus one flat colour per layer.
 
 **The Layer Colour Rule.** Pink, cyan and marigold mean Manual, Show and Autopilot. They never decorate, highlight or mark a primary action.
 
-**The Paper Rule.** Paper fills mean "now" (NOW flag, deck on air, LIVE on) or "this one" (selected tab, primary button). Text on a fill is always ink.
+**The Paper Rule.** Paper fills mean "now" (NOW flag, the deck that plays, LIVE on) or "this one" (selected tab, primary button). Text on a fill is always ink.
 
-**The Red Rule.** Red is for blackout, recording and errors only. Look pads keep their own colours as a field on the pad.
+**The Red Rule.** Red is for blackout, recording and errors only. Recording is red while it is on: the indicator, the Record button and the layer being recorded. Look pads keep their own colours as a field on the pad.
 
 ## Typography
 
-**Display Font:** Big Shoulders Display (800, 900), uppercase, tracking 0.02em
+**Display Font:** Big Shoulders Display (800, 900), sentence case, tracking 0.02em
 **Body Font:** Archivo (variable: weight 400 to 700, width 62 to 125)
+
+**The Case Rule.** Sentence case everywhere. Capitals only for LIVE and NOW.
 
 **Character:** a condensed poster face for names and numerals, a workhorse sans for everything read at a glance.
 
@@ -164,7 +166,7 @@ Warm off-black and paper, plus one flat colour per layer.
 | Token | Size | Face | Used for |
 |---|---|---|---|
 | `--display-2xl` | 38 px | Display 900 | Tempo. The largest text on any screen. |
-| `--display-xl` | 32 px | Display 800 | Title of the song on air |
+| `--display-xl` | 32 px | Display 800 | Title of the song that plays |
 | `--display-lg` | 26 px | Display 900 | LIVE, page title |
 | `--display-md` | 22 px | Display 800 | Fader values, product name, panel titles |
 | 20 px | 20 px | Display 800 | Lane names, block titles, workspace tabs |
@@ -177,7 +179,7 @@ Warm off-black and paper, plus one flat colour per layer.
 
 **The 13 Rule.** Nothing read during a show is smaller than 13 px.
 
-**The Tempo Rule.** The tempo is the largest text. The song on air is second. Nothing else exceeds 26 px.
+**The Tempo Rule.** The tempo is the largest text. The song that plays is second. Nothing else exceeds 26 px.
 
 **The Narrow Rule.** Where a label is tight, narrow Archivo with `font-stretch: var(--tight)` (82%) before shrinking it. Numbers are tabular everywhere.
 
@@ -196,7 +198,7 @@ None. No shadows, no glow, no blur. Depth is three tones: ground, `--s1` panels,
 
 ## Shapes
 
-Square corners everywhere (radius 0). The only round shapes are things that are round in the world: fixtures in the rig view and the four beat dots. Rules are 2 px (`--rule`) or 1 px for quiet dividers. Dashed means "not now": planned, waiting, off, or locked.
+Square corners everywhere (radius 0). The only round shapes are things that are round in the world: the four beat dots. Rules are 2 px (`--rule`) or 1 px for quiet dividers. Dashed means "not now": planned, waiting, off, or locked.
 
 ## Components
 
@@ -228,8 +230,8 @@ Name: 14 px bold, narrow, never breaks at a hyphen. Pads 84 px and taller also s
 
 | State | Look |
 |---|---|
-| On | Paper slab, ink "LIVE ON", knob right |
-| Off | Outline, mute "LIVE OFF", knob left |
+| On | Paper slab, ink "LIVE on", knob right |
+| Off | Outline, mute "LIVE off", knob left |
 
 Four indicators beside it (DJ link, Recording, Autopilot, Lock), each a lamp and a word:
 
@@ -238,6 +240,7 @@ Four indicators beside it (DJ link, Recording, Autopilot, Lock), each a lamp and
 | Filled paper | On, in effect now |
 | Filled mute | Ready, starts with LIVE |
 | Empty, word struck through | Turned off |
+| Red lamp and red word | Recording, while it is on |
 
 With no lights connected a red-outlined chip says so and opens In/Out.
 
@@ -246,7 +249,9 @@ With no lights connected a red-outlined chip says so and opens In/Out.
 | Part | Look |
 |---|---|
 | Lane label | Name in the layer's colour (20 px), one state word, one short line |
-| State word | HOLDING, PLAYING (filled) or IDLE, WAITING, OFF (outlined) |
+| State word | holding, playing (filled) or idle, waiting, off (outlined) |
+| Added layer | "Add layer" under the lanes adds one below Manual, with its own colour (violet, green, orange) |
+| Recorded layer | Red while it records, then the Show colour |
 | Block, now or later | Flat fill, ink text |
 | Block, past | 2 px outline in the layer's colour |
 | Block, layer off or waiting | Dashed outline |
@@ -257,7 +262,7 @@ A narrow block wraps its title at 15 px. Narrower than a word, it keeps only its
 
 ### Decks
 
-The deck on air gets the room: paper letter block, 32 px title, NOW-style "ON AIR" flag, a 3 px progress line. The other deck is as wide as its text needs: 18 px title in mute. A deck with nothing loaded is a dashed outline that says "Nothing loaded".
+Decks are numbered 1 and 2. Their states are Playing, Cued and Stopped. The deck that plays gets the room: paper number block, 32 px title, a paper "Playing" chip, a 3 px progress line. The other deck is as wide as its text needs: 18 px title in mute. A deck with nothing loaded is a dashed outline that says "Nothing loaded".
 
 ### Buttons
 
@@ -279,6 +284,14 @@ The deck on air gets the room: paper letter block, 32 px title, NOW-style "ON AI
 - Fader: 44 px track, paper thumb with ink edge, value above in 22 px display, label below.
 - XY pad: paper crosshair and square dot on a quiet grid.
 
+### Learn
+
+"Learn" sits in the top bar. Step 1: click any button, pad, fader or value on any screen. Step 2: move a control on the hardware. A mapped control carries a 9 px paper square in its top left corner. The list of mappings is on In/Out.
+
+### Universe grid (Patch)
+
+512 cells, 32 per row. A fixture is a flat run of cells with its name plate, coloured by its group (never a layer colour). A clash is a red bar over the shared cells. Drag a run to give it another address.
+
 ### Region
 
 Every part of a screen is a Region: an 18 px display heading with an optional 13 px aside at the right. In comment mode each Region gets a dashed paper outline and a paper title chip.
@@ -299,6 +312,6 @@ Neutral paper chrome, no layer colour: paper frames, paper name chips, 44 px han
 ### Don't:
 - **Don't** use pink, cyan or marigold for anything that is not that layer.
 - **Don't** add gradients, glow, shadows or rounded corners.
-- **Don't** set any text larger than the tempo, or as large as the song on air.
+- **Don't** set any text larger than the tempo, or as large as the song that plays.
 - **Don't** rely on hover: every action has a visible control.
 - **Don't** open a modal. Flows happen in place.
