@@ -113,6 +113,8 @@ flowchart LR
 
 Let go and the PARs go back to amber. This replaces HTP and LTP.
 
+Three layers to start with. You can add more: each one is a lane, and the top one that speaks still wins.
+
 On screen the autopilot is not a separate place: its picks show as the Auto lane of the show. In the engine it stays its own layer, so one rule covers everything: show beats auto, hands beat both.
 
 ### 6. One clock
@@ -141,7 +143,7 @@ flowchart LR
   MUS["Music"] --> AP["Autopilot"] --> CMD3["Same kind of command<br/>on Autopilot"] --> ENG
 ```
 
-Recording, show and autopilot are three writers of one stream. That is why they combine.
+Recording, show and autopilot are three writers of one stream. That is why they combine. A fader move is a command too, so a recording keeps it.
 
 ### 8. Two kinds of state
 
@@ -235,7 +237,7 @@ sequenceDiagram
 | Second UI or an agent | easy | another client of the same door |
 | Laser shapes | medium | a source plus one output adapter |
 | "Just set channel 37" | awkward on purpose | goes through a raw-channel attribute |
-| More than three layers | hard | changes idea 5 |
+| One more layer | easy | layers are a list, top wins |
 | A source reading another source | not possible | compose them into one |
 
 ## The theory says no
@@ -249,16 +251,16 @@ flowchart LR
   classDef no stroke:#ef3e7b,stroke-width:2px,stroke-dasharray: 5 3
 ```
 
-## Questions for you
+## Answers from review 1
 
-| # | Question | Option A (my lean) | Option B |
-|---|---|---|---|
-| 1 | Who wins inside a layer? | Top layer wins for everything | Intensity adds up, so two washes are brighter |
-| 2 | How many layers? | Three, fixed | The user can add layers |
-| 3 | What does recording store? | Commands: editable, follows rig changes | DMX values: exact, but frozen |
-| 4 | Where do raw channels live? | Only on the DMX screen | Everywhere |
-| 5 | DJ software and audio disagree on the beat | The feed you picked wins | The most confident feed wins |
-| 6 | What is Song Director? | An editor for a show whose blocks follow song sections | Its own thing |
-| 7 | Anything you rely on in QLC+ that these nine ideas cannot say? | | |
+| # | Question | Decided |
+|---|---|---|
+| 1 | Who wins inside a layer? | the top layer wins for everything |
+| 2 | How many layers? | three to start with, and the user can add layers |
+| 3 | What does recording store? | commands, fader moves included |
+| 4 | Where do raw channels live? | only on the DMX screen |
+| 5 | DJ software and audio disagree on the beat | the feed you picked wins |
+| 6 | What is Song Director? | the editor of a song's show. Song = show, one screen |
+| 7 | Missing from QLC+? | nothing named |
 
-Answer with the number and A or B, here or in [issue #100](https://github.com/abossard/bossylights/issues/100).
+Details: [review-1.md](review-1.md).

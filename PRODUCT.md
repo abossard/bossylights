@@ -31,8 +31,10 @@ The show follows the music by itself, and a hand on any control takes over. Thre
 
 ## Capabilities and Constraints
 
-- Screens: Console (the customizable console, home), Show (timeline, recorder, runner, with the autopilot as its Auto lane), Songs (song director), Looks (looks, chasers, effects), Patch, DMX, In/Out.
-- The two VirtualDJ decks and the title of the song on air are always visible.
+- Screens: Console (the customizable console, home), Songs (every song has one show: sections, layers, recording, with the autopilot as its Auto lane), Looks (steps, sequences, patterns), Patch (universe grid, no map), DMX, In/Out.
+- Every button and value in the app can be mapped to a controller with one global Learn.
+- Layers: Autopilot, Show and Manual to start with. The user can add layers.
+- The two VirtualDJ decks (1 and 2) and the title of the song that plays are always visible.
 - The live console is designed by the user: widgets on pages and frames.
 - Words in the default layer are plain: looks, layers, pads. No "HTP", "LTP" or "function" there.
 - No screen asks the user to remember a value from another screen.

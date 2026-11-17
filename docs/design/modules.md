@@ -120,8 +120,7 @@ Screens are thin. Each is a view of one or two modules through the Door.
 | Screen | Surface | Mixer | Show | Music | Autopilot | Project | Rig | Library | Output | Clock |
 |---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
 | Console | ● | ● | | | | | | | | |
-| Show (with autopilot) | | ● | ● | ● | ● | | | | | ● |
-| Songs | | | ● | ● | | | | | | |
+| Songs (show and autopilot) | | ● | ● | ● | ● | | | | | ● |
 | Looks | | ● | | | | ● | | | | |
 | Patch | | | | | | | ● | ● | | |
 | DMX | | ● | | | | | ● | | ● | |
@@ -137,14 +136,14 @@ flowchart LR
   classDef no stroke:#ef3e7b,stroke-width:2px,stroke-dasharray: 5 3
 ```
 
-## Questions for you
+## Answers from review 1
 
-| # | Question | Option A (my lean) | Option B |
-|---|---|---|---|
-| 1 | Is a Door with three operations believable? | Yes, commands are data | No, it hides a giant "do anything" |
-| 2 | Can you play something that is not saved? | No, everything playable lives in Project | Yes, scratch sources exist |
-| 3 | Where does controller mapping live? | In Surface, next to the widgets | In In/Out, like QLC+ profiles |
-| 4 | Music and Autopilot | Two modules: knowing vs deciding | One module |
-| 5 | Which module will be hardest to keep narrow? | | |
+| # | Question | Decided |
+|---|---|---|
+| 1 | Is a Door with three operations believable? | not under that name. It gets a desk word (open: "Command line" or "Gate") and a listed set of commands |
+| 2 | Can you play something that is not saved? | everything you try is saved by itself, so the question disappears |
+| 3 | Where does controller mapping live? | in Surface. Learn works on every control in the app |
+| 4 | Music and Autopilot | two modules: knowing and deciding |
+| 5 | Hardest module to keep narrow | open |
 
-Answer with the number and A or B, here or in [issue #100](https://github.com/abossard/bossylights/issues/100).
+Details: [review-1.md](review-1.md).
