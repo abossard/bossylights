@@ -109,7 +109,7 @@ Built in `mockups/` (tokens in `mockups/src/styles/tokens.css`, components in `m
 
 **Creative North Star: "Running Order"**
 
-Tonight is a timetable, like the set-times board at a festival. One lane per layer (three to start: Manual, Show, Autopilot; more can be added), a NOW line, flat blocks of colour with dark text. Made for a laptop in a dark room next to DJ decks, and for a touch screen.
+Tonight is a timetable, like the set-times board at a festival. Three rows (Manual, Show, Autopilot), a NOW line, flat blocks of colour with dark text. Made for a laptop in a dark room next to DJ decks, and for a touch screen.
 
 What the eye finds, in this order:
 
@@ -117,18 +117,18 @@ What the eye finds, in this order:
 |---|---|---|
 | 1 | The song that plays | 32 px title, the only text that size |
 | 2 | The NOW line | A paper line through every lane, with its flag |
-| 3 | What is running | Solid fills in the layer's colour |
+| 3 | What is running | Solid fills in the colour of its row |
 | 4 | Everything else | Quiet: dark surfaces, 18 px headings, 13 to 14 px labels |
 
 **Key Characteristics:**
 - Flat colour. No gradients, glow or shadows. Square corners.
-- One colour per layer, used for nothing else.
+- One colour per row (manual, show, autopilot), used for nothing else.
 - Paper means "now" and "do this".
 - Standard controls: buttons, tabs, sliders, lists, tables.
 
 ## Colors
 
-Warm off-black and paper, plus one flat colour per layer.
+Warm off-black and paper, plus one flat colour for each of the three rows.
 
 | Token | Value | Used for |
 |---|---|---|
@@ -146,11 +146,11 @@ Warm off-black and paper, plus one flat colour per layer.
 
 ### Named Rules
 
-**The Layer Colour Rule.** Pink, cyan and marigold mean Manual, Show and Autopilot. They never decorate, highlight or mark a primary action.
+**The Row Colour Rule.** Pink, cyan and marigold mean Manual, Show and Autopilot: who started it. There are no layers to manage. (The tokens keep their names, `--layer-manual` and so on.) They never decorate, highlight or mark a primary action.
 
 **The Paper Rule.** Paper fills mean "now" (NOW flag, the deck that plays, LIVE on) or "this one" (selected tab, primary button). Text on a fill is always ink.
 
-**The Red Rule.** Red is for blackout, recording and errors only. Recording is red while it is on: the indicator, the Record button and the layer being recorded. Look pads keep their own colours as a field on the pad.
+**The Red Rule.** Red is for blackout, recording and errors only. Recording is red while it is on: the indicator, the Record button and the take being recorded. Look pads keep their own colours as a field on the pad.
 
 ## Typography
 
@@ -248,13 +248,13 @@ With no lights connected a red-outlined chip says so and opens In/Out.
 
 | Part | Look |
 |---|---|
-| Lane label | Name in the layer's colour (20 px), one state word, one short line |
+| Lane label | Name in the row's colour (20 px), one state word, one short line |
 | State word | holding, playing (filled) or idle, waiting, off (outlined) |
-| Added layer | "Add layer" under the lanes adds one below Manual, with its own colour (violet, green, orange) |
-| Recorded layer | Red while it records, then the Show colour |
+| Held, pad off | The Manual block goes on as a dashed tail "held, pad off" until Release |
+| Take (Songs) | Red while it records ("Recording"), then the Show colour ("Recorded today 21:58") |
 | Block, now or later | Flat fill, ink text |
-| Block, past | 2 px outline in the layer's colour |
-| Block, layer off or waiting | Dashed outline |
+| Block, past | 2 px outline in the row's colour |
+| Block, row off or waiting | Dashed outline |
 | Still running | Fill up to NOW, then an open dashed tail: "holding" |
 | NOW | 6 px paper line with ink edges, flag "NOW 22:47" |
 
@@ -270,7 +270,7 @@ Decks are numbered 1 and 2. Their states are Playing, Cued and Stopped. The deck
 |---|---|---|
 | Default | 2 px `--line` outline | Most actions |
 | Primary | Paper fill, ink text | The one main action of a view |
-| Layer | Outline or fill in a layer's colour | Acts on that layer (Release, Keep) |
+| Row colour | Outline or fill in pink, cyan or marigold | Acts on what you hold, on the show or on the autopilot (Release, Keep) |
 | Danger | Red outline, red fill when on | Blackout, Record |
 | Toggle on | Paper fill | Any pressed toggle |
 | Disabled with reason | Dashed outline, the reason under the label | "Edit surface / Locked while LIVE is on" |
@@ -284,13 +284,27 @@ Decks are numbered 1 and 2. Their states are Playing, Cued and Stopped. The deck
 - Fader: 44 px track, paper thumb with ink edge, value above in 22 px display, label below.
 - XY pad: paper crosshair and square dot on a quiet grid.
 
+### Held until Release
+
+What you touch on the Console stays yours until Release. Three marks say so, all pink:
+
+| Where | Mark |
+|---|---|
+| Notice above the pads | "You hold, until Release", one line per pad or control with what it touched ("brightness of PAR 1-8"), a dashed "pad off" chip, and the Release button |
+| Pad that is off but still held | 3 px pink outline and a pink "held" tag in the corner. No NOW flag, no fill |
+| Timetable, Manual row | The block continues as a dashed tail "held, pad off" |
+
+### Who wins (DMX)
+
+Five numbered rows: rule name, then the rule or its setting. Settings are two-option switches, 30 px high (an expert screen, not pressed during a show). The row names Manual, Show and Autopilot in their colours.
+
 ### Learn
 
 "Learn" sits in the top bar. Step 1: click any button, pad, fader or value on any screen. Step 2: move a control on the hardware. A mapped control carries a 9 px paper square in its top left corner. The list of mappings is on In/Out.
 
 ### Universe grid (Patch)
 
-512 cells, 32 per row. A fixture is a flat run of cells with its name plate, coloured by its group (never a layer colour). A clash is a red bar over the shared cells. Drag a run to give it another address.
+512 cells, 32 per row. A fixture is a flat run of cells with its name plate, coloured by its group (never pink, cyan or marigold). A clash is a red bar over the shared cells. Drag a run to give it another address.
 
 ### Region
 
@@ -303,14 +317,14 @@ Neutral paper chrome, no layer colour: paper frames, paper name chips, 44 px han
 ## Do's and Don'ts
 
 ### Do:
-- **Do** give a running thing its layer's colour as a solid fill, and the NOW flag.
+- **Do** give a running thing the colour of its row as a solid fill, and the NOW flag.
 - **Do** use paper for the single primary action and for "now".
 - **Do** say why a control is disabled, on the control.
 - **Do** narrow a label before shrinking it, and keep it at 13 px or more.
 - **Do** use dashed lines for planned, waiting, off and locked.
 
 ### Don't:
-- **Don't** use pink, cyan or marigold for anything that is not that layer.
+- **Don't** use pink, cyan or marigold for anything but manual, show and autopilot.
 - **Don't** add gradients, glow, shadows or rounded corners.
 - **Don't** set any text larger than the tempo, or as large as the song that plays.
 - **Don't** rely on hover: every action has a visible control.

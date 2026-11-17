@@ -109,7 +109,7 @@
       "name": "Pad, running on Manual",
       "kind": "custom",
       "refersTo": "pad-running-manual",
-      "description": "A running pad fills with its layer's colour and carries the NOW flag.",
+      "description": "A running pad fills with the colour of who runs it (manual, show or autopilot) and carries the NOW flag.",
       "html": "<button class=\"ds-pad-run\"><span class=\"ds-pad-run-field\"></span><span class=\"ds-pad-run-flag\">NOW</span><span class=\"ds-pad-run-name\">Strobe</span></button>",
       "css": ".ds-pad-run{width:76px;height:72px;padding:0;border:0;display:flex;flex-direction:column;background:#ef3e7b;color:#1c1a17;text-align:left;position:relative;cursor:pointer}.ds-pad-run-field{flex:0 0 34%;background:#fff;border-bottom:2px solid #1c1a17}.ds-pad-run-flag{position:absolute;top:0;right:0;background:#f4efe6;font:800 14px/1 'Big Shoulders Display',sans-serif;padding:3px 5px;border-left:2px solid #1c1a17;border-bottom:2px solid #1c1a17}.ds-pad-run-name{flex:1;display:flex;align-items:center;padding:2px 6px;font:700 14px/1.1 Archivo,sans-serif;font-stretch:82%}.ds-pad-run:focus-visible{outline:3px solid #f4efe6;outline-offset:2px}"
     },
@@ -141,23 +141,23 @@
       "name": "Timetable block and NOW flag",
       "kind": "custom",
       "refersTo": "block",
-      "description": "A flat block in the layer's colour with dark text, and the NOW flag.",
+      "description": "A flat block in the colour of its row with dark text, and the NOW flag.",
       "html": "<div class=\"ds-lane\"><div class=\"ds-block\"><b>BUILD-UP</b><i>22:44</i></div><span class=\"ds-now\"></span><span class=\"ds-flag\">NOW 22:47</span></div>",
       "css": ".ds-lane{position:relative;width:260px;height:96px;border-bottom:1px solid #46413a}.ds-block{position:absolute;left:20px;top:28px;bottom:8px;width:150px;padding:7px 6px;background:#f2b705;color:#1c1a17}.ds-block b{display:block;font:800 20px/1 'Big Shoulders Display',sans-serif;letter-spacing:.02em}.ds-block i{display:block;margin-top:4px;font:600 13px Archivo,sans-serif;font-style:normal}.ds-now{position:absolute;left:120px;top:20px;bottom:0;width:6px;background:#f4efe6;border-left:2px solid #1c1a17;border-right:2px solid #1c1a17}.ds-flag{position:absolute;left:84px;top:0;background:#f4efe6;color:#1c1a17;font:800 17px/1 'Big Shoulders Display',sans-serif;letter-spacing:.02em;padding:4px 7px}"
     }
   ],
   "narrative": {
     "northStar": "Running Order",
-    "overview": "Tonight is a timetable, like the set-times board at a festival. One lane per layer (three to start: Manual, Show, Autopilot; more can be added), a NOW line, flat blocks of colour with dark text. Made for a laptop in a dark room next to DJ decks, and for a touch screen. The eye finds the song that plays first, then the NOW line, then what is running. Everything else stays quiet.",
+    "overview": "Tonight is a timetable, like the set-times board at a festival. Three rows (Manual, Show, Autopilot), a NOW line, flat blocks of colour with dark text. Made for a laptop in a dark room next to DJ decks, and for a touch screen. The eye finds the song that plays first, then the NOW line, then what is running. Everything else stays quiet.",
     "keyCharacteristics": [
       "Flat colour, square corners, no gradients, glow or shadows",
-      "One colour per layer, used for nothing else",
+      "One colour per row (manual, show, autopilot), used for nothing else",
       "Paper means now and the primary action",
       "Standard controls"
     ],
     "rules": [
       {
-        "name": "The Layer Colour Rule",
+        "name": "The Row Colour Rule",
         "body": "Pink, cyan and marigold mean Manual, Show and Autopilot. They never decorate, highlight or mark a primary action.",
         "section": "colors"
       },
@@ -185,16 +185,21 @@
         "name": "The Case Rule",
         "body": "Sentence case everywhere. Capitals only for LIVE and NOW.",
         "section": "typography"
+      },
+      {
+        "name": "The Release Rule",
+        "body": "What you touch on the Console stays yours until Release. A pad that is off but still held keeps a pink outline and a held tag.",
+        "section": "components"
       }
     ],
     "dos": [
-      "Do give a running thing its layer's colour as a solid fill, and the NOW flag.",
+      "Do give a running thing the colour of its row as a solid fill, and the NOW flag.",
       "Do use paper for the single primary action and for now.",
       "Do say why a control is disabled, on the control.",
       "Do narrow a label before shrinking it."
     ],
     "donts": [
-      "Don't use pink, cyan or marigold for anything that is not that layer.",
+      "Don't use pink, cyan or marigold for anything but manual, show and autopilot.",
       "Don't add gradients, glow, shadows or rounded corners.",
       "Don't set any text larger than the tempo.",
       "Don't rely on hover.",
