@@ -45,7 +45,38 @@ export interface ManualEvent {
   action: "start" | "stop" | "flash";
 }
 
-/** A section of a song placed on the show clock. */
+export type ClipTrack = "looks" | "movers" | "pixels" | "laser" | "recorded";
+
+/** A clip on the Show timeline. Kept clips came from an autopilot pick. */
+export interface ShowClip {
+  id: number;
+  track: ClipTrack;
+  lookId: string;
+  start: number;
+  end: number;
+  origin: "programmed" | "kept" | "recorded";
+}
+
+/** A VirtualDJ deck. Position and length in seconds. */
+export interface Deck {
+  letter: "A" | "B";
+  song: Song;
+  playing: boolean;
+  onAir: boolean;
+  position: number;
+  length: number;
+}
+
+/** A song in tonight's set, placed on the clock. */
+export interface SetEntry {
+  song: Song;
+  index: number;
+  start: number;
+  end: number;
+  mark: "recorded" | "show" | "auto" | "not analysed";
+}
+
+/** A section of a song placed on the clock. */
 export interface PlacedSection {
   key: string;
   song: Song;
@@ -96,7 +127,7 @@ interface State {
   faders: Record<FaderId, number>;
   xy: { pan: number; tilt: number };
   manual: ManualBlock[];
-  show: { on: boolean };
+  clips: ShowClip[];
   autopilot: {
     on: boolean;
     style: AutopilotStyle;
@@ -132,7 +163,19 @@ function build() {
       { id: 1, lookId: "red-alert", start: 22 * 3600 + 40 * 60 + 30, end: 22 * 3600 + 42 * 60 + 40, mode: "held" },
       { id: 2, lookId: "strobe", start: 22 * 3600 + 43 * 60 + 30, end: null, mode: "held" },
     ],
-    show: { on: false },
+    // Song 1 was recorded. Song 2 has its own show for the first drop only.
+    clips: [
+      { id: 10, track: "recorded", lookId: "warm-wash", start: 80100, end: 80340, origin: "recorded" },
+      { id: 11, track: "recorded", lookId: "tilt-wave", start: 80340, end: 80640, origin: "recorded" },
+      { id: 12, track: "recorded", lookId: "pulse", start: 80640, end: 81000, origin: "recorded" },
+      { id: 13, track: "recorded", lookId: "deep-blue", start: 81000, end: 81180, origin: "recorded" },
+      { id: 14, track: "recorded", lookId: "bass-hit", start: 81180, end: 81420, origin: "recorded" },
+      { id: 15, track: "recorded", lookId: "slow-fade", start: 81420, end: 81600, origin: "recorded" },
+      { id: 16, track: "looks", lookId: "pulse", start: 82140, end: 82380, origin: "programmed" },
+      { id: 17, track: "movers", lookId: "fan-out", start: 82140, end: 82380, origin: "programmed" },
+      { id: 18, track: "pixels", lookId: "sparkle", start: 82140, end: 82380, origin: "programmed" },
+      { id: 19, track: "laser", lookId: "laser-fan", start: 82200, end: 82380, origin: "programmed" },
+    ],
     autopilot: {
       on: true,
       style: "club",
@@ -145,7 +188,7 @@ function build() {
     history: [],
   });
 
-  let nextId = 3;
+  let nextId = 100;
 
   /** Show clock in seconds since midnight. */
   const now = () => CLOCK_START + elapsed() / 1000;
@@ -222,9 +265,38 @@ function build() {
     return s ? sectionsBetween(s.start, s.end - 0.001) : [];
   };
 
+  // ---- show clips ----------------------------------------------------
+  const trackFor = (l: Look): ClipTrack =>
+    l.kind === "movement" ? "movers" : l.kind === "pixels" ? "pixels" : l.kind === "laser" ? "laser" : "looks";
+  const activeClips = (t = now()) => state.clips.filter((c) => c.start <= t && t < c.end);
+  /** A section the show already covers: the autopilot leaves it alone. */
+  const covered = (p: PlacedSection) => {
+    const mid = (p.start + p.end) / 2;
+    return state.clips.some((c) => c.start < mid && c.end > mid);
+  };
+
+  function moveClip(id: number, start: number, end: number) {
+    const c = state.clips.find((x) => x.id === id);
+    if (!c) return;
+    const before = { start: c.start, end: c.end };
+    set("clips", (x) => x.id === id, { start, end });
+    record("Move clip", () => set("clips", (x) => x.id === id, before), `clip:${id}`);
+  }
+
+  const energyWord = (e: number) => (e < 0.4 ? "low" : e < 0.7 ? "rising" : "high");
+  /** Why the autopilot picked what it picked, in plain words. */
+  const pickReason = (p: PlacedSection) => `${p.section.title}, ${energyWord(p.section.energy)} energy`;
+
+  const FALLBACK: Record<string, string[]> = {
+    low: ["breathe"],
+    rising: ["warm-wash", "tilt-wave"],
+    high: ["pulse", "fan-out", "chase-lr"],
+  };
+
   /** What the autopilot plays in a section, after style, groups and skips. */
   function autopilotLooks(p: PlacedSection): Look[] {
-    const ids = state.autopilot.swaps[p.key] ?? p.section.looks;
+    const ids =
+      state.autopilot.swaps[p.key] ?? (p.section.looks.length ? p.section.looks : FALLBACK[energyWord(p.section.energy)]);
     return ids
       .map(lookById)
       .filter((l) => !(state.autopilot.style === "no-strobe" && l.kind === "strobe"))
@@ -233,14 +305,89 @@ function build() {
 
   const autopilotNow = (): Look[] => {
     const cur = currentSection();
-    return state.autopilot.on && autopilotArmed() && cur ? autopilotLooks(cur) : [];
+    return state.autopilot.on && autopilotArmed() && cur && !covered(cur) ? autopilotLooks(cur) : [];
   };
+
+  /** Skip a whole pick: every look in it is replaced with another of the same kind. */
+  function skipPick(p: PlacedSection) {
+    const before = state.autopilot.swaps[p.key];
+    const ids = autopilotLooks(p).map((l) => l.id);
+    const next = ids.map((id) => {
+      const old = lookById(id);
+      const options = LOOKS.filter(
+        (l) => l.kind === old.kind && !ids.includes(l.id) && l.id !== "blackout-hold" && l.groups.some((g) => old.groups.includes(g)),
+      );
+      return (options[Math.floor(Math.random() * options.length)] ?? old).id;
+    });
+    set("autopilot", "swaps", p.key, next);
+    record(`Skip ${p.section.title}`, () =>
+      set("autopilot", "swaps", produce((s: Record<string, string[]>) => {
+        if (before) s[p.key] = before;
+        else delete s[p.key];
+      })),
+    );
+  }
+
+  function morePick(p: PlacedSection) {
+    const before = [...state.autopilot.likes];
+    const add = autopilotLooks(p).map((l) => l.id).filter((id) => !before.includes(id));
+    if (!add.length) return;
+    set("autopilot", "likes", [...before, ...add]);
+    record(`More like ${p.section.title}`, () => set("autopilot", "likes", before));
+  }
+
+  /** Keep a pick: it becomes normal show clips that you own. */
+  function keepPick(p: PlacedSection) {
+    const looks = autopilotLooks(p);
+    if (!looks.length) return;
+    const ids = looks.map(() => nextId++);
+    set("clips", (cs) => [
+      ...cs,
+      ...looks.map((l, i) => ({ id: ids[i], track: trackFor(l), lookId: l.id, start: p.start, end: p.end, origin: "kept" as const })),
+    ]);
+    record(`Keep ${p.section.title}`, () => set("clips", (cs) => cs.filter((c) => !ids.includes(c.id))));
+  }
+
+  // ---- decks and the set ---------------------------------------------
+  /** The song on air sits on deck A when its place in the set is even (song 2 is on A). */
+  function decks(): Deck[] {
+    const cur = currentSong();
+    if (!cur) return [];
+    const next = SONGS[(cur.index + 1) % SONGS.length];
+    const onAirLetter: Deck["letter"] = cur.index % 2 === 1 ? "A" : "B";
+    const other: Deck["letter"] = onAirLetter === "A" ? "B" : "A";
+    const list: Deck[] = [
+      { letter: onAirLetter, song: cur.song, playing: true, onAir: true, position: now() - cur.start, length: cur.end - cur.start },
+      { letter: other, song: next, playing: false, onAir: false, position: 0, length: songLength(next) },
+    ];
+    return list.sort((a, b) => a.letter.localeCompare(b.letter));
+  }
+
+  /** Tonight's set around now, with how each song is lit. */
+  function setList(): SetEntry[] {
+    const cycle = Math.max(0, Math.floor((now() - SET_START) / setLength));
+    let t = SET_START + cycle * setLength;
+    return SONGS.map((song, index) => {
+      const start = t;
+      const end = (t += songLength(song));
+      const inSong = state.clips.filter((c) => c.start < end && c.end > start);
+      const mark: SetEntry["mark"] = inSong.some((c) => c.origin === "recorded")
+        ? "recorded"
+        : inSong.length
+          ? "show"
+          : song.analysis === "queued"
+            ? "not analysed"
+            : "auto";
+      return { song, index, start, end, mark };
+    });
+  }
 
   // ---- manual layer --------------------------------------------------
   const runningManual = () => state.manual.filter((b) => b.end === null);
   const manualBlockFor = (lookId: string) => runningManual().find((b) => b.lookId === lookId);
 
   function log(lookId: string, action: ManualEvent["action"]) {
+    if (!isRecording()) return;
     set("events", (e) => [...e, { at: now(), lookId, action }]);
   }
 
@@ -400,8 +547,14 @@ function build() {
       look = lookById(hand.lookId);
       layer = "manual";
     } else {
+      const sh = activeClips()
+        .map((c) => lookById(c.lookId))
+        .find((l) => l.groups.includes(f.group));
       const ap = autopilotNow().find((l) => l.groups.includes(f.group));
-      if (ap) {
+      if (sh) {
+        look = sh;
+        layer = "show";
+      } else if (ap) {
         look = ap;
         layer = "autopilot";
       }
@@ -416,12 +569,17 @@ function build() {
     return { look, layer, level };
   }
 
-  /** Groups the Manual layer covers that the Autopilot also wants. */
+  /** Groups the Manual layer covers that the Show or the Autopilot also wants. */
   function overrides() {
+    const showGroups = new Set(activeClips().flatMap((c) => lookById(c.lookId).groups));
     const apGroups = new Set(autopilotNow().flatMap((l) => l.groups));
     return runningManual()
       .map((b) => ({ block: b, look: lookById(b.lookId) }))
-      .map((x) => ({ ...x, groups: x.look.groups.filter((g) => apGroups.has(g)) }))
+      .map((x) => {
+        const under: "Show" | "Autopilot" = x.look.groups.some((g) => showGroups.has(g)) ? "Show" : "Autopilot";
+        const wanted = under === "Show" ? showGroups : apGroups;
+        return { ...x, under, groups: x.look.groups.filter((g) => wanted.has(g)) };
+      })
       .filter((x) => x.groups.length > 0);
   }
 
@@ -433,10 +591,11 @@ function build() {
     }).filter((x) => x !== null);
   }
 
-  /** How a look is running: "held" or "flash" on Manual, "autopilot", or null. */
-  function lookState(lookId: string): "held" | "flash" | "autopilot" | null {
+  /** How a look is running: "held" or "flash" on Manual, "show", "autopilot", or null. */
+  function lookState(lookId: string): "held" | "flash" | "show" | "autopilot" | null {
     const b = manualBlockFor(lookId);
     if (b) return b.mode;
+    if (activeClips().some((c) => c.lookId === lookId)) return "show";
     if (autopilotNow().some((l) => l.id === lookId)) return "autopilot";
     return null;
   }
@@ -454,9 +613,24 @@ function build() {
         end: b.end,
         tail: b.end === null ? (b.mode === "flash" ? "flash" : "held") : undefined,
       }));
-    const covered = handsOff().map((h) => h.group.name);
+    const handGroups = handsOff().map((h) => h.group.name);
     const cur = currentSection();
-    const apBlocks = sectionsBetween(from, to).map((p) => ({
+    const spans: { start: number; end: number; clips: ShowClip[] }[] = [];
+    for (const c of [...state.clips].sort((a, b) => a.start - b.start)) {
+      const last = spans[spans.length - 1];
+      if (last && c.start <= last.end) {
+        last.end = Math.max(last.end, c.end);
+        last.clips.push(c);
+      } else spans.push({ start: c.start, end: c.end, clips: [c] });
+    }
+    const spanTitle = (sp: (typeof spans)[number]) =>
+      sp.clips.every((c) => c.origin === "recorded") ? "Recorded" : (sectionAt(sp.start + 0.001)?.section.title ?? "Show");
+    const showBlocks = spans
+      .filter((sp) => sp.end > from && sp.start < to)
+      .map((sp) => ({ id: `show-${sp.start}`, title: spanTitle(sp), sub: hhmm(sp.start), start: sp.start, end: sp.end }));
+    const showNow = spans.find((sp) => sp.start <= t && t < sp.end);
+    const showNext = spans.find((sp) => sp.start > t);
+    const apBlocks = sectionsBetween(from, to).filter((p) => !covered(p)).map((p) => ({
       id: `ap-${p.key}`,
       title: p.section.title,
       sub: p.key === cur?.key ? `${hhmm(p.start)}\n${mmss(p.end - t)} left` : hhmm(p.start),
@@ -467,16 +641,22 @@ function build() {
       {
         layer: "manual",
         title: "Manual",
-        on: covered.length > 0,
-        status: covered.length ? `covers ${covered.join(", ")}` : "idle",
+        on: handGroups.length > 0,
+        status: handGroups.length ? `covers ${handGroups.join(", ")}` : "idle",
         blocks: manualBlocks,
       },
       {
         layer: "show",
         title: "Show",
-        on: state.show.on,
-        status: isRecording() ? "recording" : "idle",
-        blocks: [],
+        on: !!showNow,
+        status: isRecording()
+          ? "recording"
+          : showNow
+            ? `playing ${spanTitle(showNow)}`
+            : showNext
+              ? `next at ${hhmm(showNext.start)}`
+              : "idle",
+        blocks: showBlocks,
         empty: "No show loaded",
       },
       {
@@ -489,9 +669,11 @@ function build() {
             ? "waits for LIVE"
             : !autopilotArmed()
               ? "held back at LIVE"
-              : cur
-                ? `playing ${cur.section.title}`
-                : "idle",
+              : cur && covered(cur)
+                ? "leaves this to the Show"
+                : cur
+                  ? `playing ${cur.section.title}`
+                  : "idle",
         blocks: apBlocks,
       },
     ];
@@ -520,6 +702,10 @@ function build() {
     toggleGroup,
     skipLook,
     moreLikeThis,
+    skipPick,
+    morePick,
+    keepPick,
+    moveClip,
     undo,
     undoLabel,
     record,
@@ -542,6 +728,11 @@ function build() {
     currentSong,
     currentSongSections,
     autopilotLooks,
+    pickReason,
+    covered,
+    activeClips,
+    decks,
+    setList,
     autopilotNow,
     rig: RIG,
     looks: LOOKS,

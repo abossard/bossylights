@@ -70,7 +70,7 @@ const mover = (n: string, x: number, address: number): Fixture => ({
   group: "movers",
   kind: "mover",
   x,
-  y: 0.22,
+  y: 0.14,
   model: "Spot 60 LED",
   mode: "16 channel",
   universe: 1,
@@ -84,7 +84,7 @@ const par = (i: number): Fixture => ({
   group: "pars",
   kind: "par",
   x: 0.16 + (i - 1) * (0.68 / 7),
-  y: 0.66,
+  y: 0.6,
   model: "Flat PAR RGBW",
   mode: "7 channel",
   universe: 1,
@@ -101,7 +101,7 @@ export const RIG: Fixture[] = [
     group: "laser",
     kind: "laser",
     x: 0.5,
-    y: 0.22,
+    y: 0.14,
     model: "Show laser RGB",
     mode: "10 channel",
     universe: 1,
@@ -249,7 +249,7 @@ export const SONGS: Song[] = [
     artist: "Ruin and Ivy",
     bpm: 128,
     confidence: 0.81,
-    analysis: "queued",
+    analysis: "analysed",
     sections: sections([
       ["intro", "Intro", 3 * min, 0.3, ["cold-wash"]],
       ["build", "Build-up", 6 * min, 0.6, ["ice", "crowd-sweep"]],
@@ -264,14 +264,32 @@ export const SONGS: Song[] = [
     title: "Paper Satellites",
     artist: "Dali Okon",
     bpm: 122,
-    confidence: 0.42,
-    analysis: "needs-review",
+    confidence: 0,
+    analysis: "queued",
     sections: sections([
       ["intro", "Intro", 5 * min, 0.3, ["warm-wash"]],
       ["build", "Build-up", 5 * min, 0.55, ["fire", "fan-out"]],
       ["drop", "Drop", 5 * min, 0.85, ["lime-zap", "circle", "pulse"]],
       ["break", "Break", 4 * min, 0.35, ["teal-drift"]],
       ["outro", "Outro", 6 * min, 0.25, ["slow-fade"]],
+    ]),
+  },
+];
+
+/** In the library, not in tonight's set. Sample data. */
+export const LIBRARY_ONLY: Song[] = [
+  {
+    id: "static-bloom",
+    title: "Static Bloom",
+    artist: "Mira Quell",
+    bpm: 118,
+    confidence: 0.42,
+    analysis: "needs-review",
+    sections: sections([
+      ["intro", "Intro", 3 * min, 0.3, []],
+      ["build", "Build-up", 4 * min, 0.5, []],
+      ["drop", "Drop", 4 * min, 0.8, []],
+      ["outro", "Outro", 3 * min, 0.3, []],
     ]),
   },
 ];

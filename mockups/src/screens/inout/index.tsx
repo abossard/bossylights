@@ -3,7 +3,7 @@ import { Stub } from "../../shell/Stub";
 
 export const id = "inout";
 export const title = "In/Out";
-export const order = 8;
+export const order = 7;
 export const issues: Issue[] = [
   { number: 42, title: "USB DMX adapters" },
   { number: 43, title: "Art-Net and sACN" },

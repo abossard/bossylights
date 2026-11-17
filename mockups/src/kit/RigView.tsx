@@ -32,16 +32,24 @@ const plateW = (s: string) => s.length * PLATE_CHAR + 12;
 
 /** The rig from above: fixtures with name plates and the colours they show now. */
 export function RigView(props: RigViewProps) {
+  /**
+   * A zone's box. The top and sides are in %, the bottom sits a fixed number of
+   * pixels under the lowest fixture so its name plate always stays inside.
+   */
   const zoneBox = (z: RigZone) => {
     const fs = props.fixtures.filter((f) => z.fixtureIds.includes(f.id));
     const xs = fs.map((f) => f.x);
     const ys = fs.map((f) => f.y);
-    const x0 = Math.min(...xs) - 0.04;
-    const x1 = Math.max(...xs) + 0.04;
-    const y0 = Math.min(...ys) - 0.15;
-    const y1 = Math.max(...ys) + 0.16;
-    return { x: x0 * 100, y: y0 * 100, w: (x1 - x0) * 100, h: (y1 - y0) * 100 };
+    return {
+      x0: (Math.min(...xs) - 0.04) * 100,
+      x1: (Math.max(...xs) + 0.04) * 100,
+      yTop: Math.min(...ys) * 100,
+      yLow: Math.max(...ys) * 100,
+    };
   };
+  const ZONE_PAD = 40;
+  const ZONE_TOP = 38;
+
 
   // Narrow rigs show short plates ("L1", "3") so plates never overlap.
   let svg!: SVGSVGElement;
@@ -76,10 +84,21 @@ export function RigView(props: RigViewProps) {
           const b = () => zoneBox(z);
           return (
             <g class={`rig-zone layer-${z.layer}`}>
-              <rect x={`${b().x}%`} y={`${b().y}%`} width={`${b().w}%`} height={`${b().h}%`} />
-              <svg x={`${b().x}%`} y={`${b().y}%`} overflow="visible">
-                <rect class="rig-zone-chip" width={plateW(z.label) + 4} height="20" />
-                <text x="8" y="14">{z.label}</text>
+              <line x1={`${b().x0}%`} x2={`${b().x0}%`} y1={`${b().yTop}%`} y2={`${b().yLow}%`} />
+              <line x1={`${b().x1}%`} x2={`${b().x1}%`} y1={`${b().yTop}%`} y2={`${b().yLow}%`} />
+              <svg y={`${b().yTop}%`} overflow="visible">
+                <line x1={`${b().x0}%`} x2={`${b().x0}%`} y1={-ZONE_TOP} y2="0" />
+                <line x1={`${b().x1}%`} x2={`${b().x1}%`} y1={-ZONE_TOP} y2="0" />
+                <line x1={`${b().x0}%`} x2={`${b().x1}%`} y1={-ZONE_TOP} y2={-ZONE_TOP} />
+              </svg>
+              <svg y={`${b().yLow}%`} overflow="visible">
+                <line x1={`${b().x0}%`} x2={`${b().x0}%`} y1="0" y2={ZONE_PAD} />
+                <line x1={`${b().x1}%`} x2={`${b().x1}%`} y1="0" y2={ZONE_PAD} />
+                <line x1={`${b().x0}%`} x2={`${b().x1}%`} y1={ZONE_PAD} y2={ZONE_PAD} />
+              </svg>
+              <svg x={`${b().x0}%`} y={`${b().yTop}%`} overflow="visible">
+                <rect class="rig-zone-chip" y={-ZONE_TOP} width={plateW(z.label) + 4} height="20" />
+                <text x="8" y={-ZONE_TOP + 14}>{z.label}</text>
               </svg>
             </g>
           );

@@ -26,7 +26,7 @@
 }
 
 .brand b {
-  font-size: var(--display-xl);
+  font-size: var(--display-md);
   font-weight: 900;
 }
 
@@ -156,9 +156,6 @@
     display: none;
   }
 
-  .brand b {
-    font-size: 26px;
-  }
 
   .tabs-workspace .tab {
     font-size: 18px;

@@ -13,4 +13,5 @@ export { NowStrip } from "./NowStrip";
 export { List, type ListItem } from "./List";
 export { Table, type Column } from "./Table";
 export { Meter } from "./Meter";
+export { Decks } from "./Decks";
 export { EnergyCurve, type EnergySpan } from "./EnergyCurve";

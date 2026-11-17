@@ -3,7 +3,7 @@ import { Stub } from "../../shell/Stub";
 
 export const id = "songs";
 export const title = "Songs";
-export const order = 4;
+export const order = 3;
 export const issues: Issue[] = [
   { number: 96, title: "Song Director" },
   { number: 47, title: "Song analysis: grid, sections, energy" },

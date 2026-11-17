@@ -1,4 +1,4 @@
-import { For, Show } from "solid-js";
+import { For, Show, type JSX } from "solid-js";
 import type { Lane, LaneBlock } from "../fake/store";
 
 export interface TimetableProps {
@@ -15,6 +15,8 @@ export interface TimetableProps {
   laneHeight?: string;
   /** CSS length of the label column. Default 124px. */
   labelWidth?: string;
+  /** Controls for a lane header, e.g. the autopilot's on/off and style. They replace the ON/OFF chip. */
+  laneControls?: (lane: Lane) => JSX.Element | undefined;
   /** Hide lane labels' status lines (single-lane rulers). */
   plain?: boolean;
   class?: string;
@@ -97,13 +99,25 @@ export function Timetable(props: TimetableProps) {
       <For each={props.lanes}>
         {(lane) => (
           <>
-            <div class={`tt-label layer-${lane.layer}`}>
+            <div class={`tt-label layer-${lane.layer}`} classList={{ "has-controls": !!props.laneControls?.(lane) }}>
               <h3 class="display">{lane.title}</h3>
-              <Show when={!props.plain}>
-                <p>
-                  <span class="tt-state" classList={{ "is-on": lane.on }}>{lane.on ? "ON" : "OFF"}</span>
-                  <span class="mute">{lane.status}</span>
-                </p>
+              <Show
+                when={props.laneControls?.(lane)}
+                fallback={
+                  <Show when={!props.plain}>
+                    <p>
+                      <span class="tt-state" classList={{ "is-on": lane.on }}>{lane.on ? "ON" : "OFF"}</span>
+                      <span class="mute">{lane.status}</span>
+                    </p>
+                  </Show>
+                }
+              >
+                {(controls) => (
+                  <>
+                    <div class="tt-controls">{controls()}</div>
+                    <p class="tt-status mute">{lane.status}</p>
+                  </>
+                )}
               </Show>
             </div>
             <div class={`tt-lane layer-${lane.layer}`} classList={{ "is-off": !lane.on }} aria-label={`${lane.title} lane`}>

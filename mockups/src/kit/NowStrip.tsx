@@ -1,11 +1,14 @@
 import { For } from "solid-js";
-import type { Lane } from "../fake/store";
+import type { Deck, Lane } from "../fake/store";
+import { Decks } from "./Decks";
 
 export interface NowStripProps {
   from: number;
   to: number;
   now: number;
   lanes: Lane[];
+  /** The two decks, shown in the strip's header. */
+  decks: Deck[];
   /** Clicking anywhere on the strip. The shell goes to the Console. */
   onActivate: () => void;
 }
@@ -44,6 +47,7 @@ export function NowStrip(props: NowStripProps) {
         <span class="ns-now" style={{ left: `${nowPct()}%` }} />
         <span class="now-flag ns-flag" style={{ left: `${nowPct()}%` }}>Now</span>
       </span>
+      <Decks decks={props.decks} compact class="ns-decks" />
       <span class="ns-go display">Open Console</span>
     </button>
   );

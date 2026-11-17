@@ -12,7 +12,7 @@ export interface ScreenModule {
   id: string;
   /** Plain-words tab title. */
   title: string;
-  /** Position among the workspace tabs, 1 to 8. Also its number key. */
+  /** Position among the workspace tabs. Also its number key (1 to 9). */
   order: number;
   /** The GitHub issues this screen stands for. */
   issues: Issue[];

@@ -1,4 +1,4 @@
-// 1 to 8 switch workspace, Space holds blackout, Cmd/Ctrl+Z undoes.
+// 1 to 7 switch workspace, Space holds blackout, Cmd/Ctrl+Z undoes.
 import { store } from "../fake/store";
 import { screens } from "./registry";
 import { go } from "./router";
@@ -21,7 +21,7 @@ export function installShortcuts() {
       return;
     }
     const n = Number(e.key);
-    if (Number.isInteger(n) && n >= 1 && n <= 8) {
+    if (Number.isInteger(n) && n >= 1 && n <= 9) {
       const s = screens.find((x) => x.order === n);
       if (s) go(s.id);
     }

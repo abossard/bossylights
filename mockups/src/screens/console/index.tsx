@@ -1,8 +1,9 @@
 import { createEffect, createSignal, onCleanup, Show } from "solid-js";
 import { groupNames, hhmm, store } from "../../fake/store";
-import { Button, Region, RigView, Tabs, Timetable, stepWindow, type RigZone } from "../../kit";
+import { Button, Decks, Region, RigView, Tabs, Timetable, stepWindow, type RigZone } from "../../kit";
 import type { Issue } from "../../shell/registry";
 import { ConsoleGrid, createConsole, WidgetDrawer } from "./Console";
+import { AutoLaneControls } from "./AutoLaneControls";
 import "./console.css";
 
 export const id = "console";
@@ -45,7 +46,7 @@ function OverrideNotice() {
           <div class="notice" role="status">
             <span class="notice-sw" />
             <span class="notice-text">
-              <strong>Manual overrides Autopilot on {groupNames(groups())}</strong>{" "}
+              <strong>Manual overrides {o().under} on {groupNames(groups())}</strong>{" "}
               <span class="mute">
                 {store.overrides().map((x) => x.look.name).join(", ")} since {hhmm(o().block.start)}
               </span>
@@ -103,18 +104,10 @@ export function Screen() {
   return (
     <div class="console-screen" classList={{ "is-editing": c.editing() }}>
       <div class="console-left">
-        <Region
-          id="timetable"
-          title="Layers"
-          aside={
-            <span class="console-tt-aside">
-              <span class="mute">Top layer wins</span>
-              <span class="mute">
-                {hhmm(win().from)} to {hhmm(win().to)}
-              </span>
-            </span>
-          }
-        >
+        <Region id="decks" title="Decks" bare>
+          <Decks decks={store.decks()} />
+        </Region>
+        <Region id="timetable" title="Layers" bare>
           <Timetable
             from={win().from}
             to={win().to}
@@ -124,6 +117,7 @@ export function Screen() {
             format={hhmm}
             laneHeight="var(--console-lane)"
             labelWidth="var(--console-label)"
+            laneControls={(lane) => (lane.layer === "autopilot" ? <AutoLaneControls /> : undefined)}
           />
         </Region>
         <Region id="rig" title="Rig" aside={<span class="mute">Top view, {store.rig.length} fixtures, colours as they are now</span>} class="console-rig">

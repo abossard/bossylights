@@ -26,6 +26,7 @@ export function App() {
           to={stripWindow().to}
           now={store.now()}
           lanes={store.lanes(stripWindow().from, stripWindow().to)}
+          decks={store.decks()}
           onActivate={() => go("console")}
         />
       </Show>

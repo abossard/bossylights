@@ -1,6 +1,6 @@
 import { For, Show } from "solid-js";
 
-export type PadState = "idle" | "autopilot" | "held" | "flash";
+export type PadState = "idle" | "autopilot" | "show" | "held" | "flash";
 
 export interface PadProps {
   label: string;
@@ -19,6 +19,7 @@ export interface PadProps {
 const SUB: Record<PadState, string | undefined> = {
   idle: undefined,
   autopilot: "Autopilot",
+  show: "Show",
   held: "Manual",
   flash: "Flash",
 };

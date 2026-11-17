@@ -1,5 +1,5 @@
 .console-screen {
-  --console-lane: clamp(72px, 11vh, 112px);
+  --console-lane: clamp(80px, 12vh, 112px);
   --console-label: 124px;
   position: relative;
   display: grid;
@@ -402,7 +402,7 @@
 /* ---------------- 1024 wide ---------------- */
 @media (max-width: 1180px) {
   .console-screen {
-    --console-label: 104px;
+    --console-label: 112px;
     grid-template-columns: minmax(0, 45fr) minmax(0, 55fr);
     gap: var(--sp-3);
     padding: var(--sp-3);
@@ -462,4 +462,24 @@
   .console-rig {
     padding: var(--sp-3);
   }
+}
+
+/* compact autopilot header in the Auto lane */
+.auto-toggle {
+  min-height: 32px;
+  min-width: 40px;
+  padding: 0 6px;
+  font: 700 var(--text-sm) var(--font-ui);
+  border: var(--rule) solid var(--layer);
+  color: var(--layer);
+}
+
+.auto-toggle[aria-pressed="true"] {
+  background: var(--layer);
+  color: var(--ink);
+}
+
+.console-screen .tt-controls select {
+  min-width: 0;
+  flex: 1;
 }

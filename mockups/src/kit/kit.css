@@ -420,7 +420,8 @@
   margin-top: 2px;
 }
 
-.pad-autopilot {
+.pad-autopilot,
+.pad-show {
   border-color: var(--paper);
 }
 
@@ -703,6 +704,23 @@ button.list-body:hover {
   gap: 4px 8px;
 }
 
+.tt-label.has-controls {
+  padding-top: 6px;
+}
+
+.tt-controls {
+  display: flex;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.tt-status {
+  margin-top: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .tt-plain .tt-label {
   display: flex;
   align-items: center;
@@ -779,7 +797,7 @@ button.list-body:hover {
 }
 
 /* a layer that is off keeps its plan visible, outlined */
-.tt-lane.is-off .tt-block {
+.tt-lane.layer-autopilot.is-off .tt-block {
   background: none;
   border: var(--rule) dashed var(--layer);
   color: var(--layer);
@@ -870,7 +888,7 @@ button.list-body:hover {
 /* ---------------- Now strip ---------------- */
 .ns {
   display: grid;
-  grid-template-columns: 84px minmax(0, 1fr) auto;
+  grid-template-columns: 84px minmax(0, 1fr) minmax(0, 300px) auto;
   align-items: stretch;
   width: 100%;
   height: var(--nowstrip-h);
@@ -978,7 +996,7 @@ button.list-body:hover {
   font: 600 var(--text-sm) var(--font-ui);
 }
 
-.rig-zone > rect {
+.rig-zone line {
   fill: none;
   stroke: var(--layer);
   stroke-width: 2;
@@ -1090,4 +1108,140 @@ button.list-body:hover {
   background: var(--paper);
   border-left: var(--rule) solid var(--ink);
   border-right: var(--rule) solid var(--ink);
+}
+
+/* ---------------- Decks ---------------- */
+.decks {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.deck {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  min-height: 52px;
+  padding: 4px var(--sp-2);
+  border: var(--rule) solid var(--line);
+  color: var(--mute);
+}
+
+.deck.is-onair {
+  border-color: var(--paper);
+  color: var(--paper);
+}
+
+.deck-letter {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  font-size: var(--display-sm);
+  background: var(--s2);
+  color: var(--paper);
+}
+
+.deck.is-onair .deck-letter {
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.deck-icon {
+  flex: none;
+}
+
+.deck-song {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.deck-title {
+  font-size: var(--display-sm);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.deck.is-onair .deck-title {
+  font-size: 28px;
+}
+
+.deck-meta {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.deck-chip {
+  flex: none;
+  font: 700 var(--text-xs) / 1 var(--font-ui);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 4px 6px;
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.deck-chip.is-cued {
+  background: none;
+  border: 1px solid var(--line);
+  color: var(--mute);
+}
+
+@media (max-width: 1180px) {
+  .decks:not(.decks-compact) {
+    grid-template-columns: minmax(0, 2.2fr) minmax(0, 1fr);
+  }
+
+  .decks:not(.decks-compact) .deck-chip {
+    display: none;
+  }
+}
+
+/* the compact decks in the Now strip: two lines, one per deck */
+.decks-compact {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  gap: 0;
+  align-content: center;
+}
+
+.decks-compact .deck {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  gap: 6px;
+}
+
+.decks-compact .deck-letter {
+  width: 18px;
+  height: 18px;
+  font-size: 13px;
+}
+
+.decks-compact .deck-song {
+  flex-direction: row;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.decks-compact .deck-title,
+.decks-compact .deck.is-onair .deck-title {
+  font-size: 15px;
+}
+
+.decks-compact .deck.is-onair .deck-title {
+  font-size: 20px;
+}
+
+.decks-compact .deck-chip {
+  display: none;
 }

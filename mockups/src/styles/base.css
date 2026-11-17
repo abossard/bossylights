@@ -94,6 +94,19 @@ input[type="text"] {
   line-height: 1.4;
 }
 
+select {
+  min-height: 32px;
+  padding: 0 6px;
+  background: var(--bg);
+  border: var(--rule) solid var(--line);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+select:hover {
+  border-color: var(--paper);
+}
+
 textarea:focus,
 input[type="text"]:focus {
   border-color: var(--paper);
