@@ -1,0 +1,160 @@
+/* ---------------- side panel ---------------- */
+.review-panel {
+  position: fixed;
+  top: calc(var(--topbar-h) + var(--tabbar-h) + var(--rule));
+  right: 0;
+  bottom: 0;
+  width: min(var(--panel-w), 100vw);
+  z-index: 50;
+  background: var(--s1);
+  border-left: var(--rule) solid var(--line);
+  display: flex;
+  flex-direction: column;
+}
+
+.rp-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-2) var(--sp-2) var(--sp-4);
+  border-bottom: var(--rule) solid var(--line);
+}
+
+.rp-head h2 {
+  font-size: var(--display-lg);
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.rp-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--sp-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+}
+
+.rp-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.rp-h {
+  font-weight: 700;
+  font-size: var(--text-md);
+}
+
+.rp-h-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+
+.rp-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+.rp-star {
+  width: var(--target);
+  padding: 0;
+}
+
+.rp-issues {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: var(--text-md);
+}
+
+.rp-regions {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+}
+
+.rp-region {
+  width: 100%;
+  min-height: var(--target);
+  padding: 6px var(--sp-2);
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.rp-region:hover {
+  background: var(--s2);
+}
+
+.rp-region .mute {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------------- Review tab ---------------- */
+.review-screen {
+  padding: var(--sp-4) var(--sp-4) var(--sp-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+.review-screen-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--sp-2) var(--sp-4);
+}
+
+.review-screen-head h1 {
+  font-size: 40px;
+}
+
+.review-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.rs-title {
+  font-size: var(--display-md);
+}
+
+.rs-issues {
+  font-size: var(--text-sm);
+  color: var(--mute);
+  font-weight: 600;
+}
+
+tr.is-selected .rs-issues {
+  color: var(--ink);
+}
+
+.rs-verdict {
+  font-weight: 700;
+}
+
+.rs-none {
+  color: var(--mute);
+}
+
+.rs-approve {
+  color: var(--layer-show);
+}
+
+.rs-change {
+  color: var(--layer-autopilot);
+}
+
+.rs-rethink {
+  color: var(--layer-live);
+}

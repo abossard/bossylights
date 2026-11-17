@@ -1,0 +1,49 @@
+:root {
+  /* ground and text */
+  --bg: #1c1a17;
+  --s1: #26231f;
+  --s2: #36322c;
+  --line: #46413a;
+  --paper: #f4efe6;
+  --mute: #c4bbad;
+  --ink: #1c1a17;
+  --fixture-edge: #0f0e0c;
+
+  /* one flat colour per layer */
+  --layer-autopilot: #f2b705;
+  --layer-show: #20b2c9;
+  --layer-live: #ef3e7b;
+
+  /* red is only for blackout and errors */
+  --danger: #ff4a3d;
+
+  /* type */
+  --font-display: "Big Shoulders Display", "Archivo Narrow", sans-serif;
+  --font-ui: Archivo, system-ui, sans-serif;
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-md: 14px;
+  --text-lg: 16px;
+  --display-sm: 18px;
+  --display-md: 22px;
+  --display-lg: 26px;
+  --display-xl: 30px;
+
+  /* space */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+
+  /* sizes */
+  --target: 44px;
+  --rule: 2px;
+  --topbar-h: 52px;
+  --tabbar-h: 44px;
+  --nowstrip-h: 56px;
+  --panel-w: 380px;
+
+  /* motion: state changes only */
+  --t-fast: 150ms;
+}
