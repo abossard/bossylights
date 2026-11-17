@@ -99,14 +99,16 @@ Ten QLC+ function types become one shape.
 
 ### 5. Layers: the top one that speaks wins
 
+| Layer | PARs | Movers |
+|---|---|---|
+| **LIVE** (top) | strobe | silent |
+| **SHOW** | silent | silent |
+| **AUTOPILOT** (bottom) | amber | sweep |
+| **What you see** | **strobe** (Live speaks) | **sweep** (only Autopilot speaks) |
+
 ```mermaid
-flowchart TB
-  LIVE["LIVE<br/>says: PARs strobe"]
-  SHOW["SHOW<br/>says nothing"]
-  AUTO["AUTOPILOT<br/>says: PARs amber, Movers sweep"]
-  LIVE --> R1(["PARs: strobe"])
-  AUTO --> R2(["Movers: sweep"])
-  LIVE ~~~ SHOW ~~~ AUTO
+flowchart LR
+  A["Hold Strobe"] --> B(["PARs: strobe"]) --> C["Release"] --> D(["PARs: amber again"])
 ```
 
 Release Live and the PARs go back to amber. This replaces HTP and LTP.
@@ -143,14 +145,8 @@ Recording, show and autopilot are three writers of one stream. That is why they 
 
 ```mermaid
 flowchart LR
-  subgraph PR["Project: what you made"]
-    direction TB
-    A1["Rig"] ~~~ A2["Looks and sources"] ~~~ A3["Surface"] ~~~ A4["Shows"]
-  end
-  subgraph PE["Performance: what happens now"]
-    direction TB
-    B1["What runs"] ~~~ B2["Levels"] ~~~ B3["Clock"]
-  end
+  PR[("Project: what you made<br/>rig, looks, sources, surface, shows")]
+  PE(["Performance: what happens now<br/>what runs, levels, clock"])
   PR -- "is played by" --> PE
 ```
 
@@ -164,16 +160,13 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-  subgraph OUTSIDE["Outside: clever, may be slow, may crash"]
-    direction TB
-    UI["UI"] ~~~ AN["Song analysis"] ~~~ AP["Autopilot choices"] ~~~ FI["Files"] ~~~ AG["Agents"]
-  end
+  OUTSIDE["Outside: clever, may be slow, may crash<br/>UI, song analysis, autopilot choices, files, agents"]
   subgraph CORE["Core: 44 times a second, never waits"]
     direction LR
     E["Evaluate"] --> M["Merge"] --> P["Patch"] --> S["Send"]
   end
-  OUTSIDE -- "commands" --> CORE
-  CORE -. "snapshots" .-> OUTSIDE
+  OUTSIDE -- "commands" --> E
+  S -. "snapshots" .-> OUTSIDE
 ```
 
 A frozen UI cannot stop the lights.
