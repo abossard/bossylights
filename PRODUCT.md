@@ -31,7 +31,8 @@ The show follows the music by itself, and a hand on any control takes over. Thre
 
 ## Capabilities and Constraints
 
-- Screens: patching, DMX control, functions (looks, chasers, effects), song director, timeline with show recorder and show runner, autopilot, customizable live console, inputs and outputs.
+- Screens: Console (the customizable console, home), Show (timeline, recorder, runner, with the autopilot as its Auto lane), Songs (song director), Looks (looks, chasers, effects), Patch, DMX, In/Out.
+- The two VirtualDJ decks and the title of the song on air are always visible.
 - The live console is designed by the user: widgets on pages and frames.
 - Words in the default layer are plain: looks, layers, pads. No "HTP", "LTP" or "function" there.
 - No screen asks the user to remember a value from another screen.

@@ -113,6 +113,8 @@ flowchart LR
 
 Let go and the PARs go back to amber. This replaces HTP and LTP.
 
+On screen the autopilot is not a separate place: its picks show as the Auto lane of the show. In the engine it stays its own layer, so one rule covers everything: show beats auto, hands beat both.
+
 ### 6. One clock
 
 ```mermaid

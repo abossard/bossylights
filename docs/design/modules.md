@@ -120,8 +120,7 @@ Screens are thin. Each is a view of one or two modules through the Door.
 | Screen | Surface | Mixer | Show | Music | Autopilot | Project | Rig | Library | Output | Clock |
 |---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
 | Console | ● | ● | | | | | | | | |
-| Autopilot | | ● | | ● | ● | | | | | |
-| Show | | | ● | | | | | | | ● |
+| Show (with autopilot) | | ● | ● | ● | ● | | | | | ● |
 | Songs | | | ● | ● | | | | | | |
 | Looks | | ● | | | | ● | | | | |
 | Patch | | | | | | | ● | ● | | |
