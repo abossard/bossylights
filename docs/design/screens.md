@@ -102,6 +102,23 @@ Each brief: what the screen is for, its regions, the states worth showing, what 
 - **Clickable:** pick the clock feed, tap tempo, MIDI learn (click a control, then it waits for a press), test an output.
 - **Issues:** USB DMX adapters, Art-Net and sACN, DDP pixel output, MIDI in with learn, Ready-made controller profiles, OSC in and out, Audio in: beat and levels, One tempo for everything.
 
+## Two explainer screens (after the eight)
+
+The theory and the module map as live, animated pages inside the same app, with the same review tools. Sources: `docs/design/theory.md` and `docs/design/modules.md`.
+
+### 9. How it works (the theory, animated)
+
+- **For:** understanding the nine ideas by playing with them.
+- **Regions:** the one-picture flow (writers, three layers, frame, rig, output) with commands travelling along it as dots. A small pad row and one fader to press. A "who wins" panel per fixture group that updates as layers speak. A step-through of the three walks (press a pad, record and replay, autopilot yields).
+- **Clickable:** press a pad and watch the command travel and the Live layer cover the others. Release and watch the layer below return. Toggle record and see commands written down, then replayed on Show.
+- **Driven by** the same fake store as the other screens.
+
+### 10. Modules (the boundary map, interactive)
+
+- **For:** seeing which modules exist and how narrow each one is.
+- **Regions:** the boundary map as a diagram. Click a module to open its card: whole interface, what it hides, which screens use it. A depth bar per module. A "trace" button that animates one press through Surface, Door, Mixer, Rig, Output.
+- **Questions for review** from both documents appear here as A/B choices that are saved with the review export.
+
 ## Fake data, shared by all screens
 
 - Show: "Friday at the Garage". Tempo 126. Master 85%.

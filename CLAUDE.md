@@ -25,6 +25,7 @@ The owner has ADHD and is a visual learner. This applies to every output: docs, 
 - Mermaid for structure and flow (flowchart, sequence, state). Use `<br/>` for line breaks and no light fill colours, so it works in dark mode.
 - At most one or two short lines per idea. Cut every word that carries no information.
 - Questions and choices as a table with the options side by side, the recommended one marked.
+- Animated and interactive is welcome where it explains better than a still picture: a small live demo beats a paragraph.
 - No walls of bullets. If a list has more than five items, it wants to be a table or a diagram.
 - No em dashes.
 
