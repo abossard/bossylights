@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Bossylights Live</title>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Big+Shoulders+Display:wght@700;800;900&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#1c1a17;--s1:#26231f;--s2:#36322c;--line:#46413a;--paper:#f4efe6;--mute:#c4bbad;--mari:#f2b705;--pink:#ef3e7b;--cyan:#20b2c9;--ink:#1c1a17}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:1440px;height:900px;overflow:hidden;background:var(--bg)}
+body{color:var(--paper);font:500 14px/1.3 Archivo,sans-serif;font-variant-numeric:tabular-nums;-webkit-font-smoothing:antialiased}
+::selection{background:var(--mari);color:var(--ink)}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer;text-align:left}
+button:focus-visible{outline:3px solid var(--mari);outline-offset:2px}
+.d{font-family:"Big Shoulders Display",sans-serif;font-weight:800;text-transform:uppercase;letter-spacing:.02em;line-height:1}
+.mute{color:var(--mute);font-size:12px;font-weight:600}
+.top{height:64px;display:flex;align-items:center;gap:24px;padding:0 16px;border-bottom:2px solid var(--line)}
+.brand b{display:block;font-size:30px}.brand span{display:block;margin-top:3px}
+.ws{display:flex;gap:4px}
+.ws button{height:40px;padding:0 12px;font-size:20px;display:flex;align-items:center}.ws button:hover{background:var(--s1)}.ws .on{background:var(--paper);color:var(--ink)}.ws .on:hover{background:var(--paper)}
+.status{margin-left:auto;display:flex;align-items:center;gap:24px}
+.seg{display:flex;border:2px solid var(--pink)}
+.seg b{height:36px;padding:0 12px;display:flex;align-items:center;font-size:18px}
+.seg .act{background:var(--pink);color:var(--ink)}.seg .off{color:var(--mute)}
+.bpm{display:flex;align-items:center;gap:8px}.bpm b{font-size:30px}
+.dots{display:flex;gap:6px;margin-left:4px}.dots i{width:12px;height:12px;border-radius:50%;background:var(--s2)}.dots .lit{background:var(--mari)}
+.mst{display:flex;align-items:center;gap:8px}.mst b{font-size:30px}
+.meter{width:64px;height:10px;background:var(--s2)}.meter i{display:block;width:85%;height:100%;background:var(--paper)}
+.main{display:grid;grid-template-columns:680px 712px;gap:16px;padding:16px;height:836px}
+.left,.right{display:flex;flex-direction:column;gap:16px;min-height:0}
+.ph{display:flex;align-items:baseline;gap:12px;height:28px}.ph h2{font-size:26px}.ph .end{margin-left:auto}
+.tt{position:relative;display:grid;grid-template-columns:124px 1fr;grid-template-rows:44px repeat(3,112px)}
+.ruler{position:relative;border-bottom:2px solid var(--line)}
+.ruler span{position:absolute;bottom:6px;font-size:12px;font-weight:600;color:var(--mute);padding-left:4px}
+.lab{padding:14px 12px 0 0;border-bottom:1px solid var(--line)}
+.lab h3{font-size:26px}.lab p{margin-top:8px;display:flex;align-items:center;gap:8px}
+.st{font:700 12px Archivo;padding:2px 6px;color:var(--ink)}
+.lane{position:relative;border-bottom:1px solid var(--line);z-index:1}
+.b{position:absolute;top:14px;bottom:14px;padding:8px 6px;color:var(--ink);overflow:hidden}
+.b b{display:block;font-size:22px}.b i{display:block;margin-top:6px;font:600 12px Archivo;font-style:normal}
+.ap{background:var(--mari)}.lv{background:var(--pink)}
+.past{background:none;border:2px solid currentColor}.ap.past{color:var(--mari)}.lv.past{color:var(--pink)}
+.tail{position:absolute;top:14px;bottom:14px;border:2px dashed var(--pink);border-left:0;color:var(--pink);font:700 12px Archivo;padding:8px}
+.empty{position:absolute;inset:14px 0;display:flex;align-items:center;padding-left:16px;color:var(--cyan);font-weight:600}
+.grid{position:absolute;left:124px;right:0;top:44px;bottom:0}.grid i{position:absolute;top:0;bottom:0;border-left:1px dashed var(--line)}
+.ov{position:absolute;left:124px;right:0;top:0;bottom:0;z-index:3;pointer-events:none}
+.now{position:absolute;left:28%;top:24px;bottom:0;width:6px;margin-left:-3px;background:var(--paper);border-left:2px solid var(--ink);border-right:2px solid var(--ink)}
+.flag{background:var(--paper);color:var(--ink);font-size:15px;padding:3px 6px;white-space:nowrap}
+.ov .flag{position:absolute;top:0;left:28%;transform:translateX(-50%)}
+.rig{flex:1;background:var(--s1);padding:16px;display:flex;flex-direction:column;gap:12px}
+.stage{flex:1;display:grid;grid-template-columns:64px 1fr 64px;grid-template-rows:1fr auto;column-gap:16px;align-items:center}
+.fx{display:flex;flex-direction:column;align-items:center;gap:6px}
+.plate{font:600 12px Archivo;background:var(--bg);padding:2px 6px;white-space:nowrap}
+.mv{width:44px;height:44px;border-radius:50%;background:#ff7a3d;border:4px solid #0f0e0c}
+.par{width:28px;height:28px;border-radius:50%;background:#fff;border:3px solid #0f0e0c}
+.bar{width:24px;height:150px;background:var(--cyan);border:3px solid #0f0e0c}
+.lz{width:30px;height:30px;border:2px solid var(--mute);background:var(--bg)}
+.row1{display:flex;justify-content:space-around;align-items:flex-end}
+.zone{position:relative;border:2px solid var(--pink);padding:28px 12px 10px;display:flex;justify-content:space-between}
+.zone .st{position:absolute;top:0;left:0;background:var(--pink)}
+.bars{grid-row:1/3}
+.front{grid-column:1/4;margin-top:14px;border-top:2px dashed var(--line);padding-top:6px;text-align:center}
+.chead{display:flex;align-items:center;gap:4px;height:40px}
+.ct{height:40px;padding:0 16px;font-size:20px;background:var(--s1);display:flex;align-items:center}
+.ct.on{background:var(--paper);color:var(--ink)}.ct svg{display:block}
+.acts{margin-left:auto;display:flex;gap:8px}
+.btn{height:40px;padding:0 14px;font-weight:700;border:2px solid var(--line);display:flex;align-items:center}
+.btn:hover{border-color:var(--paper)}
+.btn.bo{border-color:var(--paper)}.btn.sp{background:var(--mari);border-color:var(--mari);color:var(--ink)}
+.note{display:flex;align-items:center;gap:12px;height:52px;padding:0 6px 0 14px;border:2px solid var(--pink);margin-top:-4px}
+.note .sw{width:14px;height:14px;background:var(--pink)}.note strong{font-weight:700}
+.note .rel{margin-left:auto;height:36px;padding:0 18px;background:var(--pink);color:var(--ink);font-size:20px}
+.pads{display:grid;grid-template-columns:repeat(8,1fr);grid-auto-rows:84px;gap:8px;margin-top:-4px}
+.pad{position:relative;background:var(--s1);border:2px solid var(--s2);padding:8px;display:flex;flex-direction:column;justify-content:flex-end;font-size:13px;font-weight:600;line-height:1.15}
+.pad:hover{border-color:var(--mute)}
+.pad .c{position:absolute;top:8px;left:8px;width:18px;height:18px}
+.pad em{font-style:normal;font-size:11px;font-weight:700;color:var(--mute);margin-top:2px}
+.pad .flag{position:absolute;top:0;right:0;font-size:13px;padding:3px 5px}
+.run{border-color:var(--paper)}
+.held{background:var(--pink);border-color:var(--pink);color:var(--ink)}.held em{color:var(--ink)}.held .c{border:2px solid var(--ink)}
+.lower{flex:1;display:grid;grid-template-columns:1fr 280px;gap:24px}
+.lower section{display:flex;flex-direction:column;gap:8px}
+.lower h2{font-size:22px}.lh{display:flex;align-items:baseline;justify-content:space-between;height:24px}
+.fd{flex:1;display:grid;grid-template-columns:repeat(6,1fr);gap:14px}
+.f{display:flex;flex-direction:column;align-items:center;gap:8px}
+.f b{font-size:22px}.f span{font-size:12px;font-weight:600;text-align:center;line-height:1.15;height:28px}
+.tr{position:relative;flex:1;width:40px;background:var(--s1);border:2px solid var(--s2)}
+.tr i{position:absolute;left:0;right:0;bottom:0;background:var(--s2)}
+.tr u{position:absolute;left:-8px;right:-8px;height:14px;margin-bottom:-7px;background:var(--paper);border:2px solid var(--ink)}
+.xy{position:relative;flex:1;background:var(--s1);border:2px solid var(--s2)}
+.xy .h,.xy .v{position:absolute;background:var(--line)}.xy .h{left:0;right:0;height:1px}.xy .v{top:0;bottom:0;width:1px}
+.xy .h.p,.xy .v.p{background:var(--mari)}
+.xy .dot{position:absolute;left:38%;top:38%;width:22px;height:22px;margin:-11px;background:var(--mari);border:3px solid var(--ink)}
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="brand"><b class="d">Bossylights</b><span class="mute">Friday at the Garage</span></div>
+  <nav class="ws d"><button class="on">Live</button><button>Autopilot</button><button>Show</button><button>Songs</button><button>Looks</button><button>Patch</button><button>DMX</button><button>In/Out</button></nav>
+  <div class="status">
+    <div class="seg d"><b class="act">Live</b><b class="off">Preview</b></div>
+    <div class="bpm"><b class="d">126</b><span class="mute">BPM</span><span class="dots"><i></i><i class="lit"></i><i></i><i></i></span></div>
+    <div class="mst"><span class="mute">Master</span><b class="d">85%</b><span class="meter"><i></i></span></div>
+  </div>
+</header>
+<main class="main">
+  <div class="left">
+    <div class="ph"><h2 class="d">Layers</h2><span class="mute">Top layer wins</span><span class="mute end">22:40 to 23:05</span></div>
+    <div class="tt">
+      <div></div>
+      <div class="ruler"><span style="left:0">22:40</span><span style="left:20%">22:45</span><span style="left:40%">22:50</span><span style="left:60%">22:55</span><span style="left:80%">23:00</span></div>
+      <div class="lab"><h3 class="d" style="color:var(--pink)">Live</h3><p><span class="st" style="background:var(--pink)">ON</span><span class="mute">overriding 2 groups</span></p></div>
+      <div class="lane">
+        <div class="b lv past" style="left:2%;width:calc(11% - 4px)"><b class="d" style="font-size:17px">Red alert</b><i>22:40</i></div>
+        <div class="b lv" style="left:14%;width:14%"><b class="d" style="font-size:18px">Strobe hold</b><i>22:43</i></div>
+        <div class="tail" style="left:28%;width:9%">held</div>
+      </div>
+      <div class="lab"><h3 class="d" style="color:var(--cyan)">Show</h3><p><span class="st" style="border:2px solid var(--cyan);color:var(--cyan);padding:0 5px">OFF</span><span class="mute">idle</span></p></div>
+      <div class="lane"><div class="empty">No show loaded</div></div>
+      <div class="lab"><h3 class="d" style="color:var(--mari)">Autopilot</h3><p><span class="st" style="background:var(--mari)">ON</span><span class="mute">playing Build-up</span></p></div>
+      <div class="lane">
+        <div class="b ap past" style="left:0;width:calc(16% - 4px)"><b class="d">Intro</b><i>22:40</i></div>
+        <div class="b ap" style="left:16%;width:calc(20% - 4px)"><b class="d">Build-up</b><i>22:44</i><i>1:48 left</i></div>
+        <div class="b ap" style="left:36%;width:calc(16% - 4px)"><b class="d">Drop</b><i>22:49</i></div>
+        <div class="b ap" style="left:52%;width:calc(12% - 4px)"><b class="d" style="font-size:20px">Break</b><i>22:53</i></div>
+        <div class="b ap" style="left:64%;width:calc(16% - 4px)"><b class="d">Drop</b><i>22:56</i></div>
+        <div class="b ap" style="left:80%;width:20%"><b class="d">Outro</b><i>23:00</i></div>
+      </div>
+      <div class="grid"><i style="left:20%"></i><i style="left:40%"></i><i style="left:60%"></i><i style="left:80%"></i></div>
+      <div class="ov"><span class="flag d">Now 22:47</span><span class="now"></span></div>
+    </div>
+    <section class="rig">
+      <div class="ph"><h2 class="d">Rig</h2><span class="mute">Top view, 15 fixtures, live colours</span></div>
+      <div class="stage">
+        <div class="fx bars"><span class="bar"></span><span class="plate">Bar L</span></div>
+        <div class="row1">
+          <div class="fx"><span class="mv"></span><span class="plate">Mover L1</span></div>
+          <div class="fx"><span class="mv"></span><span class="plate">Mover L2</span></div>
+          <div class="fx"><span class="lz"></span><span class="plate">Laser, off</span></div>
+          <div class="fx"><span class="mv"></span><span class="plate">Mover R1</span></div>
+          <div class="fx"><span class="mv"></span><span class="plate">Mover R2</span></div>
+        </div>
+        <div class="fx bars" style="grid-column:3;grid-row:1/3"><span class="bar"></span><span class="plate">Bar R</span></div>
+        <div class="zone"><span class="st">LIVE: Strobe hold</span>
+          <div class="fx"><span class="par"></span><span class="plate">PAR 1</span></div><div class="fx"><span class="par"></span><span class="plate">PAR 2</span></div><div class="fx"><span class="par"></span><span class="plate">PAR 3</span></div><div class="fx"><span class="par"></span><span class="plate">PAR 4</span></div>
+          <div class="fx"><span class="par"></span><span class="plate">PAR 5</span></div><div class="fx"><span class="par"></span><span class="plate">PAR 6</span></div><div class="fx"><span class="par"></span><span class="plate">PAR 7</span></div><div class="fx"><span class="par"></span><span class="plate">PAR 8</span></div>
+        </div>
+        <div class="front mute">Front of stage</div>
+      </div>
+    </section>
+  </div>
+  <div class="right">
+    <div class="chead">
+      <button class="ct d on">Main</button><button class="ct d">Movers</button><button class="ct d">Pixels</button>
+      <button class="ct" aria-label="Add page"><svg width="16" height="16" viewBox="0 0 16 16"><path d="M8 1v14M1 8h14" stroke="#f4efe6" stroke-width="3"/></svg></button>
+      <div class="acts"><button class="btn">Undo</button><button class="btn bo">Blackout</button><button class="btn sp">Surprise me</button><button class="btn">Edit surface</button></div>
+    </div>
+    <div class="note"><span class="sw"></span><span><strong>Live overrides Autopilot on PAR 1-8</strong> <span class="mute">Strobe hold since 22:43</span></span><button class="rel d">Release</button></div>
+    <div class="pads">
+      <button class="pad"><i class="c" style="background:#ffb46b"></i>Warm wash</button><button class="pad"><i class="c" style="background:#bfe3ff"></i>Cold wash</button>
+      <button class="pad run"><i class="c" style="background:#ff7a3d"></i><span class="flag d">Now</span>Sunset<em>Autopilot</em></button><button class="pad"><i class="c" style="background:#2a4bff"></i>Deep blue</button>
+      <button class="pad"><i class="c" style="background:#7b2cff"></i>UV</button><button class="pad"><i class="c" style="background:#ff2a2a"></i>Red alert</button>
+      <button class="pad"><i class="c" style="background:#ef3e7b"></i>Pulse</button><button class="pad"><i class="c" style="background:#ffd9a8"></i>Breathe</button>
+      <button class="pad run"><i class="c" style="background:#20b2c9"></i><span class="flag d">Now</span>Chase L-R<em>Autopilot</em></button><button class="pad"><i class="c" style="background:#9ef0ff"></i>Chase ping</button>
+      <button class="pad"><i class="c" style="background:#fffbe0"></i>Sparkle</button><button class="pad held"><i class="c" style="background:#fff"></i><span class="flag d">Now</span>Strobe<em>Held live</em></button>
+      <button class="pad"><i class="c" style="background:#fff1b0"></i>Blinder</button><button class="pad"><i class="c" style="background:#f2b705"></i>Fan out</button>
+      <button class="pad"><i class="c" style="background:#3ddc97"></i>Circle</button><button class="pad"><i class="c" style="background:#6fa8ff"></i>Tilt wave</button>
+      <button class="pad"><i class="c" style="background:#f4efe6"></i>Center</button><button class="pad"><i class="c" style="background:#ff9ad0"></i>Crowd sweep</button>
+      <button class="pad"><i class="c" style="background:var(--mari);border-left:6px solid var(--pink);border-right:6px solid var(--cyan)"></i>Rainbow</button><button class="pad"><i class="c" style="background:#ff5a1f"></i>Fire</button>
+      <button class="pad"><i class="c" style="background:#8fe8ff"></i>Ice</button><button class="pad"><i class="c" style="background:#000;border:2px solid var(--paper)"></i>Blackout hold</button>
+      <button class="pad"><i class="c" style="background:#fff"></i>Flash white</button><button class="pad"><i class="c" style="background:#39ff6a"></i>Laser fan</button>
+      <button class="pad"><i class="c" style="background:#ffa000"></i>Amber glow</button><button class="pad"><i class="c" style="background:#ff2fd0"></i>Magenta pop</button>
+      <button class="pad"><i class="c" style="background:#12c2a8"></i>Teal drift</button><button class="pad"><i class="c" style="background:#ff4d6d"></i>Bass hit</button>
+      <button class="pad"><i class="c" style="background:#fff4dc"></i>DJ spot</button><button class="pad"><i class="c" style="background:#c9a27a"></i>Slow fade</button>
+      <button class="pad"><i class="c" style="background:#b6ff2e"></i>Lime zap</button><button class="pad"><i class="c" style="background:#d7b8ff"></i>Gobo spin</button>
+    </div>
+    <div class="lower">
+      <section>
+        <div class="lh"><h2 class="d">Faders</h2><span class="mute">Main page</span></div>
+        <div class="fd">
+          <div class="f"><b class="d">85</b><div class="tr"><i style="height:85%"></i><u style="bottom:85%"></u></div><span>Master</span></div>
+          <div class="f"><b class="d">70</b><div class="tr"><i style="height:70%"></i><u style="bottom:70%"></u></div><span>Wash</span></div>
+          <div class="f"><b class="d">60</b><div class="tr"><i style="height:60%"></i><u style="bottom:60%"></u></div><span>Movers</span></div>
+          <div class="f"><b class="d">45</b><div class="tr"><i style="height:45%"></i><u style="bottom:45%"></u></div><span>Pixels</span></div>
+          <div class="f"><b class="d">30</b><div class="tr"><i style="height:30%"></i><u style="bottom:30%"></u></div><span>Strobe rate</span></div>
+          <div class="f"><b class="d">0</b><div class="tr"><u style="bottom:0;margin-bottom:0"></u></div><span>Laser</span></div>
+        </div>
+      </section>
+      <section>
+        <div class="lh"><h2 class="d">Movers position</h2><span class="mute">Pan 38 Tilt 62</span></div>
+        <div class="xy"><i class="h" style="top:25%"></i><i class="h" style="top:50%"></i><i class="h" style="top:75%"></i><i class="v" style="left:25%"></i><i class="v" style="left:50%"></i><i class="v" style="left:75%"></i><i class="h p" style="top:38%"></i><i class="v p" style="left:38%"></i><i class="dot"></i></div>
+      </section>
+    </div>
+  </div>
+</main>
+</body>
+</html>
