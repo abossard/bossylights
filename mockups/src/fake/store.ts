@@ -93,6 +93,45 @@ export interface ManualBlock {
   end: number | null;
   /** flash: only while a finger is down. held: until stopped or released. */
   mode: "flash" | "held";
+  /** When manual control of what it touched ended: on Release, or with the pad if that is the rule. null: still held. */
+  released: number | null;
+}
+
+/** What is decided on its own, for each group of lights. */
+export type Prop = "colour" | "brightness" | "position";
+export const PROPS: Prop[] = ["colour", "brightness", "position"];
+
+/** The who-wins settings. They live in one place: the "Who wins" panel on the DMX screen. */
+export interface Rules {
+  /** rule 3, brightness among equals */
+  brightness: "latest" | "highest";
+  /** rule 4, when manual control ends */
+  manualEnds: "release" | "pad";
+  /** rule 5, when a show or autopilot look ends */
+  lookEnds: "fallback" | "stay";
+}
+
+/** Who has one property of one group right now. */
+export interface Winner {
+  rank: Layer;
+  look: Look;
+  /** manual: the pad is off, the Console still holds it */
+  padOff?: boolean;
+  /** show or autopilot: the look has ended and stays as it was left */
+  left?: boolean;
+}
+
+/** One thing the Console holds until Release. */
+export interface Hold {
+  id: string;
+  name: string;
+  since: number;
+  /** false: the pad was switched off, what it touched is still held */
+  live: boolean;
+  props: Prop[];
+  groups: GroupId[];
+  /** where an equal has it instead: "brightness: Blinder has it" */
+  beaten: string[];
 }
 
 export interface ManualEvent {
@@ -155,15 +194,6 @@ export interface LaneBlock {
   tail?: string;
 }
 
-/** A layer of the engine. Three to start with; you can add more. Top first. */
-export interface LayerDef {
-  id: string;
-  name: string;
-  kind: "manual" | "show" | "autopilot" | "extra";
-  /** colour of an added layer; the first three use their tokens */
-  color?: string;
-}
-
 /** A section of a song, with an id that survives moving, splitting and merging. */
 export type SongSection = Section & { id: string };
 
@@ -178,21 +208,21 @@ export interface RecEvent {
   value?: number;
 }
 
-/** A recording pass: one layer of a song's show. */
-export interface SongLayer {
+/** A recording pass: a take of a song's show. */
+export interface Take {
   id: string;
   name: string;
   muted: boolean;
   /** still recording: drawn in red */
   recording: boolean;
+  /** show-clock time the take started */
+  started?: number;
   events: RecEvent[];
 }
 
 export interface Lane {
-  /** the layer id */
-  layer: string;
-  /** colour of an added layer */
-  color?: string;
+  /** which of the three rows */
+  layer: Layer;
   title: string;
   /** true while the lane has something running: the state chip is filled */
   on: boolean;
@@ -237,7 +267,7 @@ interface State {
   library: Record<string, Item>;
   /** The Console's pad banks, by page. */
   pads: Record<string, string[]>;
-  /** Looks the Show layer replays right now from a recording (How it works). */
+  /** Looks the show replays right now from a recording (How it works). */
   replay: string[];
   /** false: the cued deck has nothing loaded (an edge state to look at) */
   cuedDeckLoaded: boolean;
@@ -246,14 +276,16 @@ interface State {
   faders: Record<FaderId, number>;
   xy: { pan: number; tilt: number };
   manual: ManualBlock[];
-  /** The engine's layers, top first. */
-  layers: LayerDef[];
+  /** The Movers position pad was touched: the Console holds the position since then. */
+  xyHeld: number | null;
+  /** The who-wins settings. */
+  rules: Rules;
   /** Sections per song, editable. */
   songSections: Record<string, SongSection[]>;
   /** Recording passes per song, newest first. */
-  songLayers: Record<string, SongLayer[]>;
-  /** A song's base show layer, muted. */
-  baseMuted: Record<string, boolean>;
+  takes: Record<string, Take[]>;
+  /** A song's show, muted. */
+  showMuted: Record<string, boolean>;
   autopilot: {
     on: boolean;
     style: AutopilotStyle;
@@ -305,19 +337,16 @@ function build() {
     faders: { wash: 70, movers: 60, pixels: 45, strobeRate: 30, laser: 0 },
     xy: { pan: 38, tilt: 62 },
     manual: [
-      { id: 1, lookId: "red-alert", start: 22 * 3600 + 40 * 60 + 30, end: 22 * 3600 + 42 * 60 + 40, mode: "held" },
-      { id: 2, lookId: "strobe", start: 22 * 3600 + 43 * 60 + 30, end: null, mode: "held" },
+      { id: 1, lookId: "red-alert", start: 22 * 3600 + 40 * 60 + 30, end: 22 * 3600 + 42 * 60 + 40, mode: "held", released: 22 * 3600 + 42 * 60 + 40 },
+      { id: 2, lookId: "strobe", start: 22 * 3600 + 43 * 60 + 30, end: null, mode: "held", released: null },
     ],
-    layers: [
-      { id: "manual", name: "Manual", kind: "manual" },
-      { id: "show", name: "Show", kind: "show" },
-      { id: "autopilot", name: "Autopilot", kind: "autopilot" },
-    ],
+    xyHeld: null,
+    rules: { brightness: "latest", manualEnds: "release", lookEnds: "fallback" },
     songSections: Object.fromEntries(
       [...SONGS, ...LIBRARY_ONLY].map((song) => [song.id, song.sections.map((x, i) => ({ ...x, id: `${song.id}-${i}` }))]),
     ),
-    // a pass recorded earlier today on Glass Hours, beside its base layer
-    songLayers: {
+    // a take recorded earlier today on Glass Hours, beside its show
+    takes: {
       "glass-hours": [
         {
           id: "rec-1",
@@ -335,7 +364,7 @@ function build() {
         },
       ],
     },
-    baseMuted: {},
+    showMuted: {},
     autopilot: {
       on: true,
       style: "club",
@@ -435,8 +464,8 @@ function build() {
     const c = currentSong();
     return c ? now() - c.start : 0;
   };
-  /** A recorded layer's blocks: start to stop, or a flash. */
-  function recBlocks(l: SongLayer, songLen: number, pos = songPos()) {
+  /** A take's blocks: start to stop, or a flash. */
+  function recBlocks(l: Take, songLen: number, pos = songPos()) {
     const out: { lookId: string; start: number; end: number }[] = [];
     const open: Record<string, number> = {};
     for (const ev of [...l.events].sort((x, y) => x.at - y.at)) {
@@ -451,34 +480,34 @@ function build() {
     for (const [id, at] of Object.entries(open)) out.push({ lookId: id, start: at, end: l.recording ? Math.max(at + 1, pos) : songLen });
     return out;
   }
-  /** What the Show layer plays now: the section's blocks and every recorded layer that is not muted. */
+  /** What the show plays now: the section's blocks and every take that is not muted. */
   function showLooksNow(): string[] {
     const cur = currentSection();
     if (!cur) return [...state.replay];
     const pos = now() - cur.songStart;
-    const base = state.baseMuted[cur.song.id] ? [] : sectionLooksOf(cur.song, cur.index);
-    const rec = (state.songLayers[cur.song.id] ?? [])
+    const base = state.showMuted[cur.song.id] ? [] : sectionLooksOf(cur.song, cur.index);
+    const rec = (state.takes[cur.song.id] ?? [])
       .filter((l) => !l.muted && !l.recording)
       .flatMap((l) => recBlocks(l, songLength(cur.song)).filter((x) => x.start <= pos && pos < x.end).map((x) => x.lookId));
     return [...new Set([...state.replay, ...rec, ...base])];
   }
   /** A section the show already covers: the autopilot leaves it alone. */
-  const covered = (p: PlacedSection) => !state.baseMuted[p.song.id] && sectionLooksOf(p.song, p.index).length > 0;
+  const covered = (p: PlacedSection) => !state.showMuted[p.song.id] && sectionLooksOf(p.song, p.index).length > 0;
 
   /** One undo step for any change to a song's show. */
   function editSong(song: Song, label: string, fn: () => void) {
     const before = {
       sections: JSON.parse(JSON.stringify(sectionsOf(song))) as SongSection[],
-      layers: JSON.parse(JSON.stringify(state.songLayers[song.id] ?? [])) as SongLayer[],
+      takes: JSON.parse(JSON.stringify(state.takes[song.id] ?? [])) as Take[],
       looks: { ...state.sectionLooks },
-      muted: !!state.baseMuted[song.id],
+      muted: !!state.showMuted[song.id],
     };
     fn();
     record(label, () => {
       set("songSections", song.id, before.sections);
-      set("songLayers", song.id, before.layers);
+      set("takes", song.id, before.takes);
       set("sectionLooks", reconcile(before.looks));
-      set("baseMuted", song.id, before.muted);
+      set("showMuted", song.id, before.muted);
     });
   }
 
@@ -530,66 +559,58 @@ function build() {
     record(`Rename ${before}`, () => set("songSections", song.id, i, "title", before), `rename:${song.id}:${i}`);
   }
 
-  const songLayersOf = (song: Song) => state.songLayers[song.id] ?? [];
-  function setLayerMuted(song: Song, layerId: string, muted: boolean) {
-    editSong(song, muted ? "Mute layer" : "Unmute layer", () => {
-      if (layerId === "base") set("baseMuted", song.id, muted);
-      else set("songLayers", song.id, (l) => l.id === layerId, "muted", muted);
+  const takesOf = (song: Song) => state.takes[song.id] ?? [];
+  function setTakeMuted(song: Song, takeId: string, muted: boolean) {
+    editSong(song, muted ? "Mute" : "Unmute", () => {
+      if (takeId === "show") set("showMuted", song.id, muted);
+      else set("takes", song.id, (l) => l.id === takeId, "muted", muted);
     });
   }
-  /** Merge a recorded layer into the one below it (an older pass, or the base layer). */
-  function mergeLayerDown(song: Song, layerId: string) {
-    const layers = songLayersOf(song);
-    const i = layers.findIndex((l) => l.id === layerId);
-    if (i < 0) return;
-    const l = layers[i];
-    editSong(song, `Merge ${l.name}`, () => {
-      const below = layers[i + 1];
-      if (below) {
-        set("songLayers", song.id, i + 1, "events", [...below.events, ...l.events].sort((x, y) => x.at - y.at));
-      } else {
-        // into the base layer: every look started in a section joins that section
-        const secs = sectionsOf(song);
-        let t = 0;
-        const bounds = secs.map((x) => [t, (t += x.length)]);
-        for (const ev of l.events) {
-          if ((ev.kind !== "start" && ev.kind !== "flash") || !ev.lookId) continue;
-          const k = bounds.findIndex(([a, b2]) => ev.at >= a && ev.at < b2);
-          if (k < 0) continue;
-          const ids = state.sectionLooks[secs[k].id] ?? [];
-          if (!ids.includes(ev.lookId)) set("sectionLooks", secs[k].id, [...ids, ev.lookId]);
-        }
+  /** Merge a take into the show: every look started in a section joins that section. */
+  function mergeTake(song: Song, takeId: string) {
+    const take = takesOf(song).find((l) => l.id === takeId);
+    if (!take) return;
+    editSong(song, `Merge ${take.name}`, () => {
+      const secs = sectionsOf(song);
+      let t = 0;
+      const bounds = secs.map((x) => [t, (t += x.length)]);
+      for (const ev of take.events) {
+        if ((ev.kind !== "start" && ev.kind !== "flash") || !ev.lookId) continue;
+        const k = bounds.findIndex(([a, b2]) => ev.at >= a && ev.at < b2);
+        if (k < 0) continue;
+        const ids = state.sectionLooks[secs[k].id] ?? [];
+        if (!ids.includes(ev.lookId)) set("sectionLooks", secs[k].id, [...ids, ev.lookId]);
       }
-      set("songLayers", song.id, (ls) => ls.filter((x) => x.id !== layerId));
+      set("takes", song.id, (ls) => ls.filter((x) => x.id !== takeId));
     });
   }
-  function deleteLayer(song: Song, layerId: string) {
-    editSong(song, "Delete layer", () => set("songLayers", song.id, (ls) => ls.filter((x) => x.id !== layerId)));
+  function deleteTake(song: Song, takeId: string) {
+    editSong(song, "Delete take", () => set("takes", song.id, (ls) => ls.filter((x) => x.id !== takeId)));
   }
 
-  // recording writes into the show of the song that plays, as a new layer
+  // recording writes into the show of the song that plays, as a new take
   let recSeq = 2;
   function recordEvent(ev: Omit<RecEvent, "at"> & { at?: number }) {
     if (!isRecording()) return;
     const cur = currentSong();
     if (!cur) return;
     const id = cur.song.id;
-    const layers = state.songLayers[id] ?? [];
-    let l = layers.find((x) => x.recording);
+    const takes = state.takes[id] ?? [];
+    let l = takes.find((x) => x.recording);
     if (!l) {
-      l = { id: `rec-${recSeq++}`, name: `Recording ${hhmm(now())}`, muted: false, recording: true, events: [] };
-      set("songLayers", id, [l, ...layers]);
+      l = { id: `rec-${recSeq++}`, name: "Recording", muted: false, recording: true, started: now(), events: [] };
+      set("takes", id, [l, ...takes]);
     }
     const lid = l.id;
-    set("songLayers", id, (x) => x.id === lid, "events", (es) => [...es, { ...ev, at: ev.at ?? now() - cur.start }]);
+    set("takes", id, (x) => x.id === lid, "events", (es) => [...es, { ...ev, at: ev.at ?? now() - cur.start }]);
   }
   // a pass ends when recording stops or the song changes
   createEffect(() => {
     const rec = isRecording();
     const playing = currentSong()?.song.id;
-    for (const [songId, layers] of Object.entries(state.songLayers)) {
+    for (const [songId, takes] of Object.entries(state.takes)) {
       if (!rec || songId !== playing)
-        layers.forEach((l, i) => l.recording && set("songLayers", songId, i, { recording: false, name: l.name.replace("Recording", "Recorded") }));
+        takes.forEach((l, i) => l.recording && set("takes", songId, i, { recording: false, name: `Recorded today ${hhmm(l.started ?? now())}` }));
     }
   });
 
@@ -606,7 +627,7 @@ function build() {
   /** What the autopilot plays in a section, after style, groups and skips. */
   // ---- song director ---------------------------------------------------
   const sectionKey = (song: Song, index: number) => sectionsOf(song)[index]?.id ?? `${song.id}-${index}`;
-  /** The looks a section of the song's show holds (its base layer). */
+  /** The looks a section of the song's show holds. */
   const sectionLooksOf = (song: Song, index: number): string[] => state.sectionLooks[sectionKey(song, index)] ?? [];
 
   function setSectionLooks(song: Song, index: number, ids: string[], label = "Change section") {
@@ -711,8 +732,11 @@ function build() {
     return list.sort((a, b) => a.number.localeCompare(b.number));
   }
 
-  // ---- manual layer --------------------------------------------------
+  // ---- manual: what you touch stays yours until Release ---------------
+  /** Pads that are on. */
   const runningManual = () => state.manual.filter((b) => b.end === null);
+  /** Everything a pad took under manual control and that was not released yet, pad on or off. */
+  const heldManual = () => state.manual.filter((b) => b.released === null);
   const manualBlockFor = (lookId: string) => runningManual().find((b) => b.lookId === lookId);
 
   function log(lookId: string, action: ManualEvent["action"]) {
@@ -723,57 +747,67 @@ function build() {
   }
 
   const removeBlock = (id: number) => set("manual", (bs) => bs.filter((b) => b.id !== id));
-  const endBlock = (id: number, end: number | null) =>
-    set("manual", (b) => b.id === id, "end", end);
+  const setBlock = (id: number, patch: Partial<ManualBlock>) => set("manual", (b) => b.id === id, patch);
 
-  /** Start a look on the Manual layer and keep it running. A flash in progress becomes held. */
+  /** Start a look by hand and keep it running. A flash in progress becomes held. */
   function start(lookId: string) {
     const running = manualBlockFor(lookId);
     if (running && running.mode === "held") return;
     let id: number;
+    // the same pad again: it takes over what its earlier press still held
+    const t = now();
+    set("manual", (b) => b.lookId === lookId && b.released === null && b.end !== null, "released", t);
     if (running) {
       id = running.id;
-      set("manual", (b) => b.id === id, "mode", "held");
+      setBlock(id, { mode: "held" });
     } else {
       id = nextId++;
-      set("manual", (bs) => [...bs, { id, lookId, start: now(), end: null, mode: "held" }]);
+      set("manual", (bs) => [...bs, { id, lookId, start: t, end: null, mode: "held", released: null }]);
     }
     log(lookId, "start");
     record(`Start ${lookById(lookId).name}`, () => removeBlock(id));
   }
 
-  function stop(lookId: string) {
+  /** Switch a pad off. What it touched stays under manual control until Release, unless the rule says it ends with the pad (or andRelease: a try in the editor). */
+  function stop(lookId: string, andRelease = false) {
     const running = manualBlockFor(lookId);
     if (!running) return;
     const id = running.id;
-    endBlock(id, now());
+    const t = now();
+    setBlock(id, { end: t, released: andRelease || state.rules.manualEnds === "pad" ? t : null });
     log(lookId, "stop");
-    record(`Stop ${lookById(lookId).name}`, () => endBlock(id, null));
+    record(`Stop ${lookById(lookId).name}`, () => setBlock(id, { end: null, released: null }));
   }
 
   /** Flash a look while a finger is down. Not an undo step. */
   function hold(lookId: string) {
     if (manualBlockFor(lookId)) return;
-    set("manual", (bs) => [...bs, { id: nextId++, lookId, start: now(), end: null, mode: "flash" }]);
+    set("manual", (bs) => [...bs, { id: nextId++, lookId, start: now(), end: null, mode: "flash", released: null }]);
     log(lookId, "flash");
   }
 
-  /** End a flash. */
+  /** End a flash. A flash is only there while the finger is down: it holds nothing afterwards. */
   function release(lookId: string) {
     const running = manualBlockFor(lookId);
     if (!running || running.mode !== "flash") return;
-    endBlock(running.id, now());
+    const t = now();
+    setBlock(running.id, { end: t, released: t });
     const cur = currentSong();
-    if (cur) recordEvent({ kind: "flash", lookId, at: running.start - cur.start, dur: now() - running.start });
+    if (cur) recordEvent({ kind: "flash", lookId, at: running.start - cur.start, dur: t - running.start });
   }
 
-  /** Release the whole Manual layer, so the layers below show through again. */
+  /** Release: manual control ends for everything the Console holds. Pads that are on go off. */
   function releaseAll() {
-    const ids = runningManual().map((b) => b.id);
-    if (!ids.length) return;
+    const before = heldManual().map((b) => ({ id: b.id, end: b.end }));
+    const xy = state.xyHeld;
+    if (!before.length && xy === null) return;
     const t = now();
-    set("manual", (b) => ids.includes(b.id), "end", t);
-    record("Release Manual", () => set("manual", (b) => ids.includes(b.id), "end", null));
+    for (const b of before) setBlock(b.id, { end: b.end ?? t, released: t });
+    set("xyHeld", null);
+    record("Release", () => {
+      for (const b of before) setBlock(b.id, { end: b.end, released: null });
+      set("xyHeld", xy);
+    });
   }
 
   function surprise() {
@@ -925,7 +959,11 @@ function build() {
     const bp = (beatPhase() + phase) % 1;
     for (const f of state.rig) {
       if (f.universe !== universe) continue;
-      const { look, level } = fixtureState(f);
+      const { look, level, strobe, position } = fixtureState(f);
+      // position: from the pad if you hold it, moving if a look has it, else at rest
+      const swing = (offset: number) => Math.round(127 + 100 * Math.sin(((beats() + phase) / 2 + offset) * Math.PI));
+      const pan = position?.look.id === "xy" ? Math.round((state.xy.pan / 100) * 255) : position ? swing(0) : 127;
+      const tilt = position?.look.id === "xy" ? Math.round((state.xy.tilt / 100) * 255) : position ? swing(0.5) : 127;
       const [r, g, b] = look ? rgb(look.colors[0]) : [0, 0, 0];
       const dim = Math.round(level * 255);
       const names = attributes(f);
@@ -936,9 +974,9 @@ function build() {
         else if (name === "Green") x = g;
         else if (name === "Blue") x = b;
         else if (name === "White") x = look && r > 200 && g > 200 && b > 200 ? 255 : 0;
-        else if (name === "Strobe") x = look?.kind === "strobe" ? Math.round((state.faders.strobeRate / 100) * 255) : 0;
-        else if (name === "Pan") x = Math.round((state.xy.pan / 100) * 255);
-        else if (name === "Tilt") x = Math.round((state.xy.tilt / 100) * 255);
+        else if (name === "Strobe") x = strobe ? Math.round((state.faders.strobeRate / 100) * 255) : 0;
+        else if (name === "Pan") x = pan;
+        else if (name === "Tilt") x = tilt;
         else if (name === "Shutter") x = dim ? 255 : 0;
         else if (name === "Speed") x = 40;
         else if (f.kind === "bar") {
@@ -1038,7 +1076,7 @@ function build() {
     record("Tempo", () => set("tempo", before), "tempo");
   }
 
-  /** The Show layer replays these looks (no undo: a replay is a performance). */
+  /** The show replays these looks (no undo: a replay is a performance). */
   const setReplay = (ids: string[]) => set("replay", ids);
 
   // ---- looks library ---------------------------------------------------
@@ -1075,7 +1113,7 @@ function build() {
     items().filter((i): i is Sequence => i.kind === "sequence" && i.entries.some((x) => x.ref === id));
   const allGroups = () => [...new Set(items().flatMap((i) => i.groups))].sort();
 
-  // every library item plays like a look on the layers
+  // every library item plays like a look
   setLookResolver((id) => {
     const it = state.library[id];
     if (!it) return undefined;
@@ -1182,11 +1220,11 @@ function build() {
   function recordFader(fader: string, value: number) {
     const cur = currentSong();
     if (!isRecording() || !cur) return;
-    const l = (state.songLayers[cur.song.id] ?? []).find((x) => x.recording);
+    const l = (state.takes[cur.song.id] ?? []).find((x) => x.recording);
     const last = l?.events[l.events.length - 1];
     const at = now() - cur.start;
     if (l && last?.kind === "fader" && last.fader === fader && at - last.at < 1.5) {
-      set("songLayers", cur.song.id, (x) => x.id === l.id, "events", l.events.length - 1, { at, value });
+      set("takes", cur.song.id, (x) => x.id === l.id, "events", l.events.length - 1, { at, value });
     } else recordEvent({ kind: "fader", fader, value });
   }
 
@@ -1199,9 +1237,15 @@ function build() {
 
   function setXY(pan: number, tilt: number) {
     const before = { ...state.xy };
+    const held = state.xyHeld;
     set("xy", { pan: clamp(pan), tilt: clamp(tilt) });
-    record("Movers position", () => set("xy", before), "xy");
+    if (held === null) set("xyHeld", now());
+    // if manual control ends with the control, the position goes back shortly after the finger stops
+    clearTimeout(xyTimer);
+    if (state.rules.manualEnds === "pad") xyTimer = window.setTimeout(() => set("xyHeld", null), 900);
+    record("Movers position", () => (set("xy", before), set("xyHeld", held)), "xy");
   }
+  let xyTimer: number | undefined;
 
   // ---- autopilot -----------------------------------------------------
   function setAutopilot<K extends "on" | "style" | "wild">(key: K, value: State["autopilot"][K]) {
@@ -1244,26 +1288,116 @@ function build() {
     );
   }
 
-  // ---- derived: what each fixture does --------------------------------
-  /** Top layer wins: Manual, then Show, then Autopilot. */
-  function fixtureState(f: Fixture): { look: Look | null; layer: Layer | null; level: number } {
-    const hand = [...runningManual()].reverse().find((b) => lookById(b.lookId).groups.includes(f.group));
-    let look: Look | null = null;
-    let layer: Layer | null = null;
-    if (hand) {
-      look = lookById(hand.lookId);
-      layer = "manual";
-    } else {
-      const sh = showLooksNow().map(lookById).find((l) => l.groups.includes(f.group));
-      const ap = autopilotNow().find((l) => l.groups.includes(f.group));
-      if (sh) {
-        look = sh;
-        layer = "show";
-      } else if (ap) {
-        look = ap;
-        layer = "autopilot";
-      }
+  // ---- who wins: the one place that decides between two values ---------
+  /** What a look sets. A step from the library says it itself; older looks go by their kind. */
+  function propsOf(look: Look): Prop[] {
+    const it = state.library[look.id];
+    if (it?.kind === "step" && !LOOKS.some((l) => l.id === look.id)) {
+      const own: Prop[] = [];
+      if (it.colour) own.push("colour");
+      if (it.dimmer !== undefined) own.push("brightness");
+      if (it.position) own.push("position");
+      if (own.length) return own;
     }
+    if (look.kind === "movement") return ["position"];
+    if (look.kind === "strobe") return ["brightness"];
+    return ["colour", "brightness"];
+  }
+  const BRIGHT: Record<string, number> = { uv: 0.4, "deep-blue": 0.55, breathe: 0.5, "slow-fade": 0.45, pulse: 0.7, "cold-wash": 0.75, "red-alert": 0.9, "blackout-hold": 0 };
+  /** How bright a look is on its own, 0..1. */
+  const brightnessOf = (look: Look) => BRIGHT[look.id] ?? (look.kind === "strobe" ? 1 : look.kind === "wash" ? 0.8 : 0.7);
+
+  interface Want {
+    rank: Layer;
+    look: Look;
+    started: number;
+    padOff?: boolean;
+  }
+  const XY_LOOK: Look = { id: "xy", name: "Movers position", colors: ["#f4efe6"], groups: ["movers"], kind: "movement" };
+  /** Everything that wants something right now, by rank. */
+  function wants(): Want[] {
+    const cur = currentSection();
+    const out: Want[] = heldManual().map((b) => ({ rank: "manual" as const, look: lookById(b.lookId), started: b.start, padOff: b.end !== null }));
+    if (state.xyHeld !== null) out.push({ rank: "manual", look: XY_LOOK, started: state.xyHeld });
+    showLooksNow().forEach((id, i) => out.push({ rank: "show", look: lookById(id), started: (cur?.start ?? 0) - i }));
+    autopilotNow().forEach((l, i) => out.push({ rank: "autopilot", look: l, started: (cur?.start ?? 0) - i }));
+    return out;
+  }
+  /** Rule 5, "stay": what the show or the autopilot last had, per group and property. */
+  const leftBehind = new Map<string, { rank: Layer; lookId: string }>();
+
+  /**
+   * The rules, in order. 1: each property of each group on its own. 2: manual beats show beats autopilot.
+   * 3: among equals the one that started last wins (brightness can be set to "highest").
+   * 4 and 5 decide who is still in the list: see stop(), releaseAll() and leftBehind.
+   * Returns the winner first, then who is under it.
+   */
+  function contenders(group: GroupId, prop: Prop): Winner[] {
+    const all = wants().filter((w) => w.look.groups.includes(group) && (w.look.id === "xy" ? prop === "position" : propsOf(w.look).includes(prop)));
+    const out: Winner[] = [];
+    for (const rank of ["manual", "show", "autopilot"] as const) {
+      const equals = all.filter((w) => w.rank === rank);
+      if (!equals.length) continue;
+      const highest = prop === "brightness" && state.rules.brightness === "highest";
+      equals.sort((a, b) => (highest ? brightnessOf(b.look) - brightnessOf(a.look) : 0) || b.started - a.started);
+      out.push({ rank, look: equals[0].look, padOff: equals[0].padOff });
+    }
+    const key = `${group}|${prop}`;
+    const below = out.find((w) => w.rank !== "manual");
+    if (below) leftBehind.set(key, { rank: below.rank, lookId: below.look.id });
+    else if (state.rules.lookEnds === "stay" && leftBehind.has(key)) {
+      const l = leftBehind.get(key)!;
+      out.push({ rank: l.rank, look: lookById(l.lookId), left: true });
+    }
+    return out;
+  }
+  const winner = (group: GroupId, prop: Prop): Winner | null => contenders(group, prop)[0] ?? null;
+
+  function setRule<K extends keyof Rules>(key: K, value: Rules[K]) {
+    const before = state.rules[key];
+    if (before === value) return;
+    set("rules", key, value);
+    // manual control now ends with the pad: pads that are off hold nothing any more
+    if (key === "manualEnds" && value === "pad") {
+      const t = now();
+      set("manual", (b) => b.released === null && b.end !== null, "released", t);
+      set("xyHeld", null);
+    }
+    if (key === "lookEnds" && value === "fallback") leftBehind.clear();
+    record("Who wins", () => set("rules", key, before));
+  }
+
+  /** What the Console holds until Release: each pad or control with what it touched. */
+  function holds(): Hold[] {
+    const pads = heldManual().map((b): Hold => {
+      const look = lookById(b.lookId);
+      const props = propsOf(look);
+      // rule 3 on the Console: another pad of yours has this property instead
+      const beaten = props.flatMap((p) => {
+        const others = [...new Set(look.groups.map((g) => winner(g, p)?.look).filter((w) => w && w.id !== look.id).map((w) => w!.name))];
+        return others.length ? [`${props.length > 1 ? `${p}: ` : ""}${others.join(", ")} ${others.length > 1 ? "have" : "has"} it`] : [];
+      });
+      return { id: `pad-${b.id}`, name: look.name, since: b.start, live: b.end === null, props, groups: look.groups, beaten };
+    });
+    return state.xyHeld === null ? pads : [...pads, { id: "xy", name: "Movers position", since: state.xyHeld, live: true, props: ["position"], groups: ["movers"], beaten: [] }];
+  }
+  /** "colour and brightness of PAR 1-8, Bars" */
+  const holdText = (h: Hold) => `${h.props.join(" and ")} of ${h.groups.map((g) => GROUPS.find((x) => x.id === g)!.name).join(", ")}`;
+  /** Rule 5, "stay": looks of a rank that have ended and still show. */
+  const staying = (rank: Layer) => [
+    ...new Set(GROUPS.flatMap((g) => PROPS.map((p) => winner(g.id, p))).filter((w) => w?.left && w.rank === rank).map((w) => w!.look.name)),
+  ];
+  /** Groups where Manual has at least one property. */
+  const heldGroups = () => GROUPS.filter((g) => PROPS.some((p) => winner(g.id, p)?.rank === "manual"));
+
+  // ---- derived: what each fixture does --------------------------------
+  /** Colour from the colour winner, level from the brightness winner. */
+  function fixtureState(f: Fixture): { look: Look | null; layer: Layer | null; level: number; strobe: boolean; position: Winner | null } {
+    const colour = winner(f.group, "colour");
+    const bright = winner(f.group, "brightness");
+    const position = winner(f.group, "position");
+    const top = colour ?? bright ?? position;
+    const look = top?.look ?? null;
     const groupFader: Record<GroupId, number> = {
       movers: state.faders.movers,
       pars: state.faders.wash,
@@ -1271,38 +1405,20 @@ function build() {
       laser: state.faders.laser,
     };
     if (state.identify === f.id) {
-      return { look: { id: "identify", name: "Identify", colors: ["#ffffff"], groups: [f.group], kind: "strobe" }, layer: null, level: beatPhase() < 0.5 ? 1 : 0.15 };
+      return { look: { id: "identify", name: "Identify", colors: ["#ffffff"], groups: [f.group], kind: "strobe" }, layer: null, level: beatPhase() < 0.5 ? 1 : 0.15, strobe: false, position };
     }
-    const level = isDark() || !look ? 0 : (state.master / 100) * (groupFader[f.group] / 100);
-    return { look, layer, level };
+    const own = bright ? brightnessOf(bright.look) : look ? 0.7 : 0;
+    const level = isDark() || !look ? 0 : own * (state.master / 100) * (groupFader[f.group] / 100);
+    // a strobe whose pad is off no longer flashes: it stays as it was left
+    const strobe = !!bright && bright.look.kind === "strobe" && !bright.padOff && !bright.left;
+    return { look, layer: top?.rank ?? null, level, strobe, position };
   }
 
-  /** Groups the Manual layer covers that the Show or the Autopilot also wants. */
-  function overrides() {
-    const showGroups = new Set(showLooksNow().flatMap((id) => lookById(id).groups));
-    const apGroups = new Set(autopilotNow().flatMap((l) => l.groups));
-    return runningManual()
-      .map((b) => ({ block: b, look: lookById(b.lookId) }))
-      .map((x) => {
-        const under: "Show" | "Autopilot" = x.look.groups.some((g) => showGroups.has(g)) ? "Show" : "Autopilot";
-        const wanted = under === "Show" ? showGroups : apGroups;
-        return { ...x, under, groups: x.look.groups.filter((g) => wanted.has(g)) };
-      })
-      .filter((x) => x.groups.length > 0);
-  }
-
-  /** Every group the Manual layer covers right now, with the look that covers it. */
-  function handsOff() {
-    return GROUPS.map((g) => {
-      const b = [...runningManual()].reverse().find((x) => lookById(x.lookId).groups.includes(g.id));
-      return b ? { group: g, block: b, look: lookById(b.lookId) } : null;
-    }).filter((x) => x !== null);
-  }
-
-  /** How a look is running: "held" or "flash" on Manual, "show", "autopilot", or null. */
-  function lookState(lookId: string): "held" | "flash" | "show" | "autopilot" | null {
+  /** How a look is running: "held" or "flash" by hand, "kept" (pad off, still held until Release), "show", "autopilot", or null. */
+  function lookState(lookId: string): "held" | "flash" | "kept" | "show" | "autopilot" | null {
     const b = manualBlockFor(lookId);
     if (b) return b.mode;
+    if (heldManual().some((x) => x.lookId === lookId)) return "kept";
     if (showLooksNow().includes(lookId)) return "show";
     if (autopilotNow().some((l) => l.id === lookId)) return "autopilot";
     return null;
@@ -1311,17 +1427,18 @@ function build() {
   // ---- lanes for the timetable and the Now strip ---------------------
   function lanes(from: number, to: number): Lane[] {
     const t = now();
+    // a block runs until manual control ends: with the pad off it goes on as "held"
     const manualBlocks = state.manual
-      .filter((b) => (b.end ?? t) > from && b.start < to)
+      .filter((b) => (b.released ?? t) > from && b.start < to)
       .map((b) => ({
         id: `manual-${b.id}`,
         title: lookById(b.lookId).name,
         sub: hhmm(b.start),
         start: b.start,
-        end: b.end,
-        tail: b.end === null ? (b.mode === "flash" ? "flash" : "holding") : undefined,
+        end: b.released,
+        tail: b.released !== null ? undefined : b.mode === "flash" ? "flash" : b.end === null ? "holding" : "held, pad off",
       }));
-    const handGroups = handsOff().map((h) => h.group.name);
+    const handGroups = heldGroups().map((g) => g.name);
     const cur = currentSection();
     const placed = sectionsBetween(from, to);
     const showBlocks = placed
@@ -1337,16 +1454,16 @@ function build() {
       end: p.end,
     }));
     const apPlaying = state.autopilot.on && autopilotArmed() && !!cur && !covered(cur);
-    const builtIn: Record<string, Lane> = {
-      manual: {
+    return [
+      {
         layer: "manual",
         title: "Manual",
         on: handGroups.length > 0,
         chip: handGroups.length ? "holding" : "idle",
-        status: handGroups.length ? `covers ${handGroups.join(", ")}` : "nothing held",
+        status: handGroups.length ? `holds ${handGroups.join(", ")}` : "nothing held",
         blocks: manualBlocks,
       },
-      show: {
+      {
         layer: "show",
         title: "Show",
         on: showNowLooks.length > 0,
@@ -1361,12 +1478,14 @@ function build() {
         blocks: showBlocks,
         empty: "No show for this song",
       },
-      autopilot: {
+      {
         layer: "autopilot",
         title: "Autopilot",
         on: apPlaying,
         chip: !state.autopilot.on ? "off" : !autopilotArmed() ? "waiting" : apPlaying ? "playing" : "idle",
-        status: !state.autopilot.on
+        status: staying("autopilot").length
+          ? `ended, ${staying("autopilot").join(", ")} stays as it was left`
+          : !state.autopilot.on
           ? "turned off"
           : !state.night.live
             ? "starts with LIVE"
@@ -1379,21 +1498,7 @@ function build() {
                   : "nothing to play",
         blocks: apBlocks,
       },
-    };
-    return state.layers.map(
-      (l): Lane =>
-        builtIn[l.kind] ?? { layer: l.id, title: l.name, color: l.color, on: false, chip: "idle", status: "nothing on it yet", blocks: [], empty: "Nothing on this layer yet" },
-    );
-  }
-
-  const EXTRA_COLOURS = ["#9d7bff", "#ff9a3d", "#3ddc97", "#c6d94a"];
-  /** Add a layer: it goes under Manual, with its own colour. */
-  function addLayer() {
-    const n = state.layers.filter((l) => l.kind === "extra").length;
-    const id = `layer-${Date.now().toString(36)}`;
-    const layer: LayerDef = { id, name: `Layer ${state.layers.length + 1}`, kind: "extra", color: EXTRA_COLOURS[n % EXTRA_COLOURS.length] };
-    set("layers", (ls) => [ls[0], layer, ...ls.slice(1)]);
-    record(`Add ${layer.name}`, () => set("layers", (ls) => ls.filter((l) => l.id !== id)));
+    ];
   }
 
   return {
@@ -1424,16 +1529,22 @@ function build() {
     skipPick,
     morePick,
     keepPick,
-    addLayer,
+    setRule,
+    winner,
+    contenders,
+    holds,
+    holdText,
+    heldManual,
+    propsOf,
     sectionsOf,
     songLength,
     songPos,
     recBlocks,
     showLooksNow,
-    songLayersOf,
-    setLayerMuted,
-    mergeLayerDown,
-    deleteLayer,
+    takesOf,
+    setTakeMuted,
+    mergeTake,
+    deleteTake,
     moveSectionEdge,
     splitSection,
     mergeSections,
@@ -1451,8 +1562,6 @@ function build() {
     runningManual,
     lookState,
     fixtureState,
-    overrides,
-    handsOff,
     lanes,
     sectionsBetween,
     currentSection,

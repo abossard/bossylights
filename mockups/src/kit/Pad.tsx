@@ -1,7 +1,7 @@
 import { For, Show } from "solid-js";
 
-/** idle, or running on a layer (autopilot, show, held by hand), or flash: a finger is down. */
-export type PadState = "idle" | "autopilot" | "show" | "held" | "flash";
+/** idle, running (autopilot, show, held by hand), flash: a finger is down, or kept: the pad is off but what it touched is still held until Release. */
+export type PadState = "idle" | "autopilot" | "show" | "held" | "flash" | "kept";
 
 export interface PadProps {
   label: string;
@@ -22,12 +22,13 @@ const RUNS: Record<PadState, string | undefined> = {
   show: "Show",
   held: "Manual",
   flash: "Flash",
+  kept: undefined,
 };
 
 /**
  * A look pad. Its colour is a field, its name is readable, and when it runs
- * the whole pad takes the colour of the layer that runs it and carries the
- * NOW flag. Press fires on down so it feels instant; the screen decides what
+ * the whole pad takes the colour of who runs it (manual, show or autopilot)
+ * and carries the NOW flag. A pad that is off but still held keeps a pink mark. Press fires on down so it feels instant; the screen decides what
  * a short press and a long hold mean, from onDown and onUp(heldMs).
  */
 export function Pad(props: PadProps) {
@@ -57,7 +58,7 @@ export function Pad(props: PadProps) {
     props.onUp(0);
   };
 
-  const running = () => props.state !== "idle";
+  const running = () => props.state !== "idle" && props.state !== "kept";
   // "Chase L-R" must not break at its hyphen.
   const name = () => props.label.replace(/-/g, "‑");
 
@@ -66,7 +67,7 @@ export function Pad(props: PadProps) {
       type="button"
       class={`pad pad-${props.state}`}
       aria-pressed={running()}
-      aria-label={running() ? `${props.label}, running: ${RUNS[props.state]}` : props.label}
+      aria-label={running() ? `${props.label}, running: ${RUNS[props.state]}` : props.state === "kept" ? `${props.label}, off, still held until Release` : props.label}
       disabled={props.disabled}
       onPointerDown={pointerDown}
       onPointerUp={pointerUp}
@@ -79,6 +80,9 @@ export function Pad(props: PadProps) {
       </span>
       <Show when={running()}>
         <span class="now-flag pad-flag" aria-hidden="true">Now</span>
+      </Show>
+      <Show when={props.state === "kept"}>
+        <span class="pad-kept-mark" aria-hidden="true">held</span>
       </Show>
       <span class="pad-name" aria-hidden="true">{name()}</span>
       <Show when={running()}>

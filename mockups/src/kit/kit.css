@@ -469,8 +469,25 @@
   color: var(--ink);
 }
 
-.pad:not(.pad-idle) .pad-field {
+.pad:not(.pad-idle):not(.pad-kept) .pad-field {
   border-bottom: var(--rule) solid var(--ink);
+}
+
+/* off, but what it touched is still held until Release */
+.pad-kept {
+  outline: 3px solid var(--layer-manual);
+  outline-offset: -3px;
+}
+
+.pad-kept-mark {
+  position: absolute;
+  top: 0;
+  right: 0;
+  padding: 2px 5px;
+  background: var(--layer-manual);
+  color: var(--ink);
+  font: 700 var(--text-sm) / 1.1 var(--font-ui);
+  font-stretch: var(--tight);
 }
 
 .pad:disabled {
@@ -1015,11 +1032,6 @@ button.list-body:hover {
   padding: 0 4px;
   white-space: nowrap;
   overflow: hidden;
-}
-
-/* more than three layers: the lanes get too thin for words */
-.ns.is-many .ns-block {
-  font-size: 0;
 }
 
 .ns-block.is-past {
