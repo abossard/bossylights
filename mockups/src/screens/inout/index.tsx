@@ -1,7 +1,6 @@
 import { createSignal, For, onCleanup, Show } from "solid-js";
-import { createStore } from "solid-js/store";
-import { store, type ClockFeed, type Output } from "../../fake/store";
-import { Button, Decks, Meter, Region } from "../../kit";
+import { store, type ClockFeed, type Mapping, type Output } from "../../fake/store";
+import { Button, Decks, Meter, Region, Table } from "../../kit";
 import type { Issue } from "../../shell/registry";
 import "./inout.css";
 
@@ -19,44 +18,22 @@ export const issues: Issue[] = [
   { number: 45, title: "One tempo for everything" },
 ];
 
-/** What a controller press can do. */
-const ACTIONS = [
-  { id: "blackout", name: "Blackout", run: () => store.setBlackout(!store.state.blackout) },
-  { id: "surprise", name: "Surprise me", run: () => store.surprise() },
-  { id: "release", name: "Release Manual", run: () => store.releaseAll() },
-  { id: "undo", name: "Undo", run: () => store.undo() },
-];
-
-// Learned mappings outlive the screen, like a real controller profile would.
-const [map, setMap] = createStore<Record<string, string>>({ blackout: "8,4" });
+const DEVICES = ["Launchpad Mini", "APC mini"];
 
 const STATE: Record<Output["state"], string> = { connected: "Sending", reconnecting: "Reconnecting", error: "Error" };
 
 export function Screen() {
-  // ---- MIDI learn: step 1 pick what to learn, step 2 press on the controller
-  const [learning, setLearning] = createSignal<string | null>(null);
-  const [lastPress, setLastPress] = createSignal("");
-  const padName = (k: string) => `pad ${k.replace(",", " in row ")}`;
-  const press = (key: string) => {
-    const l = learning();
-    if (l) {
-      const before = { ...map };
-      const old = Object.keys(map).find((a) => map[a] === key);
-      setMap((m) => ({ ...m, ...(old ? { [old]: undefined as unknown as string } : {}), [l]: key }));
-      store.record(`Learn ${ACTIONS.find((a) => a.id === l)!.name}`, () => setMap(() => before));
-      setLearning(null);
-      setLastPress(`Learned: ${padName(key)} now does ${ACTIONS.find((a) => a.id === l)!.name}.`);
-      return;
-    }
-    const action = ACTIONS.find((a) => map[a.id] === key);
-    if (action) {
-      action.run();
-      setLastPress(`${padName(key)}: ${action.name}`);
-    } else setLastPress(`${padName(key)}: nothing on it yet. Use Learn to give it a job.`);
+  // ---- mappings: what Learn made, to edit, test and remove
+  const [editing, setEditing] = createSignal<string | null>(null);
+  const [tested, setTested] = createSignal<string | null>(null);
+  let mapTimer: number | undefined;
+  const testMapping = (m: Mapping) => {
+    setTested(m.id);
+    clearTimeout(mapTimer);
+    mapTimer = window.setTimeout(() => setTested(null), 2000);
   };
-  const onKey = (e: KeyboardEvent) => e.key === "Escape" && setLearning(null);
-  window.addEventListener("keydown", onKey);
-  onCleanup(() => window.removeEventListener("keydown", onKey));
+  onCleanup(() => clearTimeout(mapTimer));
+  const testedMapping = () => store.state.mappings.find((m) => m.id === tested());
 
   // ---- audio level, moving with the beat
   const level = () => {
@@ -68,24 +45,10 @@ export function Screen() {
   // ---- OSC: a message now and then
   const oscAgo = () => Math.floor((store.now() * 10) % 40) / 10;
 
-  // ---- tap tempo
-  const [taps, setTaps] = createSignal<number[]>([]);
-  const tapBpm = () => {
-    const t = taps();
-    if (t.length < 2) return null;
-    const gaps = t.slice(1).map((x, i) => x - t[i]);
-    return 60000 / (gaps.reduce((a, b) => a + b, 0) / gaps.length);
-  };
-  const tap = () => {
-    const now = performance.now();
-    const t = [...taps().filter((x) => now - x < 3000), now].slice(-5);
-    setTaps(t);
-    const b = tapBpm();
-    if (b && store.state.clockFeed === "tap") store.setTempo(b);
-  };
+  const tapped = () => (store.state.clockFeed === "tap" ? store.state.tempo : null);
 
   const FEEDS: { id: ClockFeed; name: string; tempo: () => number | null; sure: number; note: () => string }[] = [
-    { id: "tap", name: "Tap", tempo: () => tapBpm(), sure: 0.6, note: () => (tapBpm() ? `${taps().length} taps` : "Tap the button four times") },
+    { id: "tap", name: "Tap", tempo: () => tapped(), sure: 0.6, note: () => (tapped() ? "From your taps" : "Tap here or in the top bar") },
     { id: "audio", name: "Audio", tempo: () => 125.8, sure: 0.82, note: () => "From the audio input" },
     { id: "midi", name: "MIDI clock", tempo: () => null, sure: 0, note: () => "No clock coming in" },
     { id: "vdj", name: "VirtualDJ", tempo: () => 126, sure: 0.99, note: () => "Deck 1, playing" },
@@ -125,51 +88,6 @@ export function Screen() {
               <span class="io-state">Not found</span>
             </li>
           </ul>
-        </section>
-
-        <section class="io-sec" aria-label="MIDI learn">
-          <h3 class="io-h">Give a pad a job</h3>
-          <ul class="io-rows">
-            <For each={ACTIONS}>
-              {(a) => (
-                <li class="io-row io-learn-row" classList={{ "is-learning": learning() === a.id }}>
-                  <span class="io-text">
-                    <b>{a.name}</b>
-                    <span class="mute">{map[a.id] ? `Launchpad Mini, ${padName(map[a.id])}` : "Not on a pad"}</span>
-                  </span>
-                  <Button pressed={learning() === a.id} onClick={() => setLearning(learning() === a.id ? null : a.id)}>
-                    {learning() === a.id ? "Cancel" : "Learn"}
-                  </Button>
-                </li>
-              )}
-            </For>
-          </ul>
-          <p class="io-learn-msg" classList={{ "is-waiting": !!learning() }} role="status">
-            {learning()
-              ? `Waiting: press a pad on the Launchpad for ${ACTIONS.find((a) => a.id === learning())!.name}.`
-              : lastPress() || "Press Learn, then a pad on the controller."}
-          </p>
-          <div class="io-pads" classList={{ "is-waiting": !!learning() }} role="group" aria-label="Launchpad Mini, as it is now">
-            <For each={[1, 2, 3, 4]}>
-              {(row) => (
-                <For each={[1, 2, 3, 4, 5, 6, 7, 8]}>
-                  {(col) => {
-                    const key = `${col},${row}`;
-                    const job = () => ACTIONS.find((a) => map[a.id] === key);
-                    return (
-                      <button
-                        type="button"
-                        class="io-pad"
-                        classList={{ "has-job": !!job() }}
-                        aria-label={`Pad ${col} in row ${row}${job() ? `: ${job()!.name}` : ""}`}
-                        onClick={() => press(key)}
-                      />
-                    );
-                  }}
-                </For>
-              )}
-            </For>
-          </div>
         </section>
 
         <section class="io-sec">
@@ -246,10 +164,10 @@ export function Screen() {
             )}
           </For>
         </div>
-        <Button size="lg" class="io-tap" onClick={tap}>
+        <Button size="lg" class="io-tap" onClick={() => store.tap()}>
           Tap
         </Button>
-        <p class="mute">Tap along with the music. Pick Tap above to make it the beat.</p>
+        <p class="mute">Tap along with the music. After two taps the beat follows you.</p>
       </Region>
 
       <Region id="out" title="Out" class="io-col" aside={<span class="mute">Where the lights get their data</span>}>
@@ -278,6 +196,91 @@ export function Screen() {
             )}
           </For>
         </ul>
+      </Region>
+
+      <Region
+        id="mappings"
+        title="Mappings"
+        class="io-map"
+        aside={<span class="mute">Made with Learn in the top bar: press it, click any control on any screen, then move a control on your hardware</span>}
+      >
+        <div class="io-map-scroll">
+          <Table<Mapping>
+            caption="Controls that hardware can reach"
+            rows={store.state.mappings}
+            rowKey={(m) => m.id}
+            selected={tested()}
+            empty="Nothing mapped yet. Press Learn in the top bar."
+            columns={[
+              { key: "control", title: "Control", render: (m) => <b>{m.control}</b> },
+              { key: "screen", title: "Screen" },
+              {
+                key: "device",
+                title: "Device",
+                render: (m) => (
+                  <Show when={editing() === m.id} fallback={m.device}>
+                    <select aria-label={`Device for ${m.control}`} value={m.device} onChange={(e) => store.updateMapping(m.id, { device: e.currentTarget.value })}>
+                      <For each={DEVICES}>{(d) => <option value={d}>{d}</option>}</For>
+                    </select>
+                  </Show>
+                ),
+              },
+              {
+                key: "message",
+                title: "Note or controller number",
+                render: (m) => (
+                  <Show when={editing() === m.id} fallback={m.message}>
+                    <input
+                      type="text"
+                      class="io-map-input"
+                      aria-label={`Note or controller number for ${m.control}`}
+                      value={m.message}
+                      onChange={(e) => store.updateMapping(m.id, { message: e.currentTarget.value.trim() || m.message })}
+                    />
+                  </Show>
+                ),
+              },
+              {
+                key: "feedback",
+                title: "Feedback",
+                render: (m) => (
+                  <Show when={editing() === m.id} fallback={m.feedback ? "Lights up" : "None"}>
+                    <Button pressed={m.feedback} onClick={() => store.updateMapping(m.id, { feedback: !m.feedback })}>
+                      {m.feedback ? "Lights up" : "None"}
+                    </Button>
+                  </Show>
+                ),
+              },
+              {
+                key: "actions",
+                title: "",
+                align: "right",
+                render: (m) => (
+                  <span class="io-map-actions">
+                    <Button pressed={editing() === m.id} aria-label={`${editing() === m.id ? "Done editing" : "Edit"} ${m.control}`} onClick={() => setEditing(editing() === m.id ? null : m.id)}>
+                      {editing() === m.id ? "Done" : "Edit"}
+                    </Button>
+                    <Button pressed={tested() === m.id} aria-label={`Test ${m.control}`} onClick={() => testMapping(m)}>
+                      {tested() === m.id ? "Sent" : "Test"}
+                    </Button>
+                    <Button variant="quiet" aria-label={`Remove ${m.control}`} onClick={() => store.removeMapping(m.id)}>
+                      Remove
+                    </Button>
+                  </span>
+                ),
+              },
+            ]}
+          />
+        </div>
+        <p class="io-map-msg" role="status">
+          <Show when={testedMapping()}>
+            {(m) => (
+              <>
+                Test: {m().device} sent {m().message}, {m().control} answered{m().feedback ? " and the control lit up" : ""}.
+              </>
+            )}
+          </Show>
+        </p>
       </Region>
     </div>
   );

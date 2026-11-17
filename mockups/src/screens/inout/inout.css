@@ -1,6 +1,7 @@
 .io-screen {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-rows: minmax(0, 1fr) auto;
   gap: var(--sp-4);
   padding: var(--sp-4) var(--gutter);
   height: 100%;
@@ -81,53 +82,32 @@
   border: 1px dashed var(--mute);
 }
 
-/* MIDI learn */
-.io-learn-row.is-learning .io-text b::after {
-  content: " · waiting";
-  font-weight: 600;
+/* mappings: one row across the three columns */
+.io-map {
+  grid-column: 1 / -1;
+  min-height: 0;
+  padding-top: var(--sp-3);
+  border-top: var(--rule) solid var(--line);
 }
 
-.io-learn-msg {
-  min-height: 2.6em;
+.io-map-scroll {
+  max-height: 190px;
+  overflow-y: auto;
+}
+
+.io-map-actions {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.io-map-input {
+  width: 9em;
+}
+
+.io-map-msg {
+  min-height: 1.4em;
   font-size: var(--text-sm);
   font-weight: 600;
-  line-height: 1.3;
-}
-
-.io-learn-msg.is-waiting {
-  padding: 4px var(--sp-2);
-  border: var(--rule) dashed var(--paper);
-  font-weight: 700;
-}
-
-.io-pads {
-  display: grid;
-  grid-template-columns: repeat(8, minmax(0, 1fr));
-  gap: 4px;
-  padding: 6px;
-  background: var(--s1);
-  border: var(--rule) solid transparent;
-}
-
-.io-pads.is-waiting {
-  border: var(--rule) dashed var(--paper);
-}
-
-.io-pad {
-  height: 34px;
-  background: var(--s2);
-}
-
-.io-pad:hover {
-  background: var(--line);
-}
-
-.io-pad:active {
-  background: var(--paper);
-}
-
-.io-pad.has-job {
-  background: var(--mute);
 }
 
 .io-meter {
