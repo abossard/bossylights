@@ -154,6 +154,8 @@ interface State {
   /** Channels held by hand on the DMX screen, universe 1: address -> 0..255. */
   held: Record<number, number>;
   clockFeed: ClockFeed;
+  /** Looks the Show layer replays right now from a recording (How it works). */
+  replay: string[];
   /** false: the cued deck has nothing loaded (an edge state to look at) */
   cuedDeckLoaded: boolean;
   blackout: boolean;
@@ -196,6 +198,7 @@ function build() {
     // three channels held by hand: PAR 1 red, PAR 5 dimmer, Mover R1 pan
     held: { 66: 255, 93: 180, 33: 96 },
     clockFeed: "vdj",
+    replay: [],
     cuedDeckLoaded: true,
     blackout: false,
     blackoutHold: false,
@@ -719,6 +722,9 @@ function build() {
     record("Tempo", () => set("tempo", before), "tempo");
   }
 
+  /** The Show layer replays these looks (no undo: a replay is a performance). */
+  const setReplay = (ids: string[]) => set("replay", ids);
+
   /** Space bar: blackout only while held. */
   const setBlackoutHold = (on: boolean) => set("blackoutHold", on);
   const isDark = () => state.blackout || state.blackoutHold;
@@ -806,9 +812,9 @@ function build() {
       look = lookById(hand.lookId);
       layer = "manual";
     } else {
-      const sh = activeClips()
-        .map((c) => lookById(c.lookId))
-        .find((l) => l.groups.includes(f.group));
+      const sh = [...state.replay.map(lookById), ...activeClips().map((c) => lookById(c.lookId))].find((l) =>
+        l.groups.includes(f.group),
+      );
       const ap = autopilotNow().find((l) => l.groups.includes(f.group));
       if (sh) {
         look = sh;
@@ -833,7 +839,7 @@ function build() {
 
   /** Groups the Manual layer covers that the Show or the Autopilot also wants. */
   function overrides() {
-    const showGroups = new Set(activeClips().flatMap((c) => lookById(c.lookId).groups));
+    const showGroups = new Set([...state.replay, ...activeClips().map((c) => c.lookId)].flatMap((id) => lookById(id).groups));
     const apGroups = new Set(autopilotNow().flatMap((l) => l.groups));
     return runningManual()
       .map((b) => ({ block: b, look: lookById(b.lookId) }))
@@ -912,9 +918,12 @@ function build() {
       {
         layer: "show",
         title: "Show",
-        on: !!showNow,
-        chip: showNow ? "playing" : "idle",
-        status: showNow ? spanTitle(showNow) : showNext ? `next at ${hhmm(showNext.start)}` : "nothing planned",
+        on: !!showNow || state.replay.length > 0,
+        chip: showNow || state.replay.length ? "playing" : "idle",
+        status: state.replay.length
+          ? `replays ${state.replay.map((id) => lookById(id).name).join(", ")}`
+          : showNow
+            ? spanTitle(showNow) : showNext ? `next at ${hhmm(showNext.start)}` : "nothing planned",
         blocks: showBlocks,
         empty: "No show loaded",
       },
@@ -1020,6 +1029,7 @@ function build() {
     outputs,
     setClockFeed,
     setTempo,
+    setReplay,
     looks: LOOKS,
     songs: SONGS,
     groups: GROUPS,
