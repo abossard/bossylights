@@ -1,0 +1,199 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-17T18:30:00Z",
+  "title": "Design System: Bossylights",
+  "extensions": {
+    "colorMeta": {
+      "ground": {
+        "role": "neutral",
+        "displayName": "Warm Off-Black",
+        "canonical": "#1c1a17"
+      },
+      "surface": {
+        "role": "neutral",
+        "displayName": "Panel",
+        "canonical": "#26231f"
+      },
+      "surface-raised": {
+        "role": "neutral",
+        "displayName": "Hover",
+        "canonical": "#36322c"
+      },
+      "line": {
+        "role": "neutral",
+        "displayName": "Rule",
+        "canonical": "#46413a"
+      },
+      "paper": {
+        "role": "primary",
+        "displayName": "Paper",
+        "canonical": "#f4efe6"
+      },
+      "mute": {
+        "role": "neutral",
+        "displayName": "Mute",
+        "canonical": "#c4bbad"
+      },
+      "layer-manual": {
+        "role": "secondary",
+        "displayName": "Manual Hot Pink",
+        "canonical": "#ef3e7b"
+      },
+      "layer-show": {
+        "role": "secondary",
+        "displayName": "Show Cyan",
+        "canonical": "#20b2c9"
+      },
+      "layer-autopilot": {
+        "role": "secondary",
+        "displayName": "Autopilot Marigold",
+        "canonical": "#f2b705"
+      },
+      "danger": {
+        "role": "tertiary",
+        "displayName": "Blackout Red",
+        "canonical": "#ff4a3d"
+      }
+    },
+    "typographyMeta": {
+      "tempo": {
+        "displayName": "Tempo",
+        "purpose": "The tempo numeral. The largest text on any screen."
+      },
+      "on-air": {
+        "displayName": "On air",
+        "purpose": "Title of the song on air."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Fader values, product name, panel titles."
+      },
+      "heading": {
+        "displayName": "Heading",
+        "purpose": "Region headings."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Body text, buttons, pad names."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Labels, status lines, chips. The 13 px floor."
+      }
+    },
+    "shadows": [],
+    "motion": [
+      {
+        "name": "t-fast",
+        "value": "150ms",
+        "purpose": "State changes only: fills, borders, the switch knob."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "narrow",
+        "value": "1180px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Pad, idle",
+      "kind": "custom",
+      "refersTo": "pad",
+      "description": "A look pad: colour field on top, name below.",
+      "html": "<button class=\"ds-pad\"><span class=\"ds-pad-field\" style=\"background:#ff7a3d\"></span><span class=\"ds-pad-name\">Sunset</span></button>",
+      "css": ".ds-pad{width:76px;height:72px;padding:0;border:0;display:flex;flex-direction:column;background:var(--s1,#26231f);color:var(--paper,#f4efe6);text-align:left;cursor:pointer;position:relative}.ds-pad-field{flex:0 0 34%}.ds-pad-name{flex:1;display:flex;align-items:center;padding:2px 6px;font:700 14px/1.1 Archivo,sans-serif;font-stretch:82%}.ds-pad:hover{background:var(--s2,#36322c)}.ds-pad:active::after{content:\"\";position:absolute;inset:0;border:4px solid #f4efe6}.ds-pad:focus-visible{outline:3px solid #f4efe6;outline-offset:2px}"
+    },
+    {
+      "name": "Pad, running on Manual",
+      "kind": "custom",
+      "refersTo": "pad-running-manual",
+      "description": "A running pad fills with its layer's colour and carries the NOW flag.",
+      "html": "<button class=\"ds-pad-run\"><span class=\"ds-pad-run-field\"></span><span class=\"ds-pad-run-flag\">NOW</span><span class=\"ds-pad-run-name\">Strobe</span></button>",
+      "css": ".ds-pad-run{width:76px;height:72px;padding:0;border:0;display:flex;flex-direction:column;background:#ef3e7b;color:#1c1a17;text-align:left;position:relative;cursor:pointer}.ds-pad-run-field{flex:0 0 34%;background:#fff;border-bottom:2px solid #1c1a17}.ds-pad-run-flag{position:absolute;top:0;right:0;background:#f4efe6;font:800 14px/1 'Big Shoulders Display',sans-serif;padding:3px 5px;border-left:2px solid #1c1a17;border-bottom:2px solid #1c1a17}.ds-pad-run-name{flex:1;display:flex;align-items:center;padding:2px 6px;font:700 14px/1.1 Archivo,sans-serif;font-stretch:82%}.ds-pad-run:focus-visible{outline:3px solid #f4efe6;outline-offset:2px}"
+    },
+    {
+      "name": "Button",
+      "kind": "button",
+      "refersTo": "button",
+      "description": "Default action.",
+      "html": "<button class=\"ds-btn\">Surprise me</button>",
+      "css": ".ds-btn{min-height:44px;padding:0 14px;background:none;color:#f4efe6;font:700 14px Archivo,sans-serif;border:2px solid #46413a;cursor:pointer;transition:border-color 150ms,background-color 150ms}.ds-btn:hover{border-color:#f4efe6}.ds-btn:active{background:#36322c}.ds-btn:focus-visible{outline:3px solid #f4efe6;outline-offset:2px}"
+    },
+    {
+      "name": "Primary button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The one main action of a view.",
+      "html": "<button class=\"ds-btn-primary\">Export</button>",
+      "css": ".ds-btn-primary{min-height:44px;padding:0 14px;background:#f4efe6;color:#1c1a17;font:700 14px Archivo,sans-serif;border:2px solid #f4efe6;cursor:pointer;transition:background-color 150ms,border-color 150ms}.ds-btn-primary:hover,.ds-btn-primary:active{background:#c4bbad;border-color:#c4bbad}.ds-btn-primary:focus-visible{outline:3px solid #f4efe6;outline-offset:2px}"
+    },
+    {
+      "name": "LIVE switch, on",
+      "kind": "custom",
+      "refersTo": "live-switch-on",
+      "description": "The night is running. A paper slab readable across a dark room.",
+      "html": "<button class=\"ds-live\" role=\"switch\" aria-checked=\"true\"><span class=\"ds-live-track\"><span class=\"ds-live-knob\"></span></span><b>LIVE</b><span>ON</span></button>",
+      "css": ".ds-live{display:inline-flex;align-items:center;gap:8px;min-height:44px;padding:0 12px 0 8px;background:#f4efe6;color:#1c1a17;border:2px solid #f4efe6;cursor:pointer}.ds-live b{font:900 26px/1 'Big Shoulders Display',sans-serif;letter-spacing:.02em}.ds-live span:last-child{font:700 14px Archivo,sans-serif;letter-spacing:.04em}.ds-live-track{position:relative;width:40px;height:24px;background:#1c1a17}.ds-live-knob{position:absolute;top:4px;left:20px;width:16px;height:16px;background:#f4efe6}.ds-live:focus-visible{outline:3px solid #f4efe6;outline-offset:2px}"
+    },
+    {
+      "name": "Timetable block and NOW flag",
+      "kind": "custom",
+      "refersTo": "block",
+      "description": "A flat block in the layer's colour with dark text, and the NOW flag.",
+      "html": "<div class=\"ds-lane\"><div class=\"ds-block\"><b>BUILD-UP</b><i>22:44</i></div><span class=\"ds-now\"></span><span class=\"ds-flag\">NOW 22:47</span></div>",
+      "css": ".ds-lane{position:relative;width:260px;height:96px;border-bottom:1px solid #46413a}.ds-block{position:absolute;left:20px;top:28px;bottom:8px;width:150px;padding:7px 6px;background:#f2b705;color:#1c1a17}.ds-block b{display:block;font:800 20px/1 'Big Shoulders Display',sans-serif;letter-spacing:.02em}.ds-block i{display:block;margin-top:4px;font:600 13px Archivo,sans-serif;font-style:normal}.ds-now{position:absolute;left:120px;top:20px;bottom:0;width:6px;background:#f4efe6;border-left:2px solid #1c1a17;border-right:2px solid #1c1a17}.ds-flag{position:absolute;left:84px;top:0;background:#f4efe6;color:#1c1a17;font:800 17px/1 'Big Shoulders Display',sans-serif;letter-spacing:.02em;padding:4px 7px}"
+    }
+  ],
+  "narrative": {
+    "northStar": "Running Order",
+    "overview": "Tonight is a timetable, like the set-times board at a festival. Three lanes (Manual, Show, Autopilot), a NOW line, flat blocks of colour with dark text. Made for a laptop in a dark room next to DJ decks, and for a touch screen. The eye finds the song on air first, then the NOW line, then what is running. Everything else stays quiet.",
+    "keyCharacteristics": [
+      "Flat colour, square corners, no gradients, glow or shadows",
+      "One colour per layer, used for nothing else",
+      "Paper means now and the primary action",
+      "Standard controls"
+    ],
+    "rules": [
+      {
+        "name": "The Layer Colour Rule",
+        "body": "Pink, cyan and marigold mean Manual, Show and Autopilot. They never decorate, highlight or mark a primary action.",
+        "section": "colors"
+      },
+      {
+        "name": "The Paper Rule",
+        "body": "Paper fills mean now or this one. Text on a fill is always ink.",
+        "section": "colors"
+      },
+      {
+        "name": "The Red Rule",
+        "body": "Red is for blackout, recording and errors only.",
+        "section": "colors"
+      },
+      {
+        "name": "The 13 Rule",
+        "body": "Nothing read during a show is smaller than 13 px.",
+        "section": "typography"
+      },
+      {
+        "name": "The Tempo Rule",
+        "body": "The tempo is the largest text. The song on air is second. Nothing else exceeds 26 px.",
+        "section": "typography"
+      }
+    ],
+    "dos": [
+      "Do give a running thing its layer's colour as a solid fill, and the NOW flag.",
+      "Do use paper for the single primary action and for now.",
+      "Do say why a control is disabled, on the control.",
+      "Do narrow a label before shrinking it."
+    ],
+    "donts": [
+      "Don't use pink, cyan or marigold for anything that is not that layer.",
+      "Don't add gradients, glow, shadows or rounded corners.",
+      "Don't set any text larger than the tempo.",
+      "Don't rely on hover.",
+      "Don't open a modal."
+    ]
+  }
+}
