@@ -1017,6 +1017,11 @@ button.list-body:hover {
   overflow: hidden;
 }
 
+/* more than three layers: the lanes get too thin for words */
+.ns.is-many .ns-block {
+  font-size: 0;
+}
+
 .ns-block.is-past {
   background: none;
   border: 1px solid var(--layer);
@@ -1267,7 +1272,7 @@ button.list-body:hover {
   text-overflow: ellipsis;
 }
 
-/* the song on air: the largest text after the tempo */
+/* the song that plays: the largest text after the tempo */
 .deck.is-onair .deck-title {
   font-size: var(--display-xl);
 }

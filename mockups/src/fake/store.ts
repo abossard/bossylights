@@ -1006,7 +1006,7 @@ function build() {
         errors: 12 + Math.floor(sec / 5),
         detail: "No reply since 22:41",
       },
-      { id: "sacn", universe: 3, device: "sACN, bar wall", kind: "sACN", state: "connected", fps: 40, errors: 0, detail: "Sending" },
+      { id: "sacn", universe: 5, device: "sACN, bar wall", kind: "sACN", state: "connected", fps: 40, errors: 0, detail: "Sending" },
       { id: "ddp", universe: null, device: "Pixel controller 10.0.0.40", kind: "DDP", state: "connected", fps: 60, errors: 0, detail: "Sending, 480 pixels" },
     ];
   }

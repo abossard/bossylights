@@ -286,7 +286,7 @@ export const SONGS: Song[] = [
   },
 ];
 
-/** In the library, not in tonight's set. Sample data. */
+/** In the library, without a show of its own. Sample data. */
 export const LIBRARY_ONLY: Song[] = [
   {
     id: "static-bloom",

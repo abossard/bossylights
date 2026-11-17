@@ -13,13 +13,13 @@ export interface NowStripProps {
   onActivate: () => void;
 }
 
-/** Three thin lanes with the NOW line, under the top bar on most screens. */
+/** One thin lane per layer with the NOW line, under the top bar on most screens. */
 export function NowStrip(props: NowStripProps) {
   const pct = (t: number) => Math.max(0, Math.min(100, ((t - props.from) / (props.to - props.from)) * 100));
   const nowPct = () => pct(props.now);
 
   return (
-    <button type="button" class="ns" onClick={() => props.onActivate()} aria-label="Now strip: what runs on each layer. Open the Console.">
+    <button type="button" class="ns" classList={{ "is-many": props.lanes.length > 3 }} onClick={() => props.onActivate()} aria-label="Now strip: what runs on each layer. Open the Console.">
       <span class="ns-labels" aria-hidden="true">
         <For each={props.lanes}>{(l) => <span class={`ns-label layer-${l.layer}`} style={l.color ? { "--layer": l.color } : undefined}>{l.title}</span>}</For>
       </span>

@@ -37,10 +37,15 @@ export function Screen() {
   });
 
   const fixtures = () => store.rig.filter((f) => f.universe === universe()).sort((a, b) => a.address - b.address);
-  const ownerOf = (address: number) => fixtures().filter((f) => address >= f.address && address < f.address + f.channels);
-  const nameOf = (address: number) => {
-    const f = ownerOf(address)[0];
-    return f ? `${f.name}, ${store.attributes(f)[address - f.address]}` : "Not patched";
+  const ownerOf = (address: number, u = universe()) => store.rig.filter((f) => f.universe === u && address >= f.address && address < f.address + f.channels);
+  const panelAt = (address: number, u = universe()) => store.allPanelRuns().find((r) => r.universe === u && address >= r.address && address < r.address + r.channels);
+  const nameOf = (address: number, u = universe()) => {
+    const f = ownerOf(address, u)[0];
+    if (f) return `${f.name}, ${store.attributes(f)[address - f.address]}`;
+    const r = panelAt(address, u);
+    if (!r) return "Not patched";
+    const i = address - r.address;
+    return `${r.panel.name}, pixel ${r.firstPixel + Math.floor(i / 3)} ${["red", "green", "blue"][i % 3]}`;
   };
   const clash = (address: number) => ownerOf(address).length > 1;
   const held = (address: number) => universe() === 1 && store.state.held[address] !== undefined;
@@ -62,7 +67,7 @@ export function Screen() {
         if (!free && start) {
           out.push({
             key: `free-${start}`,
-            title: "Not patched",
+            title: panelAt(start) ? `${panelAt(start)!.panel.name}, pixels ${panelAt(start)!.firstPixel} to ${panelAt(start)!.lastPixel}` : "Not patched",
             fixture: null,
             channels: Array.from({ length: a - start }, (_, i) => ({ address: start + i, name: "" })),
           });
@@ -75,6 +80,7 @@ export function Screen() {
   const shown = (g: Group) =>
     changingOnly() ? g.channels.filter((c) => changing().has(c.address) || held(c.address)) : g.channels;
 
+  const panelHere = () => store.allPanelRuns().find((r) => r.universe === universe());
   const output = () => store.outputs().find((o) => o.universe === universe());
   const heldList = () =>
     Object.entries(store.state.held)
@@ -143,7 +149,7 @@ export function Screen() {
           )}
         </Show>
         <div class="dmx-scroll">
-          <Show when={groups().some((g) => shown(g).length)} fallback={<p class="mute dmx-none">{changingOnly() ? "Nothing is changing right now." : `Nothing patched in universe ${universe()}.`}</p>}>
+          <Show when={groups().some((g) => shown(g).length)} fallback={<p class="mute dmx-none">{changingOnly() ? "Nothing is changing right now." : panelHere() ? `Universe ${universe()} carries pixels ${panelHere()!.firstPixel} to ${panelHere()!.lastPixel} of ${panelHere()!.panel.name}. Its layout is on Patch.` : `Nothing patched in universe ${universe()}.`}</p>}>
             <For each={groups()}>
               {(g) => (
                 <Show when={shown(g).length}>
@@ -232,7 +238,7 @@ export function Screen() {
             empty="Nothing held. Every channel follows the layers."
             items={heldList().map((h) => ({
               id: String(h.address),
-              title: `${h.address} · ${nameOf(h.address)}`,
+              title: `${h.address} · ${nameOf(h.address, 1)}`,
               meta: <b>{h.value}</b>,
               layer: "manual",
               actions: (

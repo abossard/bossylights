@@ -499,6 +499,8 @@
   font-weight: 700;
   font-stretch: var(--tight);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .songs-pick.is-selected {
