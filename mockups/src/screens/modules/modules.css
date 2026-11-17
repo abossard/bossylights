@@ -137,9 +137,10 @@
   font-weight: 600;
 }
 
+/* interface names: the UI face, set apart by weight and the chip, not by a code font */
 .mm-screen code {
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
-  font-size: 0.95em;
+  font-family: var(--font-ui);
+  font-weight: 700;
 }
 
 /* ---------------- the card ---------------- */
