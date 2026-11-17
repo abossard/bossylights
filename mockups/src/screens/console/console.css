@@ -36,16 +36,6 @@
   min-height: 0;
 }
 
-.console-tt-foot {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-3);
-}
-
-.console-tt-foot .btn {
-  min-height: 40px;
-}
-
 /* ---------------- page bar ---------------- */
 .console-pagebar {
   flex-direction: row;
@@ -100,7 +90,36 @@
 
 .notice-text {
   min-width: 0;
+  padding: 6px 0;
   line-height: 1.2;
+}
+
+/* each thing held, with what it touched; the pink mark stays until Release */
+.notice-holds {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px var(--sp-3);
+  margin-top: 3px;
+  font-size: var(--text-sm);
+}
+
+.notice-holds li {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.notice-holds .notice-sw {
+  width: 9px;
+  height: 9px;
+}
+
+.notice-holds em {
+  padding: 0 4px;
+  border: 1px dashed var(--layer-manual);
+  font-style: normal;
+  font-weight: 700;
 }
 
 .notice-release {

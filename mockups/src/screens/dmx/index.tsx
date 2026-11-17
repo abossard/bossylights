@@ -1,6 +1,6 @@
 import { createMemo, createSignal, For, Show } from "solid-js";
-import { store, type Fixture } from "../../fake/store";
-import { Button, Fader, List, Region, Table, Tabs } from "../../kit";
+import { store, type Fixture, type Prop } from "../../fake/store";
+import { Button, Fader, List, Region, Segmented, Table, Tabs } from "../../kit";
 import type { Issue } from "../../shell/registry";
 import "./dmx.css";
 
@@ -10,6 +10,7 @@ export const order = 5;
 export const issues: Issue[] = [
   { number: 48, title: "DMX monitor and channel tester" },
   { number: 30, title: "DMX engine: universes, merge, masters" },
+  { number: 72, title: "Who wins: manual, show, autopilot" },
 ];
 
 interface Group {
@@ -79,6 +80,18 @@ export function Screen() {
   });
   const shown = (g: Group) =>
     changingOnly() ? g.channels.filter((c) => changing().has(c.address) || held(c.address)) : g.channels;
+
+  // ---- who decides the selected channel: its property, and the winner of that property
+  const RANK = { manual: "Manual", show: "Show", autopilot: "Autopilot" } as const;
+  const propOf = (name: string): Prop | null =>
+    /^(Dimmer|Shutter|Strobe)/.test(name) ? "brightness" : /^(Red|Green|Blue|White|Colour)/.test(name) ? "colour" : /^(Pan|Tilt)/.test(name) ? "position" : null;
+  const decidedBy = (address: number) => {
+    const f = ownerOf(address)[0];
+    const prop = f && propOf(store.attributes(f)[address - f.address]);
+    if (!f || !prop) return null;
+    const groupName = store.groups.find((g) => g.id === f.group)!.name;
+    return { prop, groupName, list: store.contenders(f.group, prop) };
+  };
 
   const panelHere = () => store.allPanelRuns().find((r) => r.universe === universe());
   const output = () => store.outputs().find((o) => o.universe === universe());
@@ -201,6 +214,26 @@ export function Screen() {
                   <b class="display">{a()}</b>
                   <span>{nameOf(a())}</span>
                 </p>
+                <Show when={decidedBy(a())}>
+                  {(d) => (
+                    <p class="dmx-decided">
+                      <span class="dmx-decided-what">{d().prop[0].toUpperCase() + d().prop.slice(1)} of {d().groupName}</span>
+                      <Show when={d().list[0]} fallback={<b>nobody wants it</b>}>
+                        {(w) => (
+                          <b class={`layer-${w().rank}`}>
+                            {RANK[w().rank]}, {w().look.name}
+                            {w().padOff ? " (pad off, held)" : w().left ? " (ended, stays)" : ""}
+                          </b>
+                        )}
+                      </Show>
+                      <Show when={d().list.length > 1}>
+                        <span class="mute">
+                          under it: {d().list.slice(1).map((w) => `${RANK[w.rank]} ${w.look.name}`).join(", ")}
+                        </span>
+                      </Show>
+                    </p>
+                  )}
+                </Show>
                 <Show
                   when={universe() === 1}
                   fallback={<p class="mute">Universe {universe()} has no working output, so its channels cannot be set by hand.</p>}
@@ -220,7 +253,7 @@ export function Screen() {
                       Release
                     </Button>
                   </div>
-                  <p class="mute">Moving the fader holds the channel by hand. Release gives it back to the layers.</p>
+                  <p class="mute">Moving the fader holds the channel by hand.</p>
                 </Show>
               </>
             )}
@@ -235,7 +268,7 @@ export function Screen() {
               setUniverse(1);
               setSelected(Number(a));
             }}
-            empty="Nothing held. Every channel follows the layers."
+            empty="Nothing held. Every channel follows what plays."
             items={heldList().map((h) => ({
               id: String(h.address),
               title: `${h.address} · ${nameOf(h.address, 1)}`,
@@ -254,6 +287,7 @@ export function Screen() {
         </Region>
       </div>
 
+      <div class="dmx-bottom">
       <Region id="output" title="Output" class="dmx-output">
         <Table
           dense
@@ -272,6 +306,65 @@ export function Screen() {
           ]}
         />
       </Region>
+
+      <Region id="who-wins" title="Who wins" class="dmx-who" aside={<span class="mute">Decided here, nowhere else</span>}>
+        <ol class="dmx-rules">
+          <li>
+            <b>What is decided</b>
+            <span>Each property of each light on its own: colour, brightness, position.</span>
+          </li>
+          <li>
+            <b>Rank</b>
+            <span>
+              <i class="layer-manual">Manual</i> beats <i class="layer-show">Show</i> beats <i class="layer-autopilot">Autopilot</i>
+            </span>
+          </li>
+          <li>
+            <b>Among equals</b>
+            <span>
+              Latest wins. Brightness:
+              <Segmented
+                label="Brightness among equals"
+                value={store.state.rules.brightness}
+                onChange={(v) => store.setRule("brightness", v)}
+                options={[
+                  { value: "latest", label: "Latest" },
+                  { value: "highest", label: "Highest" },
+                ]}
+              />
+            </span>
+          </li>
+          <li>
+            <b>Manual control ends</b>
+            <span>
+              <Segmented
+                label="Manual control ends"
+                value={store.state.rules.manualEnds}
+                onChange={(v) => store.setRule("manualEnds", v)}
+                options={[
+                  { value: "release", label: "On Release" },
+                  { value: "pad", label: "When the pad stops" },
+                ]}
+              />
+            </span>
+          </li>
+          <li>
+            <b>When a look ends</b>
+            <span>
+              <Segmented
+                label="When a show or autopilot look ends"
+                value={store.state.rules.lookEnds}
+                onChange={(v) => store.setRule("lookEnds", v)}
+                options={[
+                  { value: "fallback", label: "Fall back" },
+                  { value: "stay", label: "Stay" },
+                ]}
+              />
+            </span>
+          </li>
+        </ol>
+      </Region>
+      </div>
     </div>
   );
 }

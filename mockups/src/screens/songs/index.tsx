@@ -89,7 +89,7 @@ export function Screen() {
       const f = filter();
       if (f === "show") return hasShow(s);
       if (f === "auto") return !hasShow(s);
-      if (f === "today") return store.songLayersOf(s).length > 0;
+      if (f === "today") return store.takesOf(s).length > 0;
       if (f === "review") return store.analysisOf(s) === "needs-review";
       return true;
     });
@@ -365,10 +365,10 @@ export function Screen() {
                 </div>
               </div>
 
-              {/* the show's layers: recorded passes on top, the base layer below */}
-              <For each={store.songLayersOf(song())}>
+              {/* takes on top, the show below */}
+              <For each={store.takesOf(song())}>
                 {(l) => (
-                  <div class="songs-tl-row songs-layer" classList={{ "is-recording": l.recording, "is-muted": l.muted }}>
+                  <div class="songs-tl-row songs-take" classList={{ "is-recording": l.recording, "is-muted": l.muted }}>
                     <div class="songs-tl-label">
                       <b>
                         <Show when={l.recording}>
@@ -376,14 +376,14 @@ export function Screen() {
                         </Show>
                         {l.name}
                       </b>
-                      <span class="songs-layer-actions">
-                        <button type="button" aria-pressed={l.muted} onClick={() => store.setLayerMuted(song(), l.id, !l.muted)}>
+                      <span class="songs-take-actions">
+                        <button type="button" aria-pressed={l.muted} onClick={() => store.setTakeMuted(song(), l.id, !l.muted)}>
                           {l.muted ? "Muted" : "Mute"}
                         </button>
-                        <button type="button" disabled={l.recording} onClick={() => store.mergeLayerDown(song(), l.id)}>
-                          Merge
+                        <button type="button" disabled={l.recording} onClick={() => store.mergeTake(song(), l.id)}>
+                          Merge into show
                         </button>
-                        <button type="button" disabled={l.recording} aria-label={`Delete ${l.name}`} onClick={() => store.deleteLayer(song(), l.id)}>
+                        <button type="button" disabled={l.recording} aria-label={`Delete ${l.name}`} onClick={() => store.deleteTake(song(), l.id)}>
                           Delete
                         </button>
                       </span>
@@ -408,12 +408,12 @@ export function Screen() {
                   </div>
                 )}
               </For>
-              <div class="songs-tl-row songs-layer" classList={{ "is-muted": !!store.state.baseMuted[song().id] }}>
+              <div class="songs-tl-row songs-take" classList={{ "is-muted": !!store.state.showMuted[song().id] }}>
                 <div class="songs-tl-label">
                   <b>Show</b>
-                  <span class="songs-layer-actions">
-                    <button type="button" aria-pressed={!!store.state.baseMuted[song().id]} onClick={() => store.setLayerMuted(song(), "base", !store.state.baseMuted[song().id])}>
-                      {store.state.baseMuted[song().id] ? "Muted" : "Mute"}
+                  <span class="songs-take-actions">
+                    <button type="button" aria-pressed={!!store.state.showMuted[song().id]} onClick={() => store.setTakeMuted(song(), "show", !store.state.showMuted[song().id])}>
+                      {store.state.showMuted[song().id] ? "Muted" : "Mute"}
                     </button>
                   </span>
                 </div>
@@ -443,7 +443,7 @@ export function Screen() {
               <div class="songs-tl-row songs-auto layer-autopilot">
                 <div class="songs-tl-label">
                   <b>Auto</b>
-                  <span class="songs-layer-actions">
+                  <span class="songs-take-actions">
                     <button type="button" class="songs-auto-toggle" aria-pressed={store.state.autopilot.on} onClick={() => store.setAutopilot("on", !store.state.autopilot.on)}>
                       {store.state.autopilot.on ? "On" : "Off"}
                     </button>

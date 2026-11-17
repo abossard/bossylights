@@ -50,7 +50,7 @@ export function Screen() {
       .filter((i) => !query().trim() || i.name.toLowerCase().includes(query().trim().toLowerCase()))
       .sort((a, b) => (a.kind === b.kind ? a.name.localeCompare(b.name) : ["sequence", "pattern", "step"].indexOf(a.kind) - ["sequence", "pattern", "step"].indexOf(b.kind)));
 
-  // ---- try on lights: tap toggles, hold flashes, on the Manual layer
+  // ---- try on lights: tap toggles, hold flashes. A try gives back what it touched when it stops.
   let wasRunning = false;
   const tryDown = () => {
     const s = store.lookState(current().id);
@@ -60,7 +60,7 @@ export function Screen() {
   const tryUp = (ms: number) => {
     const id = current().id;
     if (wasRunning) {
-      if (ms < HOLD_MS) store.stop(id);
+      if (ms < HOLD_MS) store.stop(id, true);
     } else if (ms < HOLD_MS) store.start(id);
     else store.release(id);
   };
@@ -166,7 +166,7 @@ export function Screen() {
       <Region id="about" title="About this look" class="lk-about">
         <div class="lk-try">
           <Pad label="Try on lights" colors={store.colorsOf(current().id).length ? store.colorsOf(current().id) : ["#000000"]} state={tryState()} onDown={tryDown} onUp={tryUp} />
-          <p class="mute">Tap to play it on the Manual layer, tap again to stop. Hold to flash.</p>
+          <p class="mute">Tap to play it by hand, tap again to stop. Hold to flash.</p>
         </div>
         <div class="lk-console">
           <Button

@@ -202,9 +202,9 @@
   font-size: var(--display-sm);
 }
 
-/* ---------------- the timeline: ruler, layers, Auto ---------------- */
+/* ---------------- the timeline: ruler, takes, show, Auto ---------------- */
 .songs-tl {
-  --tl-label: 184px;
+  --tl-label: 204px;
   position: relative;
   padding-top: 26px;
 }
@@ -321,39 +321,41 @@
   background: var(--paper);
 }
 
-/* a layer of the show */
-.songs-layer {
+/* a take, or the show */
+.songs-take {
   min-height: 52px;
 }
 
-.songs-layer-actions {
+.songs-take-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
 }
 
-.songs-layer-actions button {
+.songs-take-actions button {
   min-height: 28px;
   padding: 0 6px;
   border: 1px solid var(--line);
   font-size: var(--text-sm);
   font-weight: 700;
+  font-stretch: var(--tight);
+  white-space: nowrap;
 }
 
-.songs-layer-actions button:hover:not(:disabled) {
+.songs-take-actions button:hover:not(:disabled) {
   border-color: var(--paper);
 }
 
-.songs-layer-actions button[aria-pressed="true"] {
+.songs-take-actions button[aria-pressed="true"] {
   background: var(--paper);
   color: var(--ink);
 }
 
-.songs-layer-actions button:disabled {
+.songs-take-actions button:disabled {
   opacity: 0.4;
 }
 
-.songs-layer-actions select {
+.songs-take-actions select {
   min-height: 28px;
   font-size: var(--text-sm);
 }
@@ -364,7 +366,7 @@
   overflow: hidden;
 }
 
-.songs-layer.is-muted .songs-track {
+.songs-take.is-muted .songs-track {
   opacity: 0.35;
 }
 
@@ -441,15 +443,15 @@
   white-space: nowrap;
 }
 
-.songs-layer.is-recording {
+.songs-take.is-recording {
   border: var(--rule) solid var(--danger);
 }
 
-.songs-layer.is-recording .songs-tl-label b {
+.songs-take.is-recording .songs-tl-label b {
   color: var(--danger);
 }
 
-.songs-layer.is-recording .songs-rec-block {
+.songs-take.is-recording .songs-rec-block {
   border-color: var(--danger);
 }
 
@@ -466,7 +468,7 @@
   color: var(--layer);
 }
 
-.songs-layer-actions .songs-auto-toggle[aria-pressed="true"] {
+.songs-take-actions .songs-auto-toggle[aria-pressed="true"] {
   background: var(--layer);
   border-color: var(--layer);
   color: var(--ink);
@@ -739,10 +741,10 @@
   }
 
   .songs-tl {
-    --tl-label: 132px;
+    --tl-label: 150px;
   }
 
-  .songs-layer-actions button {
+  .songs-take-actions button {
     padding: 0 4px;
   }
 }

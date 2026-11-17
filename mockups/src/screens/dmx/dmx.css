@@ -30,8 +30,82 @@
   overflow-y: auto;
 }
 
-.dmx-output {
+.dmx-bottom {
   grid-area: out;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 452px;
+  gap: var(--sp-4);
+  align-items: start;
+}
+
+/* ---------------- who wins: the five rules, one place ---------------- */
+.dmx-rules {
+  list-style: none;
+  counter-reset: rule;
+  border-top: 1px solid var(--line);
+}
+
+.dmx-rules li {
+  counter-increment: rule;
+  display: grid;
+  grid-template-columns: 2ch 150px minmax(0, 1fr);
+  align-items: center;
+  column-gap: var(--sp-2);
+  min-height: 34px;
+  border-bottom: 1px solid var(--line);
+  font-size: var(--text-sm);
+}
+
+.dmx-rules li::before {
+  content: counter(rule);
+  font-weight: 700;
+  color: var(--mute);
+}
+
+.dmx-rules li > span {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px 6px;
+  line-height: 1.25;
+}
+
+.dmx-rules i {
+  font-style: normal;
+  font-weight: 700;
+  color: var(--layer);
+}
+
+.dmx-rules .seg-opt {
+  min-height: 30px;
+  padding: 0 8px;
+  font: 700 var(--text-sm) var(--font-ui);
+  font-stretch: var(--tight);
+}
+
+.dmx-decided {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 6px;
+  font-size: var(--text-sm);
+  line-height: 1.3;
+}
+
+.dmx-decided-what::after {
+  content: ":";
+}
+
+.dmx-channel {
+  flex: none;
+}
+
+.dmx-held {
+  flex: 1 0 150px;
+  min-height: 0;
+}
+
+.dmx-decided b {
+  color: var(--layer, var(--paper));
 }
 
 .dmx-tab-mark {
@@ -316,6 +390,30 @@
 
   .dmx-legend {
     display: none;
+  }
+
+  .dmx-bottom {
+    grid-template-columns: minmax(0, 1fr) 400px;
+    gap: var(--sp-3);
+  }
+
+  .dmx-rules li {
+    grid-template-columns: 2ch 118px minmax(0, 1fr);
+  }
+
+  /* the last column says what the state already says */
+  .dmx-output th:last-child,
+  .dmx-output td:last-child {
+    display: none;
+  }
+
+  .dmx-output th:nth-child(4) {
+    font-size: 0;
+  }
+
+  .dmx-output th:nth-child(4)::after {
+    content: "Frames";
+    font-size: var(--text-sm);
   }
 }
 

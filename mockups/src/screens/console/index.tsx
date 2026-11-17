@@ -1,5 +1,5 @@
-import { createEffect, createSignal, onCleanup, Show } from "solid-js";
-import { groupNames, hhmm, store } from "../../fake/store";
+import { createEffect, createSignal, For, onCleanup, Show } from "solid-js";
+import { hhmm, store } from "../../fake/store";
 import { Button, Decks, Region, Tabs, Timetable, stepWindow } from "../../kit";
 import type { Issue } from "../../shell/registry";
 import { ConsoleGrid, createConsole, WidgetDrawer } from "./Console";
@@ -15,47 +15,58 @@ export const issues: Issue[] = [
   { number: 80, title: "Widget set" },
   { number: 91, title: "Surface generated from your rig" },
   { number: 82, title: "Pads mirror the screen" },
-  { number: 72, title: "Layers: base, override, flash" },
+  { number: 72, title: "Who wins: manual, show, autopilot" },
   { number: 73, title: "Launch on the beat" },
 ];
 
+/** Everything the Console holds, each with what it touched, and the one Release. */
 function OverrideNotice() {
-  const first = () => store.overrides()[0];
-  const groups = () => [...new Set(store.overrides().flatMap((o) => o.groups))];
+  const holds = () => store.holds();
   return (
-    <Region id="override" title="Override notice" bare class="notice-region">
+    <Region id="override" title="Held by you" bare class="notice-region">
       <Show
-        when={first()}
+        when={holds().length}
         fallback={
           <div class="notice is-calm" role="status">
             <span class="notice-sw" />
             <span>
-              <strong>Manual is not overriding anything.</strong>{" "}
+              <strong>You hold nothing.</strong>{" "}
               <span class="mute">
                 {store.autopilotNow().length
-                  ? "Autopilot runs every group."
+                  ? "The show and the autopilot run every light."
                   : store.state.autopilot.on && !store.state.night.live
                     ? "Autopilot waits for LIVE."
-                    : "Autopilot is not playing."}
+                    : "Autopilot is not playing."}{" "}
+                {store.state.rules.manualEnds === "release" ? "What you touch stays yours until Release." : "What you touch is yours while its pad is on."}
               </span>
             </span>
           </div>
         }
       >
-        {(o) => (
-          <div class="notice" role="status">
-            <span class="notice-sw" />
-            <span class="notice-text">
-              <strong>Manual overrides {o().under} on {groupNames(groups())}</strong>{" "}
-              <span class="mute">
-                {store.overrides().map((x) => x.look.name).join(", ")} since {hhmm(o().block.start)}
-              </span>
-            </span>
-            <Button variant="layer" layer="manual" size="lg" pressed class="notice-release" onClick={() => store.releaseAll()}>
-              Release
-            </Button>
-          </div>
-        )}
+        <div class="notice" role="status">
+          <span class="notice-text">
+            <strong>You hold, until Release</strong>
+            <ul class="notice-holds">
+              <For each={holds()}>
+                {(h) => (
+                  <li classList={{ "is-off": !h.live }}>
+                    <i class="notice-sw" aria-hidden="true" />
+                    <b>{h.name}</b> {store.holdText(h)}
+                    <Show when={h.beaten.length}>
+                      <span class="mute">({h.beaten.join("; ")})</span>
+                    </Show>
+                    <Show when={!h.live}>
+                      <em>pad off</em>
+                    </Show>
+                  </li>
+                )}
+              </For>
+            </ul>
+          </span>
+          <Button variant="layer" layer="manual" size="lg" pressed class="notice-release" onClick={() => store.releaseAll()}>
+            Release
+          </Button>
+        </div>
       </Show>
     </Region>
   );
@@ -92,7 +103,7 @@ export function Screen() {
         <Region id="decks" title="Decks" bare>
           <Decks decks={store.decks()} />
         </Region>
-        <Region id="timetable" title="Layers" bare class="console-tt">
+        <Region id="timetable" title="Timetable" bare class="console-tt">
           <Timetable
             from={win().from}
             to={win().to}
@@ -104,15 +115,6 @@ export function Screen() {
             labelWidth="var(--console-label)"
             laneControls={(lane) => (lane.layer === "autopilot" ? <AutoLaneControls /> : undefined)}
           />
-          <div class="console-tt-foot">
-            <Button onClick={() => store.addLayer()}>
-              <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
-                <path d="M6 1v10M1 6h10" stroke="currentColor" stroke-width="2.5" />
-              </svg>
-              Add layer
-            </Button>
-            <span class="mute">The top layer that speaks wins.</span>
-          </div>
         </Region>
         <Show when={c.editing()}>
           <WidgetDrawer model={c} />
