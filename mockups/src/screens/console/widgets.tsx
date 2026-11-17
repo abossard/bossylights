@@ -120,7 +120,7 @@ function CueList(props: { editing: boolean }) {
         <Button disabled={props.editing || at() < 0} onClick={() => goTo(at() - 1)}>
           Back
         </Button>
-        <Button variant="layer" layer="live" size="lg" disabled={props.editing} onClick={() => goTo(at() + 1)}>
+        <Button variant="layer" layer="manual" size="lg" disabled={props.editing} onClick={() => goTo(at() + 1)}>
           Go
         </Button>
       </div>

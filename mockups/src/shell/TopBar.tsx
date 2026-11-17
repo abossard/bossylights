@@ -1,23 +1,15 @@
 import { For, Show } from "solid-js";
 import { store } from "../fake/store";
-import { Button, Meter, Segmented, Tabs } from "../kit";
+import { Button, Meter, Tabs } from "../kit";
 import { review } from "../review/store";
+import { LiveSwitch } from "./LiveSwitch";
 import { screens } from "./registry";
 import { go, route } from "./router";
 
 function Status() {
   return (
     <div class="status" role="group" aria-label="Status">
-      <Segmented
-        label="Output"
-        layer="live"
-        value={store.state.output}
-        onChange={(v) => store.setOutput(v)}
-        options={[
-          { value: "live", label: "Live" },
-          { value: "preview", label: "Preview" },
-        ]}
-      />
+      <LiveSwitch />
       <div class="status-tempo" aria-label={`Tempo ${store.state.tempo} BPM, beat ${store.beat() + 1}`}>
         <b class="display">{store.state.tempo}</b>
         <span class="mute">BPM</span>
@@ -64,20 +56,19 @@ export function TopBar() {
           <span class="mute">{store.state.showName}</span>
         </div>
         <Status />
-        <Show
-          when={review.commentMode()}
-          fallback={
-            <Button
-              class="review-toggle"
-              pressed={review.panelOpen()}
-              disabled={route() === "review"}
-              onClick={() => review.setPanelOpen(!review.panelOpen())}
-              aria-controls="review-panel"
-            >
-              Review
-            </Button>
-          }
+        <Button
+          class="review-toggle"
+          pressed={review.panelOpen()}
+          disabled={route() === "review"}
+          onClick={() => review.setPanelOpen(!review.panelOpen())}
+          aria-controls="review-panel"
         >
+          Review
+        </Button>
+      </div>
+      <nav class="tabbar" aria-label="Workspaces">
+        <Tabs variant="workspace" label="Workspaces" items={tabs()} value={route()} onChange={go} />
+        <Show when={review.commentMode()}>
           <div class="comment-bar" role="status">
             <span>Comment mode: pick a region</span>
             <Button variant="primary" onClick={() => (review.setCommentMode(false), review.setActiveRegion(null))}>
@@ -85,9 +76,6 @@ export function TopBar() {
             </Button>
           </div>
         </Show>
-      </div>
-      <nav class="tabbar" aria-label="Workspaces">
-        <Tabs variant="workspace" label="Workspaces" items={tabs()} value={route()} onChange={go} />
       </nav>
     </header>
   );

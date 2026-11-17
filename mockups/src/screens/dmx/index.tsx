@@ -18,7 +18,7 @@ export function Screen() {
       regions={[
         { id: "universes", area: "universes", title: "Universes", line: "One tab per universe, with filters: patched only, changing." },
         { id: "channels", area: "channels", title: "Channels", line: "All 512 channels with value bars, grouped and labelled by fixture. Tap one to get a fader for it." },
-        { id: "held", area: "held", title: "Held by hand", line: "Channels set by hand, in the Live colour, with Release all." },
+        { id: "held", area: "held", title: "Held by hand", line: "Channels set by hand, in the Manual colour, with Release all." },
         { id: "output", area: "output", title: "Output", line: "Each universe's device, frames per second and errors." },
       ]}
     />

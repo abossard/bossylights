@@ -39,6 +39,7 @@ function NowAndNext() {
   const next = () => store.nextSection();
   const playing = () => (cur() ? store.autopilotLooks(cur()!) : []);
   const coming = () => (next() ? store.autopilotLooks(next()!) : []);
+  const running = () => store.state.autopilot.on && store.autopilotArmed();
 
   const rulerLanes = (): Lane[] => [
     {
@@ -92,8 +93,14 @@ function NowAndNext() {
           </header>
           <List
             label="Looks playing now"
-            empty={store.state.autopilot.on ? "No looks fit the groups it may use." : "Autopilot is off. Live and Show still run."}
-            items={(store.state.autopilot.on ? playing() : []).map((l) => ({
+            empty={
+              !store.state.autopilot.on
+                ? "Autopilot is off. Manual and Show still run."
+                : !store.autopilotArmed()
+                  ? "Nothing yet: the autopilot waits for LIVE."
+                  : "No looks fit the groups it may use."
+            }
+            items={(running() ? playing() : []).map((l) => ({
               id: l.id,
               title: l.name,
               swatch: l.colors[0],
@@ -123,7 +130,7 @@ function NowAndNext() {
             </Show>
           </header>
           <div class="ap-chips">
-            <For each={store.state.autopilot.on ? coming() : []} fallback={<span class="mute">Nothing planned.</span>}>
+            <For each={running() ? coming() : []} fallback={<span class="mute">Nothing planned.</span>}>
               {(l) => <LookChip id={l.id} />}
             </For>
           </div>
@@ -180,6 +187,11 @@ export function Screen() {
               onChange={(v) => store.setAutopilot("style", v)}
               options={STYLES}
             />
+            <Show when={store.state.autopilot.on && !store.autopilotArmed()}>
+              <p class="ap-waits">
+                {store.state.night.live ? "Held back: Auto is turned off beside LIVE." : "Waits for LIVE. It starts when the night runs."}
+              </p>
+            </Show>
             <p class="mute">Never dark: if the music stops, a slow warm wash keeps the room lit.</p>
           </Region>
 
@@ -221,15 +233,15 @@ export function Screen() {
 
         <div class="ap-col ap-side">
           <Region id="hands-off" title="Hands off" class="ap-handsoff">
-            <p class="mute">The Live layer covers these. The autopilot leaves them alone until you release them.</p>
+            <p class="mute">The Manual layer covers these. The autopilot leaves them alone until you release them.</p>
             <List
-              label="Covered by Live"
+              label="Covered by Manual"
               empty="Nothing. The autopilot runs every group it may use."
               items={store.handsOff().map((h) => ({
                 id: h.group.id,
                 title: h.group.name,
                 sub: `${h.look.name} since ${hhmm(h.block.start)}`,
-                layer: "live",
+                layer: "manual",
               }))}
             />
           </Region>

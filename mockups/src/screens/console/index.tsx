@@ -1,12 +1,12 @@
-import { createSignal, onCleanup, Show } from "solid-js";
+import { createEffect, createSignal, onCleanup, Show } from "solid-js";
 import { groupNames, hhmm, store } from "../../fake/store";
 import { Button, Region, RigView, Tabs, Timetable, stepWindow, type RigZone } from "../../kit";
 import type { Issue } from "../../shell/registry";
 import { ConsoleGrid, createConsole, WidgetDrawer } from "./Console";
-import "./live.css";
+import "./console.css";
 
-export const id = "live";
-export const title = "Live";
+export const id = "console";
+export const title = "Console";
 export const order = 1;
 export const nowStrip = false;
 export const issues: Issue[] = [
@@ -29,7 +29,14 @@ function OverrideNotice() {
           <div class="notice is-calm" role="status">
             <span class="notice-sw" />
             <span>
-              <strong>Live is not overriding anything.</strong> <span class="mute">Autopilot runs every group.</span>
+              <strong>Manual is not overriding anything.</strong>{" "}
+              <span class="mute">
+                {store.autopilotNow().length
+                  ? "Autopilot runs every group."
+                  : store.state.autopilot.on && !store.state.night.live
+                    ? "Autopilot waits for LIVE."
+                    : "Autopilot is not playing."}
+              </span>
             </span>
           </div>
         }
@@ -38,12 +45,12 @@ function OverrideNotice() {
           <div class="notice" role="status">
             <span class="notice-sw" />
             <span class="notice-text">
-              <strong>Live overrides Autopilot on {groupNames(groups())}</strong>{" "}
+              <strong>Manual overrides Autopilot on {groupNames(groups())}</strong>{" "}
               <span class="mute">
                 {store.overrides().map((x) => x.look.name).join(", ")} since {hhmm(o().block.start)}
               </span>
             </span>
-            <Button variant="layer" layer="live" size="lg" pressed class="notice-release" onClick={() => store.releaseAll()}>
+            <Button variant="layer" layer="manual" size="lg" pressed class="notice-release" onClick={() => store.releaseAll()}>
               Release
             </Button>
           </div>
@@ -63,6 +70,8 @@ function PlusIcon() {
 
 export function Screen() {
   const c = createConsole();
+  // Turning LIVE on locks the surface, so an edit in progress ends.
+  createEffect(() => store.surfaceLocked() && c.setEditing(false));
   // The narrow layout shows 20 minutes so short blocks keep readable titles.
   const mq = matchMedia("(max-width: 1180px)");
   const [narrow, setNarrow] = createSignal(mq.matches);
@@ -78,7 +87,7 @@ export function Screen() {
       entry.ids.push(...store.rig.filter((f) => f.group === h.group.id).map((f) => f.id));
       byBlock.set(h.block.id, entry);
     }
-    return [...byBlock.values()].map((z) => ({ label: `LIVE: ${z.name}`, layer: "live", fixtureIds: z.ids }));
+    return [...byBlock.values()].map((z) => ({ label: `MANUAL: ${z.name}`, layer: "manual", fixtureIds: z.ids }));
   };
 
   const lookOf = (f: (typeof store.rig)[number]) => {
@@ -92,13 +101,13 @@ export function Screen() {
   ];
 
   return (
-    <div class="live" classList={{ "is-editing": c.editing() }}>
-      <div class="live-left">
+    <div class="console-screen" classList={{ "is-editing": c.editing() }}>
+      <div class="console-left">
         <Region
           id="timetable"
           title="Layers"
           aside={
-            <span class="live-tt-aside">
+            <span class="console-tt-aside">
               <span class="mute">Top layer wins</span>
               <span class="mute">
                 {hhmm(win().from)} to {hhmm(win().to)}
@@ -113,12 +122,12 @@ export function Screen() {
             lanes={store.lanes(win().from, win().to)}
             tickEvery={5 * 60}
             format={hhmm}
-            laneHeight="var(--live-lane)"
-            labelWidth="var(--live-label)"
+            laneHeight="var(--console-lane)"
+            labelWidth="var(--console-label)"
           />
         </Region>
-        <Region id="rig" title="Rig" aside={<span class="mute">Top view, {store.rig.length} fixtures, live colours</span>} class="live-rig">
-          <div class="live-rig-stage">
+        <Region id="rig" title="Rig" aside={<span class="mute">Top view, {store.rig.length} fixtures, colours as they are now</span>} class="console-rig">
+          <div class="console-rig-stage">
             <RigView fixtures={store.rig} lookOf={lookOf} zones={zones()} />
           </div>
         </Region>
@@ -127,15 +136,15 @@ export function Screen() {
         </Show>
       </div>
 
-      <div class="live-right">
-        <Region id="pages" title="Console pages" bare class="live-pagebar">
+      <div class="console-right">
+        <Region id="pages" title="Console pages" bare class="console-pagebar">
           <Tabs
             label="Console pages"
             items={pageTabs()}
             value={c.page().id}
             onChange={(id) => (id === "__add" ? c.addPage() : c.setPageId(id))}
           />
-          <div class="live-actions">
+          <div class="console-actions">
             <Show
               when={c.editing()}
               fallback={
@@ -143,7 +152,16 @@ export function Screen() {
                   <Button variant="primary" onClick={() => store.surprise()}>
                     Surprise me
                   </Button>
-                  <Button onClick={() => (c.setMessage(""), c.setEditing(true))}>Edit surface</Button>
+                  <Button
+                    disabled={store.surfaceLocked()}
+                    aria-describedby={store.surfaceLocked() ? "console-lock-note" : undefined}
+                    onClick={() => (c.setMessage(""), c.setEditing(true))}
+                  >
+                    {store.surfaceLocked() ? "Surface locked" : "Edit surface"}
+                  </Button>
+                  <span id="console-lock-note" class="visually-hidden">
+                    Locked while LIVE is on. Turn LIVE or Lock off to edit.
+                  </span>
                 </>
               }
             >

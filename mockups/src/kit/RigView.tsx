@@ -18,7 +18,7 @@ export interface RigViewProps {
   fixtures: Fixture[];
   /** What each fixture outputs now. */
   lookOf: (f: Fixture) => FixtureLook;
-  /** Outlines with a label, e.g. what the Live layer covers. */
+  /** Outlines with a label, e.g. what the Manual layer covers. */
   zones?: RigZone[];
   /** Makes fixtures pressable (select in Looks, Patch). */
   onFixture?: (f: Fixture) => void;
@@ -30,7 +30,7 @@ export interface RigViewProps {
 const PLATE_CHAR = 7;
 const plateW = (s: string) => s.length * PLATE_CHAR + 12;
 
-/** The rig from above: fixtures with name plates and their live colours. */
+/** The rig from above: fixtures with name plates and the colours they show now. */
 export function RigView(props: RigViewProps) {
   const zoneBox = (z: RigZone) => {
     const fs = props.fixtures.filter((f) => z.fixtureIds.includes(f.id));
@@ -65,7 +65,7 @@ export function RigView(props: RigViewProps) {
   };
 
   return (
-    <svg ref={svg} class={`rig ${props.class ?? ""}`} role="img" aria-label={props.label ?? "Rig, top view, with live colours"}>
+    <svg ref={svg} class={`rig ${props.class ?? ""}`} role="img" aria-label={props.label ?? "Rig, top view, with the colours it shows now"}>
       <line class="rig-front" x1="2%" x2="98%" y1="94%" y2="94%" />
       <text class="rig-front-label" x="50%" y="94%" dy="-6" text-anchor="middle">
         Front of stage

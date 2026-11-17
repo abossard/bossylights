@@ -230,3 +230,8 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+.ap-waits {
+  font-weight: 700;
+  color: var(--layer-autopilot);
+}

@@ -129,8 +129,8 @@ input::placeholder {
 }
 
 /* layer colour classes, used the same way everywhere */
-.layer-live {
-  --layer: var(--layer-live);
+.layer-manual {
+  --layer: var(--layer-manual);
 }
 .layer-show {
   --layer: var(--layer-show);

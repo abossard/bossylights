@@ -12,7 +12,7 @@
   /* one flat colour per layer */
   --layer-autopilot: #f2b705;
   --layer-show: #20b2c9;
-  --layer-live: #ef3e7b;
+  --layer-manual: #ef3e7b;
 
   /* red is only for blackout and errors */
   --danger: #ff4a3d;

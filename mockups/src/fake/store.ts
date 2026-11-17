@@ -1,4 +1,4 @@
-// One fake state store drives every screen. A pad pressed on Live shows up
+// One fake state store drives every screen. A pad pressed on the Console shows up
 // everywhere that reads this store.
 import { createRoot, createSignal } from "solid-js";
 import { createStore, produce } from "solid-js/store";
@@ -26,7 +26,10 @@ export * from "./data";
 export type FaderId = "wash" | "movers" | "pixels" | "strobeRate" | "laser";
 export type AutopilotStyle = "chill" | "club" | "peak" | "no-strobe";
 
-export interface LiveBlock {
+/** The four things the LIVE switch turns on, each of which can be turned off on its own. */
+export type Indicator = "dj" | "record" | "autopilot" | "lock";
+
+export interface ManualBlock {
   id: number;
   lookId: string;
   start: number;
@@ -36,7 +39,7 @@ export interface LiveBlock {
   mode: "flash" | "held";
 }
 
-export interface LiveEvent {
+export interface ManualEvent {
   at: number;
   lookId: string;
   action: "start" | "stop" | "flash";
@@ -85,13 +88,15 @@ interface State {
   showName: string;
   tempo: number;
   master: number;
-  output: "live" | "preview";
+  /** The LIVE switch: the night is running. Lights follow the app either way. */
+  night: { live: boolean; indicators: Record<Indicator, boolean> };
+  lightsConnected: boolean;
   blackout: boolean;
   blackoutHold: boolean;
   faders: Record<FaderId, number>;
   xy: { pan: number; tilt: number };
-  live: LiveBlock[];
-  show: { on: boolean; recording: boolean };
+  manual: ManualBlock[];
+  show: { on: boolean };
   autopilot: {
     on: boolean;
     style: AutopilotStyle;
@@ -101,7 +106,7 @@ interface State {
     swaps: Record<string, string[]>;
     likes: string[];
   };
-  events: LiveEvent[];
+  events: ManualEvent[];
   history: UndoEntry[];
 }
 
@@ -117,16 +122,17 @@ function build() {
     showName: SHOW_NAME,
     tempo: TEMPO,
     master: MASTER,
-    output: "live",
+    night: { live: true, indicators: { dj: true, record: true, autopilot: true, lock: true } },
+    lightsConnected: true,
     blackout: false,
     blackoutHold: false,
     faders: { wash: 70, movers: 60, pixels: 45, strobeRate: 30, laser: 0 },
     xy: { pan: 38, tilt: 62 },
-    live: [
+    manual: [
       { id: 1, lookId: "red-alert", start: 22 * 3600 + 40 * 60 + 30, end: 22 * 3600 + 42 * 60 + 40, mode: "held" },
       { id: 2, lookId: "strobe", start: 22 * 3600 + 43 * 60 + 30, end: null, mode: "held" },
     ],
-    show: { on: false, recording: false },
+    show: { on: false },
     autopilot: {
       on: true,
       style: "club",
@@ -227,39 +233,39 @@ function build() {
 
   const autopilotNow = (): Look[] => {
     const cur = currentSection();
-    return state.autopilot.on && cur ? autopilotLooks(cur) : [];
+    return state.autopilot.on && autopilotArmed() && cur ? autopilotLooks(cur) : [];
   };
 
-  // ---- live layer ----------------------------------------------------
-  const runningLive = () => state.live.filter((b) => b.end === null);
-  const liveBlockFor = (lookId: string) => runningLive().find((b) => b.lookId === lookId);
+  // ---- manual layer --------------------------------------------------
+  const runningManual = () => state.manual.filter((b) => b.end === null);
+  const manualBlockFor = (lookId: string) => runningManual().find((b) => b.lookId === lookId);
 
-  function log(lookId: string, action: LiveEvent["action"]) {
+  function log(lookId: string, action: ManualEvent["action"]) {
     set("events", (e) => [...e, { at: now(), lookId, action }]);
   }
 
-  const removeBlock = (id: number) => set("live", (bs) => bs.filter((b) => b.id !== id));
+  const removeBlock = (id: number) => set("manual", (bs) => bs.filter((b) => b.id !== id));
   const endBlock = (id: number, end: number | null) =>
-    set("live", (b) => b.id === id, "end", end);
+    set("manual", (b) => b.id === id, "end", end);
 
-  /** Start a look on the Live layer and keep it running. A flash in progress becomes held. */
+  /** Start a look on the Manual layer and keep it running. A flash in progress becomes held. */
   function start(lookId: string) {
-    const running = liveBlockFor(lookId);
+    const running = manualBlockFor(lookId);
     if (running && running.mode === "held") return;
     let id: number;
     if (running) {
       id = running.id;
-      set("live", (b) => b.id === id, "mode", "held");
+      set("manual", (b) => b.id === id, "mode", "held");
     } else {
       id = nextId++;
-      set("live", (bs) => [...bs, { id, lookId, start: now(), end: null, mode: "held" }]);
+      set("manual", (bs) => [...bs, { id, lookId, start: now(), end: null, mode: "held" }]);
     }
     log(lookId, "start");
     record(`Start ${lookById(lookId).name}`, () => removeBlock(id));
   }
 
   function stop(lookId: string) {
-    const running = liveBlockFor(lookId);
+    const running = manualBlockFor(lookId);
     if (!running) return;
     const id = running.id;
     endBlock(id, now());
@@ -269,28 +275,28 @@ function build() {
 
   /** Flash a look while a finger is down. Not an undo step. */
   function hold(lookId: string) {
-    if (liveBlockFor(lookId)) return;
-    set("live", (bs) => [...bs, { id: nextId++, lookId, start: now(), end: null, mode: "flash" }]);
+    if (manualBlockFor(lookId)) return;
+    set("manual", (bs) => [...bs, { id: nextId++, lookId, start: now(), end: null, mode: "flash" }]);
     log(lookId, "flash");
   }
 
   /** End a flash. */
   function release(lookId: string) {
-    const running = liveBlockFor(lookId);
+    const running = manualBlockFor(lookId);
     if (running && running.mode === "flash") endBlock(running.id, now());
   }
 
-  /** Release the whole Live layer, so the layers below show through again. */
+  /** Release the whole Manual layer, so the layers below show through again. */
   function releaseAll() {
-    const ids = runningLive().map((b) => b.id);
+    const ids = runningManual().map((b) => b.id);
     if (!ids.length) return;
     const t = now();
-    set("live", (b) => ids.includes(b.id), "end", t);
-    record("Release Live", () => set("live", (b) => ids.includes(b.id), "end", null));
+    set("manual", (b) => ids.includes(b.id), "end", t);
+    record("Release Manual", () => set("manual", (b) => ids.includes(b.id), "end", null));
   }
 
   function surprise() {
-    const idle = LOOKS.filter((l) => !liveBlockFor(l.id) && l.id !== "blackout-hold");
+    const idle = LOOKS.filter((l) => !manualBlockFor(l.id) && l.id !== "blackout-hold");
     start(idle[Math.floor(Math.random() * idle.length)].id);
   }
 
@@ -311,12 +317,25 @@ function build() {
   const setBlackoutHold = (on: boolean) => set("blackoutHold", on);
   const isDark = () => state.blackout || state.blackoutHold;
 
-  function setOutput(output: State["output"]) {
-    const before = state.output;
-    if (before === output) return;
-    set("output", output);
-    record(output === "live" ? "Go live" : "Preview", () => set("output", before));
+  /** LIVE on: performing. LIVE off: preparing. */
+  function setLive(on: boolean) {
+    if (state.night.live === on) return;
+    set("night", "live", on);
+    record(on ? "LIVE on" : "LIVE off", () => set("night", "live", !on));
   }
+
+  function toggleIndicator(i: Indicator) {
+    const before = state.night.indicators[i];
+    set("night", "indicators", i, !before);
+    record(`${INDICATOR_NAME[i]} ${before ? "off" : "on"}`, () => set("night", "indicators", i, before));
+  }
+
+  /** An indicator is in effect when LIVE is on and it is not turned off. */
+  const inEffect = (i: Indicator) => state.night.live && state.night.indicators[i];
+  const isRecording = () => inEffect("record");
+  const surfaceLocked = () => inEffect("lock");
+  const followsDj = () => inEffect("dj");
+  const autopilotArmed = () => inEffect("autopilot");
 
   function setFader(id: FaderId, v: number) {
     const before = state.faders[id];
@@ -371,21 +390,15 @@ function build() {
     );
   }
 
-  // ---- show ----------------------------------------------------------
-  function setRecording(on: boolean) {
-    set("show", "recording", on);
-    record(on ? "Record" : "Stop recording", () => set("show", "recording", !on));
-  }
-
   // ---- derived: what each fixture does --------------------------------
-  /** Top layer wins: Live, then Show, then Autopilot. */
+  /** Top layer wins: Manual, then Show, then Autopilot. */
   function fixtureState(f: Fixture): { look: Look | null; layer: Layer | null; level: number } {
-    const live = [...runningLive()].reverse().find((b) => lookById(b.lookId).groups.includes(f.group));
+    const hand = [...runningManual()].reverse().find((b) => lookById(b.lookId).groups.includes(f.group));
     let look: Look | null = null;
     let layer: Layer | null = null;
-    if (live) {
-      look = lookById(live.lookId);
-      layer = "live";
+    if (hand) {
+      look = lookById(hand.lookId);
+      layer = "manual";
     } else {
       const ap = autopilotNow().find((l) => l.groups.includes(f.group));
       if (ap) {
@@ -403,26 +416,26 @@ function build() {
     return { look, layer, level };
   }
 
-  /** Groups the Live layer covers that the Autopilot also wants. */
+  /** Groups the Manual layer covers that the Autopilot also wants. */
   function overrides() {
     const apGroups = new Set(autopilotNow().flatMap((l) => l.groups));
-    return runningLive()
+    return runningManual()
       .map((b) => ({ block: b, look: lookById(b.lookId) }))
       .map((x) => ({ ...x, groups: x.look.groups.filter((g) => apGroups.has(g)) }))
       .filter((x) => x.groups.length > 0);
   }
 
-  /** Every group the Live layer covers right now, with the look that covers it. */
+  /** Every group the Manual layer covers right now, with the look that covers it. */
   function handsOff() {
     return GROUPS.map((g) => {
-      const b = [...runningLive()].reverse().find((x) => lookById(x.lookId).groups.includes(g.id));
+      const b = [...runningManual()].reverse().find((x) => lookById(x.lookId).groups.includes(g.id));
       return b ? { group: g, block: b, look: lookById(b.lookId) } : null;
     }).filter((x) => x !== null);
   }
 
-  /** How a look is running: "held" or "flash" on Live, "autopilot", or null. */
+  /** How a look is running: "held" or "flash" on Manual, "autopilot", or null. */
   function lookState(lookId: string): "held" | "flash" | "autopilot" | null {
-    const b = liveBlockFor(lookId);
+    const b = manualBlockFor(lookId);
     if (b) return b.mode;
     if (autopilotNow().some((l) => l.id === lookId)) return "autopilot";
     return null;
@@ -431,10 +444,10 @@ function build() {
   // ---- lanes for the timetable and the Now strip ---------------------
   function lanes(from: number, to: number): Lane[] {
     const t = now();
-    const liveBlocks = state.live
+    const manualBlocks = state.manual
       .filter((b) => (b.end ?? t) > from && b.start < to)
       .map((b) => ({
-        id: `live-${b.id}`,
+        id: `manual-${b.id}`,
         title: lookById(b.lookId).name,
         sub: hhmm(b.start),
         start: b.start,
@@ -452,25 +465,33 @@ function build() {
     }));
     return [
       {
-        layer: "live",
-        title: "Live",
+        layer: "manual",
+        title: "Manual",
         on: covered.length > 0,
         status: covered.length ? `covers ${covered.join(", ")}` : "idle",
-        blocks: liveBlocks,
+        blocks: manualBlocks,
       },
       {
         layer: "show",
         title: "Show",
         on: state.show.on,
-        status: state.show.recording ? "recording" : "idle",
+        status: isRecording() ? "recording" : "idle",
         blocks: [],
         empty: "No show loaded",
       },
       {
         layer: "autopilot",
         title: "Autopilot",
-        on: state.autopilot.on,
-        status: state.autopilot.on && cur ? `playing ${cur.section.title}` : "off",
+        on: state.autopilot.on && autopilotArmed(),
+        status: !state.autopilot.on
+          ? "off"
+          : !state.night.live
+            ? "waits for LIVE"
+            : !autopilotArmed()
+              ? "held back at LIVE"
+              : cur
+                ? `playing ${cur.section.title}`
+                : "idle",
         blocks: apBlocks,
       },
     ];
@@ -491,20 +512,25 @@ function build() {
     setMaster,
     setBlackout,
     setBlackoutHold,
-    setOutput,
+    setLive,
+    toggleIndicator,
     setFader,
     setXY,
     setAutopilot,
     toggleGroup,
     skipLook,
     moreLikeThis,
-    setRecording,
     undo,
     undoLabel,
     record,
     // derived
     isDark,
-    runningLive,
+    inEffect,
+    isRecording,
+    surfaceLocked,
+    followsDj,
+    autopilotArmed,
+    runningManual,
     lookState,
     fixtureState,
     overrides,
@@ -523,6 +549,13 @@ function build() {
     groups: GROUPS,
   };
 }
+
+export const INDICATOR_NAME: Record<Indicator, string> = {
+  dj: "DJ link",
+  record: "Recording",
+  autopilot: "Autopilot",
+  lock: "Lock",
+};
 
 const clamp = (v: number) => Math.max(0, Math.min(100, Math.round(v)));
 

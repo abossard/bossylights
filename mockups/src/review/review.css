@@ -156,5 +156,5 @@ tr.is-selected .rs-issues {
 }
 
 .rs-rethink {
-  color: var(--layer-live);
+  color: var(--layer-manual);
 }

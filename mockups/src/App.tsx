@@ -26,7 +26,7 @@ export function App() {
           to={stripWindow().to}
           now={store.now()}
           lanes={store.lanes(stripWindow().from, stripWindow().to)}
-          onActivate={() => go("live")}
+          onActivate={() => go("console")}
         />
       </Show>
       <main class="screen-host" id="main">

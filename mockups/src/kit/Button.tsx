@@ -7,7 +7,7 @@ export interface ButtonProps extends JSX.ButtonHTMLAttributes<HTMLButtonElement>
   layer?: Layer;
   /** Toggle buttons: shows the on state and sets aria-pressed. */
   pressed?: boolean;
-  /** lg uses the display face, for the big live actions. */
+  /** lg uses the display face, for the big actions pressed during a show. */
   size?: "md" | "lg";
 }
 

@@ -19,7 +19,7 @@ export interface PadProps {
 const SUB: Record<PadState, string | undefined> = {
   idle: undefined,
   autopilot: "Autopilot",
-  held: "Held live",
+  held: "Manual",
   flash: "Flash",
 };
 

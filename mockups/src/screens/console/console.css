@@ -1,6 +1,6 @@
-.live {
-  --live-lane: clamp(72px, 11vh, 112px);
-  --live-label: 124px;
+.console-screen {
+  --console-lane: clamp(72px, 11vh, 112px);
+  --console-label: 124px;
   position: relative;
   display: grid;
   grid-template-columns: minmax(0, 680fr) minmax(0, 712fr);
@@ -10,8 +10,8 @@
   min-height: 600px;
 }
 
-.live-left,
-.live-right {
+.console-left,
+.console-right {
   position: relative;
   display: flex;
   flex-direction: column;
@@ -20,7 +20,7 @@
   min-width: 0;
 }
 
-.live-tt-aside {
+.console-tt-aside {
   display: flex;
   flex: 1;
   gap: var(--sp-3);
@@ -29,43 +29,48 @@
 }
 
 /* timetable block titles follow the lane width */
-.live .tt-lane {
+.console-screen .tt-lane {
   container-type: inline-size;
 }
 
-.live .tt-block b {
+.console-screen .tt-block b {
   font-size: clamp(13px, 4cqi, var(--display-md));
 }
 
-.live-rig {
+.console-rig {
   flex: 1;
   background: var(--s1);
   padding: var(--sp-4);
   gap: var(--sp-3);
 }
 
-.live-rig .region-head h2 {
+.console-rig .region-head h2 {
   font-size: var(--display-lg);
 }
 
-.live-rig-stage {
+.console-rig-stage {
   flex: 1;
   min-height: 0;
   padding: 8px 8px 0;
 }
 
 /* ---------------- page bar ---------------- */
-.live-pagebar {
+.console-pagebar {
   flex-direction: row;
   align-items: center;
   gap: var(--sp-2);
 }
 
-.live-pagebar .tabs .tab:last-child {
+.console-pagebar .tab {
+  flex: none;
+}
+
+.console-pagebar .tabs .tab:last-child {
+  min-width: var(--target);
   padding: 0 14px;
 }
 
-.live-actions {
+.console-actions {
   margin-left: auto;
   display: flex;
   gap: var(--sp-2);
@@ -78,7 +83,7 @@
   gap: var(--sp-3);
   min-height: 52px;
   padding: 0 6px 0 14px;
-  border: var(--rule) solid var(--layer-live);
+  border: var(--rule) solid var(--layer-manual);
 }
 
 .notice.is-calm {
@@ -89,7 +94,7 @@
   width: 14px;
   height: 14px;
   flex: none;
-  background: var(--layer-live);
+  background: var(--layer-manual);
 }
 
 .notice.is-calm .notice-sw {
@@ -110,7 +115,7 @@
 }
 
 /* ---------------- console ---------------- */
-.console {
+.console-grid {
   position: relative;
   flex: 1;
   min-height: 0;
@@ -145,7 +150,7 @@
   font-size: var(--display-md);
 }
 
-.live-left .region-head h2 {
+.console-left .region-head h2 {
   font-size: var(--display-lg);
 }
 
@@ -214,7 +219,7 @@
 }
 
 .w-cues li.is-current {
-  color: var(--layer-live);
+  color: var(--layer-manual);
 }
 
 .w-cues .now-flag {
@@ -396,27 +401,27 @@
 
 /* ---------------- 1024 wide ---------------- */
 @media (max-width: 1180px) {
-  .live {
-    --live-label: 104px;
+  .console-screen {
+    --console-label: 104px;
     grid-template-columns: minmax(0, 45fr) minmax(0, 55fr);
     gap: var(--sp-3);
     padding: var(--sp-3);
   }
 
-  .live-left,
-  .live-right {
+  .console-left,
+  .console-right {
     gap: var(--sp-3);
   }
 
-  .live .tt-label h3 {
+  .console-screen .tt-label h3 {
     font-size: 20px;
   }
 
-  .live .tt-label {
+  .console-screen .tt-label {
     padding-right: 4px;
   }
 
-  .live .tt-label p {
+  .console-screen .tt-label p {
     flex-direction: column;
     align-items: flex-start;
     gap: 4px;
@@ -435,6 +440,15 @@
     min-height: 48px;
   }
 
+  .console-pagebar .tabs-page .tab {
+    padding: 0 10px;
+    font-size: 18px;
+  }
+
+  .console-pagebar .btn {
+    padding: 0 10px;
+  }
+
   .faders {
     gap: 6px;
   }
@@ -445,7 +459,7 @@
 }
 
 @media (max-height: 800px) {
-  .live-rig {
+  .console-rig {
     padding: var(--sp-3);
   }
 }

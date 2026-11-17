@@ -6,7 +6,7 @@ export interface NowStripProps {
   to: number;
   now: number;
   lanes: Lane[];
-  /** Clicking anywhere on the strip. The shell goes to Live. */
+  /** Clicking anywhere on the strip. The shell goes to the Console. */
   onActivate: () => void;
 }
 
@@ -16,7 +16,7 @@ export function NowStrip(props: NowStripProps) {
   const nowPct = () => pct(props.now);
 
   return (
-    <button type="button" class="ns" onClick={() => props.onActivate()} aria-label="Now strip: what runs on each layer. Open Live.">
+    <button type="button" class="ns" onClick={() => props.onActivate()} aria-label="Now strip: what runs on each layer. Open the Console.">
       <span class="ns-labels" aria-hidden="true">
         <For each={props.lanes}>{(l) => <span class={`ns-label layer-${l.layer}`}>{l.title}</span>}</For>
       </span>
@@ -44,7 +44,7 @@ export function NowStrip(props: NowStripProps) {
         <span class="ns-now" style={{ left: `${nowPct()}%` }} />
         <span class="now-flag ns-flag" style={{ left: `${nowPct()}%` }}>Now</span>
       </span>
-      <span class="ns-go display">Open Live</span>
+      <span class="ns-go display">Open Console</span>
     </button>
   );
 }

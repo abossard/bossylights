@@ -1,0 +1,113 @@
+.ls {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.ls-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: var(--target);
+  padding: 0 10px 0 6px;
+  border: var(--rule) solid var(--line);
+  color: var(--mute);
+  transition: border-color var(--t-fast), color var(--t-fast);
+}
+
+.ls-switch:hover {
+  border-color: var(--paper);
+}
+
+.ls-switch[aria-checked="true"] {
+  border-color: var(--paper);
+  color: var(--paper);
+}
+
+.ls-track {
+  position: relative;
+  width: 40px;
+  height: 22px;
+  background: var(--s2);
+  transition: background-color var(--t-fast);
+}
+
+.ls-knob {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  background: var(--mute);
+  transition: left var(--t-fast), background-color var(--t-fast);
+}
+
+.ls-switch[aria-checked="true"] .ls-track {
+  background: var(--paper);
+}
+
+.ls-switch[aria-checked="true"] .ls-knob {
+  left: 21px;
+  background: var(--ink);
+}
+
+.ls-word {
+  font-size: var(--display-md);
+}
+
+.ls-inds {
+  display: flex;
+  gap: 2px;
+}
+
+.ls-ind {
+  min-width: 40px;
+  min-height: var(--target);
+  padding: 0 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font: 700 var(--text-xs) / 1 var(--font-ui);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border: var(--rule) solid var(--line);
+  color: var(--mute);
+  transition: background-color var(--t-fast), color var(--t-fast), border-color var(--t-fast);
+}
+
+.ls-ind:hover {
+  border-color: var(--paper);
+}
+
+/* in effect now */
+.ls-ind.is-active {
+  background: var(--paper);
+  border-color: var(--paper);
+  color: var(--ink);
+}
+
+/* will be in effect when LIVE turns on */
+.ls-ind.is-armed {
+  border-style: dashed;
+  border-color: var(--mute);
+  color: var(--paper);
+}
+
+/* turned off on its own */
+.ls-ind.is-off {
+  text-decoration: line-through;
+  text-decoration-thickness: 2px;
+}
+
+.ls-nolights {
+  min-height: var(--target);
+  padding: 0 10px;
+  border: var(--rule) solid var(--danger);
+  color: var(--paper);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.ls-nolights:hover {
+  background: var(--s1);
+}

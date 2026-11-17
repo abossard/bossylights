@@ -205,7 +205,7 @@ export function ConsoleGrid(props: { model: ConsoleModel }) {
   };
 
   return (
-    <div ref={grid} class="console" classList={{ "is-editing": m.editing() }}>
+    <div ref={grid} class="console-grid" classList={{ "is-editing": m.editing() }}>
       <Show when={m.editing()}>
         <For each={Array.from({ length: COLS * ROWS }, (_, i) => i)}>
           {(i) => (
@@ -258,8 +258,8 @@ export function ConsoleGrid(props: { model: ConsoleModel }) {
           <p class="display">{m.page().name} is empty</p>
           <p class="mute">Add widgets from the drawer. Drag them into place, drag a corner to resize.</p>
           <Show when={!m.editing()}>
-            <Button variant="primary" onClick={() => m.setEditing(true)}>
-              Edit surface
+            <Button variant="primary" disabled={store.surfaceLocked()} onClick={() => m.setEditing(true)}>
+              {store.surfaceLocked() ? "Surface locked while LIVE" : "Edit surface"}
             </Button>
           </Show>
         </div>

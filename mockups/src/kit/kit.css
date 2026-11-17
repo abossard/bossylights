@@ -428,8 +428,8 @@
 .pad-held:hover:not(:disabled),
 .pad-flash,
 .pad-flash:hover:not(:disabled) {
-  background: var(--layer-live);
-  border-color: var(--layer-live);
+  background: var(--layer-manual);
+  border-color: var(--layer-manual);
   color: var(--ink);
 }
 

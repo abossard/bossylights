@@ -140,7 +140,6 @@ export function ReviewPanel() {
                   <textarea
                     id="rp-region-note"
                     rows={8}
-                    autofocus
                     ref={(el) => queueMicrotask(() => el.focus())}
                     placeholder="What should change in this region"
                     value={r().regions[reg().id]?.note ?? ""}

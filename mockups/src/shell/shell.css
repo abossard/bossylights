@@ -90,10 +90,15 @@
   display: flex;
   align-items: center;
   gap: var(--sp-3);
+  margin-left: var(--sp-3);
   padding-left: var(--sp-3);
   border-left: var(--rule) solid var(--line);
   font-weight: 700;
   white-space: nowrap;
+}
+
+.comment-bar .btn {
+  min-height: 36px;
 }
 
 .tabbar {
@@ -104,7 +109,7 @@
 }
 
 .tabbar .tabs {
-  width: 100%;
+  flex: 1;
 }
 
 /* the ninth tab, Review, sits apart at the right */

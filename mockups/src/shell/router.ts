@@ -1,7 +1,7 @@
-// A tiny hash router: #/live, #/autopilot, ..., #/review.
+// A tiny hash router: #/console, #/autopilot, ..., #/review.
 import { createRoot, createSignal } from "solid-js";
 
-const read = () => location.hash.replace(/^#\/?/, "").split("/")[0] || "live";
+const read = () => location.hash.replace(/^#\/?/, "").split("/")[0] || "console";
 
 export const route = createRoot(() => {
   const [current, setCurrent] = createSignal(read());

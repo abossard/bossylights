@@ -1,6 +1,6 @@
 // Fake data shared by every screen. Nothing here talks to an engine.
 
-export type Layer = "live" | "show" | "autopilot";
+export type Layer = "manual" | "show" | "autopilot";
 export type GroupId = "movers" | "pars" | "bars" | "laser";
 export type LookKind = "wash" | "movement" | "strobe" | "pixels" | "laser";
 export type SectionLabel = "intro" | "build" | "drop" | "break" | "outro";
