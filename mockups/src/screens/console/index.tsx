@@ -73,13 +73,13 @@ export function Screen() {
   const c = createConsole();
   // Turning LIVE on locks the surface, so an edit in progress ends.
   createEffect(() => store.surfaceLocked() && c.setEditing(false));
-  // The narrow layout shows 20 minutes so short blocks keep readable titles.
+  // The narrow layout shows 15 minutes so short blocks keep readable titles.
   const mq = matchMedia("(max-width: 1180px)");
   const [narrow, setNarrow] = createSignal(mq.matches);
   const onMq = () => setNarrow(mq.matches);
   mq.addEventListener("change", onMq);
   onCleanup(() => mq.removeEventListener("change", onMq));
-  const win = () => stepWindow(store.now(), 7 * 60, (narrow() ? 20 : 25) * 60, 5 * 60);
+  const win = () => stepWindow(store.now(), narrow() ? 5 * 60 : 7 * 60, (narrow() ? 15 : 25) * 60, 5 * 60);
 
   const zones = (): RigZone[] => {
     const byBlock = new Map<number, { name: string; ids: string[] }>();
@@ -143,19 +143,14 @@ export function Screen() {
               when={c.editing()}
               fallback={
                 <>
-                  <Button variant="primary" onClick={() => store.surprise()}>
-                    Surprise me
-                  </Button>
+                  <Button onClick={() => store.surprise()}>Surprise me</Button>
                   <Button
                     disabled={store.surfaceLocked()}
-                    aria-describedby={store.surfaceLocked() ? "console-lock-note" : undefined}
+                    reason="Locked while LIVE is on"
                     onClick={() => (c.setMessage(""), c.setEditing(true))}
                   >
-                    {store.surfaceLocked() ? "Surface locked" : "Edit surface"}
+                    Edit surface
                   </Button>
-                  <span id="console-lock-note" class="visually-hidden">
-                    Locked while LIVE is on. Turn LIVE or Lock off to edit.
-                  </span>
                 </>
               }
             >

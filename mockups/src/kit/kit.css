@@ -11,17 +11,17 @@
 .region-head {
   display: flex;
   flex-wrap: wrap;
-  align-items: baseline;
+  align-items: center;
   gap: 0 var(--sp-3);
-  min-height: 28px;
-}
-
-.region-head > :not(h2) {
-  white-space: nowrap;
+  min-height: 24px;
 }
 
 .region-head h2 {
-  font-size: var(--display-lg);
+  font-size: var(--display-sm);
+  white-space: nowrap;
+}
+
+.region-head > :not(h2) {
   white-space: nowrap;
 }
 
@@ -42,7 +42,6 @@
 
 .region-target.has-note {
   border-style: solid;
-  border-color: var(--layer-autopilot);
 }
 
 .region-target:hover {
@@ -62,7 +61,8 @@
 }
 
 .region-target.has-note .region-chip {
-  background: var(--layer-autopilot);
+  outline: var(--rule) solid var(--ink);
+  outline-offset: -5px;
 }
 
 .region-chip-note {
@@ -99,8 +99,8 @@
 }
 
 .btn-primary {
-  background: var(--layer-autopilot);
-  border-color: var(--layer-autopilot);
+  background: var(--paper);
+  border-color: var(--paper);
   color: var(--ink);
 }
 
@@ -108,8 +108,10 @@
   border-color: var(--paper);
 }
 
+.btn-primary:hover:not(:disabled),
 .btn-primary:active:not(:disabled) {
-  background: var(--paper);
+  background: var(--mute);
+  border-color: var(--mute);
 }
 
 .btn-danger {
@@ -154,6 +156,26 @@
   color: var(--ink);
 }
 
+/* a disabled button says why, under its label */
+.btn-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  line-height: 1.15;
+}
+
+.btn-reason {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  font-stretch: var(--tight);
+}
+
+.btn.has-reason:disabled {
+  opacity: 1;
+  color: var(--mute);
+  border-style: dashed;
+}
+
 .btn-lg {
   font-size: var(--display-md);
   font-weight: 800;
@@ -189,6 +211,16 @@
 
 .tabs-workspace .tab {
   font-size: 20px;
+  color: var(--mute);
+}
+
+.tabs-workspace .tab:hover {
+  color: var(--paper);
+}
+
+.tabs-workspace .tab[aria-selected="true"],
+.tabs-workspace .tab[aria-selected="true"]:hover {
+  color: var(--ink);
 }
 
 .tabs-page .tab {
@@ -339,90 +371,94 @@
 /* ---------------- Pad ---------------- */
 .pad {
   position: relative;
+  min-width: var(--target);
   min-height: var(--target);
-  background: var(--s1);
-  border: var(--rule) solid var(--s2);
-  padding: 8px;
+  padding: 0;
   display: flex;
   flex-direction: column;
-  justify-content: flex-end;
-  font-size: 13px;
-  font-weight: 600;
-  line-height: 1.15;
+  background: var(--s1);
+  color: var(--paper);
   overflow: hidden;
   user-select: none;
   -webkit-user-select: none;
   touch-action: none;
   container-type: size;
-  transition: background-color var(--t-fast), border-color var(--t-fast);
+  transition: background-color var(--t-fast), color var(--t-fast);
 }
 
-.pad:hover:not(:disabled) {
-  border-color: var(--mute);
-}
-
-.pad:active:not(:disabled) {
-  background: var(--s2);
-}
-
-.pad-chip {
-  position: absolute;
-  top: 8px;
-  left: 8px;
-  width: 16px;
-  height: 16px;
+/* the look's colour: a real field, not a chip */
+.pad-field {
+  flex: 0 0 34%;
+  min-height: 12px;
   display: flex;
 }
 
-.pad-chip span {
+.pad-field i {
   flex: 1;
 }
 
-.pad-chip-dark {
-  outline: var(--rule) solid var(--paper);
+.pad-field.is-dark {
+  outline: var(--rule) solid var(--line);
   outline-offset: -2px;
+}
+
+.pad-name {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  padding: 2px 6px;
+  font-size: var(--text-md);
+  font-weight: 700;
+  font-stretch: var(--tight);
+  line-height: 1.1;
+  overflow-wrap: anywhere;
+}
+
+.pad-runs {
+  display: none;
+  padding: 0 6px 5px;
+  font-size: var(--text-sm);
+  font-weight: 700;
+  font-stretch: var(--tight);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .pad-flag {
   position: absolute;
   top: 0;
   right: 0;
-  font-size: 13px;
+  font-size: 14px;
   padding: 3px 5px;
+  border-left: var(--rule) solid var(--ink);
+  border-bottom: var(--rule) solid var(--ink);
 }
 
-.pad-label {
-  hyphens: auto;
-  -webkit-hyphens: auto;
+.pad:hover:not(:disabled) {
+  background: var(--s2);
 }
 
-/* narrow pads: smaller label, and long words may break */
-@container (max-width: 74px) {
-  .pad-label {
-    font-size: 11.5px;
-    letter-spacing: -0.01em;
-    overflow-wrap: break-word;
-  }
+/* pressed: the frame answers before the state does */
+.pad:active:not(:disabled)::after,
+.pad-flash::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 4px solid var(--paper);
+  pointer-events: none;
 }
 
-/* short pads show state by fill, border and flag only */
-@container (max-height: 79px) {
-  .pad-sub {
-    display: none;
-  }
-}
-
-.pad-sub {
-  font-style: normal;
-  font-size: var(--text-xs);
-  font-weight: 700;
-  color: var(--mute);
-  margin-top: 2px;
-}
-
+/* running: the whole pad takes the colour of the layer that runs it */
 .pad-autopilot,
-.pad-show {
-  border-color: var(--paper);
+.pad-autopilot:hover:not(:disabled) {
+  background: var(--layer-autopilot);
+  color: var(--ink);
+}
+
+.pad-show,
+.pad-show:hover:not(:disabled) {
+  background: var(--layer-show);
+  color: var(--ink);
 }
 
 .pad-held,
@@ -430,23 +466,40 @@
 .pad-flash,
 .pad-flash:hover:not(:disabled) {
   background: var(--layer-manual);
-  border-color: var(--layer-manual);
   color: var(--ink);
 }
 
-.pad-held .pad-sub,
-.pad-flash .pad-sub {
-  color: var(--ink);
+.pad:not(.pad-idle) .pad-field {
+  border-bottom: var(--rule) solid var(--ink);
 }
 
-.pad-held .pad-chip,
-.pad-flash .pad-chip {
-  outline: var(--rule) solid var(--ink);
+.pad:disabled {
+  opacity: 1;
+}
+
+/* tall pads also say who runs them */
+@container (min-height: 84px) {
+  .pad-runs {
+    display: block;
+  }
+}
+
+/* narrow pads: tighter text so "Blackout" still fits */
+@container (max-width: 68px) {
+  .pad-name {
+    font-size: var(--text-sm);
+    padding: 2px 4px;
+  }
+
+  .pad-flag {
+    font-size: 13px;
+    padding: 2px 4px;
+  }
 }
 
 /* ---------------- XY pad ---------------- */
 .xy {
-  --layer: var(--layer-autopilot);
+  --layer: var(--paper);
   position: relative;
   min-height: 120px;
   background: var(--s1);
@@ -665,7 +718,7 @@ button.list-body:hover {
   position: relative;
   display: grid;
   grid-template-columns: var(--tt-label) minmax(0, 1fr);
-  grid-template-rows: 40px repeat(var(--tt-lanes), var(--tt-lane));
+  grid-template-rows: 44px repeat(var(--tt-lanes), var(--tt-lane));
   flex: none;
 }
 
@@ -684,24 +737,48 @@ button.list-body:hover {
   white-space: nowrap;
 }
 
+/* lane label: name, one state word, one short line */
 .tt-label {
-  padding: 12px 10px 0 0;
+  padding: 10px var(--sp-2) 0 0;
   border-bottom: 1px solid var(--line);
   min-width: 0;
   overflow: hidden;
 }
 
 .tt-label h3 {
-  font-size: var(--display-lg);
+  font-size: 20px;
   color: var(--layer);
 }
 
 .tt-label p {
   margin-top: 6px;
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px 8px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.tt-state {
+  font: 700 var(--text-sm) / 1 var(--font-ui);
+  font-stretch: var(--tight);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 5px;
+  border: var(--rule) solid var(--layer);
+  color: var(--layer);
+}
+
+.tt-state.is-on {
+  background: var(--layer);
+  color: var(--ink);
+}
+
+.tt-status {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  font-stretch: var(--tight);
+  line-height: 1.15;
+  color: var(--mute);
 }
 
 .tt-label.has-controls {
@@ -714,29 +791,14 @@ button.list-body:hover {
   margin-top: 4px;
 }
 
-.tt-status {
+.tt-label.has-controls p {
   margin-top: 4px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .tt-plain .tt-label {
   display: flex;
   align-items: center;
   padding-top: 0;
-}
-
-.tt-state {
-  font: 700 var(--text-sm) var(--font-ui);
-  padding: 0 5px;
-  border: var(--rule) solid var(--layer);
-  color: var(--layer);
-}
-
-.tt-state.is-on {
-  background: var(--layer);
-  color: var(--ink);
 }
 
 .tt-lane {
@@ -746,42 +808,77 @@ button.list-body:hover {
   overflow: hidden;
 }
 
+/* blocks: flat fill in the layer's colour, dark text */
 .tt-block {
   position: absolute;
-  top: 12px;
-  bottom: 12px;
-  padding: 8px 6px;
+  top: 10px;
+  bottom: 10px;
+  padding: 7px 6px;
   background: var(--layer);
   color: var(--ink);
   overflow: hidden;
+  container-type: inline-size;
 }
 
 .tt-block b {
   display: block;
-  font-size: var(--display-md);
+  font-size: 20px;
+  line-height: 1;
   white-space: nowrap;
   overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .tt-block i {
   display: block;
   margin-top: 4px;
-  font: 600 var(--text-sm) var(--font-ui);
+  font: 600 var(--text-sm) / 1.15 var(--font-ui);
+  font-stretch: var(--tight);
   font-style: normal;
   white-space: nowrap;
+}
+
+/* a narrow block wraps its title, a very narrow one keeps only its colour */
+@container (max-width: 84px) {
+  .tt-block b {
+    font-size: 15px;
+    letter-spacing: 0;
+    white-space: normal;
+  }
+}
+
+@container (max-width: 40px) {
+  .tt-block i {
+    display: none;
+  }
+}
+
+/* too narrow for a word: the colour alone says something ran here */
+@container (max-width: 30px) {
+  .tt-block b {
+    display: none;
+  }
 }
 
 .tt-block.is-past {
   background: none;
   border: var(--rule) solid var(--layer);
   color: var(--layer);
+  padding: 5px 4px;
 }
 
+/* a layer that is off or waiting keeps its plan visible, dashed */
+.tt-lane.is-off .tt-block {
+  background: none;
+  border: var(--rule) dashed var(--layer);
+  color: var(--layer);
+  padding: 5px 4px;
+}
+
+/* blocks that run at the same time share the lane */
 .tt-block.is-stacked,
 .tt-tail.is-stacked {
-  --slot: calc((100% - 16px) / var(--tracks));
-  top: calc(8px + var(--track) * var(--slot));
+  --slot: calc((100% - 12px) / var(--tracks));
+  top: calc(6px + var(--track) * var(--slot));
   bottom: auto;
   height: calc(var(--slot) - 3px);
   padding-top: 3px;
@@ -789,56 +886,37 @@ button.list-body:hover {
 }
 
 .tt-block.is-stacked b {
-  font-size: 13px;
+  font-size: 15px;
+  white-space: nowrap;
 }
 
 .tt-block.is-stacked i {
   display: none;
 }
 
-/* a layer that is off keeps its plan visible, outlined */
-.tt-lane.layer-autopilot.is-off .tt-block {
-  background: none;
-  border: var(--rule) dashed var(--layer);
-  color: var(--layer);
-}
-
-.tt-b-sm b {
-  font-size: 17px;
-}
-
-.tt-b-xs {
-  padding: 6px 3px;
-}
-
-.tt-b-xs b {
-  font-size: 13px;
-}
-
-.tt-b-xs i {
-  display: none;
-}
-
+/* still running: open at the right end, it lasts until you release it */
 .tt-tail {
   position: absolute;
-  top: 12px;
-  bottom: 12px;
+  top: 10px;
+  bottom: 10px;
+  min-width: 64px;
   border: var(--rule) dashed var(--layer);
   border-left: 0;
+  border-right: 0;
   color: var(--layer);
-  font: 700 var(--text-sm) var(--font-ui);
-  padding: 8px 6px;
-  min-width: 44px;
+  font: 700 var(--text-sm) / 1.15 var(--font-ui);
+  font-stretch: var(--tight);
+  padding: 7px 6px 0 10px;
   overflow: hidden;
 }
 
 .tt-empty {
   position: absolute;
-  inset: 12px 0;
+  inset: 10px 0;
   display: flex;
   align-items: center;
-  padding-left: var(--sp-4);
-  color: var(--layer);
+  padding-left: var(--sp-3);
+  color: var(--mute);
   font-weight: 600;
 }
 
@@ -851,7 +929,7 @@ button.list-body:hover {
 }
 
 .tt-grid {
-  top: 40px;
+  top: 44px;
   bottom: 0;
 }
 
@@ -868,9 +946,10 @@ button.list-body:hover {
   z-index: 3;
 }
 
+/* the NOW line: the second thing the eye should find */
 .tt-now {
   position: absolute;
-  top: 22px;
+  top: 24px;
   bottom: 0;
   width: 6px;
   margin-left: -3px;
@@ -883,16 +962,18 @@ button.list-body:hover {
   position: absolute;
   top: 0;
   transform: translateX(-50%);
+  font-size: 17px;
+  padding: 4px 7px;
 }
 
 /* ---------------- Now strip ---------------- */
 .ns {
   display: grid;
-  grid-template-columns: 84px minmax(0, 1fr) minmax(0, 300px) auto;
+  grid-template-columns: auto minmax(0, 1fr) minmax(0, 300px) auto;
   align-items: stretch;
   width: 100%;
   height: var(--nowstrip-h);
-  padding: 4px var(--sp-4);
+  padding: 4px var(--gutter);
   border-bottom: var(--rule) solid var(--line);
   gap: var(--sp-3);
 }
@@ -909,7 +990,8 @@ button.list-body:hover {
 
 .ns-label {
   color: var(--layer);
-  font: 700 var(--text-xs) / 1 var(--font-ui);
+  font: 700 var(--text-sm) / 1 var(--font-ui);
+  font-stretch: var(--tight);
   display: flex;
   align-items: center;
   text-transform: uppercase;
@@ -928,11 +1010,12 @@ button.list-body:hover {
 
 .ns-block {
   position: absolute;
-  top: 2px;
-  bottom: 2px;
+  top: 1px;
+  bottom: 1px;
   background: var(--layer);
   color: var(--ink);
-  font: 700 var(--text-xs) / 12px var(--font-ui);
+  font: 700 var(--text-sm) / 14px var(--font-ui);
+  font-stretch: var(--tight);
   padding: 0 4px;
   white-space: nowrap;
   overflow: hidden;
@@ -942,6 +1025,7 @@ button.list-body:hover {
   background: none;
   border: 1px solid var(--layer);
   color: var(--layer);
+  line-height: 12px;
 }
 
 .ns-now {
@@ -960,16 +1044,20 @@ button.list-body:hover {
   position: absolute;
   top: -4px;
   margin-left: 4px;
-  font-size: 12px;
+  font-size: 13px;
   padding: 2px 4px;
   z-index: 2;
 }
 
 .ns-go {
   align-self: center;
-  font-size: var(--display-sm);
-  padding: 8px 12px;
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 var(--sp-3);
   border: var(--rule) solid var(--line);
+  font-weight: 700;
+  white-space: nowrap;
 }
 
 .ns:hover .ns-go {
@@ -1113,36 +1201,35 @@ button.list-body:hover {
 /* ---------------- Decks ---------------- */
 .decks {
   display: grid;
-  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) fit-content(44%);
   gap: var(--sp-2);
   min-width: 0;
 }
 
 .deck {
+  position: relative;
   display: flex;
-  align-items: center;
-  gap: var(--sp-2);
+  align-items: stretch;
+  gap: var(--sp-3);
   min-width: 0;
-  min-height: 52px;
-  padding: 4px var(--sp-2);
-  border: var(--rule) solid var(--line);
+  min-height: 60px;
+  padding-right: var(--sp-3);
+  background: var(--s1);
   color: var(--mute);
 }
 
 .deck.is-onair {
-  border-color: var(--paper);
   color: var(--paper);
 }
 
 .deck-letter {
   flex: none;
-  width: 26px;
-  height: 26px;
+  width: 36px;
   display: grid;
   place-items: center;
-  font-size: var(--display-sm);
+  font-size: var(--display-md);
   background: var(--s2);
-  color: var(--paper);
+  color: var(--mute);
 }
 
 .deck.is-onair .deck-letter {
@@ -1150,13 +1237,11 @@ button.list-body:hover {
   color: var(--ink);
 }
 
-.deck-icon {
-  flex: none;
-}
-
 .deck-song {
   display: flex;
   flex-direction: column;
+  justify-content: center;
+  gap: 4px;
   min-width: 0;
   flex: 1;
 }
@@ -1168,80 +1253,116 @@ button.list-body:hover {
   text-overflow: ellipsis;
 }
 
+/* the song on air: the largest text after the tempo */
 .deck.is-onair .deck-title {
-  font-size: 28px;
-}
-
-.deck-meta {
-  font-size: var(--text-sm);
-  font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.deck-chip {
-  flex: none;
-  font: 700 var(--text-xs) / 1 var(--font-ui);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  padding: 4px 6px;
-  background: var(--paper);
-  color: var(--ink);
-}
-
-.deck-chip.is-cued {
-  background: none;
-  border: 1px solid var(--line);
-  color: var(--mute);
+  font-size: var(--display-xl);
 }
 
 @media (max-width: 1180px) {
-  .decks:not(.decks-compact) {
-    grid-template-columns: minmax(0, 2.2fr) minmax(0, 1fr);
-  }
-
-  .decks:not(.decks-compact) .deck-chip {
-    display: none;
+  .deck.is-onair .deck-title {
+    font-size: 28px;
   }
 }
 
-/* the compact decks in the Now strip: two lines, one per deck */
+.deck-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  min-width: 0;
+}
+
+.deck-state {
+  flex: none;
+  font-weight: 700;
+  font-stretch: var(--tight);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.deck-state.now-flag {
+  font-size: 14px;
+  letter-spacing: 0.02em;
+  padding: 2px 5px;
+}
+
+.deck-icon {
+  flex: none;
+}
+
+.deck-detail {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-stretch: var(--tight);
+}
+
+/* how far the song is */
+.deck-progress {
+  position: absolute;
+  left: 36px;
+  bottom: 0;
+  height: 3px;
+  max-width: calc(100% - 36px);
+  background: var(--mute);
+}
+
+.deck.is-onair .deck-progress {
+  background: var(--paper);
+}
+
+.deck.is-empty {
+  background: none;
+  outline: 1px dashed var(--line);
+  outline-offset: -1px;
+}
+
+.deck.is-empty .deck-letter {
+  background: none;
+}
+
+/* the compact decks in the Now strip: one line per deck */
 .decks-compact {
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: auto auto;
-  gap: 0;
+  grid-template-rows: 1fr 1fr;
+  gap: 2px;
   align-content: center;
 }
 
 .decks-compact .deck {
   min-height: 0;
   padding: 0;
-  border: 0;
   gap: 6px;
+  background: none;
+  outline: 0;
+  align-items: center;
 }
 
 .decks-compact .deck-letter {
-  width: 18px;
-  height: 18px;
-  font-size: 13px;
+  width: 20px;
+  height: 20px;
+  font-size: 14px;
 }
 
 .decks-compact .deck-song {
   flex-direction: row;
+  justify-content: flex-start;
   align-items: baseline;
   gap: 6px;
 }
 
-.decks-compact .deck-title,
-.decks-compact .deck.is-onair .deck-title {
+.decks-compact .deck-title {
   font-size: 15px;
+  flex: none;
+  max-width: 60%;
 }
 
 .decks-compact .deck.is-onair .deck-title {
   font-size: 20px;
 }
 
-.decks-compact .deck-chip {
+.decks-compact .deck-state {
   display: none;
 }
+

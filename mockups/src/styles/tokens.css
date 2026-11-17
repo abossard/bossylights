@@ -20,14 +20,20 @@
   /* type */
   --font-display: "Big Shoulders Display", "Archivo Narrow", sans-serif;
   --font-ui: Archivo, system-ui, sans-serif;
-  --text-xs: 11px;
-  --text-sm: 12px;
+  /* 13 px is the floor: nothing read during a show is smaller */
+  --text-sm: 13px;
   --text-md: 14px;
   --text-lg: 16px;
+  /* Archivo's narrow width, for labels in tight places */
+  --tight: 82%;
+  --display-xs: 15px;
   --display-sm: 18px;
   --display-md: 22px;
   --display-lg: 26px;
-  --display-xl: 30px;
+  /* the song on air */
+  --display-xl: 32px;
+  /* the tempo: the largest text on any screen */
+  --display-2xl: 38px;
 
   /* space */
   --sp-1: 4px;
@@ -37,13 +43,21 @@
   --sp-5: 24px;
 
   /* sizes */
+  /* page gutter: the top bar, the Now strip and every screen share it */
+  --gutter: 16px;
   --target: 44px;
   --rule: 2px;
-  --topbar-h: 52px;
+  --topbar-h: 56px;
   --tabbar-h: 44px;
   --nowstrip-h: 56px;
   --panel-w: 380px;
 
   /* motion: state changes only */
   --t-fast: 150ms;
+}
+
+@media (max-width: 1180px) {
+  :root {
+    --gutter: 12px;
+  }
 }

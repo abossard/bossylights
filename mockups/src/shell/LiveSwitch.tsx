@@ -5,17 +5,24 @@ import { INDICATOR_NAME, store, type Indicator } from "../fake/store";
 import { go } from "./router";
 import "./live-switch.css";
 
-const SHORT: Record<Indicator, string> = { dj: "DJ", record: "Rec", autopilot: "Auto", lock: "Lock" };
 const ORDER: Indicator[] = ["dj", "record", "autopilot", "lock"];
+
+/** What each indicator does while LIVE is on, in plain words. */
+const DOES: Record<Indicator, string> = {
+  dj: "follows VirtualDJ",
+  record: "records the set",
+  autopilot: "the autopilot plays",
+  lock: "the surface is locked",
+};
 
 /** LIVE on: the night is running (performing). LIVE off: preparing. */
 export function LiveSwitch() {
   const live = () => store.state.night.live;
 
-  const state = (i: Indicator) =>
-    !store.state.night.indicators[i] ? "off" : live() ? "active" : "armed";
+  /** on: in effect now. ready: will be in effect when LIVE turns on. off: turned off. */
+  const state = (i: Indicator) => (!store.state.night.indicators[i] ? "off" : live() ? "on" : "ready");
   const stateText = (i: Indicator) =>
-    ({ active: "on", armed: "on when LIVE", off: "turned off" })[state(i)];
+    ({ on: `on, ${DOES[i]}`, ready: "ready, starts with LIVE", off: "turned off" })[state(i)];
 
   return (
     <div class="ls" role="group" aria-label="LIVE">
@@ -24,13 +31,14 @@ export function LiveSwitch() {
         role="switch"
         class="ls-switch"
         aria-checked={live()}
-        aria-label={live() ? "LIVE is on: performing" : "LIVE is off: preparing"}
+        aria-label={live() ? "LIVE is on: the night is running" : "LIVE is off: preparing"}
         onClick={() => store.setLive(!live())}
       >
         <span class="ls-track" aria-hidden="true">
           <span class="ls-knob" />
         </span>
         <span class="ls-word display">Live</span>
+        <span class="ls-state">{live() ? "On" : "Off"}</span>
       </button>
       <div class="ls-inds">
         <For each={ORDER}>
@@ -43,14 +51,16 @@ export function LiveSwitch() {
               title={`${INDICATOR_NAME[i]}: ${stateText(i)}`}
               onClick={() => store.toggleIndicator(i)}
             >
-              {SHORT[i]}
+              <i class="ls-lamp" aria-hidden="true" />
+              {INDICATOR_NAME[i]}
             </button>
           )}
         </For>
       </div>
       <Show when={!store.state.lightsConnected}>
         <button type="button" class="ls-nolights" onClick={() => go("inout")}>
-          No lights connected
+          <i class="ls-lamp" aria-hidden="true" />
+          No lights<span class="ls-long"> connected</span>
         </button>
       </Show>
     </div>

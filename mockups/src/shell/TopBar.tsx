@@ -1,6 +1,7 @@
 import { For, Show } from "solid-js";
 import { store } from "../fake/store";
 import { Button, Meter, Tabs } from "../kit";
+import { verdictLabel } from "../review/export";
 import { review } from "../review/store";
 import { LiveSwitch } from "./LiveSwitch";
 import { screens } from "./registry";
@@ -45,8 +46,9 @@ function Status() {
 export function TopBar() {
   const tabs = () => [
     ...screens.map((s) => ({ id: s.id, label: s.title })),
-    { id: "review", label: "Review" },
+    { id: "review", label: "All reviews" },
   ];
+  const verdict = () => review.get(route()).verdict;
 
   return (
     <header class="topbar-wrap">
@@ -56,19 +58,27 @@ export function TopBar() {
           <span class="mute">{store.state.showName}</span>
         </div>
         <Status />
-        <Button
-          class="review-toggle"
-          pressed={review.panelOpen()}
-          disabled={route() === "review"}
-          onClick={() => review.setPanelOpen(!review.panelOpen())}
-          aria-controls="review-panel"
-        >
-          Review
-        </Button>
       </div>
       <nav class="tabbar" aria-label="Workspaces">
         <Tabs variant="workspace" label="Workspaces" items={tabs()} value={route()} onChange={go} />
-        <Show when={review.commentMode()}>
+        <Show
+          when={review.commentMode()}
+          fallback={
+            <Show when={route() !== "review"}>
+              <Button
+                class="review-toggle"
+                pressed={review.panelOpen()}
+                onClick={() => review.setPanelOpen(!review.panelOpen())}
+                aria-controls="review-panel"
+              >
+                Review this screen
+                <Show when={verdict()}>
+                  <span class="review-toggle-verdict">{verdictLabel(verdict())}</span>
+                </Show>
+              </Button>
+            </Show>
+          }
+        >
           <div class="comment-bar" role="status">
             <span>Comment mode: pick a region</span>
             <Button variant="primary" onClick={() => (review.setCommentMode(false), review.setActiveRegion(null))}>

@@ -258,8 +258,8 @@ export function ConsoleGrid(props: { model: ConsoleModel }) {
           <p class="display">{m.page().name} is empty</p>
           <p class="mute">Add widgets from the drawer. Drag them into place, drag a corner to resize.</p>
           <Show when={!m.editing()}>
-            <Button variant="primary" disabled={store.surfaceLocked()} onClick={() => m.setEditing(true)}>
-              {store.surfaceLocked() ? "Surface locked while LIVE" : "Edit surface"}
+            <Button variant="primary" disabled={store.surfaceLocked()} reason="Locked while LIVE is on" onClick={() => m.setEditing(true)}>
+              Edit surface
             </Button>
           </Show>
         </div>

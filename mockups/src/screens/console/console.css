@@ -1,11 +1,11 @@
 .console-screen {
-  --console-lane: clamp(80px, 12vh, 112px);
-  --console-label: 124px;
+  --console-lane: clamp(84px, 11vh, 104px);
+  --console-label: 128px;
   position: relative;
   display: grid;
   grid-template-columns: minmax(0, 680fr) minmax(0, 712fr);
   gap: var(--sp-4);
-  padding: var(--sp-4);
+  padding: var(--sp-4) var(--gutter);
   height: 100%;
   min-height: 600px;
 }
@@ -15,43 +15,27 @@
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: var(--sp-4);
+  gap: var(--sp-3);
   min-height: 0;
   min-width: 0;
 }
 
-.console-tt-aside {
-  display: flex;
-  flex: 1;
-  gap: var(--sp-3);
-  justify-content: space-between;
-  white-space: nowrap;
+.console-screen .tt-block {
+  top: 8px;
+  bottom: 8px;
 }
 
-/* timetable block titles follow the lane width */
-.console-screen .tt-lane {
-  container-type: inline-size;
-}
-
-.console-screen .tt-block b {
-  font-size: clamp(13px, 4cqi, var(--display-md));
-}
-
+/* ---------------- rig ---------------- */
 .console-rig {
   flex: 1;
   background: var(--s1);
-  padding: var(--sp-4);
-  gap: var(--sp-3);
-}
-
-.console-rig .region-head h2 {
-  font-size: var(--display-lg);
+  padding: var(--sp-3) var(--sp-4);
+  gap: var(--sp-2);
 }
 
 .console-rig-stage {
   flex: 1;
   min-height: 0;
-  padding: 8px 8px 0;
 }
 
 /* ---------------- page bar ---------------- */
@@ -67,7 +51,7 @@
 
 .console-pagebar .tabs .tab:last-child {
   min-width: var(--target);
-  padding: 0 14px;
+  justify-content: center;
 }
 
 .console-actions {
@@ -82,17 +66,18 @@
   align-items: center;
   gap: var(--sp-3);
   min-height: 52px;
-  padding: 0 6px 0 14px;
+  padding: 0 4px 0 var(--sp-3);
   border: var(--rule) solid var(--layer-manual);
 }
 
 .notice.is-calm {
   border-color: var(--line);
+  color: var(--mute);
 }
 
 .notice-sw {
-  width: 14px;
-  height: 14px;
+  width: 12px;
+  height: 12px;
   flex: none;
   background: var(--layer-manual);
 }
@@ -107,6 +92,7 @@
 
 .notice-text {
   min-width: 0;
+  line-height: 1.2;
 }
 
 .notice-release {
@@ -114,7 +100,7 @@
   min-height: 40px;
 }
 
-/* ---------------- console ---------------- */
+/* ---------------- console grid ---------------- */
 .console-grid {
   position: relative;
   flex: 1;
@@ -146,14 +132,6 @@
   z-index: 0;
 }
 
-.region-head h2 {
-  font-size: var(--display-md);
-}
-
-.console-left .region-head h2 {
-  font-size: var(--display-lg);
-}
-
 /* pads */
 .pads {
   flex: 1;
@@ -161,7 +139,7 @@
   display: grid;
   grid-template-columns: repeat(8, minmax(0, 1fr));
   grid-template-rows: repeat(var(--pad-rows), minmax(var(--target), 1fr));
-  gap: var(--sp-2);
+  gap: 6px;
 }
 
 .w-button .pad {
@@ -169,20 +147,20 @@
 }
 
 /* faders */
-.faders .fader-v .fader-thumb {
-  left: -3px;
-  right: -3px;
-}
-
 .faders {
   flex: 1;
   min-height: 0;
   display: grid;
   grid-auto-flow: column;
   grid-auto-columns: minmax(var(--target), 1fr);
-  gap: 10px;
+  gap: var(--sp-2);
   overflow-x: auto;
   overflow-y: hidden;
+}
+
+.faders .fader-v .fader-thumb {
+  left: -3px;
+  right: -3px;
 }
 
 .w-slider .fader {
@@ -253,7 +231,7 @@
 }
 
 .w-label p {
-  font-size: var(--display-lg);
+  font-size: var(--display-md);
 }
 
 /* frame */
@@ -267,24 +245,26 @@
   color: var(--mute);
 }
 
-/* ---------------- edit mode ---------------- */
+/* ---------------- edit mode ----------------
+   Neutral chrome: paper frames and handles, no layer colour. */
 .w-edit {
   position: absolute;
   inset: 0;
   z-index: 5;
-  border: var(--rule) solid var(--layer-autopilot);
-  background: rgb(28 26 23 / 0.55);
+  border: var(--rule) solid var(--paper);
+  background: rgb(28 26 23 / 0.6);
   cursor: grab;
   touch-action: none;
 }
 
 .w-edit:active {
   cursor: grabbing;
+  background: rgb(28 26 23 / 0.4);
 }
 
 .w-edit:focus-visible {
   outline-offset: 0;
-  background: rgb(28 26 23 / 0.35);
+  background: rgb(28 26 23 / 0.4);
 }
 
 .w-edit-name {
@@ -292,16 +272,18 @@
   top: 0;
   left: 0;
   max-width: calc(100% - var(--target));
-  padding: 4px 8px;
-  background: var(--layer-autopilot);
+  padding: 4px var(--sp-2);
+  background: var(--paper);
   color: var(--ink);
   font-weight: 700;
   white-space: nowrap;
   overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .w-edit-name span {
   font-weight: 600;
+  font-size: var(--text-sm);
 }
 
 .w-edit-remove,
@@ -311,7 +293,7 @@
   height: var(--target);
   display: grid;
   place-items: center;
-  background: var(--layer-autopilot);
+  background: var(--paper);
   color: var(--ink);
 }
 
@@ -321,7 +303,7 @@
 }
 
 .w-edit-remove:hover {
-  background: var(--paper);
+  background: var(--mute);
 }
 
 .w-edit-resize {
@@ -344,25 +326,25 @@
 }
 
 .console-empty .display {
-  font-size: var(--display-lg);
+  font-size: var(--display-md);
 }
 
-/* ---------------- drawer ---------------- */
+/* ---------------- widget drawer ---------------- */
 .drawer {
   position: absolute;
   inset: 0;
   z-index: 30;
   background: var(--s1);
-  border: var(--rule) solid var(--layer-autopilot);
+  border: var(--rule) solid var(--paper);
   padding: var(--sp-4);
   display: flex;
   flex-direction: column;
-  gap: var(--sp-3);
+  gap: var(--sp-4);
   overflow-y: auto;
 }
 
 .drawer-head h2 {
-  font-size: var(--display-lg);
+  font-size: var(--display-md);
   margin-bottom: 4px;
 }
 
@@ -377,9 +359,11 @@
   width: 100%;
   min-height: 64px;
   padding: var(--sp-2) var(--sp-3);
+  background: var(--bg);
   border: var(--rule) solid var(--line);
   display: flex;
   flex-direction: column;
+  justify-content: center;
   gap: 4px;
 }
 
@@ -392,84 +376,21 @@
 }
 
 .drawer-item b {
-  font-size: var(--display-md);
+  font-size: var(--display-sm);
 }
 
 .drawer-msg {
   min-height: 1.3em;
+  color: var(--paper);
 }
 
-/* ---------------- 1024 wide ---------------- */
-@media (max-width: 1180px) {
-  .console-screen {
-    --console-label: 112px;
-    grid-template-columns: minmax(0, 45fr) minmax(0, 55fr);
-    gap: var(--sp-3);
-    padding: var(--sp-3);
-  }
-
-  .console-left,
-  .console-right {
-    gap: var(--sp-3);
-  }
-
-  .console-screen .tt-label h3 {
-    font-size: 20px;
-  }
-
-  .console-screen .tt-label {
-    padding-right: 4px;
-  }
-
-  .console-screen .tt-label p {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 4px;
-  }
-
-  .pad-flag {
-    font-size: 11px;
-    padding: 2px 4px;
-  }
-
-  .pads .pad {
-    padding: 6px 4px 6px 5px;
-  }
-
-  .notice {
-    min-height: 48px;
-  }
-
-  .console-pagebar .tabs-page .tab {
-    padding: 0 10px;
-    font-size: 18px;
-  }
-
-  .console-pagebar .btn {
-    padding: 0 10px;
-  }
-
-  .faders {
-    gap: 6px;
-  }
-
-  .faders .fader-label {
-    font-size: var(--text-xs);
-  }
-}
-
-@media (max-height: 800px) {
-  .console-rig {
-    padding: var(--sp-3);
-  }
-}
-
-/* compact autopilot header in the Auto lane */
+/* ---------------- compact autopilot header in the Auto lane ---------------- */
 .auto-toggle {
-  min-height: 32px;
-  min-width: 40px;
+  min-height: var(--target);
+  min-width: var(--target);
   padding: 0 6px;
   font: 700 var(--text-sm) var(--font-ui);
+  text-align: center;
   border: var(--rule) solid var(--layer);
   color: var(--layer);
 }
@@ -482,4 +403,53 @@
 .console-screen .tt-controls select {
   min-width: 0;
   flex: 1;
+  min-height: var(--target);
+  font-stretch: var(--tight);
+}
+
+.console-screen .tt-label.has-controls {
+  padding-top: 4px;
+}
+
+.console-screen .tt-label.has-controls h3 {
+  font-size: var(--display-sm);
+}
+
+.console-screen .tt-label.has-controls .tt-controls {
+  margin-top: 2px;
+}
+
+.console-screen .tt-label.has-controls p {
+  margin-top: 2px;
+}
+
+/* ---------------- 1024 wide ---------------- */
+@media (max-width: 1180px) {
+  .console-screen {
+    grid-template-columns: minmax(0, 44fr) minmax(0, 56fr);
+    gap: var(--sp-3);
+    padding: var(--sp-3) var(--gutter);
+  }
+
+  .console-screen {
+    --console-label: 116px;
+  }
+
+  .console-rig {
+    padding: var(--sp-2) var(--sp-3);
+  }
+
+  .console-pagebar .tabs-page .tab {
+    padding: 0 10px;
+    font-size: var(--display-sm);
+  }
+
+  .console-pagebar .btn {
+    padding: 0 10px;
+  }
+
+  .pads,
+  .faders {
+    gap: 5px;
+  }
 }

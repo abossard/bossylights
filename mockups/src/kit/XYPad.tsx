@@ -45,7 +45,11 @@ export function XYPad(props: XYPadProps) {
       aria-valuetext={`${props.x}, ${props.y}`}
       aria-valuenow={props.x}
       onPointerDown={(e) => {
-        box.setPointerCapture(e.pointerId);
+        try {
+          box.setPointerCapture(e.pointerId);
+        } catch {
+          // pointer already gone: the press still counts
+        }
         fromPointer(e);
       }}
       onPointerMove={(e) => box.hasPointerCapture(e.pointerId) && fromPointer(e)}

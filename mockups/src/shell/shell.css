@@ -5,7 +5,9 @@
   min-width: 0;
 }
 
-/* ---------------- top bar ---------------- */
+/* ---------------- top bar ----------------
+   Row 1: name and status. Row 2: workspaces, then the review tools.
+   Both rows and every screen share one gutter, so edges line up. */
 .topbar-wrap {
   flex: none;
   border-bottom: var(--rule) solid var(--line);
@@ -16,13 +18,14 @@
   display: flex;
   align-items: center;
   gap: var(--sp-4);
-  padding: 0 var(--sp-4);
+  padding: 0 var(--gutter);
 }
 
 .brand {
   flex: none;
   display: flex;
   flex-direction: column;
+  gap: 2px;
 }
 
 .brand b {
@@ -31,7 +34,6 @@
 }
 
 .brand .mute {
-  margin-top: 2px;
   white-space: nowrap;
 }
 
@@ -42,10 +44,6 @@
   gap: var(--sp-4);
 }
 
-.status .btn {
-  min-height: 40px;
-}
-
 .status-tempo,
 .status-master {
   display: flex;
@@ -54,20 +52,21 @@
   white-space: nowrap;
 }
 
-.status-tempo b,
-.status-master b {
-  font-size: var(--display-xl);
+/* the tempo is the largest text on any screen */
+.status-tempo b {
+  font-size: var(--display-2xl);
+  font-weight: 900;
 }
 
 .status-master b {
+  font-size: var(--display-md);
   min-width: 3.1ch;
   text-align: right;
 }
 
 .beat-dots {
   display: flex;
-  gap: 6px;
-  margin-left: 2px;
+  gap: 5px;
 }
 
 .beat-dots i {
@@ -78,44 +77,54 @@
 }
 
 .beat-dots i.is-lit {
-  background: var(--layer-autopilot);
-}
-
-.review-toggle {
-  flex: none;
-  min-height: 40px;
-}
-
-.comment-bar {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-3);
-  margin-left: var(--sp-3);
-  padding-left: var(--sp-3);
-  border-left: var(--rule) solid var(--line);
-  font-weight: 700;
-  white-space: nowrap;
-}
-
-.comment-bar .btn {
-  min-height: 36px;
+  background: var(--paper);
 }
 
 .tabbar {
   height: var(--tabbar-h);
   display: flex;
   align-items: stretch;
-  padding: 0 var(--sp-4) 0 10px;
+  gap: var(--sp-2);
+  padding: 0 var(--gutter);
 }
 
 .tabbar .tabs {
   flex: 1;
 }
 
-/* the ninth tab, Review, sits apart at the right */
+/* the last tab, All reviews, sits apart at the right with the review button */
 .tabbar .tab:last-child {
   margin-left: auto;
-  border-left: var(--rule) solid var(--line);
+}
+
+.review-toggle {
+  flex: none;
+  align-self: center;
+  min-height: 36px;
+}
+
+.review-toggle-verdict {
+  padding: 2px 6px;
+  background: var(--paper);
+  color: var(--ink);
+  font-size: var(--text-sm);
+}
+
+.review-toggle.is-on .review-toggle-verdict {
+  background: var(--ink);
+  color: var(--paper);
+}
+
+.comment-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.comment-bar .btn {
+  min-height: 36px;
 }
 
 /* ---------------- screen host ---------------- */
@@ -131,13 +140,13 @@
 .stub {
   display: grid;
   gap: var(--sp-4);
-  padding: var(--sp-4);
+  padding: var(--sp-4) var(--gutter);
   min-height: 100%;
 }
 
 .stub .region {
-  border: var(--rule) dashed var(--line);
-  padding: var(--sp-3);
+  border: 1px dashed var(--line);
+  padding: var(--sp-3) var(--sp-4);
   min-height: 120px;
 }
 
@@ -149,16 +158,39 @@
 @media (max-width: 1180px) {
   .topbar,
   .status {
-    gap: var(--sp-3);
+    gap: 10px;
   }
 
-  .status-meter {
+  .status-tempo b {
+    font-size: var(--display-xl);
+  }
+
+  .status-tempo,
+  .status-master {
+    gap: 6px;
+  }
+
+  .ls-ind {
+    padding: 0 6px;
+  }
+
+  .status .btn {
+    padding: 0 10px;
+  }
+
+  /* the no-lights chip needs the room more than the name does */
+  .ls-long,
+  .topbar:has(.ls-nolights) .brand {
     display: none;
   }
 
+  .status-meter,
+  .brand .mute {
+    display: none;
+  }
 
   .tabs-workspace .tab {
-    font-size: 18px;
+    font-size: var(--display-sm);
     padding: 0 10px;
   }
 }

@@ -1,4 +1,4 @@
-import { splitProps, type JSX } from "solid-js";
+import { Show, splitProps, type JSX } from "solid-js";
 import type { Layer } from "../fake/data";
 
 export interface ButtonProps extends JSX.ButtonHTMLAttributes<HTMLButtonElement> {
@@ -9,19 +9,27 @@ export interface ButtonProps extends JSX.ButtonHTMLAttributes<HTMLButtonElement>
   pressed?: boolean;
   /** lg uses the display face, for the big actions pressed during a show. */
   size?: "md" | "lg";
+  /** Why it is disabled, in a few words. Shown under the label while disabled. */
+  reason?: string;
 }
 
 export function Button(props: ButtonProps) {
-  const [own, rest] = splitProps(props, ["variant", "layer", "pressed", "size", "class", "children", "type"]);
+  const [own, rest] = splitProps(props, ["variant", "layer", "pressed", "size", "class", "children", "type", "reason"]);
+  const why = () => (rest.disabled && own.reason ? own.reason : undefined);
   return (
     <button
       type={own.type ?? "button"}
       class={`btn btn-${own.variant ?? "default"} ${own.layer ? `layer-${own.layer}` : ""} ${own.size === "lg" ? "btn-lg display" : ""} ${own.class ?? ""}`}
-      classList={{ "is-on": !!own.pressed }}
+      classList={{ "is-on": !!own.pressed, "has-reason": !!why() }}
       aria-pressed={own.pressed === undefined ? undefined : own.pressed}
       {...rest}
     >
-      {own.children}
+      <Show when={why()} fallback={own.children}>
+        <span class="btn-stack">
+          <span>{own.children}</span>
+          <span class="btn-reason">{why()}</span>
+        </span>
+      </Show>
     </button>
   );
 }

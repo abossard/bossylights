@@ -28,7 +28,11 @@ export function Fader(props: FaderProps) {
   };
 
   const onDown = (e: PointerEvent) => {
-    track.setPointerCapture(e.pointerId);
+    try {
+      track.setPointerCapture(e.pointerId);
+    } catch {
+      // pointer already gone: the press still counts
+    }
     fromPointer(e);
   };
   const onMove = (e: PointerEvent) => {

@@ -1,4 +1,5 @@
 import { For, Show } from "solid-js";
+import { store } from "../fake/store";
 import { Button } from "../kit";
 import { ISSUE_URL, screenById } from "../shell/registry";
 import { route } from "../shell/router";
@@ -102,6 +103,29 @@ export function ReviewPanel() {
                     value={r().comment}
                     onInput={(e) => review.setComment(s().id, e.currentTarget.value)}
                   />
+                </section>
+
+                <section class="rp-section">
+                  <h3 class="rp-h">States to look at</h3>
+                  <div class="rp-states">
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={!store.state.lightsConnected}
+                        onChange={(e) => store.setLightsConnected(!e.currentTarget.checked)}
+                      />
+                      No lights connected
+                    </label>
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={!store.state.cuedDeckLoaded}
+                        onChange={(e) => store.setCuedDeckLoaded(!e.currentTarget.checked)}
+                      />
+                      Nothing loaded on the second deck
+                    </label>
+                  </div>
+                  <p class="mute">LIVE on and off: use the switch in the top bar.</p>
                 </section>
 
                 <section class="rp-section">

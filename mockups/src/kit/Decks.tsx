@@ -10,7 +10,7 @@ export interface DecksProps {
 
 function PlayIcon(props: { playing: boolean }) {
   return (
-    <svg class="deck-icon" width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+    <svg class="deck-icon" width="12" height="12" viewBox="0 0 14 14" aria-hidden="true">
       <Show when={props.playing} fallback={<path d="M3 2h3v10H3zM8 2h3v10H8z" fill="currentColor" />}>
         <path d="M3 1.5l9 5.5-9 5.5z" fill="currentColor" />
       </Show>
@@ -18,9 +18,12 @@ function PlayIcon(props: { playing: boolean }) {
   );
 }
 
+const stateWord = (d: Deck) => (!d.song ? "Empty" : d.onAir ? "On air" : d.playing ? "Playing" : "Cued");
+
 /**
  * The two VirtualDJ decks: letter, playing or paused, song title and artist,
- * tempo, position, and which one is on air. The on-air title is the largest.
+ * tempo, position, and which one is on air. The deck on air gets the room and
+ * the largest title; the other one is as wide as its text needs.
  */
 export function Decks(props: DecksProps) {
   return (
@@ -29,22 +32,36 @@ export function Decks(props: DecksProps) {
         {(d) => (
           <div
             class="deck"
-            classList={{ "is-onair": d().onAir }}
-            aria-label={`Deck ${d().letter}, ${d().playing ? "playing" : "paused"}${d().onAir ? ", on air" : ""}: ${d().song.title} by ${d().song.artist}`}
+            classList={{ "is-onair": d().onAir, "is-empty": !d().song }}
+            aria-label={
+              d().song
+                ? `Deck ${d().letter}, ${stateWord(d()).toLowerCase()}: ${d().song!.title} by ${d().song!.artist}`
+                : `Deck ${d().letter}: nothing loaded`
+            }
           >
             <span class="deck-letter display">{d().letter}</span>
-            <PlayIcon playing={d().playing} />
             <span class="deck-song">
-              <b class="deck-title display">{d().song.title}</b>
+              <b class="deck-title display">{d().song?.title ?? "Nothing loaded"}</b>
               <span class="deck-meta">
-                {d().song.artist}
-                <Show when={!props.compact}>
-                  <span> · {d().song.bpm} BPM · {mmss(d().position)} / {mmss(d().length)}</span>
+                <span class="deck-state" classList={{ "now-flag": d().onAir }}>{stateWord(d())}</span>
+                <Show when={d().song} fallback={<span class="deck-detail">Load a song in VirtualDJ</span>}>
+                  {(song) => (
+                    <>
+                      <PlayIcon playing={d().playing} />
+                      <span class="deck-detail">
+                        {song().artist}
+                        <Show when={!props.compact}>
+                          {" "}
+                          · {song().bpm} BPM · {mmss(d().position)} / {mmss(d().length)}
+                        </Show>
+                      </span>
+                    </>
+                  )}
                 </Show>
               </span>
             </span>
-            <Show when={d().onAir} fallback={<span class="deck-chip is-cued">{d().playing ? "Playing" : "Cued"}</span>}>
-              <span class="deck-chip">On air</span>
+            <Show when={d().song && !props.compact}>
+              <i class="deck-progress" style={{ width: `${Math.min(100, (d().position / d().length) * 100)}%` }} />
             </Show>
           </div>
         )}

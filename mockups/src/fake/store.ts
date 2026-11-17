@@ -60,7 +60,8 @@ export interface ShowClip {
 /** A VirtualDJ deck. Position and length in seconds. */
 export interface Deck {
   letter: "A" | "B";
-  song: Song;
+  /** null: nothing loaded on this deck */
+  song: Song | null;
   playing: boolean;
   onAir: boolean;
   position: number;
@@ -95,14 +96,18 @@ export interface LaneBlock {
   sub?: string;
   start: number;
   end: number | null;
-  /** Label on the dashed tail of a block that is still running: "held" or "flash". */
+  /** Label on the open tail of a block that is still running: "holding" or "flash". */
   tail?: string;
 }
 
 export interface Lane {
   layer: Layer;
   title: string;
+  /** true while the lane has something running: the state chip is filled */
   on: boolean;
+  /** One word for the lane's state: "holding", "playing", "idle", "waiting", "off". */
+  chip: string;
+  /** A short line saying more: what it covers, what plays, what comes next. */
   status: string;
   blocks: LaneBlock[];
   empty?: string;
@@ -122,6 +127,8 @@ interface State {
   /** The LIVE switch: the night is running. Lights follow the app either way. */
   night: { live: boolean; indicators: Record<Indicator, boolean> };
   lightsConnected: boolean;
+  /** false: the cued deck has nothing loaded (an edge state to look at) */
+  cuedDeckLoaded: boolean;
   blackout: boolean;
   blackoutHold: boolean;
   faders: Record<FaderId, number>;
@@ -155,6 +162,7 @@ function build() {
     master: MASTER,
     night: { live: true, indicators: { dj: true, record: true, autopilot: true, lock: true } },
     lightsConnected: true,
+    cuedDeckLoaded: true,
     blackout: false,
     blackoutHold: false,
     faders: { wash: 70, movers: 60, pixels: 45, strobeRate: 30, laser: 0 },
@@ -358,7 +366,9 @@ function build() {
     const other: Deck["letter"] = onAirLetter === "A" ? "B" : "A";
     const list: Deck[] = [
       { letter: onAirLetter, song: cur.song, playing: true, onAir: true, position: now() - cur.start, length: cur.end - cur.start },
-      { letter: other, song: next, playing: false, onAir: false, position: 0, length: songLength(next) },
+      state.cuedDeckLoaded
+        ? { letter: other, song: next, playing: false, onAir: false, position: 0, length: songLength(next) }
+        : { letter: other, song: null, playing: false, onAir: false, position: 0, length: 0 },
     ];
     return list.sort((a, b) => a.letter.localeCompare(b.letter));
   }
@@ -459,6 +469,10 @@ function build() {
     set("blackout", on);
     record(on ? "Blackout" : "Blackout off", () => set("blackout", !on));
   }
+
+  /** Edge states to look at: no lights connected, a deck with nothing loaded. */
+  const setLightsConnected = (on: boolean) => set("lightsConnected", on);
+  const setCuedDeckLoaded = (on: boolean) => set("cuedDeckLoaded", on);
 
   /** Space bar: blackout only while held. */
   const setBlackoutHold = (on: boolean) => set("blackoutHold", on);
@@ -611,7 +625,7 @@ function build() {
         sub: hhmm(b.start),
         start: b.start,
         end: b.end,
-        tail: b.end === null ? (b.mode === "flash" ? "flash" : "held") : undefined,
+        tail: b.end === null ? (b.mode === "flash" ? "flash" : "holding") : undefined,
       }));
     const handGroups = handsOff().map((h) => h.group.name);
     const cur = currentSection();
@@ -637,43 +651,41 @@ function build() {
       start: p.start,
       end: p.end,
     }));
+    const apPlaying = state.autopilot.on && autopilotArmed() && !!cur && !covered(cur);
     return [
       {
         layer: "manual",
         title: "Manual",
         on: handGroups.length > 0,
-        status: handGroups.length ? `covers ${handGroups.join(", ")}` : "idle",
+        chip: handGroups.length ? "holding" : "idle",
+        status: handGroups.length ? `covers ${handGroups.join(", ")}` : "nothing held",
         blocks: manualBlocks,
       },
       {
         layer: "show",
         title: "Show",
         on: !!showNow,
-        status: isRecording()
-          ? "recording"
-          : showNow
-            ? `playing ${spanTitle(showNow)}`
-            : showNext
-              ? `next at ${hhmm(showNext.start)}`
-              : "idle",
+        chip: showNow ? "playing" : "idle",
+        status: showNow ? spanTitle(showNow) : showNext ? `next at ${hhmm(showNext.start)}` : "nothing planned",
         blocks: showBlocks,
         empty: "No show loaded",
       },
       {
         layer: "autopilot",
         title: "Autopilot",
-        on: state.autopilot.on && autopilotArmed(),
+        on: apPlaying,
+        chip: !state.autopilot.on ? "off" : !autopilotArmed() ? "waiting" : apPlaying ? "playing" : "idle",
         status: !state.autopilot.on
-          ? "off"
+          ? "turned off"
           : !state.night.live
-            ? "waits for LIVE"
+            ? "starts with LIVE"
             : !autopilotArmed()
-              ? "held back at LIVE"
+              ? "Autopilot is off beside LIVE"
               : cur && covered(cur)
-                ? "leaves this to the Show"
+                ? "the Show has this part"
                 : cur
-                  ? `playing ${cur.section.title}`
-                  : "idle",
+                  ? cur.section.title
+                  : "nothing to play",
         blocks: apBlocks,
       },
     ];
@@ -694,6 +706,8 @@ function build() {
     setMaster,
     setBlackout,
     setBlackoutHold,
+    setLightsConnected,
+    setCuedDeckLoaded,
     setLive,
     toggleIndicator,
     setFader,

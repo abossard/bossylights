@@ -48,7 +48,7 @@ export function NowStrip(props: NowStripProps) {
         <span class="now-flag ns-flag" style={{ left: `${nowPct()}%` }}>Now</span>
       </span>
       <Decks decks={props.decks} compact class="ns-decks" />
-      <span class="ns-go display">Open Console</span>
+      <span class="ns-go">Open Console</span>
     </button>
   );
 }

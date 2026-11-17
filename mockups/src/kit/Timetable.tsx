@@ -13,7 +13,7 @@ export interface TimetableProps {
   format: (t: number) => string;
   /** CSS length of one lane. Default 112px. */
   laneHeight?: string;
-  /** CSS length of the label column. Default 124px. */
+  /** CSS length of the label column. Default 108px. */
   labelWidth?: string;
   /** Controls for a lane header, e.g. the autopilot's on/off and style. They replace the ON/OFF chip. */
   laneControls?: (lane: Lane) => JSX.Element | undefined;
@@ -63,6 +63,7 @@ export function Timetable(props: TimetableProps) {
         <Show when={width() > 0}>
           <div
             class={`tt-block ${size()}`}
+            title={`${b.title}, ${props.format(b.start)}`}
             classList={{ "is-past": past(), "is-stacked": pos().count > 1 }}
             style={{ left: `${left()}%`, width: `calc(${width()}% - 4px)`, "--track": pos().track, "--tracks": pos().count }}
           >
@@ -74,7 +75,7 @@ export function Timetable(props: TimetableProps) {
           <div
             class="tt-tail"
             classList={{ "is-stacked": pos().count > 1 }}
-            style={{ left: `${nowPct()}%`, width: `${Math.min(9, 100 - nowPct())}%`, "--track": pos().track, "--tracks": pos().count }}
+            style={{ left: `${nowPct()}%`, width: `${Math.min(14, 100 - nowPct())}%`, "--track": pos().track, "--tracks": pos().count }}
           >
             {b.tail}
           </div>
@@ -88,7 +89,7 @@ export function Timetable(props: TimetableProps) {
       class={`tt ${props.plain ? "tt-plain" : ""} ${props.class ?? ""}`}
       style={{
         "--tt-lane": props.laneHeight ?? "112px",
-        "--tt-label": props.labelWidth ?? "124px",
+        "--tt-label": props.labelWidth ?? "108px",
         "--tt-lanes": props.lanes.length,
       }}
     >
@@ -106,8 +107,8 @@ export function Timetable(props: TimetableProps) {
                 fallback={
                   <Show when={!props.plain}>
                     <p>
-                      <span class="tt-state" classList={{ "is-on": lane.on }}>{lane.on ? "ON" : "OFF"}</span>
-                      <span class="mute">{lane.status}</span>
+                      <span class="tt-state" classList={{ "is-on": lane.on }}>{lane.chip}</span>
+                      <span class="tt-status">{lane.status}</span>
                     </p>
                   </Show>
                 }
@@ -115,12 +116,14 @@ export function Timetable(props: TimetableProps) {
                 {(controls) => (
                   <>
                     <div class="tt-controls">{controls()}</div>
-                    <p class="tt-status mute">{lane.status}</p>
+                    <p>
+                      <span class="tt-status">{lane.status}</span>
+                    </p>
                   </>
                 )}
               </Show>
             </div>
-            <div class={`tt-lane layer-${lane.layer}`} classList={{ "is-off": !lane.on }} aria-label={`${lane.title} lane`}>
+            <div class={`tt-lane layer-${lane.layer}`} classList={{ "is-off": lane.chip === "off" || lane.chip === "waiting" }} aria-label={`${lane.title} lane`}>
               {(() => {
                 const packed = () => pack(lane.blocks);
                 return (
