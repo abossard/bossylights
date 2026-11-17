@@ -27,6 +27,20 @@ import {
 export * from "./data";
 export * from "./library";
 
+/** A control mapped with Learn: something on screen, played from a hardware control. */
+export interface Mapping {
+  id: string;
+  /** what it does, as the button or value is called on screen */
+  control: string;
+  /** where that control is: a screen title, or "Top bar" */
+  screen: string;
+  device: string;
+  /** the MIDI message, in words: "Note 91", "CC 21" */
+  message: string;
+  /** the controller lights up to show the state */
+  feedback: boolean;
+}
+
 /** Where the beat comes from. */
 export type ClockFeed = "tap" | "audio" | "midi" | "vdj" | "timecode";
 
@@ -79,11 +93,10 @@ export interface ShowClip {
 
 /** A VirtualDJ deck. Position and length in seconds. */
 export interface Deck {
-  letter: "A" | "B";
+  number: "1" | "2";
   /** null: nothing loaded on this deck */
   song: Song | null;
   playing: boolean;
-  onAir: boolean;
   position: number;
   length: number;
 }
@@ -158,6 +171,8 @@ interface State {
   /** Channels held by hand on the DMX screen, universe 1: address -> 0..255. */
   held: Record<number, number>;
   clockFeed: ClockFeed;
+  /** Everything mapped with Learn, anywhere in the app. */
+  mappings: Mapping[];
   /** Steps, sequences and patterns, by id. */
   library: Record<string, Item>;
   /** The Console's pad banks, by page. */
@@ -206,6 +221,10 @@ function build() {
     // three channels held by hand: PAR 1 red, PAR 5 dimmer, Mover R1 pan
     held: { 66: 255, 93: 180, 33: 96 },
     clockFeed: "vdj",
+    mappings: [
+      { id: "m1", control: "Blackout", screen: "Top bar", device: "Launchpad Mini", message: "Note 91", feedback: true },
+      { id: "m2", control: "Master", screen: "Console", device: "Launchpad Mini", message: "CC 21", feedback: false },
+    ],
     replay: [],
     library: initialLibrary(),
     pads: JSON.parse(JSON.stringify(PAD_PAGES)) as Record<string, string[]>,
@@ -446,20 +465,20 @@ function build() {
   }
 
   // ---- decks and the set ---------------------------------------------
-  /** The song on air sits on deck A when its place in the set is even (song 2 is on A). */
+  /** The song that plays sits on deck 1 when its place in the set is even (song 2 is on deck 1). */
   function decks(): Deck[] {
     const cur = currentSong();
     if (!cur) return [];
     const next = SONGS[(cur.index + 1) % SONGS.length];
-    const onAirLetter: Deck["letter"] = cur.index % 2 === 1 ? "A" : "B";
-    const other: Deck["letter"] = onAirLetter === "A" ? "B" : "A";
+    const playingDeck: Deck["number"] = cur.index % 2 === 1 ? "1" : "2";
+    const other: Deck["number"] = playingDeck === "1" ? "2" : "1";
     const list: Deck[] = [
-      { letter: onAirLetter, song: cur.song, playing: true, onAir: true, position: now() - cur.start, length: cur.end - cur.start },
+      { number: playingDeck, song: cur.song, playing: true, position: now() - cur.start, length: cur.end - cur.start },
       state.cuedDeckLoaded
-        ? { letter: other, song: next, playing: false, onAir: false, position: 0, length: songLength(next) }
-        : { letter: other, song: null, playing: false, onAir: false, position: 0, length: 0 },
+        ? { number: other, song: next, playing: false, position: 0, length: songLength(next) }
+        : { number: other, song: null, playing: false, position: 0, length: 0 },
     ];
-    return list.sort((a, b) => a.letter.localeCompare(b.letter));
+    return list.sort((a, b) => a.number.localeCompare(b.number));
   }
 
   /** Tonight's set around now, with how each song is lit. */
@@ -726,6 +745,20 @@ function build() {
     record("Clock", () => set("clockFeed", before));
   }
 
+  /** Tap tempo: after two taps the tempo follows them and the clock switches to Tap. */
+  let taps: number[] = [];
+  function tap() {
+    const t = performance.now();
+    taps = [...taps.filter((x) => t - x < 3000), t].slice(-5);
+    if (taps.length < 2) return null;
+    const gaps = taps.slice(1).map((x, i) => x - taps[i]);
+    const bpm = 60000 / (gaps.reduce((a, b) => a + b, 0) / gaps.length);
+    if (state.clockFeed !== "tap") set("clockFeed", "tap");
+    setTempo(bpm);
+    return bpm;
+  }
+  const tapCount = () => taps.length;
+
   function setTempo(bpm: number) {
     const before = state.tempo;
     set("tempo", Math.max(40, Math.min(220, Math.round(bpm * 10) / 10)));
@@ -824,6 +857,27 @@ function build() {
     set("pads", "main", before.length - 1, id);
     record(`Put ${state.library[id]?.name} on Console`, () => set("pads", "main", before));
     return before.length;
+  }
+
+  // ---- learn: mappings ----------------------------------------------------
+  let mapSeq = 3;
+  function addMapping(m: Omit<Mapping, "id">) {
+    const id = `m${mapSeq++}`;
+    set("mappings", (ms) => [...ms.filter((x) => !(x.device === m.device && x.message === m.message)), { ...m, id }]);
+    record(`Learn ${m.control}`, () => set("mappings", (ms) => ms.filter((x) => x.id !== id)));
+    return id;
+  }
+  function updateMapping(id: string, patch: Partial<Mapping>) {
+    const before = state.mappings.find((m) => m.id === id);
+    if (!before) return;
+    const copy = { ...before };
+    set("mappings", (m) => m.id === id, patch);
+    record(`Change mapping ${before.control}`, () => set("mappings", (m) => m.id === id, copy), `map:${id}`);
+  }
+  function removeMapping(id: string) {
+    const before = [...state.mappings];
+    set("mappings", (ms) => ms.filter((m) => m.id !== id));
+    record("Remove mapping", () => set("mappings", before));
   }
 
   /** Space bar: blackout only while held. */
@@ -1130,6 +1184,11 @@ function build() {
     outputs,
     setClockFeed,
     setTempo,
+    tap,
+    tapCount,
+    addMapping,
+    updateMapping,
+    removeMapping,
     setReplay,
     item,
     items,

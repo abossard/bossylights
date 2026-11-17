@@ -1,0 +1,67 @@
+.learn-bar {
+  position: fixed;
+  top: calc(var(--topbar-h) + var(--tabbar-h) + var(--rule));
+  left: 0;
+  right: 0;
+  z-index: 60;
+  min-height: 56px;
+  padding: 6px var(--gutter);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-3);
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.learn-bar .btn {
+  min-height: 40px;
+  border-color: var(--ink);
+  color: var(--ink);
+}
+
+.learn-bar .btn:hover:not(:disabled) {
+  background: var(--mute);
+}
+
+.learn-step {
+  padding: 2px 6px;
+  background: var(--ink);
+  color: var(--paper);
+  font-size: var(--text-sm);
+  font-weight: 700;
+}
+
+.learn-hw {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.learn-bar .mute {
+  color: var(--ink);
+}
+
+.learn-toggle {
+  flex: none;
+  align-self: center;
+  min-height: 36px;
+}
+
+/* a control that has a mapping: a small paper square at its corner */
+[data-learned] {
+  position: relative;
+}
+
+[data-learned]::before {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  z-index: 3;
+  width: 9px;
+  height: 9px;
+  background: var(--paper);
+  border: var(--rule) solid var(--ink);
+  pointer-events: none;
+}

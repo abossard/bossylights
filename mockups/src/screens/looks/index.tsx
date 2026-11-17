@@ -10,7 +10,7 @@ import "./looks.css";
 
 export const id = "looks";
 export const title = "Looks";
-export const order = 4;
+export const order = 3;
 export const issues: Issue[] = [
   { number: 58, title: "Programmer: touch it, see it" },
   { number: 64, title: "Looks: store what you see" },

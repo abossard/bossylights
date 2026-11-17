@@ -37,15 +37,15 @@ export function LiveSwitch() {
         <span class="ls-track" aria-hidden="true">
           <span class="ls-knob" />
         </span>
-        <span class="ls-word display">Live</span>
-        <span class="ls-state">{live() ? "On" : "Off"}</span>
+        <span class="ls-word display">LIVE</span>
+        <span class="ls-state">{live() ? "on" : "off"}</span>
       </button>
       <div class="ls-inds">
         <For each={ORDER}>
           {(i) => (
             <button
               type="button"
-              class={`ls-ind is-${state(i)}`}
+              class={`ls-ind is-${state(i)} ind-${i}`}
               aria-pressed={store.state.night.indicators[i]}
               aria-label={`${INDICATOR_NAME[i]}: ${stateText(i)}`}
               title={`${INDICATOR_NAME[i]}: ${stateText(i)}`}

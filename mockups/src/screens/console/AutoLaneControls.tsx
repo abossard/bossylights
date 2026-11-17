@@ -19,7 +19,7 @@ export function AutoLaneControls() {
         aria-label={`Autopilot ${store.state.autopilot.on ? "on" : "off"}`}
         onClick={() => store.setAutopilot("on", !store.state.autopilot.on)}
       >
-        {store.state.autopilot.on ? "ON" : "OFF"}
+        {store.state.autopilot.on ? "On" : "Off"}
       </button>
       <select
         aria-label="Autopilot style"

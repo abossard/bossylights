@@ -6,7 +6,8 @@ import "./songs.css";
 
 export const id = "songs";
 export const title = "Songs";
-export const order = 3;
+export const order = 2;
+export const nowStrip = false;
 export const issues: Issue[] = [
   { number: 96, title: "Song Director" },
   { number: 47, title: "Song analysis: grid, sections, energy" },
@@ -138,7 +139,7 @@ export function Screen() {
                   {s.title}
                   <Show when={onAir()?.song.id === s.id}>
                     {" "}
-                    <span class="now-flag songs-flag">On air</span>
+                    <span class="songs-flag">Playing</span>
                   </Show>
                 </>
               ),

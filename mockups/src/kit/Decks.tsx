@@ -18,12 +18,13 @@ function PlayIcon(props: { playing: boolean }) {
   );
 }
 
-const stateWord = (d: Deck) => (!d.song ? "Empty" : d.onAir ? "On air" : d.playing ? "Playing" : "Cued");
+/** A deck's state in a word. */
+const stateWord = (d: Deck) => (!d.song ? "Stopped" : d.playing ? "Playing" : "Cued");
 
 /**
- * The two VirtualDJ decks: letter, playing or paused, song title and artist,
- * tempo, position, and which one is on air. The deck on air gets the room and
- * the largest title; the other one is as wide as its text needs.
+ * The two VirtualDJ decks, numbered 1 and 2: state in a word (Playing, Cued,
+ * Stopped), song title and artist, tempo, position. The deck that plays gets the
+ * room and the largest title; the other one is as wide as its text needs.
  */
 export function Decks(props: DecksProps) {
   return (
@@ -32,18 +33,18 @@ export function Decks(props: DecksProps) {
         {(d) => (
           <div
             class="deck"
-            classList={{ "is-onair": d().onAir, "is-empty": !d().song }}
+            classList={{ "is-onair": d().playing, "is-empty": !d().song }}
             aria-label={
               d().song
-                ? `Deck ${d().letter}, ${stateWord(d()).toLowerCase()}: ${d().song!.title} by ${d().song!.artist}`
-                : `Deck ${d().letter}: nothing loaded`
+                ? `Deck ${d().number}, ${stateWord(d()).toLowerCase()}: ${d().song!.title} by ${d().song!.artist}`
+                : `Deck ${d().number}: nothing loaded`
             }
           >
-            <span class="deck-letter display">{d().letter}</span>
+            <span class="deck-letter display">{d().number}</span>
             <span class="deck-song">
               <b class="deck-title display">{d().song?.title ?? "Nothing loaded"}</b>
               <span class="deck-meta">
-                <span class="deck-state" classList={{ "now-flag": d().onAir }}>{stateWord(d())}</span>
+                <span class="deck-state" classList={{ "is-playing": d().playing }}>{stateWord(d())}</span>
                 <Show when={d().song} fallback={<span class="deck-detail">Load a song in VirtualDJ</span>}>
                   {(song) => (
                     <>

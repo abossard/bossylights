@@ -422,8 +422,6 @@
   font-size: var(--text-sm);
   font-weight: 700;
   font-stretch: var(--tight);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
 }
 
 .pad-flag {
@@ -764,8 +762,6 @@ button.list-body:hover {
 .tt-state {
   font: 700 var(--text-sm) / 1 var(--font-ui);
   font-stretch: var(--tight);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
   padding: 2px 5px;
   border: var(--rule) solid var(--layer);
   color: var(--layer);
@@ -997,8 +993,6 @@ button.list-body:hover {
   font-stretch: var(--tight);
   display: flex;
   align-items: center;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
 }
 
 .ns-lanes {
@@ -1298,14 +1292,12 @@ button.list-body:hover {
   flex: none;
   font-weight: 700;
   font-stretch: var(--tight);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
 }
 
-.deck-state.now-flag {
-  font-size: 14px;
-  letter-spacing: 0.02em;
-  padding: 2px 5px;
+.deck-state.is-playing {
+  padding: 2px 6px;
+  background: var(--paper);
+  color: var(--ink);
 }
 
 .deck-icon {

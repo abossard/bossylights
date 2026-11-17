@@ -7,7 +7,7 @@ import "./patch.css";
 
 export const id = "patch";
 export const title = "Patch";
-export const order = 5;
+export const order = 4;
 export const issues: Issue[] = [
   { number: 50, title: "Patch: fixtures, modes, addresses" },
   { number: 54, title: "Guided patch" },

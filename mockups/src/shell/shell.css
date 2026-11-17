@@ -64,6 +64,11 @@
   text-align: right;
 }
 
+.status-tap {
+  min-height: 36px;
+  padding: 0 10px;
+}
+
 .beat-dots {
   display: flex;
   gap: 5px;
@@ -185,7 +190,8 @@
   }
 
   .status-meter,
-  .brand .mute {
+  .brand .mute,
+  .brand {
     display: none;
   }
 

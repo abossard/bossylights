@@ -7,7 +7,7 @@ import "./inout.css";
 
 export const id = "inout";
 export const title = "In/Out";
-export const order = 7;
+export const order = 6;
 export const issues: Issue[] = [
   { number: 42, title: "USB DMX adapters" },
   { number: 43, title: "Art-Net and sACN" },
@@ -88,7 +88,7 @@ export function Screen() {
     { id: "tap", name: "Tap", tempo: () => tapBpm(), sure: 0.6, note: () => (tapBpm() ? `${taps().length} taps` : "Tap the button four times") },
     { id: "audio", name: "Audio", tempo: () => 125.8, sure: 0.82, note: () => "From the audio input" },
     { id: "midi", name: "MIDI clock", tempo: () => null, sure: 0, note: () => "No clock coming in" },
-    { id: "vdj", name: "VirtualDJ", tempo: () => 126, sure: 0.99, note: () => "Deck A, on air" },
+    { id: "vdj", name: "VirtualDJ", tempo: () => 126, sure: 0.99, note: () => "Deck 1, playing" },
     { id: "timecode", name: "Timecode", tempo: () => null, sure: 0, note: () => "No timecode coming in" },
   ];
 

@@ -7,7 +7,7 @@ import "./how.css";
 
 export const id = "how";
 export const title = "How it works";
-export const order = 8;
+export const order = 7;
 export const issues: Issue[] = [
   { number: 100, title: "Review the theory and the module boundary map" },
   { number: 72, title: "Layers: base, override, flash" },

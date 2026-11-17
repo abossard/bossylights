@@ -6,7 +6,7 @@ import "./dmx.css";
 
 export const id = "dmx";
 export const title = "DMX";
-export const order = 6;
+export const order = 5;
 export const issues: Issue[] = [
   { number: 48, title: "DMX monitor and channel tester" },
   { number: 30, title: "DMX engine: universes, merge, masters" },

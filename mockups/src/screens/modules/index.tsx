@@ -9,7 +9,7 @@ import "./modules.css";
 
 export const id = "modules";
 export const title = "Modules";
-export const order = 9;
+export const order = 8;
 export const issues: Issue[] = [
   { number: 100, title: "Review the theory and the module boundary map" },
   { number: 26, title: "One engine, one API, no UI inside" },
@@ -71,7 +71,7 @@ export function Screen() {
   const answered = createMemo(() => QUESTIONS.filter((q) => review.answerOf(q.id).choice || review.answerOf(q.id).text.trim()).length);
   // a screen must not import the registry (it would import itself), so titles are local
   const SCREEN_TITLES: Record<string, string> = {
-    console: "Console", show: "Show", songs: "Songs", looks: "Looks", patch: "Patch", dmx: "DMX", inout: "In/Out",
+    console: "Console", songs: "Songs", looks: "Looks", patch: "Patch", dmx: "DMX", inout: "In/Out",
   };
   const screenTitle = (id: string) => SCREEN_TITLES[id] ?? id;
 
@@ -113,7 +113,7 @@ export function Screen() {
           </defs>
           <rect class="mm-core" x="525" y="128" width="410" height="290" />
           <text class="mm-core-label" x="935" y="120" text-anchor="end">
-            REAL-TIME CORE, NEVER WAITS
+            Real-time core, never waits
           </text>
           <For each={ARROWS}>
             {(a) => (

@@ -109,7 +109,7 @@ export function Flow(props: {
     <g class={`fl-node ${b.layer ? `layer-${b.layer} is-layer` : ""}`} classList={{ "is-dim": !isLit(b.id) }}>
       <rect x={b.x} y={b.y} width={b.w} height={b.h} />
       <text x={b.x + 14} y={b.y + (b.layer ? 30 : 24)} class={b.layer ? "fl-layer-title" : "fl-title"}>
-        {b.layer ? b.title.toUpperCase() : b.title}
+        {b.title}
       </text>
       <Show when={b.sub && !b.layer}>
         <text x={b.x + 14} y={b.y + 44} class="fl-sub">
@@ -131,8 +131,8 @@ export function Flow(props: {
           <path d="M0,0 L10,5 L0,10 z" class="fl-arrowhead" />
         </marker>
       </defs>
-      <text x="16" y="12" class="fl-col">FIVE WRITERS</text>
-      <text x="400" y="16" class="fl-col">THREE LAYERS, TOP WINS</text>
+      <text x="16" y="12" class="fl-col">Five writers</text>
+      <text x="400" y="16" class="fl-col">Three layers, top wins</text>
 
       <For each={Object.entries(PATHS)}>
         {([id, d]) => (

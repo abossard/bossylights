@@ -3,6 +3,7 @@ import { store } from "../fake/store";
 import { Button, Meter, Tabs } from "../kit";
 import { verdictLabel } from "../review/export";
 import { review } from "../review/store";
+import { LearnBar, LearnButton } from "./learn";
 import { LiveSwitch } from "./LiveSwitch";
 import { screens } from "./registry";
 import { go, route } from "./router";
@@ -14,6 +15,9 @@ function Status() {
       <div class="status-tempo" aria-label={`Tempo ${store.state.tempo} BPM, beat ${store.beat() + 1}`}>
         <b class="display">{store.state.tempo}</b>
         <span class="mute">BPM</span>
+        <Button class="status-tap" onClick={() => store.tap()} aria-label="Tap the tempo">
+          Tap
+        </Button>
         <span class="beat-dots" aria-hidden="true">
           <For each={[0, 1, 2, 3]}>{(i) => <i classList={{ "is-lit": store.beat() === i }} />}</For>
         </span>
@@ -61,6 +65,7 @@ export function TopBar() {
       </div>
       <nav class="tabbar" aria-label="Workspaces">
         <Tabs variant="workspace" label="Workspaces" items={tabs()} value={route()} onChange={go} />
+        <LearnButton />
         <Show
           when={review.commentMode()}
           fallback={
@@ -87,6 +92,7 @@ export function TopBar() {
           </div>
         </Show>
       </nav>
+      <LearnBar />
     </header>
   );
 }

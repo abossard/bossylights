@@ -27,9 +27,17 @@
 }
 
 .songs-flag {
-  font-size: 13px;
-  padding: 2px 4px;
+  padding: 1px 5px;
+  background: var(--paper);
+  color: var(--ink);
+  font-size: var(--text-sm);
+  font-weight: 700;
   vertical-align: 1px;
+}
+
+.list-row.is-selected .songs-flag {
+  background: var(--ink);
+  color: var(--paper);
 }
 
 .songs-state {
@@ -340,8 +348,6 @@
 .songs-group {
   font-size: var(--text-sm);
   font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
   color: var(--mute);
   margin-bottom: 4px;
 }

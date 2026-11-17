@@ -64,8 +64,6 @@
   min-width: 2.2ch;
   font-size: var(--text-md);
   font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
 }
 
 /* the four things LIVE turns on: a lamp and a word each */
@@ -144,4 +142,14 @@
 
 .ls-nolights:hover {
   background: var(--s1);
+}
+
+/* recording is red while it is on */
+.ls-ind.is-on.ind-record {
+  color: var(--danger);
+}
+
+.ls-ind.is-on.ind-record .ls-lamp {
+  background: var(--danger);
+  border-color: var(--danger);
 }
