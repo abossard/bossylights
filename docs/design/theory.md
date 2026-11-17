@@ -73,14 +73,14 @@ flowchart LR
 
 Addresses exist in one place only. You never remember a number.
 
-### 3. A look is a value
+### 3. A step is a value
 
 | Fixture | Intensity | Colour |
 |---|---|---|
 | PAR 1 to 8 | 80% | amber |
 | Mover L1 | not mentioned | not mentioned |
 
-Plain data: store it, blend it, preview it, hand it to an agent.
+Plain data: store it, re-use it, hand it to an agent. On screen this is a **step**.
 
 ### 4. Everything that moves is a source
 
@@ -95,7 +95,7 @@ flowchart LR
   S{{"source(time) gives a look"}}
 ```
 
-Ten QLC+ function types become one shape.
+Ten QLC+ function types become one shape. On screen there are two kinds: a **sequence** (steps and other sequences on the beat grid) and a **pattern** (generated motion). Details: [looks.md](looks.md).
 
 ### 5. Layers: the top one that speaks wins
 

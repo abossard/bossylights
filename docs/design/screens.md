@@ -82,11 +82,20 @@ Each brief: what the screen is for, its regions, the states worth showing, what 
 
 ### 4. Looks
 
-- **For:** making everything that can play: looks, chases, effects, matrix effects, groups of looks.
-- **Regions:** left: library with type filter and search. Centre: the rig as a programmer: click fixtures to select them, then change Intensity, Colour, Position, Beam in the panel beside it, and the rig view follows at once. Bottom: the editor for the selected type (steps for a chase, shape and spread for an effect, a pixel preview for a matrix). Right: palettes (colours, positions, beams).
-- **States:** a chase selected with four steps, three fixtures selected.
-- **Clickable:** select fixtures, change an attribute, store as look, update, add a step, apply a palette.
-- **Issues:** Programmer: touch it, see it, Looks: store what you see, Palettes that stay linked, Effects across a group, Chasers and sequences, Pixel matrix effects, Collections.
+Model: `docs/design/looks.md`. A look is anything you can play: a **step**, a **sequence** or a **pattern**.
+
+- **For:** making steps, sequences and patterns, and trying them on the real lights at once.
+- **Regions:**
+  - **Library**, left: search, a kind filter (Step, Sequence, Pattern), groups as chips (one thing can sit in many groups, there are no folders). Each row shows a symbol for its kind, its colour chips and its measure in beats.
+  - **Editor**, centre. It changes with the kind:
+    - Step: which fixtures, then one card per property: Colour (chips and picker), Position (an x/y grid), Gobo (pictures), Dimmer, Spin. A property you did not set is shown as "not set" and is not part of the step.
+    - Sequence: a beat grid. Each row is one item, a step or another sequence. One beat per item by default, drag an edge to change the width. A selected item shows its use settings: speed (÷2, ×1, ×2), loop or once, spread across fixtures, transition. Opening an inner sequence drills in, with a breadcrumb back.
+    - Pattern: the kind (plasma, stripes, wave, sparkle), its measure, where the colours come from (a step), and which fixture group or pixel matrix it runs on.
+  - **About this look**, right: "Used in" (every sequence that uses it, so a change here changes them all), its groups, **Try on lights** (press to toggle, hold to flash), "Put on Console".
+- **No animated preview.** Looks are told apart by symbols and colour chips. Testing happens on the lights.
+- **States:** the sequence "Build-up end A" open, with "Mover run" used at ×2 and "Flicker" looping. A step that sets only colours. The pattern "Plasma" on the pixel bars taking colours from "Jungle colours". "Mover run" used in three sequences.
+- **Clickable:** pick anything in the library, filter by kind and group, edit a step property, change an item's width, change a use setting, drill into an inner sequence and back, add to or remove from a group, Try on lights.
+- **Issues:** Programmer: touch it, see it, Looks: store what you see, Palettes that stay linked, Effects across a group, Chasers and sequences, Pixel matrix effects, Audio-reactive colour scripts, Collections.
 
 ### 5. Patch
 
