@@ -32,7 +32,7 @@ flowchart LR
   end
 
   SURF["Surface"]
-  DOOR{{"Door<br/>the one API"}}
+  DOOR{{"Engine<br/>commands in, state out"}}
   SHOW["Show"]
   AUTO["Autopilot"]
   MUSIC["Music"]
@@ -72,7 +72,7 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-  R1["Every writer goes<br/>through the Door"] ~~~ R2["The core never<br/>calls outward"] ~~~ R3["Only Output knows bytes<br/>Only Rig knows addresses"]
+  R1["Every writer goes<br/>through the Engine"] ~~~ R2["The core never<br/>calls outward"] ~~~ R3["Only Output knows bytes<br/>Only Rig knows addresses"]
 ```
 
 ## The twelve modules
@@ -81,7 +81,7 @@ The bar shows depth: interface size on the left, what it hides on the right.
 
 | Module | Whole interface | Hides | Depth |
 |---|---|---|---|
-| **Door** | `send` `subscribe` `query` | transports (UI, MCP, OSC), versions, permissions | ▮▮▮ → ▮▮▮▮▮▮ |
+| **Engine** | `send` `subscribe` `query` | a listed set of commands, transports (UI, MCP, OSC), versions, permissions | ▮▮▮ → ▮▮▮▮▮▮ |
 | **Mixer** | `apply` `frame` | layers, fades, launch on beat, flash, release, masters, blackout | ▮▮ → ▮▮▮▮▮▮▮▮ |
 | **Sources** | `evaluate` | chases, movement maths, pixel matrices, audio scripts, palettes, laser shapes | ▮ → ▮▮▮▮▮▮▮▮ |
 | **Clock** | `now` `follow` | tap, audio beat, MIDI clock, DJ position, timecode, smoothing | ▮▮ → ▮▮▮▮▮▮ |
@@ -99,7 +99,7 @@ The bar shows depth: interface size on the left, what it hides on the right.
 ```mermaid
 sequenceDiagram
   participant S as Surface
-  participant D as Door
+  participant D as Engine
   participant M as Mixer
   participant R as Rig
   participant O as Output
@@ -115,7 +115,7 @@ sequenceDiagram
 
 ## Which screen uses which module
 
-Screens are thin. Each is a view of one or two modules through the Door.
+Screens are thin. Each is a view of one or two modules through the Engine.
 
 | Screen | Surface | Mixer | Show | Music | Autopilot | Project | Rig | Library | Output | Clock |
 |---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
@@ -140,7 +140,7 @@ flowchart LR
 
 | # | Question | Decided |
 |---|---|---|
-| 1 | Is a Door with three operations believable? | not under that name. It gets a desk word (open: "Command line" or "Gate") and a listed set of commands |
+| 1 | Is a Door with three operations believable? | not under that name. It is now called **Engine**, and it accepts a listed set of commands, not "anything" |
 | 2 | Can you play something that is not saved? | everything you try is saved by itself, so the question disappears |
 | 3 | Where does controller mapping live? | in Surface. Learn works on every control in the app |
 | 4 | Music and Autopilot | two modules: knowing and deciding |

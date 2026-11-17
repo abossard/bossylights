@@ -145,7 +145,7 @@ The theory and the module map as live, animated pages inside the same app, with 
 ### 8. Modules (the boundary map, interactive)
 
 - **For:** seeing which modules exist and how narrow each one is.
-- **Regions:** the boundary map as a diagram. Click a module to open its card: whole interface, what it hides, which screens use it. A depth bar per module. A "trace" button that animates one press through Surface, Door, Mixer, Rig, Output.
+- **Regions:** the boundary map as a diagram. Click a module to open its card: whole interface, what it hides, which screens use it. A depth bar per module. A "trace" button that animates one press through Surface, Engine, Mixer, Rig, Output.
 - **Questions for review** from both documents appear here as A/B choices that are saved with the review export.
 
 ## Fake data, shared by all screens

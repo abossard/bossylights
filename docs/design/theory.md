@@ -234,7 +234,7 @@ sequenceDiagram
 | New output protocol | easy | one adapter behind Output |
 | New kind of effect | easy | one new source |
 | New controller | easy | one profile, mirrors the screen for free |
-| Second UI or an agent | easy | another client of the same door |
+| Second UI or an agent | easy | another client of the Engine |
 | Laser shapes | medium | a source plus one output adapter |
 | "Just set channel 37" | awkward on purpose | goes through a raw-channel attribute |
 | One more layer | easy | layers are a list, top wins |

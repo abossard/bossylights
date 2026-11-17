@@ -49,7 +49,7 @@ flowchart LR
 | Patch | no map needed, rather a DMX view | the map is replaced by a universe grid |
 | Patch | many universes for pixel screens | a universe list with fill bars, and "Add a pixel panel" that spreads over universes |
 | In/Out | MIDI mapping must work across the whole app | a global **Learn** button. Every button and value can be mapped. In/Out holds the list to edit |
-| Modules | "Door" is not a good name | to be renamed, see below |
+| Modules | "Door" is not a good name | renamed to **Engine** |
 
 ## No map anywhere
 
@@ -75,7 +75,7 @@ flowchart LR
 
 | # | Question | Answer |
 |---|---|---|
-| 1 | Is a Door with three operations believable? | no as named: it reads like "do anything". Needs a desk word |
+| 1 | Is a Door with three operations believable? | no as named: it reads like "do anything". Renamed to **Engine**, with a listed set of commands |
 | 2 | Can you play something that is not saved? | the question was unclear. Decision: everything you try is saved by itself, so the question disappears |
 | 3 | Where does controller mapping live? | in Surface, next to the widgets |
 | 4 | Music and Autopilot | two modules: knowing and deciding |
@@ -85,7 +85,7 @@ flowchart LR
 
 | # | Question | Option A (recommended) | Option B |
 |---|---|---|---|
-| 1 | New name for "Door" | **Command line**: the term every pro desk uses for "everything is a command" | Gate |
+| 1 | New name for "Door" | decided by the owner: **Engine** | |
 | 2 | Name of the merged screen | **Songs**. A song has a show. The middle layer stays "Show" | Shows |
 | 3 | Desk words for the other modules | Mixer to **Playback**, Rig to **Patch**, Project to **Show file**, Sources to **Looks**, Clock to **Tempo** | keep the current names |
 
