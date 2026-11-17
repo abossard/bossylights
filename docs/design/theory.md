@@ -19,7 +19,7 @@ flowchart LR
 
   subgraph L["Three layers, top wins"]
     direction TB
-    LIVE["LIVE"]
+    LIVE["MANUAL<br/>your hands"]
     SHOW["SHOW"]
     AUTO["AUTOPILOT"]
   end
@@ -101,17 +101,17 @@ Ten QLC+ function types become one shape.
 
 | Layer | PARs | Movers |
 |---|---|---|
-| **LIVE** (top) | strobe | silent |
+| **MANUAL** (top) | strobe | silent |
 | **SHOW** | silent | silent |
 | **AUTOPILOT** (bottom) | amber | sweep |
-| **What you see** | **strobe** (Live speaks) | **sweep** (only Autopilot speaks) |
+| **What you see** | **strobe** (Manual speaks) | **sweep** (only Autopilot speaks) |
 
 ```mermaid
 flowchart LR
   A["Hold Strobe"] --> B(["PARs: strobe"]) --> C["Release"] --> D(["PARs: amber again"])
 ```
 
-Release Live and the PARs go back to amber. This replaces HTP and LTP.
+Let go and the PARs go back to amber. This replaces HTP and LTP.
 
 ### 6. One clock
 
@@ -131,7 +131,7 @@ One feed drives it at a time. Launch-on-the-beat and timecode are the same thing
 
 ```mermaid
 flowchart LR
-  P["You press a pad"] --> CMD["Command<br/>start Sunset on Live"]
+  P["You press a pad"] --> CMD["Command<br/>start Sunset on Manual"]
   CMD --> ENG["Engine"]
   CMD -. "written down" .-> REC[("Recording")]
   REC -. "played back" .-> CMD2["Same command<br/>on Show"]
@@ -155,6 +155,8 @@ flowchart LR
 | Saved | always, by itself | never by accident |
 | Undo | yes | no |
 | Recordable | no | yes |
+
+**The LIVE switch** is part of the performance. On means the night is running: it follows the DJ software, records the set, arms the autopilot and locks the surface. Lights follow the app either way. There is no preview mode.
 
 ### 9. The real-time core is small and dumb
 
@@ -183,7 +185,7 @@ sequenceDiagram
   participant Rig as Lights
   participant Pad as Launchpad
   You->>Surface: press "Sunset"
-  Surface->>Engine: start Sunset on Live
+  Surface->>Engine: start Sunset on Manual
   Engine->>Rig: next frame includes Sunset
   Engine-->>Surface: state changed
   Engine-->>Pad: state changed
@@ -201,8 +203,8 @@ sequenceDiagram
   Engine-->>Show: same commands, with time
   Note over Show: this list is now a show
   Show->>Engine: replays them on the Show layer
-  You->>Engine: grab a fader (Live)
-  Note over Engine: Live is on top, you win
+  You->>Engine: grab a fader (Manual)
+  Note over Engine: Manual is on top, you win
   You->>Engine: let go
   Note over Engine: the show is back
 ```
@@ -215,7 +217,7 @@ sequenceDiagram
   participant Engine
   actor You
   Auto->>Engine: rising look, all fixtures
-  You->>Engine: hold Strobe on PARs (Live)
+  You->>Engine: hold Strobe on PARs (Manual)
   Note over Engine: PARs follow you, Movers follow Autopilot
   You->>Engine: release
   Note over Engine: PARs return to Autopilot, no cut

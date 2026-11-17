@@ -20,8 +20,8 @@ Origin: **Q** = QLC+ v5 parity, **F** = built in the fork, **N** = new.
 
 | ID | Requirement | Test |
 |---|---|---|
-| r-first60 | First light changes within 60 seconds of launch | Stopwatch from launch to first user-caused change in the preview, no form in between |
-| r-visible | State is always visible | Live or preview, BPM, running items and master are on screen in every view |
+| r-first60 | First light changes within 60 seconds of launch | Stopwatch from launch to first user-caused change in the rig view, no form in between |
+| r-visible | State is always visible | LIVE on or off, tempo, running items and master are on screen in every view |
 | r-layers | Simple by default, expert on request | Default layer shows a handful of controls. Channels and priorities are one level down |
 | r-words | Plain words | No "HTP", "LTP" or "function" in the default layer |
 | r-nomemory | Never remember a number | No task needs a value read on another screen |
@@ -134,18 +134,18 @@ Origin: **Q** = QLC+ v5 parity, **F** = built in the fork, **N** = new.
 
 ## First five minutes
 
-- **f-demo (N)** Opens on a running demo rig in preview.
-- **f-golive (N)** Connect your lights, then Go live.
+- **f-demo (N)** Opens on a running demo rig.
+- **f-golive (N)** Connect your lights, then LIVE. Lights follow the app at once. The LIVE switch starts the night: DJ link, recording, autopilot, lock. There is no preview mode.
 - **f-panic (N)** Blackout, panic and "surprise me".
 
 Target script:
 
 | Time | What happens |
 |---|---|
-| 0:00 | Demo rig plays a beat-synced look, marked "preview only" |
-| 0:20 | Launchpad found, pads mirror the look grid, a press changes the preview |
+| 0:00 | Demo rig plays a beat-synced look in the rig view |
+| 0:20 | Launchpad found, pads mirror the look grid, a press changes the rig view |
 | 0:45 | "Connect your lights": interface found, pick fixtures from a list with photos, address proposed |
-| 2:00 | Go live. Each fixture flashes, you confirm which one it is |
+| 2:00 | The lights are on. Each fixture flashes, you confirm which one it is |
 | 2:40 | Generated looks fill the grid |
 | 3:15 | BPM from mic or line-in, tap pad as backup |
 | 3:45 | Fire looks, launches land on the bar |

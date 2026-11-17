@@ -20,7 +20,7 @@ An open-source lighting desk that is easy first and deep on request. Version 1 s
 
 ## Positioning
 
-The show follows the music by itself, and a hand on any control takes over. Three ways to run a show combine in layers: the autopilot, the show runner (a timeline), and the live console. Live always wins over what runs underneath.
+The show follows the music by itself, and a hand on any control takes over. Three ways to run a show combine in layers: the autopilot, the show runner (a timeline), and the console, played by hand. Hands always win over what runs underneath.
 
 ## Operating Context
 
@@ -35,7 +35,9 @@ The show follows the music by itself, and a hand on any control takes over. Thre
 - The live console is designed by the user: widgets on pages and frames.
 - Words in the default layer are plain: looks, layers, pads. No "HTP", "LTP" or "function" there.
 - No screen asks the user to remember a value from another screen.
-- State is always visible: live or preview, tempo, what runs, master level.
+- State is always visible: LIVE on or off, tempo, what runs, master level.
+- Lights follow the app whenever it runs. There is no preview mode. One LIVE switch means the night is running: it follows the DJ software, records the set, arms the autopilot and locks the surface.
+- Names: the home screen is the Console. The three layers are Autopilot, Show and Manual (your hands). "Live" means only the switch.
 - First light changes within 60 seconds of launch.
 - Undecided: the engine API, the project file format, how the autopilot picks looks.
 
@@ -43,7 +45,7 @@ The show follows the music by itself, and a hand on any control takes over. Thre
 
 1. A result before any setup.
 2. Simple by default, expert on request.
-3. Live wins: a hand on a control overrides whatever runs.
+3. Hands win: a hand on a control overrides whatever runs.
 4. Nothing to hold in your head.
 5. Every action can be undone.
 

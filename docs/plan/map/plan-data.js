@@ -32,7 +32,7 @@
     nodes: [
       // ---------- Foundation ----------
       node('t-proto-5min', T, 'ux', 'Prototype the first five minutes', { origin: 'new', effort: 'M', risk: 'low', suggest: 'must', deps: ['t-scaffold'],
-        desc: 'A clickable fake of launch to first beat-synced look: demo rig, pad grid, connect your lights, go live. No engine behind it.',
+        desc: 'A clickable fake of launch to first beat-synced look: demo rig, pad grid, connect your lights, switch LIVE on. No engine behind it.',
         why: 'The product is about taste. Testing the feel costs days. Finding out after the engine is built costs months.' }),
       node('t-scaffold', T, 'found', 'Repo scaffold: engine, web UI shell, CI', { origin: 'new', effort: 'M', risk: 'low', suggest: 'must', deps: [],
         desc: 'The thinnest end-to-end path: a headless Rust engine process, a web UI that shows a value streamed from it, a Tauri shell around both, one command to run, one to test, CI on every push.',
@@ -82,16 +82,16 @@
 
       // ---------- First five minutes ----------
       node('f-demo', F, 'ux', 'Opens on a running demo rig', { origin: 'new', effort: 'M', risk: 'low', suggest: 'must', deps: ['f-2d', 'f-genlooks', 'f-tempo'], support: sup(0, 0, 0, 0, 0, 0),
-        desc: 'First launch shows a rig preview with a beat-synced look already playing, marked "preview only".',
+        desc: 'First launch shows the rig view with a beat-synced look already playing on a demo rig.',
         why: 'Something cool happens before any setup. Waiting for a result is the main barrier for the audience.' }),
       node('r-first60', R, 'ux', 'First light changes within 60 seconds', { origin: 'new', effort: 'S', risk: 'med', suggest: 'must', deps: ['f-demo'],
         desc: 'Measured from launch to the first user-caused change in the preview. No form, no login, no patching before it.',
         why: 'A testable number for "easy and obvious".' }),
-      node('f-golive', F, 'ux', 'Connect your lights, then Go live', { origin: 'new', effort: 'M', risk: 'med', suggest: 'must', deps: ['f-usbdmx', 'f-autopatch', 'f-demo'], support: sup(0, 0, 0, 0, 0, 0),
-        desc: 'A banner finds the interface. One toggle switches from preview to real output. Each fixture flashes so you can say "that is this one".',
+      node('f-golive', F, 'ux', 'Connect your lights, then LIVE', { origin: 'new', effort: 'M', risk: 'med', suggest: 'must', deps: ['f-usbdmx', 'f-autopatch', 'f-demo'], support: sup(0, 0, 0, 0, 0, 0),
+        desc: 'A banner finds the interface and the lights follow the app at once. Each fixture flashes so you can say "that is this one". The LIVE switch starts the night: DJ link, recording, autopilot, lock.',
         why: 'Replaces the usual wall of fixture type, mode, address, universe and interface.' }),
       node('r-visible', R, 'ux', 'State is always visible', { origin: 'new', effort: 'S', risk: 'low', suggest: 'must', deps: [],
-        desc: 'Live or preview, BPM, what is running, master level. Always on screen, in the same place.',
+        desc: 'LIVE on or off, tempo, what is running, master level. Always on screen, in the same place.',
         why: 'Nothing to hold in your head.' }),
       node('r-layers', R, 'ux', 'Simple by default, expert on request', { origin: 'new', effort: 'M', risk: 'med', suggest: 'must', deps: [],
         desc: 'The default layer shows a handful of controls. Channels, priorities and timing tables live one level down.',

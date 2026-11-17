@@ -6,7 +6,7 @@ Visual world: **Running Order** (chosen 2026-11-17). The composition to match is
 
 ## The world in four contributions
 
-- **Palette:** warm off-black ground `#1c1a17`, paper `#f4efe6` for text. Each layer owns one flat colour: Autopilot marigold `#f2b705`, Show cyan `#20b2c9`, Live hot pink `#ef3e7b`. Blocks are flat fills with dark text. No gradients, no glow, no shadows. Look pads keep their own colour chips. Red is only for blackout and errors.
+- **Palette:** warm off-black ground `#1c1a17`, paper `#f4efe6` for text. Each layer owns one flat colour: Autopilot marigold `#f2b705`, Show cyan `#20b2c9`, Manual hot pink `#ef3e7b`. Blocks are flat fills with dark text. No gradients, no glow, no shadows. Look pads keep their own colour chips. Red is only for blackout and errors.
 - **Type:** a condensed poster sans (Big Shoulders Display) for lane labels, block titles and big numerals. A workhorse sans (Archivo) for everything small. Times and values in tabular numerals.
 - **Density:** bold and chunky in the default layer, square corners, large targets (44 px minimum for anything pressed live). Expert screens (DMX) are denser and ruled.
 - **Signature move:** the **NOW line**. Wherever a screen shows time, a paper-white vertical line with a "NOW" flag marks the present, and things that run carry the same flag.
@@ -16,12 +16,27 @@ Controls are standard: buttons, tabs, sliders, lists, tables. The world never su
 ## Shell (every screen)
 
 - **Top bar:** product name and show name, the eight workspaces as tabs, status at the right.
-- **Status, always visible, always in the same place:** output LIVE or PREVIEW (a switch), tempo with four beat dots, master level, Blackout, Undo.
-- **Now strip:** directly under the top bar on every screen except Live, Autopilot and Show. Three thin lanes (Live, Show, Autopilot) with the NOW line, about 56 px high. Click it to go to Live. On Live, Autopilot and Show the full timetable replaces it.
-- **Workspaces, in this order:** Live, Autopilot, Show, Songs, Looks, Patch, DMX, In/Out.
+- **Status, always visible, always in the same place:** the LIVE switch with its four indicators, tempo with four beat dots, master level, Blackout, Undo.
+- **Now strip:** directly under the top bar on every screen except Console, Autopilot and Show. Three thin lanes (Manual, Show, Autopilot) with the NOW line, about 56 px high. Click it to go to Console. On Console, Autopilot and Show the full timetable replaces it.
+- **Workspaces, in this order:** Console, Autopilot, Show, Songs, Looks, Patch, DMX, In/Out.
 - **Layer colours** are used the same way everywhere: anything that belongs to a layer carries that layer's colour.
 - Keyboard: 1 to 8 switch workspace, Space is blackout hold, Cmd/Ctrl+Z is undo.
 - Works at 1280 x 800 (laptop) and at 1024 x 768 with touch. No hover-only actions.
+
+### The LIVE switch
+
+One switch, one meaning: **the night is running**. Lights follow the app at all times, whether LIVE is on or off. There is no preview mode. Blackout is the only way to go dark.
+
+| LIVE off: preparing | LIVE on: performing |
+|---|---|
+| Edit looks, patch, try things | Follows VirtualDJ |
+| Nothing is recorded | Records the set |
+| Autopilot waits | Autopilot armed |
+| Surface can be edited | Surface locked |
+
+- Four small indicators sit beside the switch: DJ link, recording, autopilot, lock. Each can be turned off on its own.
+- With no lights connected, a chip says "No lights connected" and opens In/Out.
+- Names: the home screen is **Console**. The top layer, your hands, is **Manual**. "Live" means only this switch.
 
 ## Review layer (every screen)
 
@@ -38,19 +53,19 @@ The point of the mockups is your judgement, so the review tools are part of the 
 
 Each brief: what the screen is for, its regions, the states worth showing, what can be clicked, and the issues it stands for.
 
-### 1. Live (home)
+### 1. Console (home)
 
 - **For:** running the lights by hand on a console you designed.
 - **Regions:** timetable (three lanes, time ruler, NOW line) top left. Rig view bottom left. Console right: page tabs (Main, Movers, Pixels, +), override notice, pad grid 8 x 4, six faders, XY pad.
-- **States:** three pads running, one held live. Notice "Live overrides Autopilot on PAR 1-8" with Release.
-- **Clickable:** press a pad to start or stop it (a block appears in the Live lane, the rig view changes colour). Hold a pad to flash. Drag faders and the XY pad. Release. Surprise me. **Edit surface** switches to edit mode: the grid appears, widgets can be dragged and resized, a widget drawer opens (button, slider, XY pad, cue list, speed dial, label, frame).
+- **States:** three pads running, one held by hand. Notice "Manual overrides Autopilot on PAR 1-8" with Release.
+- **Clickable:** press a pad to start or stop it (a block appears in the Manual lane, the rig view changes colour). Hold a pad to flash. Drag faders and the XY pad. Release. Surprise me. **Edit surface** switches to edit mode: the grid appears, widgets can be dragged and resized, a widget drawer opens (button, slider, XY pad, cue list, speed dial, label, frame).
 - **Issues:** Build your own control surface, Widget set, Surface generated from your rig, Pads mirror the screen, Layers: base, override, flash, Launch on the beat.
 
 ### 2. Autopilot
 
 - **For:** letting the show follow the music, and seeing why it does what it does.
-- **Regions:** a large on/off with the current style (Chill, Club, Peak, No strobe). "Now and next": the current song, its section ruler with the NOW line, what the autopilot plays now and what it will play at the next section. An energy curve. "How wild" slider. Which groups it may use (checkboxes). "Hands off" list: what the Live layer currently covers.
-- **States:** playing Build-up, Drop comes in 0:12, PAR 1-8 covered by Live.
+- **Regions:** a large on/off with the current style (Chill, Club, Peak, No strobe). "Now and next": the current song, its section ruler with the NOW line, what the autopilot plays now and what it will play at the next section. An energy curve. "How wild" slider. Which groups it may use (checkboxes). "Hands off" list: what the Manual layer currently covers.
+- **States:** playing Build-up, Drop comes in 0:12, PAR 1-8 covered by Manual.
 - **Clickable:** on/off, style, how wild, groups, "skip this look", "more like this".
 - **Issues:** Autopilot: the show follows the music, Never-dark fallback, Looks generated from your rig.
 
@@ -58,7 +73,7 @@ Each brief: what the screen is for, its regions, the states worth showing, what 
 
 - **For:** one place for shows in time. Three modes on a segmented control: **Edit**, **Record**, **Run**.
 - **Regions:** left: list of shows (a recorded set contains one show per song). Centre: timeline with time and bar ruler, waveform, section ruler, tracks (Looks, Movers, Pixels, Laser, Recorded), clips, the NOW line as playhead. Top: transport (play, stop, record) and "follows" (Internal clock, VirtualDJ deck A, Timecode).
-- **Edit:** select, move and trim clips. **Record:** a red state, every press on Live arrives as a chip on the Recorded track. **Run:** the timeline shrinks, a large "Now / Next" list takes over with Go and Back.
+- **Edit:** select, move and trim clips. **Record:** a red state, every press on the Console arrives as a chip on the Recorded track. **Run:** the timeline shrinks, a large "Now / Next" list takes over with Go and Back.
 - **States:** a set with four songs, song 2 playing, one clip selected.
 - **Issues:** Show timeline with waveform, Record what you busk, Follow timecode, DJ set shows, Cue lists.
 
@@ -74,7 +89,7 @@ Each brief: what the screen is for, its regions, the states worth showing, what 
 
 - **For:** making everything that can play: looks, chases, effects, matrix effects, groups of looks.
 - **Regions:** left: library with type filter and search. Centre: the rig as a programmer: click fixtures to select them, then change Intensity, Colour, Position, Beam in the panel beside it, and the rig view follows at once. Bottom: the editor for the selected type (steps for a chase, shape and spread for an effect, a pixel preview for a matrix). Right: palettes (colours, positions, beams).
-- **States:** a chase selected with four steps, three fixtures selected, "preview only" on.
+- **States:** a chase selected with four steps, three fixtures selected.
 - **Clickable:** select fixtures, change an attribute, store as look, update, add a step, apply a palette.
 - **Issues:** Programmer: touch it, see it, Looks: store what you see, Palettes that stay linked, Effects across a group, Chasers and sequences, Pixel matrix effects, Collections.
 
@@ -90,7 +105,7 @@ Each brief: what the screen is for, its regions, the states worth showing, what 
 
 - **For:** the expert layer: see and set raw channels, find faults.
 - **Regions:** universe tabs. A dense grid of 512 channels with value bars, grouped and labelled by fixture. Right: "Held by hand" list with Release all. Bottom: output state per universe (device, frames per second, errors).
-- **States:** three channels held by hand (they show the Live colour), one universe with a device error.
+- **States:** three channels held by hand (they show the Manual colour), one universe with a device error.
 - **Clickable:** click a channel to get a fader for it, filter "patched only" and "changing".
 - **Issues:** DMX monitor and channel tester, DMX engine: universes, merge, masters.
 
@@ -110,7 +125,7 @@ The theory and the module map as live, animated pages inside the same app, with 
 
 - **For:** understanding the nine ideas by playing with them.
 - **Regions:** the one-picture flow (writers, three layers, frame, rig, output) with commands travelling along it as dots. A small pad row and one fader to press. A "who wins" panel per fixture group that updates as layers speak. A step-through of the three walks (press a pad, record and replay, autopilot yields).
-- **Clickable:** press a pad and watch the command travel and the Live layer cover the others. Release and watch the layer below return. Toggle record and see commands written down, then replayed on Show.
+- **Clickable:** press a pad and watch the command travel and the Manual layer cover the others. Release and watch the layer below return. Toggle record and see commands written down, then replayed on Show.
 - **Driven by** the same fake store as the other screens.
 
 ### 10. Modules (the boundary map, interactive)
@@ -123,6 +138,6 @@ The theory and the module map as live, animated pages inside the same app, with 
 
 - Show: "Friday at the Garage". Tempo 126. Master 85%.
 - Rig: Mover L1, L2, R1, R2. PAR 1 to 8. Bar L, Bar R. Laser.
-- Layers: Autopilot playing Build-up. Show off. Live holding Strobe on PAR 1-8.
+- Layers: Autopilot playing Build-up. Show off. Manual holding Strobe on PAR 1-8. LIVE is on.
 - Songs in the set: four tracks with made-up titles and artists, marked as sample data.
-- One fake state store drives all screens, so a pad pressed on Live shows up in the Now strip, in DMX and in Show (when recording).
+- One fake state store drives all screens, so a pad pressed on the Console shows up in the Now strip, in DMX and in Show (when recording).

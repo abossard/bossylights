@@ -82,7 +82,7 @@ The bar shows depth: interface size on the left, what it hides on the right.
 | Module | Whole interface | Hides | Depth |
 |---|---|---|---|
 | **Door** | `send` `subscribe` `query` | transports (UI, MCP, OSC), versions, permissions | ▮▮▮ → ▮▮▮▮▮▮ |
-| **Mixer** | `apply` `frame` | layers, fades, launch on beat, flash, release, masters, blackout, preview | ▮▮ → ▮▮▮▮▮▮▮▮ |
+| **Mixer** | `apply` `frame` | layers, fades, launch on beat, flash, release, masters, blackout | ▮▮ → ▮▮▮▮▮▮▮▮ |
 | **Sources** | `evaluate` | chases, movement maths, pixel matrices, audio scripts, palettes, laser shapes | ▮ → ▮▮▮▮▮▮▮▮ |
 | **Clock** | `now` `follow` | tap, audio beat, MIDI clock, DJ position, timecode, smoothing | ▮▮ → ▮▮▮▮▮▮ |
 | **Rig** | `fixtures` `groups` `resolve` | addresses, modes, 16-bit, colour mixing, pan/tilt limits, curves, fixture swap | ▮▮▮ → ▮▮▮▮▮▮▮▮▮ |
@@ -92,7 +92,7 @@ The bar shows depth: interface size on the left, what it hides on the right.
 | **Surface** | `layout` `press` `reflect` | widgets, pages, MIDI learn, controller profiles, pad colours | ▮▮▮ → ▮▮▮▮▮▮▮ |
 | **Show** | `record` `play` `edit` | tracks, clips, nested song shows, quantize, section blocks | ▮▮▮ → ▮▮▮▮▮▮ |
 | **Music** | `playing` `analyse` | VirtualDJ protocols, analysis pipeline, beat grids, confidence | ▮▮ → ▮▮▮▮▮▮ |
-| **Autopilot** | `start` `stop` | choosing looks, not repeating, staying out of Live's way | ▮▮ → ▮▮▮▮▮ |
+| **Autopilot** | `start` `stop` | choosing looks, not repeating, staying out of your hands' way | ▮▮ → ▮▮▮▮▮ |
 
 ## How a press travels
 
@@ -103,7 +103,7 @@ sequenceDiagram
   participant M as Mixer
   participant R as Rig
   participant O as Output
-  S->>D: send(start Sunset on Live)
+  S->>D: send(start Sunset on Manual)
   D->>M: apply(command)
   loop 44 times a second
     M->>R: frame(time) gives a look
@@ -119,7 +119,7 @@ Screens are thin. Each is a view of one or two modules through the Door.
 
 | Screen | Surface | Mixer | Show | Music | Autopilot | Project | Rig | Library | Output | Clock |
 |---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
-| Live | ● | ● | | | | | | | | |
+| Console | ● | ● | | | | | | | | |
 | Autopilot | | ● | | ● | ● | | | | | |
 | Show | | | ● | | | | | | | ● |
 | Songs | | | ● | ● | | | | | | |
