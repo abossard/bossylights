@@ -15,7 +15,8 @@ Rust engine, web UI in a Tauri shell, Apache-2.0. Status: planning, no code yet.
 - The output thread never blocks, locks or allocates.
 - Every feature has an end-to-end test that checks DMX output.
 - Apache-2.0 only: no GPL or AGPL code or dependencies. Ideas from BlinderKitten, Chataigne and Mizer are fine, their code is not.
-- Plain words in the default UI layer: looks, layers, pads.
+- Plain words in the default view: looks, pads.
+- All who-wins rules live in one place (one table in the Mixer, one panel in the app). No other code decides between two values for the same light. See `docs/design/who-wins.md`.
 
 ## How to write: visual first, few words
 

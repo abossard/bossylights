@@ -17,7 +17,7 @@ flowchart LR
     AUTOP["Autopilot<br/>commands from music"]
   end
 
-  subgraph L["Three layers, top wins"]
+  subgraph L["Three ranks: manual beats show beats autopilot"]
     direction TB
     LIVE["MANUAL<br/>your hands"]
     SHOW["SHOW"]
@@ -39,7 +39,7 @@ flowchart LR
   FRAME --> RIG --> OUT
 ```
 
-**One sentence:** every frame is computed fresh from what plays on three layers, and everything that happens is a command.
+**One sentence:** every frame is computed fresh from what plays, with manual over show over autopilot, and everything that happens is a command.
 
 ## Nine ideas
 
@@ -56,7 +56,7 @@ flowchart LR
   subgraph B["Bossylights: inputs in, frame out"]
     direction LR
     P1["What plays"] --> C{{"Compute"}}
-    P2["Layers"] --> C
+    P2["Who-wins rules"] --> C
     P3["Time"] --> C
     C --> F(["Frame"])
   end
@@ -97,9 +97,9 @@ flowchart LR
 
 Ten QLC+ function types become one shape. On screen there are two kinds: a **sequence** (steps and other sequences on the beat grid) and a **pattern** (generated motion). Details: [looks.md](looks.md).
 
-### 5. Layers: the top one that speaks wins
+### 5. Who wins: one small set of rules
 
-| Layer | PARs | Movers |
+| Who | PARs | Movers |
 |---|---|---|
 | **MANUAL** (top) | strobe | silent |
 | **SHOW** | silent | silent |
@@ -111,11 +111,9 @@ flowchart LR
   A["Hold Strobe"] --> B(["PARs: strobe"]) --> C["Release"] --> D(["PARs: amber again"])
 ```
 
-Let go and the PARs go back to amber. This replaces HTP and LTP.
+What you touch on the Console stays under your control until you press Release. Then the PARs go back to amber.
 
-Three layers to start with. You can add more: each one is a lane, and the top one that speaks still wins.
-
-On screen the autopilot is not a separate place: its picks show as the Auto lane of the show. In the engine it stays its own layer, so one rule covers everything: show beats auto, hands beat both.
+There are no layers to manage. The rules sit in one place and can be changed there: [who-wins.md](who-wins.md).
 
 ### 6. One clock
 
@@ -206,7 +204,7 @@ sequenceDiagram
   You->>Engine: commands (recording on)
   Engine-->>Show: same commands, with time
   Note over Show: this list is now a show
-  Show->>Engine: replays them on the Show layer
+  Show->>Engine: replays them as the show
   You->>Engine: grab a fader (Manual)
   Note over Engine: Manual is on top, you win
   You->>Engine: let go
@@ -237,7 +235,7 @@ sequenceDiagram
 | Second UI or an agent | easy | another client of the Engine |
 | Laser shapes | medium | a source plus one output adapter |
 | "Just set channel 37" | awkward on purpose | goes through a raw-channel attribute |
-| One more layer | easy | layers are a list, top wins |
+| Change who wins | easy | one rule table in one place |
 | A source reading another source | not possible | compose them into one |
 
 ## The theory says no
@@ -255,8 +253,8 @@ flowchart LR
 
 | # | Question | Decided |
 |---|---|---|
-| 1 | Who wins inside a layer? | the top layer wins for everything |
-| 2 | How many layers? | three to start with, and the user can add layers |
+| 1 | Who wins? | manual beats show beats autopilot. Among equals the latest wins. Brightness can be set to "highest wins" |
+| 2 | How many layers? | none to manage. The layer idea was dropped: only steps, sequences and patterns play |
 | 3 | What does recording store? | commands, fader moves included |
 | 4 | Where do raw channels live? | only on the DMX screen |
 | 5 | DJ software and audio disagree on the beat | the feed you picked wins |

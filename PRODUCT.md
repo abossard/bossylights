@@ -20,7 +20,7 @@ An open-source lighting desk that is easy first and deep on request. Version 1 s
 
 ## Positioning
 
-The show follows the music by itself, and a hand on any control takes over. Three ways to run a show combine in layers: the autopilot, the show runner (a timeline), and the console, played by hand. Hands always win over what runs underneath.
+The show follows the music by itself, and a hand on any control takes over. Three ways to run a show combine: the autopilot, the show runner (a timeline), and the console, played by hand. Hands always win over what runs underneath.
 
 ## Operating Context
 
@@ -31,16 +31,16 @@ The show follows the music by itself, and a hand on any control takes over. Thre
 
 ## Capabilities and Constraints
 
-- Screens: Console (the customizable console, home), Songs (every song has one show: sections, layers, recording, with the autopilot as its Auto lane), Looks (steps, sequences, patterns), Patch (universe grid, no map), DMX, In/Out.
+- Screens: Console (the customizable console, home), Songs (every song has one show: sections, takes, recording, with the autopilot as its Auto lane), Looks (steps, sequences, patterns), Patch (universe grid, no map), DMX, In/Out.
 - Every button and value in the app can be mapped to a controller with one global Learn.
-- Layers: Autopilot, Show and Manual to start with. The user can add layers.
+- Who wins: manual beats show, show beats autopilot, and among equals the latest wins. What you touch on the Console stays yours until you press Release. The rules are configurable and live in one place (`docs/design/who-wins.md`). There are no layers to manage.
 - The two VirtualDJ decks (1 and 2) and the title of the song that plays are always visible.
 - The live console is designed by the user: widgets on pages and frames.
-- Words in the default layer are plain: looks, layers, pads. No "HTP", "LTP" or "function" there.
+- Words in the default view are plain: looks, pads. No "HTP", "LTP" or "function" there.
 - No screen asks the user to remember a value from another screen.
 - State is always visible: LIVE on or off, tempo, what runs, master level.
 - Lights follow the app whenever it runs. There is no preview mode. One LIVE switch means the night is running: it follows the DJ software, records the set, arms the autopilot and locks the surface.
-- Names: the home screen is the Console. The three layers are Autopilot, Show and Manual (your hands). "Live" means only the switch.
+- Names: the home screen is the Console. The three rows are Autopilot, Show and Manual (your hands). "Live" means only the switch.
 - First light changes within 60 seconds of launch.
 - Undecided: the engine API, the project file format, how the autopilot picks looks.
 

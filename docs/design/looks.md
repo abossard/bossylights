@@ -97,7 +97,7 @@ Swap the step and the motion stays. DDP, Art-Net and sACN are only the cable.
 | Show: Colour chase (colours) | chase | covered | chase |
 | Show: Mover run (movement) | runs | runs | runs |
 
-A step that sets only colours covers only colours. Let go and the layer below returns.
+A step that sets only colours covers only colours. Press Release and what was underneath returns.
 
 ## Autoplay rules
 
