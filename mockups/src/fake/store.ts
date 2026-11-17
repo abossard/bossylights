@@ -545,7 +545,7 @@ function build() {
 
   // recording writes into the show of the song that plays, as a new layer
   let recSeq = 2;
-  function recordEvent(ev: Omit<RecEvent, "at">) {
+  function recordEvent(ev: Omit<RecEvent, "at"> & { at?: number }) {
     if (!isRecording()) return;
     const cur = currentSong();
     if (!cur) return;
@@ -557,7 +557,7 @@ function build() {
       set("songLayers", id, [l, ...layers]);
     }
     const lid = l.id;
-    set("songLayers", id, (x) => x.id === lid, "events", (es) => [...es, { ...ev, at: now() - cur.start }]);
+    set("songLayers", id, (x) => x.id === lid, "events", (es) => [...es, { ...ev, at: ev.at ?? now() - cur.start }]);
   }
   // a pass ends when recording stops or the song changes
   createEffect(() => {
@@ -694,7 +694,8 @@ function build() {
   function log(lookId: string, action: ManualEvent["action"]) {
     if (!isRecording()) return;
     set("events", (e) => [...e, { at: now(), lookId, action }]);
-    recordEvent({ kind: action, lookId });
+    // a flash is written when it ends, with its length
+    if (action !== "flash") recordEvent({ kind: action, lookId });
   }
 
   const removeBlock = (id: number) => set("manual", (bs) => bs.filter((b) => b.id !== id));
@@ -736,7 +737,10 @@ function build() {
   /** End a flash. */
   function release(lookId: string) {
     const running = manualBlockFor(lookId);
-    if (running && running.mode === "flash") endBlock(running.id, now());
+    if (!running || running.mode !== "flash") return;
+    endBlock(running.id, now());
+    const cur = currentSong();
+    if (cur) recordEvent({ kind: "flash", lookId, at: running.start - cur.start, dur: now() - running.start });
   }
 
   /** Release the whole Manual layer, so the layers below show through again. */
