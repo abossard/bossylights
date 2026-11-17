@@ -1,35 +1,119 @@
 .patch-screen {
   display: grid;
-  grid-template-columns: 260px minmax(0, 1fr) 320px;
-  grid-template-rows: minmax(0, 1fr) auto;
-  grid-template-areas: "list map side" "strip strip strip";
+  grid-template-columns: 230px minmax(0, 1fr) 300px;
   gap: var(--sp-4);
-  padding: var(--sp-4) var(--gutter);
+  padding: var(--sp-3) var(--gutter);
   height: 100%;
   min-height: 560px;
 }
 
-.patch-list {
-  grid-area: list;
-}
-
-.patch-map {
-  grid-area: map;
+.patch-unis,
+.patch-side {
+  min-height: 0;
 }
 
 .patch-side {
-  grid-area: side;
-  min-height: 0;
   overflow-y: auto;
 }
 
-.patch-strip {
-  grid-area: strip;
+.patch-centre {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  --grid-h: 352px;
 }
 
-/* ---------------- fixtures ---------------- */
-.patch-add {
+.patch-centre > * {
+  flex: none;
+}
+
+/* ---------------- universes ---------------- */
+.patch-uni-list {
+  list-style: none;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  position: relative;
+  border-top: 1px solid var(--line);
+}
+
+.patch-uni {
   width: 100%;
+  min-height: var(--target);
+  padding: 6px var(--sp-2);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+}
+
+.patch-uni:hover {
+  background: var(--s1);
+}
+
+.patch-uni[aria-current="true"] {
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.patch-uni[aria-current="true"] .mute {
+  color: var(--ink);
+}
+
+.patch-uni.is-in-panel {
+  padding-left: var(--sp-5);
+}
+
+.patch-uni-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.patch-uni-text b {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.patch-chev {
+  flex: none;
+  transition: transform var(--t-fast);
+}
+
+.patch-uni[aria-expanded="true"] .patch-chev {
+  transform: rotate(90deg);
+}
+
+.patch-fill {
+  height: 6px;
+  background: var(--s2);
+}
+
+.patch-fill i {
+  display: block;
+  height: 100%;
+  background: var(--mute);
+}
+
+.patch-uni[aria-current="true"] .patch-fill {
+  background: var(--mute);
+}
+
+.patch-uni[aria-current="true"] .patch-fill i {
+  background: var(--ink);
+}
+
+.patch-adds {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .patch-adding {
@@ -38,53 +122,239 @@
   font-weight: 700;
 }
 
-.patch-scroll {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-}
-
-.patch-list .list-title {
-  font-weight: 700;
-}
-
-.patch-list .list-sub {
-  font-stretch: var(--tight);
-}
-
-.patch-addr {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: var(--text-sm);
-  font-weight: 600;
-  color: var(--mute);
-}
-
-.patch-addr.is-clash {
-  color: var(--paper);
-  font-weight: 700;
-}
-
 .patch-clash-mark {
+  display: inline-block;
   width: 10px;
   height: 10px;
   background: var(--danger);
 }
 
-.list-row.is-selected .patch-addr {
+/* ---------------- universe grid ---------------- */
+.patch-grid-wrap {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  gap: 6px;
+}
+
+.patch-rownums {
+  display: grid;
+  grid-template-rows: repeat(16, 1fr);
+  height: var(--grid-h);
+  line-height: 1;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--mute);
+  text-align: right;
+}
+
+.patch-rownums span {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.patch-grid {
+  position: relative;
+  height: var(--grid-h);
+  --cw: calc(100% / 32);
+  --ch: calc(100% / 16);
+  background-color: var(--s1);
+  background-image:
+    linear-gradient(to right, var(--line) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--line) 1px, transparent 1px);
+  background-size: calc(100% / 32) calc(100% / 16);
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+/* a fixture: a coloured run of addresses with its name plate */
+.patch-run {
+  position: absolute;
+  left: calc(var(--col) * var(--cw));
+  top: calc(var(--row) * var(--ch));
+  width: calc(var(--len) * var(--cw));
+  height: var(--ch);
+  padding: 0 4px;
+  background: var(--c);
+  border: 1px solid var(--bg);
+  color: var(--ink);
+  font-size: var(--text-sm);
+  font-weight: 700;
+  font-stretch: var(--tight);
+  white-space: nowrap;
+  overflow: visible;
+  text-align: left;
+  cursor: grab;
+  touch-action: none;
+}
+
+.patch-run > span {
+  position: relative;
+  z-index: 1;
+  padding: 0 2px;
+  background: var(--c);
+}
+
+.patch-run.is-panel {
+  cursor: pointer;
+}
+
+.patch-run.is-selected {
+  outline: 3px solid var(--paper);
+  outline-offset: -2px;
+  z-index: 2;
+}
+
+.patch-run.is-ghost {
+  --c: var(--paper);
+  border-style: dashed;
+  animation: patch-blink 0.95s steps(1) infinite;
+  pointer-events: none;
+}
+
+@keyframes patch-blink {
+  50% {
+    background: var(--s1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .patch-run.is-ghost {
+    animation: none;
+  }
+}
+
+.patch-clash {
+  position: absolute;
+  left: calc(var(--col) * var(--cw));
+  top: calc(var(--row) * var(--ch));
+  width: calc(var(--len) * var(--cw));
+  height: calc(var(--ch) / 3);
+  background: var(--danger);
+  pointer-events: none;
+  z-index: 3;
+}
+
+.patch-clash-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+
+/* ---------------- fixtures, in their order ---------------- */
+.patch-groups {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-3) var(--sp-4);
+}
+
+.patch-group-h {
+  font-size: var(--text-sm);
+  font-weight: 700;
+  color: var(--mute);
+  margin-bottom: 4px;
+}
+
+.patch-groups ol {
+  list-style: none;
+}
+
+.patch-fx {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border-bottom: 1px solid var(--line);
+}
+
+.patch-order {
+  align-self: stretch;
+  width: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  padding-left: 4px;
+  font-weight: 700;
+  color: var(--mute);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.patch-order:hover {
+  color: var(--paper);
+  background: var(--s1);
+}
+
+.patch-fx-body {
+  flex: 1;
+  min-width: 0;
+  min-height: var(--target);
+  padding: 4px 6px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-rows: auto auto;
+  column-gap: 6px;
+  text-align: left;
+}
+
+.patch-fx-body b {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.patch-fx-body .mute {
+  grid-row: 2;
+  font-stretch: var(--tight);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.patch-fx-body small {
+  grid-row: 1 / span 2;
+  grid-column: 2;
+  align-self: center;
+  font-size: var(--text-sm);
+  color: var(--mute);
+}
+
+.patch-fx-body:hover {
+  background: var(--s1);
+}
+
+.patch-fx.is-selected .patch-fx-body {
+  background: var(--paper);
   color: var(--ink);
 }
 
-/* ---------------- map ---------------- */
-.patch-map {
-  background: var(--s1);
-  padding: var(--sp-3) var(--sp-4);
+.patch-fx.is-selected .patch-fx-body .mute,
+.patch-fx.is-selected .patch-fx-body small {
+  color: var(--ink);
 }
 
-.patch-stage {
-  flex: 1;
-  min-height: 0;
+.patch-move {
+  display: flex;
+  flex-direction: column;
+}
+
+.patch-move button {
+  width: 36px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  color: var(--mute);
+}
+
+.patch-move button:hover:not(:disabled) {
+  color: var(--paper);
+  background: var(--s2);
+}
+
+.patch-move button:disabled {
+  opacity: 0.3;
 }
 
 /* ---------------- details ---------------- */
@@ -149,13 +419,56 @@
   font-size: var(--display-lg);
 }
 
-.patch-clash {
+.patch-clash-box {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: var(--sp-2);
   padding: var(--sp-3);
   border: var(--rule) solid var(--danger);
+}
+
+.patch-panel-runs {
+  list-style: none;
+}
+
+/* ---------------- add a pixel panel ---------------- */
+.patch-panel-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.patch-panel-form h2 {
+  font-size: var(--display-md);
+}
+
+.patch-panel-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.patch-panel-form input {
+  min-height: var(--target);
+}
+
+.patch-two {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sp-2);
+}
+
+.patch-wiring {
+  width: 120px;
+  height: 40px;
+  fill: none;
+  stroke: var(--paper);
+  stroke-width: 3;
+}
+
+.patch-panel-sum {
+  font-weight: 700;
 }
 
 /* ---------------- add lights ---------------- */
@@ -396,113 +709,3 @@
   margin-left: auto;
 }
 
-/* ---------------- address strip ---------------- */
-.strip {
-  position: relative;
-  height: 52px;
-  margin-top: 16px;
-  background: var(--s1);
-}
-
-.strip-tick {
-  position: absolute;
-  top: -18px;
-  padding-left: 3px;
-  border-left: 1px solid var(--line);
-  font-size: var(--text-sm);
-  font-weight: 600;
-  color: var(--mute);
-  line-height: 1;
-  height: calc(100% + 18px);
-}
-
-.strip-tick.is-end {
-  transform: translateX(-100%);
-  border-left: 0;
-  border-right: 1px solid var(--line);
-  padding: 0 3px 0 0;
-}
-
-.strip-range {
-  position: absolute;
-  top: 6px;
-  bottom: 6px;
-  min-width: 3px;
-  background: var(--mute);
-  border-right: 1px solid var(--bg);
-}
-
-.strip-range:hover {
-  background: var(--paper);
-}
-
-.strip-range.is-selected {
-  background: var(--paper);
-  top: 0;
-  bottom: 0;
-}
-
-.strip-clash {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  background: var(--danger);
-  pointer-events: none;
-}
-
-.strip-legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--sp-2) var(--sp-4);
-  font-size: var(--text-sm);
-  font-weight: 600;
-}
-
-.strip-legend span {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.strip-key {
-  width: 14px;
-  height: 14px;
-  background: var(--mute);
-}
-
-.strip-key.is-selected {
-  background: var(--paper);
-}
-
-.strip-key.is-clash {
-  background: var(--danger);
-}
-
-@media (max-width: 1180px) {
-  .patch-screen {
-    grid-template-columns: 220px minmax(0, 1fr) 280px;
-    gap: var(--sp-3);
-    padding: var(--sp-3) var(--gutter);
-  }
-
-  .add-models {
-    grid-template-columns: 1fr;
-  }
-
-  .add-model {
-    min-height: 0;
-    flex-direction: row;
-    flex-wrap: wrap;
-    align-items: center;
-    column-gap: var(--sp-2);
-  }
-
-  .add-model .mute {
-    width: 100%;
-  }
-
-  .add-pic {
-    width: 48px;
-    height: 36px;
-  }
-}

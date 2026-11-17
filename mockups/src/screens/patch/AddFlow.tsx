@@ -230,7 +230,7 @@ export function AddFlow(props: { onDone: (f: Fixture) => void }) {
 
         <Show when={flow.step === 4}>
           <p class="add-ask">
-            <b>The new light is flashing on the map.</b> Did a light in the room flash too?
+            <b>The new light is flashing in the grid.</b> Did a light in the room flash too?
           </p>
           <div class="add-answers">
             <Button variant="primary" size="lg" onClick={confirm}>

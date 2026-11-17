@@ -42,6 +42,27 @@ export interface Mapping {
   feedback: boolean;
 }
 
+/** An LED pixel panel: it spreads over as many universes as it needs. */
+export interface PixelPanel {
+  id: string;
+  name: string;
+  cols: number;
+  rows: number;
+  /** snake: every other row runs back. zigzag: every row starts on the same side */
+  wiring: "snake" | "zigzag";
+  startUniverse: number;
+}
+
+/** Where a panel sits on one universe. */
+export interface PanelRun {
+  panel: PixelPanel;
+  universe: number;
+  address: number;
+  channels: number;
+  firstPixel: number;
+  lastPixel: number;
+}
+
 /** Where the beat comes from. */
 export type ClockFeed = "tap" | "audio" | "midi" | "vdj" | "timecode";
 
@@ -208,6 +229,8 @@ interface State {
   /** Channels held by hand on the DMX screen, universe 1: address -> 0..255. */
   held: Record<number, number>;
   clockFeed: ClockFeed;
+  /** Pixel panels, each over several universes. */
+  panels: PixelPanel[];
   /** Everything mapped with Learn, anywhere in the app. */
   mappings: Mapping[];
   /** Steps, sequences and patterns, by id. */
@@ -268,6 +291,7 @@ function build() {
     // three channels held by hand: PAR 1 red, PAR 5 dimmer, Mover R1 pan
     held: { 66: 255, 93: 180, 33: 96 },
     clockFeed: "vdj",
+    panels: [{ id: "panel-1", name: "Pixel panel", cols: 24, rows: 16, wiring: "snake", startUniverse: 2 }],
     mappings: [
       { id: "m1", control: "Blackout", screen: "Top bar", device: "Launchpad Mini", message: "Note 91", feedback: true },
       { id: "m2", control: "Master", screen: "Console", device: "Launchpad Mini", message: "CC 21", feedback: false },
@@ -826,6 +850,62 @@ function build() {
   }
 
   const setIdentify = (id: string | null) => set("identify", id);
+
+  // ---- pixel panels and universes -----------------------------------------
+  const PIXELS_PER_UNIVERSE = 170;
+  /** A panel spread over universes: 170 RGB pixels each. */
+  function panelRuns(panel: PixelPanel): PanelRun[] {
+    const total = panel.cols * panel.rows;
+    const out: PanelRun[] = [];
+    for (let first = 1, u = panel.startUniverse; first <= total; first += PIXELS_PER_UNIVERSE, u++) {
+      const last = Math.min(total, first + PIXELS_PER_UNIVERSE - 1);
+      out.push({ panel, universe: u, address: 1, channels: (last - first + 1) * 3, firstPixel: first, lastPixel: last });
+    }
+    return out;
+  }
+  const allPanelRuns = () => state.panels.flatMap(panelRuns);
+  /** Every universe in use, with what fills it. */
+  function universes() {
+    const max = Math.max(1, ...state.rig.map((f) => f.universe), ...allPanelRuns().map((r) => r.universe));
+    return Array.from({ length: max }, (_, i) => {
+      const u = i + 1;
+      const fx = state.rig.filter((f) => f.universe === u);
+      const runs = allPanelRuns().filter((r) => r.universe === u);
+      const used = fx.reduce((a, f) => a + f.channels, 0) + runs.reduce((a, r) => a + r.channels, 0);
+      return {
+        universe: u,
+        fixtures: fx.length,
+        used: Math.min(512, used),
+        panel: runs[0]?.panel ?? null,
+        conflict: conflicts().some((c) => c.a.universe === u),
+      };
+    });
+  }
+  const firstFreeUniverse = () => universes().length + 1;
+  function addPanel(p: Omit<PixelPanel, "id">) {
+    const id = `panel-${Date.now().toString(36)}`;
+    set("panels", (ps) => [...ps, { ...p, id }]);
+    record(`Add ${p.name}`, () => set("panels", (ps) => ps.filter((x) => x.id !== id)));
+    return id;
+  }
+
+  /** Move a fixture up or down in its group: the order is what "left to right" means. */
+  function reorderFixture(id: string, delta: number) {
+    const f = fixtureById(id);
+    if (!f) return;
+    const same = state.rig.filter((x) => x.group === f.group);
+    const i = same.findIndex((x) => x.id === id);
+    const j = Math.max(0, Math.min(same.length - 1, i + delta));
+    if (i === j) return;
+    const before = [...state.rig];
+    const order = [...same];
+    const [moved] = order.splice(i, 1);
+    order.splice(j, 0, moved);
+    let k = 0;
+    const next = state.rig.map((x) => (x.group === f.group ? order[k++] : x));
+    set("rig", next.map((x) => ({ ...x })));
+    record(`Order ${f.name}`, () => set("rig", before.map((x) => ({ ...x }))), `order:${id}`);
+  }
 
   // ---- DMX --------------------------------------------------------------
   /** Channel names per fixture, in plain words where they fit. */
@@ -1400,6 +1480,12 @@ function build() {
     setAddress,
     addFixture,
     setIdentify,
+    panelRuns,
+    allPanelRuns,
+    universes,
+    firstFreeUniverse,
+    addPanel,
+    reorderFixture,
     attributes,
     channelValues,
     holdChannel,
