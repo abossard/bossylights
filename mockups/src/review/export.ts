@@ -31,6 +31,7 @@ export function exportData() {
         question: q.question,
         optionA: q.a || null,
         optionB: q.b || null,
+        decided: q.decided ?? null,
         choice: a.choice,
         answer: a.choice === "A" ? q.a : a.choice === "B" ? q.b : null,
         text: a.text,
@@ -66,7 +67,7 @@ export function toMarkdown(): string {
   lines.push("## Questions", "");
   for (const q of data.questions) {
     const said = [q.choice ? `${q.choice}: ${q.answer}` : "", q.text.trim().replace(/\n+/g, " ")].filter(Boolean).join(". ");
-    lines.push(`- ${q.source} ${q.number}, ${q.question} ${said || "not answered"}`);
+    lines.push(`- ${q.source} ${q.number}, ${q.question} ${[q.decided ? `Decided: ${q.decided}` : "", said].filter(Boolean).join(". ") || "not answered"}`);
   }
   lines.push("");
   return lines.join("\n");

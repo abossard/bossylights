@@ -3,6 +3,8 @@
 export interface Module {
   id: string;
   name: string;
+  /** One short line under the name */
+  sub?: string;
   /** The whole interface */
   iface: string[];
   hides: string[];
@@ -19,7 +21,7 @@ export interface Module {
 }
 
 export const MODULES: Module[] = [
-  { id: "door", name: "Engine", iface: ["send", "subscribe", "query"], hides: ["a listed set of commands", "transports: UI, MCP, OSC", "versions", "permissions"], ifaceSize: 3, hidesSize: 6, core: false, screens: ["console", "songs", "looks", "patch", "dmx", "inout"], x: 360, y: 150, h: 70 },
+  { id: "engine", name: "Engine", sub: "commands in, state out", iface: ["send", "subscribe", "query"], hides: ["a listed set of commands", "transports: UI, MCP, OSC", "versions", "permissions"], ifaceSize: 3, hidesSize: 6, core: false, screens: ["console", "songs", "looks", "patch", "dmx", "inout"], x: 360, y: 150, h: 70 },
   { id: "mixer", name: "Mixer", iface: ["apply", "frame"], hides: ["layers", "fades", "launch on beat", "flash", "release", "masters", "blackout"], ifaceSize: 2, hidesSize: 8, core: true, screens: ["console", "songs", "looks", "dmx"], x: 545, y: 165 },
   { id: "sources", name: "Sources", iface: ["evaluate"], hides: ["chases", "movement maths", "pixel matrices", "audio scripts", "palettes", "laser shapes"], ifaceSize: 1, hidesSize: 8, core: true, screens: [], x: 680, y: 270 },
   { id: "clock", name: "Clock", iface: ["now", "follow"], hides: ["tap", "audio beat", "MIDI clock", "DJ position", "timecode", "smoothing"], ifaceSize: 2, hidesSize: 6, core: true, screens: ["songs", "inout"], x: 545, y: 350 },
@@ -41,32 +43,32 @@ export const WRITERS = [
 ];
 
 export const ARROWS: { id: string; d: string; state?: boolean }[] = [
-  { id: "ui-door", d: "M150,54 C260,54 300,165 360,170" },
-  { id: "agents-door", d: "M150,124 C250,124 300,182 360,182" },
+  { id: "ui-engine", d: "M150,54 C260,54 300,165 360,170" },
+  { id: "agents-engine", d: "M150,124 C250,124 300,182 360,182" },
   { id: "controllers-surface", d: "M150,214 L185,214" },
-  { id: "surface-door", d: "M315,214 C335,214 340,200 360,200" },
-  { id: "show-door", d: "M315,314 C390,314 400,270 405,220" },
-  { id: "autopilot-door", d: "M315,394 C440,394 455,280 450,220" },
+  { id: "surface-engine", d: "M315,214 C335,214 340,200 360,200" },
+  { id: "show-engine", d: "M315,314 C390,314 400,270 405,220" },
+  { id: "autopilot-engine", d: "M315,394 C440,394 455,280 450,220" },
   { id: "music-autopilot", d: "M150,394 L185,394" },
   { id: "music-clock", d: "M85,422 L85,432 L600,432 L600,402" },
-  { id: "door-mixer", d: "M490,185 L545,185" },
-  { id: "door-project", d: "M425,150 L425,92" },
+  { id: "engine-mixer", d: "M490,185 L545,185" },
+  { id: "engine-project", d: "M425,150 L425,92" },
   { id: "library-project", d: "M545,66 L490,66" },
   { id: "project-mixer", d: "M490,82 C540,82 575,120 580,165" },
   { id: "clock-mixer", d: "M600,350 L600,217" },
   { id: "sources-mixer", d: "M680,296 C650,296 640,260 632,217" },
   { id: "mixer-rig", d: "M655,191 L680,191" },
   { id: "rig-output", d: "M790,191 L815,191" },
-  { id: "mixer-door", d: "M545,207 C520,230 505,226 490,212", state: true },
+  { id: "mixer-engine", d: "M545,207 C520,230 505,226 490,212", state: true },
 ];
 
 /** One press, hop by hop: the path the dot takes, the module it lands on, what is said. */
 export const TRACE: { path: string; at: string; say: string; reverse?: boolean }[] = [
   { path: "controllers-surface", at: "surface", say: "You press Sunset. Surface turns the press into a command." },
-  { path: "surface-door", at: "door", say: "send(start Sunset on Manual)" },
-  { path: "door-mixer", at: "mixer", say: "apply(command)" },
+  { path: "surface-engine", at: "engine", say: "send(start Sunset on Manual)" },
+  { path: "engine-mixer", at: "mixer", say: "apply(command)" },
   { path: "mixer-rig", at: "rig", say: "frame(time) gives a look, 44 times a second" },
   { path: "rig-output", at: "output", say: "resolve(look) gives universes: bytes go out" },
-  { path: "mixer-door", at: "door", say: "The new state comes back through the Engine" },
-  { path: "surface-door", at: "surface", say: "reflect(state): the pad lights up", reverse: true },
+  { path: "mixer-engine", at: "engine", say: "The new state comes back through the Engine" },
+  { path: "surface-engine", at: "surface", say: "reflect(state): the pad lights up", reverse: true },
 ];

@@ -68,7 +68,7 @@ export function Screen() {
   const traced = (pathId: string) => trace() !== null && TRACE.slice(0, hop() + 1).some((h) => h.path === pathId);
 
   // ---- questions
-  const answered = createMemo(() => QUESTIONS.filter((q) => review.answerOf(q.id).choice || review.answerOf(q.id).text.trim()).length);
+  const answered = createMemo(() => QUESTIONS.filter((q) => q.decided || review.answerOf(q.id).choice || review.answerOf(q.id).text.trim()).length);
   // a screen must not import the registry (it would import itself), so titles are local
   const SCREEN_TITLES: Record<string, string> = {
     console: "Console", songs: "Songs", looks: "Looks", patch: "Patch", dmx: "DMX", inout: "In/Out",
@@ -78,7 +78,7 @@ export function Screen() {
   const Node = (m: Module) => (
     <g
       class="mm-node"
-      classList={{ "is-core": m.core, "is-selected": selected() === m.id, "is-traced": tracing(m.id), "is-door": m.id === "door" }}
+      classList={{ "is-core": m.core, "is-selected": selected() === m.id, "is-traced": tracing(m.id), "is-engine": m.id === "engine" }}
       role="button"
       tabIndex={0}
       aria-pressed={selected() === m.id}
@@ -87,9 +87,14 @@ export function Screen() {
       onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), setSelected(m.id))}
     >
       <rect x={m.x} y={m.y} width={m.w ?? W} height={m.h ?? H} />
-      <text x={m.x + (m.w ?? W) / 2} y={m.y + (m.h ?? H) / 2 + 7} text-anchor="middle">
+      <text x={m.x + (m.w ?? W) / 2} y={m.y + (m.h ?? H) / 2 + (m.sub ? -3 : 7)} text-anchor="middle">
         {m.name}
       </text>
+      <Show when={m.sub}>
+        <text class="mm-sub" x={m.x + (m.w ?? W) / 2} y={m.y + (m.h ?? H) / 2 + 17} text-anchor="middle">
+          {m.sub}
+        </text>
+      </Show>
     </g>
   );
 
@@ -152,6 +157,9 @@ export function Screen() {
       <Region id="card" title="Module" bare class="mm-card">
         <header class="mm-card-head">
           <h2 class="display">{mod().name}</h2>
+          <Show when={mod().sub}>
+            <span class="mm-card-sub">{mod().sub}</span>
+          </Show>
           <Show when={mod().core}>
             <span class="mm-core-chip">Real-time core</span>
           </Show>
@@ -211,7 +219,12 @@ export function Screen() {
                           <p class="mm-q-text">
                             <b>{q.number}.</b> {q.question}
                           </p>
-                          <Show when={q.a}>
+                          <Show when={q.decided}>
+                            <p class="mm-q-decided">
+                              <b>Decided</b> {q.decided}
+                            </p>
+                          </Show>
+                          <Show when={q.a && !q.decided}>
                             <div class="mm-q-opts" role="radiogroup" aria-label={q.question}>
                               <For each={[{ k: "A" as const, t: q.a }, { k: "B" as const, t: q.b }]}>
                                 {(o) => (
