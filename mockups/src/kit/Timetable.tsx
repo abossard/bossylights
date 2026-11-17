@@ -100,7 +100,7 @@ export function Timetable(props: TimetableProps) {
       <For each={props.lanes}>
         {(lane) => (
           <>
-            <div class={`tt-label layer-${lane.layer}`} classList={{ "has-controls": !!props.laneControls?.(lane) }}>
+            <div class={`tt-label layer-${lane.layer}`} style={lane.color ? { "--layer": lane.color } : undefined} classList={{ "has-controls": !!props.laneControls?.(lane) }}>
               <h3 class="display">{lane.title}</h3>
               <Show
                 when={props.laneControls?.(lane)}
@@ -123,7 +123,7 @@ export function Timetable(props: TimetableProps) {
                 )}
               </Show>
             </div>
-            <div class={`tt-lane layer-${lane.layer}`} classList={{ "is-off": lane.chip === "off" || lane.chip === "waiting" }} aria-label={`${lane.title} lane`}>
+            <div class={`tt-lane layer-${lane.layer}`} style={lane.color ? { "--layer": lane.color } : undefined} classList={{ "is-off": lane.chip === "off" || lane.chip === "waiting" }} aria-label={`${lane.title} lane`}>
               {(() => {
                 const packed = () => pack(lane.blocks);
                 return (

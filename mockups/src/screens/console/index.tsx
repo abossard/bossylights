@@ -1,6 +1,6 @@
 import { createEffect, createSignal, onCleanup, Show } from "solid-js";
 import { groupNames, hhmm, store } from "../../fake/store";
-import { Button, Decks, Region, RigView, Tabs, Timetable, stepWindow, type RigZone } from "../../kit";
+import { Button, Decks, Region, Tabs, Timetable, stepWindow } from "../../kit";
 import type { Issue } from "../../shell/registry";
 import { ConsoleGrid, createConsole, WidgetDrawer } from "./Console";
 import { AutoLaneControls } from "./AutoLaneControls";
@@ -81,21 +81,6 @@ export function Screen() {
   onCleanup(() => mq.removeEventListener("change", onMq));
   const win = () => stepWindow(store.now(), narrow() ? 5 * 60 : 7 * 60, (narrow() ? 15 : 25) * 60, 5 * 60);
 
-  const zones = (): RigZone[] => {
-    const byBlock = new Map<number, { name: string; ids: string[] }>();
-    for (const h of store.handsOff()) {
-      const entry = byBlock.get(h.block.id) ?? { name: h.look.name, ids: [] };
-      entry.ids.push(...store.rig.filter((f) => f.group === h.group.id).map((f) => f.id));
-      byBlock.set(h.block.id, entry);
-    }
-    return [...byBlock.values()].map((z) => ({ label: `MANUAL: ${z.name}`, layer: "manual", fixtureIds: z.ids }));
-  };
-
-  const lookOf = (f: (typeof store.rig)[number]) => {
-    const s = store.fixtureState(f);
-    return { color: s.look?.colors[0] ?? null, level: s.level };
-  };
-
   const pageTabs = () => [
     ...c.pages.map((p) => ({ id: p.id, label: p.name })),
     { id: "__add", label: <PlusIcon />, ariaLabel: "Add page" },
@@ -107,7 +92,7 @@ export function Screen() {
         <Region id="decks" title="Decks" bare>
           <Decks decks={store.decks()} />
         </Region>
-        <Region id="timetable" title="Layers" bare>
+        <Region id="timetable" title="Layers" bare class="console-tt">
           <Timetable
             from={win().from}
             to={win().to}
@@ -115,14 +100,18 @@ export function Screen() {
             lanes={store.lanes(win().from, win().to)}
             tickEvery={5 * 60}
             format={hhmm}
-            laneHeight="var(--console-lane)"
+            laneHeight="minmax(76px, 1fr)"
             labelWidth="var(--console-label)"
             laneControls={(lane) => (lane.layer === "autopilot" ? <AutoLaneControls /> : undefined)}
           />
-        </Region>
-        <Region id="rig" title="Rig" aside={<span class="mute">Top view, {store.rig.length} fixtures, colours as they are now</span>} class="console-rig">
-          <div class="console-rig-stage">
-            <RigView fixtures={store.rig} lookOf={lookOf} zones={zones()} />
+          <div class="console-tt-foot">
+            <Button onClick={() => store.addLayer()}>
+              <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+                <path d="M6 1v10M1 6h10" stroke="currentColor" stroke-width="2.5" />
+              </svg>
+              Add layer
+            </Button>
+            <span class="mute">The top layer that speaks wins.</span>
           </div>
         </Region>
         <Show when={c.editing()}>

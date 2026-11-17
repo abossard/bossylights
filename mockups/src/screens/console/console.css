@@ -25,17 +25,25 @@
   bottom: 8px;
 }
 
-/* ---------------- rig ---------------- */
-.console-rig {
-  flex: 1;
-  background: var(--s1);
-  padding: var(--sp-3) var(--sp-4);
-  gap: var(--sp-2);
-}
-
-.console-rig-stage {
+/* ---------------- timetable: it fills the left column ---------------- */
+.console-tt {
   flex: 1;
   min-height: 0;
+}
+
+.console-tt .tt {
+  flex: 1;
+  min-height: 0;
+}
+
+.console-tt-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+.console-tt-foot .btn {
+  min-height: 40px;
 }
 
 /* ---------------- page bar ---------------- */
@@ -435,9 +443,6 @@
     --console-label: 116px;
   }
 
-  .console-rig {
-    padding: var(--sp-2) var(--sp-3);
-  }
 
   .console-pagebar .tabs-page .tab {
     padding: 0 10px;

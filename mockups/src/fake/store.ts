@@ -1,11 +1,12 @@
 // One fake state store drives every screen. A pad pressed on the Console shows up
 // everywhere that reads this store.
-import { createRoot, createSignal } from "solid-js";
+import { createEffect, createRoot, createSignal } from "solid-js";
 import { createStore, produce, reconcile } from "solid-js/store";
 import { GOBOS, initialLibrary, type Entry, type Item, type Pattern, type Sequence, type Step } from "./library";
 import {
   CLOCK_START,
   GROUPS,
+  LIBRARY_ONLY,
   LOOKS,
   MASTER,
   RIG,
@@ -115,7 +116,7 @@ export interface PlacedSection {
   key: string;
   song: Song;
   songIndex: number;
-  section: Section;
+  section: SongSection;
   index: number;
   start: number;
   end: number;
@@ -133,8 +134,44 @@ export interface LaneBlock {
   tail?: string;
 }
 
+/** A layer of the engine. Three to start with; you can add more. Top first. */
+export interface LayerDef {
+  id: string;
+  name: string;
+  kind: "manual" | "show" | "autopilot" | "extra";
+  /** colour of an added layer; the first three use their tokens */
+  color?: string;
+}
+
+/** A section of a song, with an id that survives moving, splitting and merging. */
+export type SongSection = Section & { id: string };
+
+/** One thing written down while recording, in seconds from the start of the song. */
+export interface RecEvent {
+  at: number;
+  kind: "start" | "stop" | "flash" | "fader";
+  lookId?: string;
+  /** flash length in seconds */
+  dur?: number;
+  fader?: string;
+  value?: number;
+}
+
+/** A recording pass: one layer of a song's show. */
+export interface SongLayer {
+  id: string;
+  name: string;
+  muted: boolean;
+  /** still recording: drawn in red */
+  recording: boolean;
+  events: RecEvent[];
+}
+
 export interface Lane {
-  layer: Layer;
+  /** the layer id */
+  layer: string;
+  /** colour of an added layer */
+  color?: string;
   title: string;
   /** true while the lane has something running: the state chip is filled */
   on: boolean;
@@ -186,7 +223,14 @@ interface State {
   faders: Record<FaderId, number>;
   xy: { pan: number; tilt: number };
   manual: ManualBlock[];
-  clips: ShowClip[];
+  /** The engine's layers, top first. */
+  layers: LayerDef[];
+  /** Sections per song, editable. */
+  songSections: Record<string, SongSection[]>;
+  /** Recording passes per song, newest first. */
+  songLayers: Record<string, SongLayer[]>;
+  /** A song's base show layer, muted. */
+  baseMuted: Record<string, boolean>;
   autopilot: {
     on: boolean;
     style: AutopilotStyle;
@@ -216,7 +260,10 @@ function build() {
     lightsConnected: true,
     rig: RIG.map((f) => ({ ...f })),
     identify: null,
-    sectionLooks: {},
+    sectionLooks: Object.fromEntries([
+      ...SONGS[0].sections.map((x, i) => [`${SONGS[0].id}-${i}`, x.looks]),
+      ...SONGS[1].sections.map((x, i) => [`${SONGS[1].id}-${i}`, i === 1 ? [] : x.looks]),
+    ]),
     reviewed: [],
     // three channels held by hand: PAR 1 red, PAR 5 dimmer, Mover R1 pan
     held: { 66: 255, 93: 180, 33: 96 },
@@ -237,19 +284,34 @@ function build() {
       { id: 1, lookId: "red-alert", start: 22 * 3600 + 40 * 60 + 30, end: 22 * 3600 + 42 * 60 + 40, mode: "held" },
       { id: 2, lookId: "strobe", start: 22 * 3600 + 43 * 60 + 30, end: null, mode: "held" },
     ],
-    // Song 1 was recorded. Song 2 has its own show for the first drop only.
-    clips: [
-      { id: 10, track: "recorded", lookId: "warm-wash", start: 80100, end: 80340, origin: "recorded" },
-      { id: 11, track: "recorded", lookId: "tilt-wave", start: 80340, end: 80640, origin: "recorded" },
-      { id: 12, track: "recorded", lookId: "pulse", start: 80640, end: 81000, origin: "recorded" },
-      { id: 13, track: "recorded", lookId: "deep-blue", start: 81000, end: 81180, origin: "recorded" },
-      { id: 14, track: "recorded", lookId: "bass-hit", start: 81180, end: 81420, origin: "recorded" },
-      { id: 15, track: "recorded", lookId: "slow-fade", start: 81420, end: 81600, origin: "recorded" },
-      { id: 16, track: "looks", lookId: "pulse", start: 82140, end: 82380, origin: "programmed" },
-      { id: 17, track: "movers", lookId: "fan-out", start: 82140, end: 82380, origin: "programmed" },
-      { id: 18, track: "pixels", lookId: "sparkle", start: 82140, end: 82380, origin: "programmed" },
-      { id: 19, track: "laser", lookId: "laser-fan", start: 82200, end: 82380, origin: "programmed" },
+    layers: [
+      { id: "manual", name: "Manual", kind: "manual" },
+      { id: "show", name: "Show", kind: "show" },
+      { id: "autopilot", name: "Autopilot", kind: "autopilot" },
     ],
+    songSections: Object.fromEntries(
+      [...SONGS, ...LIBRARY_ONLY].map((song) => [song.id, song.sections.map((x, i) => ({ ...x, id: `${song.id}-${i}` }))]),
+    ),
+    // a pass recorded earlier today on Glass Hours, beside its base layer
+    songLayers: {
+      "glass-hours": [
+        {
+          id: "rec-1",
+          name: "Recorded today 21:58",
+          muted: false,
+          recording: false,
+          events: [
+            { at: 556, kind: "start", lookId: "strobe" },
+            { at: 586, kind: "stop", lookId: "strobe" },
+            { at: 790, kind: "fader", fader: "Wash", value: 40 },
+            { at: 965, kind: "start", lookId: "fan-out" },
+            { at: 1020, kind: "stop", lookId: "fan-out" },
+            { at: 1140, kind: "flash", lookId: "blinder", dur: 2 },
+          ],
+        },
+      ],
+    },
+    baseMuted: {},
     autopilot: {
       on: true,
       style: "club",
@@ -297,19 +359,23 @@ function build() {
   const undoLabel = () => state.history[state.history.length - 1]?.label ?? null;
 
   // ---- the set -------------------------------------------------------
-  const songLength = (s: Song) => s.sections.reduce((a, x) => a + x.length, 0);
-  const setLength = SONGS.reduce((a, s) => a + songLength(s), 0);
+  /** A song's sections as they are now (they can be moved, split, merged, renamed). */
+  const sectionsOf = (song: Song): SongSection[] =>
+    state.songSections[song.id] ?? song.sections.map((x, i) => ({ ...x, id: `${song.id}-${i}` }));
+  const songLength = (s: Song) => sectionsOf(s).reduce((a, x) => a + x.length, 0);
+  const setLengthOf = () => SONGS.reduce((a, s) => a + songLength(s), 0);
 
   /** Every section placed on the clock that overlaps [from, to]. The set repeats. */
   function sectionsBetween(from: number, to: number): PlacedSection[] {
     const out: PlacedSection[] = [];
+    const setLength = setLengthOf();
     const firstCycle = Math.max(0, Math.floor((from - SET_START) / setLength));
     for (let cycle = firstCycle; ; cycle++) {
       let t = SET_START + cycle * setLength;
       if (t > to) break;
       SONGS.forEach((song, songIndex) => {
         const songStart = t;
-        song.sections.forEach((section, index) => {
+        sectionsOf(song).forEach((section, index) => {
           const start = t;
           const end = t + section.length;
           t = end;
@@ -339,23 +405,169 @@ function build() {
     return s ? sectionsBetween(s.start, s.end - 0.001) : [];
   };
 
-  // ---- show clips ----------------------------------------------------
-  const trackFor = (l: Look): ClipTrack =>
-    l.kind === "movement" ? "movers" : l.kind === "pixels" ? "pixels" : l.kind === "laser" ? "laser" : "looks";
-  const activeClips = (t = now()) => state.clips.filter((c) => c.start <= t && t < c.end);
-  /** A section the show already covers: the autopilot leaves it alone. */
-  const covered = (p: PlacedSection) => {
-    const mid = (p.start + p.end) / 2;
-    return state.clips.some((c) => c.start < mid && c.end > mid);
+  // ---- the show of a song ---------------------------------------------
+  /** Song position in seconds, for the song that plays. */
+  const songPos = () => {
+    const c = currentSong();
+    return c ? now() - c.start : 0;
   };
-
-  function moveClip(id: number, start: number, end: number) {
-    const c = state.clips.find((x) => x.id === id);
-    if (!c) return;
-    const before = { start: c.start, end: c.end };
-    set("clips", (x) => x.id === id, { start, end });
-    record("Move clip", () => set("clips", (x) => x.id === id, before), `clip:${id}`);
+  /** A recorded layer's blocks: start to stop, or a flash. */
+  function recBlocks(l: SongLayer, songLen: number, pos = songPos()) {
+    const out: { lookId: string; start: number; end: number }[] = [];
+    const open: Record<string, number> = {};
+    for (const ev of [...l.events].sort((x, y) => x.at - y.at)) {
+      if (ev.kind === "start" && ev.lookId) open[ev.lookId] = ev.at;
+      if (ev.kind === "stop" && ev.lookId && open[ev.lookId] !== undefined) {
+        out.push({ lookId: ev.lookId, start: open[ev.lookId], end: ev.at });
+        delete open[ev.lookId];
+      }
+      if (ev.kind === "flash" && ev.lookId) out.push({ lookId: ev.lookId, start: ev.at, end: ev.at + (ev.dur ?? 1) });
+    }
+    // still held while recording: it runs up to now
+    for (const [id, at] of Object.entries(open)) out.push({ lookId: id, start: at, end: l.recording ? Math.max(at + 1, pos) : songLen });
+    return out;
   }
+  /** What the Show layer plays now: the section's blocks and every recorded layer that is not muted. */
+  function showLooksNow(): string[] {
+    const cur = currentSection();
+    if (!cur) return [...state.replay];
+    const pos = now() - cur.songStart;
+    const base = state.baseMuted[cur.song.id] ? [] : sectionLooksOf(cur.song, cur.index);
+    const rec = (state.songLayers[cur.song.id] ?? [])
+      .filter((l) => !l.muted && !l.recording)
+      .flatMap((l) => recBlocks(l, songLength(cur.song)).filter((x) => x.start <= pos && pos < x.end).map((x) => x.lookId));
+    return [...new Set([...state.replay, ...rec, ...base])];
+  }
+  /** A section the show already covers: the autopilot leaves it alone. */
+  const covered = (p: PlacedSection) => !state.baseMuted[p.song.id] && sectionLooksOf(p.song, p.index).length > 0;
+
+  /** One undo step for any change to a song's show. */
+  function editSong(song: Song, label: string, fn: () => void) {
+    const before = {
+      sections: JSON.parse(JSON.stringify(sectionsOf(song))) as SongSection[],
+      layers: JSON.parse(JSON.stringify(state.songLayers[song.id] ?? [])) as SongLayer[],
+      looks: { ...state.sectionLooks },
+      muted: !!state.baseMuted[song.id],
+    };
+    fn();
+    record(label, () => {
+      set("songSections", song.id, before.sections);
+      set("songLayers", song.id, before.layers);
+      set("sectionLooks", reconcile(before.looks));
+      set("baseMuted", song.id, before.muted);
+    });
+  }
+
+  /** Move the edge between section i and i + 1 by some seconds. */
+  function moveSectionEdge(song: Song, i: number, delta: number) {
+    const secs = sectionsOf(song);
+    if (i < 0 || i >= secs.length - 1) return;
+    const d = Math.max(-(secs[i].length - 8), Math.min(secs[i + 1].length - 8, Math.round(delta)));
+    if (!d) return;
+    const before = JSON.parse(JSON.stringify(secs)) as SongSection[];
+    set("songSections", song.id, i, "length", secs[i].length + d);
+    set("songSections", song.id, i + 1, "length", secs[i + 1].length - d);
+    record(`Move ${secs[i].title} edge`, () => set("songSections", song.id, before), `edge:${song.id}:${i}`);
+  }
+  let secSeq = 1;
+  function splitSection(song: Song, i: number) {
+    editSong(song, `Split ${sectionsOf(song)[i].title}`, () => {
+      const secs = [...sectionsOf(song)];
+      const a = secs[i];
+      const half = Math.round(a.length / 2);
+      const b2: SongSection = { ...a, id: `${a.id}-s${secSeq++}`, length: a.length - half, title: `${a.title} 2` };
+      secs.splice(i, 1, { ...a, length: half }, b2);
+      set("songSections", song.id, secs);
+      set("sectionLooks", b2.id, [...(state.sectionLooks[a.id] ?? [])]);
+    });
+  }
+  function mergeSections(song: Song, i: number) {
+    const secs = sectionsOf(song);
+    if (i >= secs.length - 1) return;
+    editSong(song, `Merge ${secs[i].title} and ${secs[i + 1].title}`, () => {
+      const a = secs[i];
+      const b2 = secs[i + 1];
+      const merged: SongSection = {
+        ...a,
+        length: a.length + b2.length,
+        energy: (a.energy * a.length + b2.energy * b2.length) / (a.length + b2.length),
+      };
+      const next = [...secs];
+      next.splice(i, 2, merged);
+      set("songSections", song.id, next);
+      set("sectionLooks", a.id, [...new Set([...(state.sectionLooks[a.id] ?? []), ...(state.sectionLooks[b2.id] ?? [])])]);
+    });
+  }
+  function renameSection(song: Song, i: number, title: string) {
+    const t = title.trim();
+    if (!t) return;
+    const before = sectionsOf(song)[i].title;
+    set("songSections", song.id, i, "title", t);
+    record(`Rename ${before}`, () => set("songSections", song.id, i, "title", before), `rename:${song.id}:${i}`);
+  }
+
+  const songLayersOf = (song: Song) => state.songLayers[song.id] ?? [];
+  function setLayerMuted(song: Song, layerId: string, muted: boolean) {
+    editSong(song, muted ? "Mute layer" : "Unmute layer", () => {
+      if (layerId === "base") set("baseMuted", song.id, muted);
+      else set("songLayers", song.id, (l) => l.id === layerId, "muted", muted);
+    });
+  }
+  /** Merge a recorded layer into the one below it (an older pass, or the base layer). */
+  function mergeLayerDown(song: Song, layerId: string) {
+    const layers = songLayersOf(song);
+    const i = layers.findIndex((l) => l.id === layerId);
+    if (i < 0) return;
+    const l = layers[i];
+    editSong(song, `Merge ${l.name}`, () => {
+      const below = layers[i + 1];
+      if (below) {
+        set("songLayers", song.id, i + 1, "events", [...below.events, ...l.events].sort((x, y) => x.at - y.at));
+      } else {
+        // into the base layer: every look started in a section joins that section
+        const secs = sectionsOf(song);
+        let t = 0;
+        const bounds = secs.map((x) => [t, (t += x.length)]);
+        for (const ev of l.events) {
+          if ((ev.kind !== "start" && ev.kind !== "flash") || !ev.lookId) continue;
+          const k = bounds.findIndex(([a, b2]) => ev.at >= a && ev.at < b2);
+          if (k < 0) continue;
+          const ids = state.sectionLooks[secs[k].id] ?? [];
+          if (!ids.includes(ev.lookId)) set("sectionLooks", secs[k].id, [...ids, ev.lookId]);
+        }
+      }
+      set("songLayers", song.id, (ls) => ls.filter((x) => x.id !== layerId));
+    });
+  }
+  function deleteLayer(song: Song, layerId: string) {
+    editSong(song, "Delete layer", () => set("songLayers", song.id, (ls) => ls.filter((x) => x.id !== layerId)));
+  }
+
+  // recording writes into the show of the song that plays, as a new layer
+  let recSeq = 2;
+  function recordEvent(ev: Omit<RecEvent, "at">) {
+    if (!isRecording()) return;
+    const cur = currentSong();
+    if (!cur) return;
+    const id = cur.song.id;
+    const layers = state.songLayers[id] ?? [];
+    let l = layers.find((x) => x.recording);
+    if (!l) {
+      l = { id: `rec-${recSeq++}`, name: `Recording ${hhmm(now())}`, muted: false, recording: true, events: [] };
+      set("songLayers", id, [l, ...layers]);
+    }
+    const lid = l.id;
+    set("songLayers", id, (x) => x.id === lid, "events", (es) => [...es, { ...ev, at: now() - cur.start }]);
+  }
+  // a pass ends when recording stops or the song changes
+  createEffect(() => {
+    const rec = isRecording();
+    const playing = currentSong()?.song.id;
+    for (const [songId, layers] of Object.entries(state.songLayers)) {
+      if (!rec || songId !== playing)
+        layers.forEach((l, i) => l.recording && set("songLayers", songId, i, { recording: false, name: l.name.replace("Recording", "Recorded") }));
+    }
+  });
 
   const energyWord = (e: number) => (e < 0.4 ? "low" : e < 0.7 ? "rising" : "high");
   /** Why the autopilot picked what it picked, in plain words. */
@@ -369,10 +581,9 @@ function build() {
 
   /** What the autopilot plays in a section, after style, groups and skips. */
   // ---- song director ---------------------------------------------------
-  const sectionKey = (song: Song, index: number) => `${song.id}:${index}`;
-  /** The looks a song section holds: set in the Song Director, else the sample data. */
-  const sectionLooksOf = (song: Song, index: number): string[] =>
-    state.sectionLooks[sectionKey(song, index)] ?? song.sections[index].looks;
+  const sectionKey = (song: Song, index: number) => sectionsOf(song)[index]?.id ?? `${song.id}-${index}`;
+  /** The looks a section of the song's show holds (its base layer). */
+  const sectionLooksOf = (song: Song, index: number): string[] => state.sectionLooks[sectionKey(song, index)] ?? [];
 
   function setSectionLooks(song: Song, index: number, ids: string[], label = "Change section") {
     const key = sectionKey(song, index);
@@ -390,7 +601,7 @@ function build() {
   function fillFromStyle(song: Song) {
     const before = { ...state.sectionLooks };
     let n = 0;
-    song.sections.forEach((sec, i) => {
+    sectionsOf(song).forEach((sec, i) => {
       if (sectionLooksOf(song, i).length) return;
       const ids = FALLBACK[energyWord(sec.energy)].filter(
         (id) => !(state.autopilot.style === "no-strobe" && lookById(id).kind === "strobe"),
@@ -411,8 +622,8 @@ function build() {
 
   /** What the autopilot plays in a section, after style, groups and skips. */
   function autopilotLooks(p: PlacedSection): Look[] {
-    const held = sectionLooksOf(p.song, p.index);
-    const ids = state.autopilot.swaps[p.key] ?? (held.length ? held : FALLBACK[energyWord(p.section.energy)]);
+    // the autopilot's own picks: the analysis suggests some, else by energy
+    const ids = state.autopilot.swaps[p.key] ?? (p.section.looks.length ? p.section.looks : FALLBACK[energyWord(p.section.energy)]);
     return ids
       .map(lookById)
       .filter((l) => !(state.autopilot.style === "no-strobe" && l.kind === "strobe"))
@@ -452,16 +663,11 @@ function build() {
     record(`More like ${p.section.title}`, () => set("autopilot", "likes", before));
   }
 
-  /** Keep a pick: it becomes normal show clips that you own. */
+  /** Keep a pick: it becomes normal blocks in the song's show that you own. */
   function keepPick(p: PlacedSection) {
     const looks = autopilotLooks(p);
     if (!looks.length) return;
-    const ids = looks.map(() => nextId++);
-    set("clips", (cs) => [
-      ...cs,
-      ...looks.map((l, i) => ({ id: ids[i], track: trackFor(l), lookId: l.id, start: p.start, end: p.end, origin: "kept" as const })),
-    ]);
-    record(`Keep ${p.section.title}`, () => set("clips", (cs) => cs.filter((c) => !ids.includes(c.id))));
+    setSectionLooks(p.song, p.index, looks.map((l) => l.id), `Keep ${p.section.title}`);
   }
 
   // ---- decks and the set ---------------------------------------------
@@ -481,25 +687,6 @@ function build() {
     return list.sort((a, b) => a.number.localeCompare(b.number));
   }
 
-  /** Tonight's set around now, with how each song is lit. */
-  function setList(): SetEntry[] {
-    const cycle = Math.max(0, Math.floor((now() - SET_START) / setLength));
-    let t = SET_START + cycle * setLength;
-    return SONGS.map((song, index) => {
-      const start = t;
-      const end = (t += songLength(song));
-      const inSong = state.clips.filter((c) => c.start < end && c.end > start);
-      const mark: SetEntry["mark"] = inSong.some((c) => c.origin === "recorded")
-        ? "recorded"
-        : inSong.length
-          ? "show"
-          : song.analysis === "queued"
-            ? "not analysed"
-            : "auto";
-      return { song, index, start, end, mark };
-    });
-  }
-
   // ---- manual layer --------------------------------------------------
   const runningManual = () => state.manual.filter((b) => b.end === null);
   const manualBlockFor = (lookId: string) => runningManual().find((b) => b.lookId === lookId);
@@ -507,6 +694,7 @@ function build() {
   function log(lookId: string, action: ManualEvent["action"]) {
     if (!isRecording()) return;
     set("events", (e) => [...e, { at: now(), lookId, action }]);
+    recordEvent({ kind: action, lookId });
   }
 
   const removeBlock = (id: number) => set("manual", (bs) => bs.filter((b) => b.id !== id));
@@ -570,6 +758,7 @@ function build() {
     const before = state.master;
     set("master", clamp(v));
     record("Master", () => set("master", before), "master");
+    recordFader("Master", clamp(v));
   }
 
   function setBlackout(on: boolean) {
@@ -904,10 +1093,24 @@ function build() {
   const followsDj = () => inEffect("dj");
   const autopilotArmed = () => inEffect("autopilot");
 
+  const FADER_NAME: Record<FaderId, string> = { wash: "Wash", movers: "Movers", pixels: "Pixels", strobeRate: "Strobe rate", laser: "Laser" };
+  /** A fader move is a command too: a recording keeps the last value of each drag. */
+  function recordFader(fader: string, value: number) {
+    const cur = currentSong();
+    if (!isRecording() || !cur) return;
+    const l = (state.songLayers[cur.song.id] ?? []).find((x) => x.recording);
+    const last = l?.events[l.events.length - 1];
+    const at = now() - cur.start;
+    if (l && last?.kind === "fader" && last.fader === fader && at - last.at < 1.5) {
+      set("songLayers", cur.song.id, (x) => x.id === l.id, "events", l.events.length - 1, { at, value });
+    } else recordEvent({ kind: "fader", fader, value });
+  }
+
   function setFader(id: FaderId, v: number) {
     const before = state.faders[id];
     set("faders", id, clamp(v));
     record("Fader", () => set("faders", id, before), `fader:${id}`);
+    recordFader(FADER_NAME[id], clamp(v));
   }
 
   function setXY(pan: number, tilt: number) {
@@ -967,9 +1170,7 @@ function build() {
       look = lookById(hand.lookId);
       layer = "manual";
     } else {
-      const sh = [...state.replay.map(lookById), ...activeClips().map((c) => lookById(c.lookId))].find((l) =>
-        l.groups.includes(f.group),
-      );
+      const sh = showLooksNow().map(lookById).find((l) => l.groups.includes(f.group));
       const ap = autopilotNow().find((l) => l.groups.includes(f.group));
       if (sh) {
         look = sh;
@@ -994,7 +1195,7 @@ function build() {
 
   /** Groups the Manual layer covers that the Show or the Autopilot also wants. */
   function overrides() {
-    const showGroups = new Set([...state.replay, ...activeClips().map((c) => c.lookId)].flatMap((id) => lookById(id).groups));
+    const showGroups = new Set(showLooksNow().flatMap((id) => lookById(id).groups));
     const apGroups = new Set(autopilotNow().flatMap((l) => l.groups));
     return runningManual()
       .map((b) => ({ block: b, look: lookById(b.lookId) }))
@@ -1018,7 +1219,7 @@ function build() {
   function lookState(lookId: string): "held" | "flash" | "show" | "autopilot" | null {
     const b = manualBlockFor(lookId);
     if (b) return b.mode;
-    if (activeClips().some((c) => c.lookId === lookId)) return "show";
+    if (showLooksNow().includes(lookId)) return "show";
     if (autopilotNow().some((l) => l.id === lookId)) return "autopilot";
     return null;
   }
@@ -1038,22 +1239,13 @@ function build() {
       }));
     const handGroups = handsOff().map((h) => h.group.name);
     const cur = currentSection();
-    const spans: { start: number; end: number; clips: ShowClip[] }[] = [];
-    for (const c of [...state.clips].sort((a, b) => a.start - b.start)) {
-      const last = spans[spans.length - 1];
-      if (last && c.start <= last.end) {
-        last.end = Math.max(last.end, c.end);
-        last.clips.push(c);
-      } else spans.push({ start: c.start, end: c.end, clips: [c] });
-    }
-    const spanTitle = (sp: (typeof spans)[number]) =>
-      sp.clips.every((c) => c.origin === "recorded") ? "Recorded" : (sectionAt(sp.start + 0.001)?.section.title ?? "Show");
-    const showBlocks = spans
-      .filter((sp) => sp.end > from && sp.start < to)
-      .map((sp) => ({ id: `show-${sp.start}`, title: spanTitle(sp), sub: hhmm(sp.start), start: sp.start, end: sp.end }));
-    const showNow = spans.find((sp) => sp.start <= t && t < sp.end);
-    const showNext = spans.find((sp) => sp.start > t);
-    const apBlocks = sectionsBetween(from, to).filter((p) => !covered(p)).map((p) => ({
+    const placed = sectionsBetween(from, to);
+    const showBlocks = placed
+      .filter((p) => covered(p))
+      .map((p) => ({ id: `show-${p.key}`, title: p.section.title, sub: hhmm(p.start), start: p.start, end: p.end }));
+    const showNowLooks = showLooksNow();
+    const showNext = sectionsBetween(t, t + 3600).find((p) => p.start > t && covered(p));
+    const apBlocks = placed.filter((p) => !covered(p)).map((p) => ({
       id: `ap-${p.key}`,
       title: p.section.title,
       sub: p.key === cur?.key ? `${hhmm(p.start)}\n${mmss(p.end - t)} left` : hhmm(p.start),
@@ -1061,8 +1253,8 @@ function build() {
       end: p.end,
     }));
     const apPlaying = state.autopilot.on && autopilotArmed() && !!cur && !covered(cur);
-    return [
-      {
+    const builtIn: Record<string, Lane> = {
+      manual: {
         layer: "manual",
         title: "Manual",
         on: handGroups.length > 0,
@@ -1070,19 +1262,22 @@ function build() {
         status: handGroups.length ? `covers ${handGroups.join(", ")}` : "nothing held",
         blocks: manualBlocks,
       },
-      {
+      show: {
         layer: "show",
         title: "Show",
-        on: !!showNow || state.replay.length > 0,
-        chip: showNow || state.replay.length ? "playing" : "idle",
+        on: showNowLooks.length > 0,
+        chip: showNowLooks.length ? "playing" : "idle",
         status: state.replay.length
           ? `replays ${state.replay.map((id) => lookById(id).name).join(", ")}`
-          : showNow
-            ? spanTitle(showNow) : showNext ? `next at ${hhmm(showNext.start)}` : "nothing planned",
+          : showNowLooks.length
+            ? showNowLooks.map((id) => lookById(id).name).join(", ")
+            : showNext
+              ? `next at ${hhmm(showNext.start)}`
+              : "nothing planned",
         blocks: showBlocks,
-        empty: "No show loaded",
+        empty: "No show for this song",
       },
-      {
+      autopilot: {
         layer: "autopilot",
         title: "Autopilot",
         on: apPlaying,
@@ -1100,7 +1295,21 @@ function build() {
                   : "nothing to play",
         blocks: apBlocks,
       },
-    ];
+    };
+    return state.layers.map(
+      (l): Lane =>
+        builtIn[l.kind] ?? { layer: l.id, title: l.name, color: l.color, on: false, chip: "idle", status: "nothing on it yet", blocks: [], empty: "Nothing on this layer yet" },
+    );
+  }
+
+  const EXTRA_COLOURS = ["#9d7bff", "#ff9a3d", "#3ddc97", "#c6d94a"];
+  /** Add a layer: it goes under Manual, with its own colour. */
+  function addLayer() {
+    const n = state.layers.filter((l) => l.kind === "extra").length;
+    const id = `layer-${Date.now().toString(36)}`;
+    const layer: LayerDef = { id, name: `Layer ${state.layers.length + 1}`, kind: "extra", color: EXTRA_COLOURS[n % EXTRA_COLOURS.length] };
+    set("layers", (ls) => [ls[0], layer, ...ls.slice(1)]);
+    record(`Add ${layer.name}`, () => set("layers", (ls) => ls.filter((l) => l.id !== id)));
   }
 
   return {
@@ -1131,7 +1340,20 @@ function build() {
     skipPick,
     morePick,
     keepPick,
-    moveClip,
+    addLayer,
+    sectionsOf,
+    songLength,
+    songPos,
+    recBlocks,
+    showLooksNow,
+    songLayersOf,
+    setLayerMuted,
+    mergeLayerDown,
+    deleteLayer,
+    moveSectionEdge,
+    splitSection,
+    mergeSections,
+    renameSection,
     undo,
     undoLabel,
     record,
@@ -1156,9 +1378,7 @@ function build() {
     autopilotLooks,
     pickReason,
     covered,
-    activeClips,
     decks,
-    setList,
     autopilotNow,
     get rig() {
       return state.rig;

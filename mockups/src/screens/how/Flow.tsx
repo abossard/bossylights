@@ -98,7 +98,7 @@ export function Flow(props: {
       layer === "manual"
         ? store.runningManual().map((b) => b.lookId)
         : layer === "show"
-          ? [...store.state.replay, ...store.activeClips().map((c) => c.lookId)]
+          ? store.showLooksNow()
           : store.autopilotNow().map((l) => l.id);
     const names = [...new Set(ids)].map((id) => lookById(id).name);
     return names.length ? names.join(", ") : "silent";

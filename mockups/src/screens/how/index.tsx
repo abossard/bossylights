@@ -159,7 +159,7 @@ export function Screen() {
   const speakers = (groupId: string) => {
     const g = groupId as "movers" | "pars" | "bars" | "laser";
     const manual = [...store.runningManual()].reverse().find((b) => lookById(b.lookId).groups.includes(g));
-    const show = [...store.state.replay, ...store.activeClips().map((c) => c.lookId)].find((id) => lookById(id).groups.includes(g));
+    const show = store.showLooksNow().find((id) => lookById(id).groups.includes(g));
     const auto = store.autopilotNow().find((l) => l.groups.includes(g));
     return [
       manual && { layer: "manual" as const, look: lookById(manual.lookId).name },
