@@ -327,7 +327,7 @@ function paint(now: number) {
 }
 
 setInterval(() => {
-  hud.textContent = `${LABEL}  ${status}  frame ${latest?.frame ?? "-"}\n${recent.length} fps  ${measuring ? `measuring ${measuring.name}` : phaseNote}`;
+  hud.textContent = `Measurement page for issue 24. Not the product design.\n${LABEL}  ${status}  frame ${latest?.frame ?? "-"}\n${recent.length} fps  ${measuring ? `measuring ${measuring.name}` : phaseNote}`;
 }, 250);
 
 // ---------- automatic run ----------
