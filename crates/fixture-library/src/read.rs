@@ -8,6 +8,26 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use roxmltree::{Document, Node, ParsingOptions};
 
+/// The largest real definition is 133 kB: this is about seven times that.
+const MOST_BYTES: usize = 1024 * 1024;
+
+/// The line of the `[` that opens declarations in a DOCTYPE, when there is one. Quoted text is skipped.
+fn declarations_at(text: &str) -> Option<u32> {
+    let start = text.find("<!DOCTYPE")?;
+    let mut quote = None;
+    for (at, c) in text[start..].char_indices() {
+        match (quote, c) {
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), _) => {}
+            (None, '"' | '\'') => quote = Some(c),
+            (None, '[') => return Some(1 + text[..start + at].matches('\n').count() as u32),
+            (None, '>') => return None,
+            _ => {}
+        }
+    }
+    None
+}
+
 /// Reads one definition. `file` is only a name for the error: nothing is opened.
 pub fn parse(file: &str, bytes: &[u8]) -> Result<Fixture, Error> {
     let failed = |line: Option<u32>, problem| Error {
@@ -16,7 +36,13 @@ pub fn parse(file: &str, bytes: &[u8]) -> Result<Fixture, Error> {
         problem,
     };
     let text = core::str::from_utf8(bytes).map_err(|_| failed(None, Problem::NotText))?;
-    // QLC+ files carry a bare `<!DOCTYPE FixtureDefinition>`: allowed, it has no entities.
+    if bytes.len() > MOST_BYTES {
+        return Err(failed(None, Problem::TooLarge { bytes: bytes.len(), most: MOST_BYTES }));
+    }
+    if let Some(line) = declarations_at(text) {
+        return Err(failed(Some(line), Problem::Declarations));
+    }
+    // QLC+ files carry a bare `<!DOCTYPE FixtureDefinition>`: allowed, the check above left it no entities.
     let options = ParsingOptions {
         allow_dtd: true,
         ..ParsingOptions::default()

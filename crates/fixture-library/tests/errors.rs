@@ -120,3 +120,54 @@ fn bytes_that_are_not_text_are_an_error_not_a_panic() {
         assert!(error.to_string().starts_with("junk.qxf"), "{error}");
     }
 }
+
+const BARE: &str = "<?xml version=\"1.0\"?>\n<!DOCTYPE FixtureDefinition>\n";
+const BODY: &str = "<FixtureDefinition xmlns=\"http://www.qlcplus.org/FixtureDefinition\"><Manufacturer>A</Manufacturer><Model>M</Model><Type>Dimmer</Type></FixtureDefinition>";
+
+// name, the file, the line it must name, a word of what is wrong. A definition may not declare entities or be huge: nothing is expanded.
+#[test]
+fn a_file_that_could_grow_when_read_is_an_error_before_it_is_read() {
+    let expansions = "&b;".repeat(100);
+    let cases: Vec<(&str, String, Option<u32>, &str)> = vec![
+        (
+            "entities that expand into each other",
+            format!(
+                "<?xml version=\"1.0\"?>\n<!DOCTYPE FixtureDefinition [\n<!ENTITY a \"aaaaaaaaaa\">\n<!ENTITY b \"&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;\">\n]>\n<FixtureDefinition><Manufacturer>{expansions}</Manufacturer></FixtureDefinition>"
+            ),
+            Some(2),
+            "declarations",
+        ),
+        (
+            "an empty set of declarations",
+            format!("<?xml version=\"1.0\"?>\n\n<!DOCTYPE FixtureDefinition []>\n{BODY}"),
+            Some(3),
+            "declarations",
+        ),
+        (
+            "bigger than any real definition",
+            format!("{BARE}{BODY}<!-- {} -->", "x".repeat(1024 * 1024)),
+            None,
+            "too large",
+        ),
+    ];
+    for (name, source, line, what) in cases {
+        let error = parse("bad.qxf", source.as_bytes()).expect_err(name);
+        let message = error.to_string();
+        assert!(message.starts_with("bad.qxf"), "{name}: {message}");
+        assert!(message.contains(what), "{name}: {message}");
+        assert_eq!(error.line, line, "{name}: {message}");
+    }
+}
+
+// name, a file with a DOCTYPE that is fine
+#[test]
+fn a_doctype_without_declarations_is_read() {
+    let cases = [
+        ("bare", format!("{BARE}{BODY}")),
+        ("with a public id", format!("<!DOCTYPE FixtureDefinition PUBLIC \"-//x[y]\" \"x.dtd\">\n{BODY}")),
+        ("no doctype", BODY.to_string()),
+    ];
+    for (name, source) in cases {
+        parse("ok.qxf", source.as_bytes()).unwrap_or_else(|e| panic!("{name}: {e}"));
+    }
+}

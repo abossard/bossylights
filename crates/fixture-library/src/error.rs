@@ -14,6 +14,9 @@ pub struct Error {
 pub enum Problem {
     NotText,
     NotXml(String),
+    /// A DOCTYPE with declarations (`[ ... ]`): entities could grow the file when read.
+    Declarations,
+    TooLarge { bytes: usize, most: usize },
     WrongRoot(String),
     Missing(&'static str),
     BadNumber { what: &'static str, text: String },
@@ -37,6 +40,8 @@ impl fmt::Display for Problem {
         match self {
             Self::NotText => write!(f, "the file is not text"),
             Self::NotXml(why) => write!(f, "not valid xml: {why}"),
+            Self::Declarations => write!(f, "the DOCTYPE has declarations, which a definition does not need"),
+            Self::TooLarge { bytes, most } => write!(f, "too large: {bytes} bytes, at most {most}"),
             Self::WrongRoot(found) => write!(f, "expected FixtureDefinition, found {found}"),
             Self::Missing(what) => write!(f, "<{what}> is missing"),
             Self::BadNumber { what, text } => {
