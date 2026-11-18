@@ -1,6 +1,6 @@
 // Songs: a song has one show. Rows are checked with a song selected and analysed, and one pass recorded.
 import { gone, off, works } from "../situations.ts";
-import { button, change, choice, control, draggable, field, keep, no, toggle, NOT_A_BUTTON, ONLY_DRAGGED, type Control } from "../spec.ts";
+import { button, change, control, draggable, field, keep, liveToggle, no, toggle, NOT_A_BUTTON, ONLY_DRAGGED, type Control } from "../spec.ts";
 
 const NO_SONGS = gone("No songs yet: they arrive from the DJ software");
 
@@ -51,25 +51,6 @@ export const SONGS: Control[] = [
     states: ["plain", "open", "playing", "needs review", "queued"],
   }),
   control({
-    id: "songs.follows",
-    name: "Follows",
-    screen: "Songs",
-    part: "Song header",
-    from: ["songs/Screen/follows"],
-    kit: "Picker.segments",
-    kind: "setting",
-    does: "Which deck, or timecode, gives the song that plays and its position",
-    sends: ["SetFollows"],
-    gestures: choice("Follows that source"),
-    in: {
-      empty: NO_SONGS,
-      song: works("Works. The Show row jumps to the song of that source, at once"),
-      "no-song": works("Works. It counts from the next song on"),
-    },
-    first: change("It sits in the header of one song but is a setting of the whole app, and it overlaps the DJ link indicator and the tempo feed. Its place is In/Out, beside the tempo feed"),
-    states: ["deck 1", "deck 2", "timecode"],
-  }),
-  control({
     id: "songs.play-from",
     name: "Play from a section",
     screen: "Songs",
@@ -77,19 +58,19 @@ export const SONGS: Control[] = [
     from: ["songs/Screen/play-from", "songs/Screen/stop-listening"],
     kit: "Button.toggle",
     kind: "play",
-    does: "Runs the show of this song on the lights from the selected section, without the deck. No sound",
-    sends: ["PlayFrom", "StopListening"],
-    gestures: toggle("Runs the show from the selected section", "the run ends"),
+    does: "Plays the show of this song on the lights from the selected section, without the deck. No sound. It says 'Play from Drop', then 'Stop'",
+    sends: ["PlayFrom", "StopPlayFrom"],
+    gestures: liveToggle("Plays the show from the selected section", "it stops"),
     in: {
       recording: off("A song plays: the deck decides"),
       holding: works("Works. What you hold stays on top of the show"),
       empty: NO_SONGS,
       song: off("A song plays: the deck decides"),
-      "no-song": works("Works. A second line, 'Listening', walks through the song"),
+      "no-song": works("Works. A second line, 'Playing', walks through the song"),
     },
-    feedback: { screen: "The flag 'Listening' with the time walks along the rows, from the next screen frame on", controller: "The mapped control is lit while it runs" },
-    first: change("Three words for one thing: 'Play from', 'Stop listening', 'Listening'. And no music plays. One word, the one Looks uses: 'Try from Drop', 'Stop'. A song that is not analysed says 'Not analysed yet'"),
-    states: ["idle", "running", "not analysed"],
+    feedback: { screen: "The flag 'Playing' with the time walks along the rows, from the next screen frame on", controller: "The mapped control is lit while it plays" },
+    first: change("Three words for one thing in the mockup: 'Play from', 'Stop listening', 'Listening'. The owner's decision 28: 'Play from Drop', then 'Stop', and the flag says 'Playing'. A song that is not analysed says 'Not analysed yet'"),
+    states: ["Play from Drop", "Stop", "not analysed"],
   }),
   control({
     id: "songs.sections-look-right",

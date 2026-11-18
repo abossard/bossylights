@@ -17,13 +17,18 @@
 mod api;
 mod channel;
 mod kinds;
+mod library;
 mod output;
 
-pub use api::{API_VERSION, Refusal, Reply, Request};
+pub use api::{API_VERSION, MATCHES, Refusal, Reply, Request};
 pub use channel::{
     ADDRESSES, Channel, ChannelLevel, ChannelNumbers, Levels, MAX_UNIVERSES, Universes, changes,
 };
 pub use kinds::{Color, OutputKind};
+pub use library::{
+    ChannelFunction, Failure, FixtureKind, Library, Match, ModeChannels, ModeSize, NamedChannel,
+    Text,
+};
 pub use output::{
     Counters, GIVE_UP, MAX_OUTPUTS, OFF_BEAT, Outcome, Output, OutputNumber, Rate, Run,
     RunNumbers, Status,
@@ -914,6 +919,14 @@ mod tests {
                 Run::decl(&config),
                 Status::decl(&config),
                 Counters::decl(&config),
+                Library::decl(&config),
+                Match::decl(&config),
+                ModeSize::decl(&config),
+                ModeChannels::decl(&config),
+                NamedChannel::decl(&config),
+                Failure::decl(&config),
+                FixtureKind::decl(&config),
+                ChannelFunction::decl(&config),
             ]
             .map(|declaration| format!("export {declaration}\n"))
             .join("\n"),

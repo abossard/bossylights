@@ -1,7 +1,7 @@
 // Generated from crates/engine-core. Do not edit.
 // Update: UPDATE_TS=1 cargo test -p engine-core
 
-export type Request = { "Send": { command: Command, } } | "Query" | "Subscribe" | "Stop";
+export type Request = { "Send": { command: Command, } } | "Query" | "Subscribe" | "Stop" | { "Search": { text: string, } } | { "Fixture": { maker: string, model: string, } } | "Failures";
 
 export type Command = { "SetChannel": { channel: ChannelNumbers, value: number, } } | { "ReleaseChannel": { channel: ChannelNumbers, } } | "ReleaseAll" | { "Blackout": { on: boolean, } } | { "SetOutput": { output: OutputNumber, kind: OutputKind, universes: RunNumbers, rate: Rate | null, } } | { "RemoveOutput": { output: OutputNumber, } };
 
@@ -17,9 +17,9 @@ export type Color = "Rgb" | "Rgbw";
 
 export type Rate = "30" | "44" | "60";
 
-export type Reply = "Accepted" | "Stopping" | { "Refused": { reason: Refusal, } } | { "Picture": { state: State, universes: Array<Levels>, } } | { "Changed": { state: State, channels: Array<ChannelLevel>, } };
+export type Reply = "Accepted" | "Stopping" | { "Refused": { reason: Refusal, } } | { "Picture": { state: State, library: Library, universes: Array<Levels>, } } | { "Changed": { state: State, library: Library, channels: Array<ChannelLevel>, } } | { "Found": { fixtures: Array<Match>, } } | { "Fixture": { maker: string, model: string, kind: FixtureKind, modes: Array<ModeChannels>, } } | { "Failures": { failures: Array<Failure>, } };
 
-export type Refusal = "NotACommand" | { "NoSuchUniverse": { universes: number, } } | "NoSuchAddress" | "QueueFull" | "CannotOpen";
+export type Refusal = "NotACommand" | { "NoSuchUniverse": { universes: number, } } | "NoSuchAddress" | "QueueFull" | "CannotOpen" | "NoSuchFixture";
 
 export type State = { 
 /**
@@ -62,5 +62,21 @@ export type Counters = { accepted: number, dropped: number, failed: number,
  * Intervals more than [`OFF_BEAT`] away from the period.
  */
 off_beat: number, };
+
+export type Library = "NoFolder" | "Reading" | { "Read": { read: number, failed: number, } } | "CannotOpen";
+
+export type Match = { maker: string, model: string, kind: FixtureKind, modes: Array<ModeSize>, };
+
+export type ModeSize = { name: string, channels: number, };
+
+export type ModeChannels = { name: string, channels: Array<NamedChannel>, };
+
+export type NamedChannel = { name: string, function: ChannelFunction, };
+
+export type Failure = { file: string, line: number | null, problem: string, };
+
+export type FixtureKind = "ColorChanger" | "Dimmer" | "Effect" | "Fan" | "Flower" | "Hazer" | "Laser" | "LedBarBeams" | "LedBarPixels" | "MovingHead" | "Other" | "Scanner" | "Smoke" | "Strobe" | { "Unlisted": { name: string, } };
+
+export type ChannelFunction = "Dimmer" | "Red" | "Green" | "Blue" | "White" | "Amber" | "Uv" | "Indigo" | "Lime" | "Cyan" | "Magenta" | "Yellow" | "Hue" | "Saturation" | "Lightness" | "Value" | "ColorTemperature" | "Pan" | "Tilt" | "Zoom" | "Focus" | "Iris" | "Frost" | "Gobo" | "ColorWheel" | "Strobe" | "Shutter" | "Prism" | "Speed" | "Effect" | "Control" | "NoFunction" | { "Other": { name: string, } };
 
 export const API_VERSION = 1;

@@ -9,14 +9,18 @@
 use engine::{Engine, MAX_OUTPUTS, OutputNumber, State, Universes};
 use std::fs::{File, TryLockError};
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::process::exit;
 
-const USAGE: &str = "usage: bossylights-engine [--listen 127.0.0.1:7744] [--universes 4]";
+const USAGE: &str =
+    "usage: bossylights-engine [--listen 127.0.0.1:7744] [--universes 4] [--fixtures <folder>]";
 
 /// What the process is started with.
 struct Settings {
     listen: SocketAddr,
     universes: Universes,
+    /// The folder of fixture definitions (QLC+ `.qxf`), read while the engine runs.
+    fixtures: Option<PathBuf>,
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -50,7 +54,7 @@ async fn main() {
         settings.listen,
         settings.universes.count()
     );
-    let mut engine = engine_server::serve(listener, engine, sender)
+    let mut engine = engine_server::serve(listener, engine, sender, settings.fixtures)
         .await
         .unwrap_or_else(|error| {
             eprintln!("bossylights-engine: {error}");
@@ -97,6 +101,7 @@ fn settings(args: &[String]) -> Result<Settings, String> {
     let mut settings = Settings {
         listen: SocketAddr::from(([127, 0, 0, 1], 7744)),
         universes: Universes::new(4).ok_or("4 universes")?,
+        fixtures: None,
     };
     let mut args = args.iter();
     while let Some(flag) = args.next() {
@@ -114,6 +119,7 @@ fn settings(args: &[String]) -> Result<Settings, String> {
                     .and_then(Universes::new)
                     .ok_or(format!("universes are 1 to {}", engine::MAX_UNIVERSES))?;
             }
+            "--fixtures" => settings.fixtures = Some(PathBuf::from(value)),
             _ => return Err(format!("unknown flag: {flag}")),
         }
     }

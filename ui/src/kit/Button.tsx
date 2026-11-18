@@ -1,5 +1,6 @@
 import { For, Show } from "solid-js";
 import type { Colour, Pressable, Signal } from "./common.ts";
+import { capture } from "./dragging.ts";
 
 /**
  * | state | means                              | look                                   |
@@ -37,8 +38,13 @@ interface Shared extends Pressable {
   holds?: readonly string[];
   /** What a screen reader hears, where the words on it are not enough. */
   says?: string;
-  /** Pressed during a show, it fires on the way down. In an editor it fires on the way up, so sliding off cancels. */
+  /** What plays fires on the way down. Everything else fires on the way up, so sliding off cancels. */
   fires?: "down" | "up";
+  /**
+   * A short press and a hold mean two things (Blackout, Learn): it reports down and up like a pad, and `onPress` is not called.
+   * `heldMs`: how long it was down, 0 from the keyboard. The one who listens decides what was short.
+   */
+  held?: { onDown: () => void; onUp: (heldMs: number) => void };
   /** Something is dragged over it and can be dropped here: it turns paper. */
   over?: boolean;
   onPress: () => void;
@@ -89,11 +95,32 @@ export function Button(props: ButtonProps) {
     return props.glyph === undefined ? undefined : props.label;
   };
 
+  let downAt = 0;
+  let isDown = false;
   const down = (e: PointerEvent) => {
-    if (props.fires === "down" && e.button === 0) props.onPress();
+    if (e.button !== 0) return;
+    if (props.held === undefined) {
+      if (props.fires === "down") props.onPress();
+      return;
+    }
+    if (e.currentTarget instanceof Element) capture(e.currentTarget, e.pointerId);
+    isDown = true;
+    downAt = e.timeStamp;
+    props.held.onDown();
   };
-  // A click with no pointer behind it (detail 0) is Enter or Space.
+  const up = (e: PointerEvent) => {
+    if (!isDown) return;
+    isDown = false;
+    props.held?.onUp(e.timeStamp - downAt);
+  };
+  // A click with no pointer behind it (detail 0) is Enter or Space: a short press.
   const click = (e: MouseEvent) => {
+    if (props.held !== undefined) {
+      if (e.detail !== 0) return;
+      props.held.onDown();
+      props.held.onUp(0);
+      return;
+    }
     if (props.fires !== "down" || e.detail === 0) props.onPress();
   };
 
@@ -115,6 +142,8 @@ export function Button(props: ButtonProps) {
       aria-label={heard()}
       disabled={props.off !== undefined}
       onPointerDown={down}
+      onPointerUp={up}
+      onPointerCancel={up}
       onClick={click}
     >
       <Show when={props.mapped}>

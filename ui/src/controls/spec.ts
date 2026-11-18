@@ -118,7 +118,15 @@ export const remove = (why: string): Verdict => ({ verdict: "remove", why });
 
 type Gestures = Record<Gesture, string>;
 
-/** A button pressed during a show. It fires on the way down. */
+/**
+ * When a press fires (owner's decision 20): what plays fires on the way down, everything else on the way up.
+ *
+ * | kind of control       | fires on     | why                          |
+ * |-----------------------|--------------|------------------------------|
+ * | play                  | the way down | instant, in the dark         |
+ * | edit, setting, view   | the way up   | sliding off cancels the press |
+ */
+/** A button that plays. It fires on the way down. */
 export const liveButton = (does: string): Gestures => ({
   press: `${does}. Fires on the way down`,
   hold: "Nothing more: it fired on the way down",
@@ -144,6 +152,12 @@ export const toggle = (on: string, offDoes: string): Gestures => ({
   press: `${on}. Pressed again: ${offDoes}. Fires on the way up`,
 });
 
+/** A button that plays and stays on until pressed again. It fires on the way down. */
+export const liveToggle = (on: string, offDoes: string): Gestures => ({
+  ...liveButton(on),
+  press: `${on}. Pressed again: ${offDoes}. Fires on the way down`,
+});
+
 /** One choice out of a few, all visible: tabs, segments, pictures. */
 export const choice = (does: string): Gestures => ({
   press: `${does}. Fires on the way up`,
@@ -152,6 +166,12 @@ export const choice = (does: string): Gestures => ({
   drag: "Nothing. Sliding to another option picks nothing",
   keyboard: "Tab to the group, arrows move and pick",
   touch: "As a press. 44 px",
+});
+
+/** One choice out of a few that plays: it is on the lights with the press. */
+export const liveChoice = (does: string): Gestures => ({
+  ...choice(does),
+  press: `${does}. Fires on the way down`,
 });
 
 /** A value from 0 to 100 on a track. */
@@ -196,6 +216,21 @@ export const draggable = (pressDoes: string, dragDoes: string, keys: string): Ge
 
 // ---- cells: the usual answers
 
+/**
+ * What the lock holds while LIVE is on (owner's decision 21): everything that changes what a press does.
+ *
+ * | held by the lock | its controls                                             |
+ * |------------------|----------------------------------------------------------|
+ * | the layout       | Edit surface, and with it every widget and the drawer    |
+ * | pads             | Put on Console, which look a pad plays                   |
+ * | pages            | add, rename, reorder, delete                             |
+ * | Learn            | the Learn button                                         |
+ * | mappings         | edit and remove a mapping. Test changes nothing: it works |
+ *
+ * Each is off and says this. Everything else works.
+ */
+export const LOCKED = off("Locked while LIVE is on");
+
 const LEARNED = works("It is picked for Learn. The press maps it and does not fire it");
 /** No control of a screen is there without the window. Only the rows of the menu bar say otherwise. */
 const CLOSED = gone("The window is closed");
@@ -205,7 +240,7 @@ export const USUAL: Record<Kind, Record<SituationId, Cell>> = {
   play: {
     "live-off": works("Works. The lights follow at once: there is no preview"),
     "live-on": works("Works the same"),
-    lock: works("Works. The lock holds the layout, not the playing"),
+    lock: works("Works. The lock holds what a press does, never the playing"),
     recording: works("Works, and it is written into the Recorded row of the song that plays"),
     autopilot: works("Works. A hand beats the autopilot on the lights it touches"),
     holding: works("Works. It adds to what you hold"),
@@ -221,7 +256,7 @@ export const USUAL: Record<Kind, Record<SituationId, Cell>> = {
   edit: {
     "live-off": works("Works. It is saved by itself, and on the lights at once if it plays"),
     "live-on": works("Works. It is a live edit: on the lights at once if it plays"),
-    lock: works("Works. The lock holds only the Console layout"),
+    lock: works("Works. The lock holds only what changes a press: layout, pads, pages, Learn, mappings"),
     recording: works("Works. Edits are not recorded, only what you play"),
     autopilot: works("Works. If the autopilot plays it, the change shows at once"),
     holding: works("Works. What you hold stays on top"),
@@ -237,7 +272,7 @@ export const USUAL: Record<Kind, Record<SituationId, Cell>> = {
   setting: {
     "live-off": works("Works. It takes effect at once"),
     "live-on": works("Works. It takes effect at once, mid-show"),
-    lock: works("Works. The lock holds only the Console layout"),
+    lock: works("Works. The lock holds only what changes a press: layout, pads, pages, Learn, mappings"),
     recording: works("Works. Settings are not recorded"),
     autopilot: works("Works the same"),
     holding: works("Works the same"),

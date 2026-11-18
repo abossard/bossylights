@@ -5,7 +5,7 @@ The catalog shows the same as live pages, primitives first: `npm run catalog`.
 
 ```mermaid
 flowchart LR
-  R["172 controls<br/>one row each"] --> K["10 primitives<br/>named by what they are for"]
+  R["173 controls<br/>one row each"] --> K["10 primitives<br/>named by what they are for"]
   K --> V["22 kinds in use"]
   K --> C["colour<br/>one prop on all of them"]
   R -. "where it lives" .-> T["a tag:<br/>the screen"]
@@ -22,7 +22,7 @@ flowchart LR
 
 | Primitive | Is for | Kinds | Controls | Carried inside |
 | --- | --- | --- | --- | --- |
-| **Button** | Do it, or switch it | action, toggle | 85 | 7 |
+| **Button** | Do it, or switch it | action, toggle | 86 | 7 |
 | **Pad** | Play a look | one | 3 | – |
 | **Fader** | Set one value | one | 8 | – |
 | **XY** | Set two values at once | one | 2 | – |
@@ -49,13 +49,14 @@ flowchart LR
 
 Fixed props are the ones that never change for the control. Its words, its state and its value come from the row.
 
-### Button, action (59)
+### Button, action (60)
 
 | Control | Name | Where | Colour | Fixed props | Carries |
 | --- | --- | --- | --- | --- | --- |
 | Trouble chip | `top.trouble` | Top bar | danger | holds: 4 lines |  |
 | Tap | `top.tap` | Top bar | plain | fires: down |  |
-| Blackout | `top.blackout` | Top bar | danger | fires: down, holds: 3 lines |  |
+| Tempo source | `top.tempo.source` | Top bar | manual | fires: down |  |
+| Blackout | `top.blackout` | Top bar | danger | fires: down, held: short press and hold, holds: 3 lines |  |
 | Undo | `top.undo` | Top bar | plain | holds: 2 lines |  |
 | Cancel Learn | `top.learn.cancel` | Top bar | plain |  |  |
 | Release one | `console.running.release` | Console | manual | fires: down, holds: 3 lines |  |
@@ -122,11 +123,11 @@ Fixed props are the ones that never change for the control. Its words, its state
 | Recording indicator | `top.indicator.recording` | Top bar | danger | mark: lamp, quiet |  |
 | Autopilot indicator | `top.indicator.autopilot` | Top bar | autopilot | mark: lamp |  |
 | Lock indicator | `top.indicator.lock` | Top bar | plain | mark: lamp, quiet |  |
-| Learn | `top.learn` | Top bar | plain | holds: 3 lines |  |
+| Learn | `top.learn` | Top bar | plain | held: short press and hold, holds: 3 lines |  |
 | Fold Running | `console.running.fold` | Console | plain | mark: chevron, quiet |  |
 | Autopilot on or off | `console.autopilot.on` | Console | autopilot | holds: 2 lines |  |
 | Library filter | `songs.filter` | Songs | plain |  |  |
-| Play from a section | `songs.play-from` | Songs | plain | holds: 2 lines |  |
+| Play from a section | `songs.play-from` | Songs | plain | fires: down, holds: 3 lines |  |
 | Mute recorded | `songs.recorded.mute` | Songs | show | holds: 2 lines |  |
 | Mute show | `songs.show.mute` | Songs | show |  |  |
 | Widen the library | `looks.library.widen` | Looks | plain | holds: 3 lines |  |
@@ -135,10 +136,10 @@ Fixed props are the ones that never change for the control. Its words, its state
 | Lights it may use | `looks.autopilot.lights` | Looks | plain |  |  |
 | Pixel panel in the list | `patch.universes.panel` | Patch | plain | mark: chevron, quiet |  |
 | Add a pixel panel | `patch.add-panel` | Patch | plain |  |  |
-| Flash it | `patch.details.flash` | Patch | plain |  |  |
+| Flash it | `patch.details.flash` | Patch | plain | fires: down |  |
 | Patched only | `dmx.filter.patched` | DMX | plain |  |  |
 | Changing | `dmx.filter.changing` | DMX | plain |  |  |
-| Test an output | `inout.out.test` | In/Out | plain | holds: 3 lines |  |
+| Test an output | `inout.out.test` | In/Out | plain | fires: down, holds: 3 lines |  |
 | Edit a mapping | `inout.mapping.edit` | In/Out | plain | holds: 3 lines |  |
 | Mapping feedback | `inout.mapping.feedback` | In/Out | plain | holds: 3 lines |  |
 | Record | `how.record` | How it works | plain | holds: 2 lines |  |
@@ -149,7 +150,7 @@ Fixed props are the ones that never change for the control. Its words, its state
 | Control | Name | Where | Colour | Fixed props | Carries |
 | --- | --- | --- | --- | --- | --- |
 | Look pad | `console.pad` | Console | plain |  | Status.flag + Status.pill |
-| Try on lights | `looks.try` | Looks | plain |  | Status.flag + Status.pill |
+| Play on lights | `looks.try` | Looks | plain |  | Status.flag + Status.pill |
 | Pad to try | `how.pad` | How it works | plain |  | Status.flag + Status.pill |
 
 ### Fader (8)
@@ -184,8 +185,7 @@ Fixed props are the ones that never change for the control. Its words, its state
 
 | Control | Name | Where | Colour | Fixed props | Carries |
 | --- | --- | --- | --- | --- | --- |
-| Speed | `console.speed` | Console | plain |  |  |
-| Follows | `songs.follows` | Songs | plain |  |  |
+| Speed | `console.speed` | Console | plain | fires: down |  |
 | Looks or Autopilot | `looks.part` | Looks | plain |  |  |
 | Type filter | `looks.library.type` | Looks | plain |  |  |
 | Item speed | `looks.seq.speed` | Looks | plain |  |  |
@@ -196,6 +196,7 @@ Fixed props are the ones that never change for the control. Its words, its state
 | Brightness among equals | `dmx.who-wins.brightness` | DMX | plain | size: small |  |
 | Manual control ends | `dmx.who-wins.manual-ends` | DMX | plain | size: small |  |
 | When a look ends | `dmx.who-wins.look-ends` | DMX | plain | size: small |  |
+| Follows | `inout.follows` | In/Out | plain |  |  |
 | Pick a walk | `how.walk` | How it works | plain |  |  |
 
 ### Picker, cards (5)

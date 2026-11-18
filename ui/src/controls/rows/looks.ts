@@ -1,7 +1,7 @@
 // Looks: the library, the editor of the open look, and the autopilot settings.
 // Rows are checked with a look open: the sequence "Build-up end A", a step, or the pattern "Plasma".
 import { gone, off, works, type Cell, type SituationId } from "../situations.ts";
-import { button, change, choice, control, draggable, fader, field, keep, no, remove, select, toggle, NOT_A_BUTTON, NOT_A_LIST, ONLY_DRAGGED, type Control, type Row } from "../spec.ts";
+import { button, change, choice, control, draggable, fader, field, keep, no, remove, select, toggle, LOCKED, NOT_A_BUTTON, NOT_A_LIST, ONLY_DRAGGED, type Control, type Row } from "../spec.ts";
 
 const NO_LOOK = gone("No look is open. An empty show file has none, and no mockup shows how to make one");
 const EDITOR: Partial<Record<SituationId, Cell>> = {
@@ -95,14 +95,15 @@ export const LOOKS: Control[] = [
   view({
     id: "looks.library.group.rename",
     name: "Rename group",
-    part: "Library",
+    part: "Library, widened",
     from: ["looks/Library/rename"],
     kit: "Button.action",
-    does: "Turns the group's name into a field",
+    does: "Turns the group's name into a field. It says 'Rename', and is there only while the library is widened",
     ui: "which group is being renamed",
     gestures: button("Opens the name to type"),
     in: { "no-engine": off("Engine not connected") },
-    first: change("A pencil with no word, on every group header at all times. It appears with the mode that uses it: in the widened library, and it says 'Rename'"),
+    first: change("In the mockup: a pencil with no word, on every group header at all times. The owner's decision 27: it says 'Rename' and shows only in the widened library, the view for arranging groups"),
+    states: ["library widened", "gone: the library is folded back"],
   }),
   edit({
     id: "looks.library.group.name",
@@ -119,14 +120,15 @@ export const LOOKS: Control[] = [
   edit({
     id: "looks.library.group.delete",
     name: "Delete group",
-    part: "Library",
+    part: "Library, widened",
     from: ["looks/Library/delete-its-looks-stay-in"],
     kit: "Button.action",
-    does: "Removes the group. Its looks stay in the library",
+    does: "Removes the group. Its looks stay in the library. It says 'Delete group', and is there only while the library is widened",
     sends: ["DeleteGroup"],
     gestures: button("Deletes the group"),
     in: { empty: works("Works on a group you just added") },
-    first: change("A cross with no word. Everywhere else the cross means 'take out of this place'; here it deletes the group itself. It says 'Delete group' and shows in the widened library only"),
+    first: change("In the mockup: a cross with no word, at all times. Everywhere else the cross means 'take out of this place'; here it deletes the group itself. The owner's decision 27: it says 'Delete group' and shows only in the widened library"),
+    states: ["library widened", "gone: the library is folded back"],
   }),
   view({
     id: "looks.library.look",
@@ -195,13 +197,13 @@ export const LOOKS: Control[] = [
   }),
   control({
     id: "looks.try",
-    name: "Try on lights",
+    name: "Play on lights",
     screen: "Looks",
-    part: "Try it",
+    part: "Play it",
     from: ["looks/Screen/try-on-lights"],
     kit: "Pad",
     kind: "play",
-    does: "Plays the open look by hand on the real lights. A try gives back what it touched when it stops",
+    does: "Plays the open look by hand on the real lights. It gives back what it touched when it stops: nothing stays held. It says 'Play on lights', then 'Stop'",
     sends: ["StartLook", "EndFlash"],
     gestures: {
       press: "Starts the look, on the way down. Pressed again: it stops and gives back what it touched",
@@ -212,28 +214,29 @@ export const LOOKS: Control[] = [
       touch: "As a press. 44 px or more",
     },
     in: {
-      recording: works("Works. A try is not recorded: only the Console is"),
-      holding: works("Works. A try never adds to what you hold"),
+      recording: works("Works. It is not recorded: only the Console is"),
+      holding: works("Works. It never adds to what you hold"),
       empty: NO_LOOK,
     },
     feedback: {
       screen: "A 4 px paper frame on the way down. Pink body and the NOW flag when the engine reports it runs",
-      controller: "The mapped pad is lit while the try runs",
+      controller: "The mapped pad is lit while it plays",
     },
-    machine: "tryPad",
+    first: change("The mockup says 'Try on lights'. The owner's decision 28: the word is Play, here as on Songs. 'Play on lights', then 'Stop'"),
+    machine: "playPad",
     states: ["idle", "running", "flash"],
   }),
   edit({
     id: "looks.put-on-console",
     name: "Put on Console",
-    part: "Try it",
+    part: "Play it",
     from: ["looks/Screen/put-on-console"],
     kit: "Button.action",
     does: "Gives the open look the next free pad of the Console's Main page, and says which one",
     sends: ["PutOnConsole"],
     gestures: button("Puts the look on a pad"),
-    in: { lock: off("Locked while LIVE is on") },
-    first: change("It changes the Console layout, so the lock has to hold it too. Today it works while locked"),
+    in: { lock: LOCKED },
+    first: change("Today it works while locked. It changes what a pad does, so the lock holds it (decision 21)"),
   }),
   view({
     id: "looks.connection",

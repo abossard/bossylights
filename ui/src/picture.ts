@@ -1,17 +1,19 @@
 // What the engine reported last, kept in step with its replies. A calculation.
-import type { ChannelLevel, Levels, Reply, State } from "./engine-api";
+import type { ChannelLevel, Levels, Library, Reply, State } from "./engine-api";
 
 export interface Picture {
   state: State;
+  library: Library;
   universes: Levels[];
 }
 
-/** The picture after a reply. `undefined` until the first `Picture`. */
+/** The picture after a reply. `undefined` until the first `Picture`. Answers to a request change nothing. */
 export function receive(picture: Picture | undefined, reply: Reply): Picture | undefined {
-  if (typeof reply === "string" || "Refused" in reply) return picture;
+  if (typeof reply === "string") return picture;
   if ("Picture" in reply) return reply.Picture;
-  if (picture === undefined) return undefined;
-  return { state: reply.Changed.state, universes: merge(picture.universes, reply.Changed.channels) };
+  if (!("Changed" in reply) || picture === undefined) return picture;
+  const { state, library, channels } = reply.Changed;
+  return { state, library, universes: merge(picture.universes, channels) };
 }
 
 /** The universes with these channels at their new levels. Counts from 1, as the engine does. */

@@ -3,6 +3,7 @@
 import { kindOf, kitNames, primitiveOf, type Control, type Kit, type Primitive } from "../controls/spec.ts";
 import type { Colour } from "../kit/common.ts";
 import { inState, usual } from "./look.ts";
+import { isHeld } from "./uses.ts";
 
 /** What never changes about how a control is drawn. What changes with its state comes from its `Look`. */
 export interface Recipe {
@@ -52,7 +53,8 @@ export function linesOf(control: Control): string[] {
 export function recipe(control: Control): Recipe {
   const primitive = primitiveOf(control.kit);
   const props: Record<string, string> = { ...FIXED[control.id] };
-  if (primitive === "Button" && control.gestures.press.includes("on the way down")) props.fires = "down";
+  if ((primitive === "Button" || primitive === "Picker") && control.gestures.press.includes("on the way down")) props.fires = "down";
+  if (primitive === "Button" && isHeld(control.id)) props.held = "short press and hold";
   if (control.kit === "Picker.segments" && control.gestures.touch.includes("30 px")) props.size = "small";
   if (primitive === "Button" && linesOf(control).length) props.holds = `${linesOf(control).length} lines`;
   const lamp = control.id === "menubar.item" ? ["Status.lamp"] : [];

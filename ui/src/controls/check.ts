@@ -18,9 +18,17 @@ export function rowFaults(controls: readonly Control[]): string[] {
     seen.add(c.id);
     if (!/^[a-z]+(\.[a-z-]+)+$/.test(c.id)) faults.push(`${c.id}: not a stable name (screen.part.control)`);
     if (!c.from.length && !c.decided) faults.push(`${c.id}: stands for no element of the mockups, and names no issue that decided it`);
-    if (!c.sends.length && !c.ui) faults.push(`${c.id}: sends no command and names no state of the screen`);
+    if (!c.sends.length && !c.ui && c.first.verdict !== "remove") faults.push(`${c.id}: sends no command and names no state of the screen`);
     // Playback decides what plays and who wins. A control that plays or sets only sends: it keeps no state of its own.
     if ((c.kind === "play" || c.kind === "setting") && c.ui) faults.push(`${c.id}: plays or sets, and keeps a state of the screen (${c.ui}). It sends a command, the engine decides`);
+    // Decision 20: what plays fires on the way down, everything else on the way up. The menu bar item is drawn by the system.
+    const down = c.gestures.press.includes("on the way down");
+    const pressed = /^(Button|Picker\.(tabs|segments|cards))/.test(c.kit);
+    if (pressed && c.first.verdict !== "remove" && c.screen !== "Menu bar" && down !== (c.kind === "play")) {
+      faults.push(`${c.id}: ${c.kind === "play" ? "plays, and fires on the way up" : "does not play, and fires on the way down"}`);
+    }
+    // Decision 31: Undo takes back changes to the show file only. What is played is never a step.
+    if (c.kind === "play" && c.undo.yes) faults.push(`${c.id}: plays, and is a step of Undo`);
     for (const text of [c.name, c.does, c.part, c.feedback.screen, c.feedback.controller, c.undo.why, c.learn.why, c.first.why]) {
       if (!text.trim()) faults.push(`${c.id}: an answer is empty`);
     }

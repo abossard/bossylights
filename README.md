@@ -62,6 +62,15 @@ Engine API: `GET /health` (`ok` while the engine runs) and the WebSocket `GET /a
 | the UI in a browser (`http://127.0.0.1:5174`, and `:5299` under the end-to-end tests) | development |
 | any other web page | refused with 403: a page must not stop or steer the lights. `/health` and `/version` stay open, they change nothing |
 
+### Fixture library
+
+| | |
+|---|---|
+| Start | `npm run engine -- --fixtures <folder>`: every `.qxf` under the folder, read on a thread of its own while the engine runs |
+| Where definitions come from | [QLC+](https://github.com/mcallegari/qlcplus), `resources/fixtures/`, Apache-2.0. Not shipped with the app yet: point `--fixtures` at a QLC+ checkout |
+| State | `library` in `Picture` and `Changed`: `NoFolder`, `Reading`, `Read { read, failed }`, `CannotOpen` |
+| Requests | `Search { text }`: best matches, each mode with its channel count. `Fixture { maker, model }`: each mode's channels by name and function. `Failures`: each file that could not be read, its line and why. A broken file never stops the engine |
+
 The list is `ORIGINS` in `crates/engine-server/src/lib.rs`. No pairing or token yet: that comes with a remote on a tablet or phone.
 
 | Client sends | Engine answers |

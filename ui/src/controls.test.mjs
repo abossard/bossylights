@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { findingFaults, inventoryFaults, machineFaults, rowFaults, unusedCommands } from "./controls/check.ts";
 import { CONTRADICTIONS } from "./controls/findings.ts";
 import { MACHINES, walk } from "./controls/machines.ts";
-import { control, button, NOT_A_BUTTON } from "./controls/spec.ts";
+import { control, button, liveButton, yes, NOT_A_BUTTON } from "./controls/spec.ts";
 import { off } from "./controls/situations.ts";
 import { CONTROLS, NOT_CONTROLS } from "./controls/table.ts";
 
@@ -20,7 +20,7 @@ const checks = [
 ];
 for (const [what, faults] of checks) test(`behaviour table: ${what}`, () => assert.deepEqual(faults(), []));
 
-const row = (over) => control({ id: "x.y", name: "Y", screen: "Console", part: "P", from: ["a"], kit: "Button.action", kind: "play", does: "Does", sends: ["TapTempo"], gestures: button("Does"), ...over });
+const row = (over) => control({ id: "x.y", name: "Y", screen: "Console", part: "P", from: ["a"], kit: "Button.action", kind: "play", does: "Does", sends: ["TapTempo"], gestures: liveButton("Does"), ...over });
 
 // [what, rows, not controls, inventory keys, faults]
 const faultCases = [
@@ -31,8 +31,13 @@ const faultCases = [
   ["a row from nowhere", [row({ from: [] })], {}, [], ["x.y: stands for no element of the mockups, and names no issue that decided it"]],
   ["an empty cell", [row({ in: { lock: off("") } })], {}, ["a"], ['x.y: the cell "Lock on" is empty']],
   ["a reason too long to show", [row({ in: { lock: off("x".repeat(41)) } })], {}, ["a"], ['x.y: the reason in "Lock on" does not fit under a label (41 letters)']],
-  ["neither a command nor a state of the screen", [row({ sends: [], kind: "view" })], {}, ["a"], ["x.y: sends no command and names no state of the screen"]],
+  ["neither a command nor a state of the screen", [row({ sends: [], kind: "view", gestures: button("Does") })], {}, ["a"], ["x.y: sends no command and names no state of the screen"]],
   ["a control that plays and keeps a state of its own", [row({ ui: "who wins" })], {}, ["a"], ["x.y: plays or sets, and keeps a state of the screen (who wins). It sends a command, the engine decides"]],
+  ["a control that plays and fires on the way up", [row({ gestures: button("Does") })], {}, ["a"], ["x.y: plays, and fires on the way up"]],
+  ["an editor button that fires on the way down", [row({ kind: "edit" })], {}, ["a"], ["x.y: does not play, and fires on the way down"]],
+  ["a removed control is not held to the rule", [row({ gestures: button("Does"), first: { verdict: "remove", why: "w" } })], {}, ["a"], []],
+  ["a removed control needs no command", [row({ sends: [], first: { verdict: "remove", why: "w" } })], {}, ["a"], []],
+  ["what is played as a step of Undo", [row({ undo: yes("w") })], {}, ["a"], ["x.y: plays, and is a step of Undo"]],
   ["an element nobody stands for", [row({})], {}, ["a", "b"], ["b: an element of the mockups with no row and no reason"]],
   ["an element that is gone from the mockups", [row({})], { c: { is: "kit", why: "w" } }, ["a"], ["c: named in the table, not in the inventory"]],
   ["a row and not a control at once", [row({})], { a: { is: "kit", why: "w" } }, ["a"], ["a: a row (x.y) and \"not a control\" at once"]],
@@ -65,12 +70,21 @@ const walks = [
   ["pad", ["down", "upShort", "down", "upShort", "release"], "off", ["StartLook", "StopLook"]],
   ["pad", ["down", "upShort", "down", "upShort", "down", "upLong"], "off", ["StartLook", "StopLook", "StartLook", "EndFlash"]],
   ["pad", ["down", "release", "upLong"], "off", ["StartLook"]],
-  ["tryPad", ["down", "upShort", "down", "upShort"], "off", ["StartLook", "EndFlash"]],
-  ["blackout", ["press"], "latched", ["Blackout"]],
-  ["blackout", ["press", "press"], "off", ["Blackout", "Blackout"]],
+  ["playPad", ["down", "upShort", "down", "upShort"], "off", ["StartLook", "EndFlash"]],
+  ["blackout", ["down"], "flash", ["Blackout"]],
+  ["blackout", ["down", "upShort"], "latched", ["Blackout"]],
+  ["blackout", ["down", "upLong"], "off", ["Blackout", "Blackout"]],
+  ["blackout", ["down", "upShort", "down", "upShort"], "off", ["Blackout", "Blackout"]],
+  ["blackout", ["down", "upShort", "down", "upLong"], "latched", ["Blackout"]],
   ["blackout", ["spaceDown", "spaceUp"], "off", ["Blackout", "Blackout"]],
-  ["blackout", ["spaceDown", "press", "spaceUp"], "latched", ["Blackout"]],
-  ["blackout", ["press", "spaceDown", "spaceUp"], "latched", ["Blackout"]],
+  ["blackout", ["spaceDown", "down", "upShort", "spaceUp"], "latched", ["Blackout"]],
+  ["blackout", ["down", "upShort", "spaceDown", "spaceUp"], "latched", ["Blackout"]],
+  ["tempo", ["tap"], "oneTap", ["TapTempo"]],
+  ["tempo", ["tap", "lapse"], "feed", ["TapTempo"]],
+  ["tempo", ["tap", "tap", "lapse"], "tap", ["TapTempo", "TapTempo"]],
+  ["tempo", ["tap", "tap", "back"], "feed", ["TapTempo", "TapTempo", "ReleaseTempo"]],
+  ["tempo", ["tap", "tap", "feedPicked"], "feed", ["TapTempo", "TapTempo"]],
+  ["tempo", ["back"], "feed", []],
   ["indicator", ["liveOn"], "on", []],
   ["indicator", ["press", "liveOn"], "offLive", []],
   ["indicator", ["liveOn", "press", "press"], "on", []],
@@ -79,6 +93,10 @@ const walks = [
   ["learn", ["press", "pick", "cancel"], "off", ["StartLearn", "CancelLearn"]],
   ["learn", ["press", "cancel"], "off", []],
   ["learn", ["press", "press"], "off", []],
+  ["learn", ["hold", "moved"], "off", ["StartLearn"]],
+  ["learn", ["press", "hold", "press"], "off", ["StartLearn", "CancelLearn"]],
+  ["learn", ["press", "lockOn"], "off", []],
+  ["learn", ["press", "pick", "lockOn"], "off", ["StartLearn", "CancelLearn"]],
   ["surface", ["edit", "lockOn"], "locked", []],
   ["surface", ["lockOn", "edit"], "locked", []],
   ["surface", ["lockOn", "lockOff", "edit", "done"], "playing", []],

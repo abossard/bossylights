@@ -1,7 +1,8 @@
-// The two explainer screens: How it works and Modules. They teach, they do not run a show.
+// The two explainer screens: How it works and Modules. They ship with the product (decision 25).
+// They teach on a small model of their own and never touch the lights: every row is of kind view.
 import { control, button, change, choice, fader, no, toggle, type Control, type Row, type Screen } from "../spec.ts";
 
-const OWN_MODEL = change("In the mockup it plays on the same lights as the Console. An explainer plays on its own small model and never touches the lights. Whether the explainers ship is the owner's call");
+const OWN_MODEL = change("In the mockup it plays on the same lights as the Console. The owner's decision 25: the explainers ship, and play on their own small model. They never touch the lights");
 const EXPLAINS = no("An explainer is read, not played");
 
 const explains = (screen: Screen, row: Omit<Row, "screen" | "kind" | "ui">): Control =>
@@ -15,7 +16,14 @@ export const EXPLAINERS: Control[] = [
     from: ["how/Screen/pad"],
     kit: "Pad",
     does: "Starts or flashes a look in the explainer, so the command can be watched travelling to the lights",
-    gestures: button("Starts or stops the look in the explainer. Held, it flashes"),
+    gestures: {
+      press: "Starts the look in the explainer, on the way down, as a real pad does. On a running pad: it stops",
+      hold: "Down for more than 350 ms it was a flash: the look ends when the finger lifts",
+      "double press": "Two presses: on, then off",
+      drag: "Nothing. Lifting anywhere ends the press",
+      keyboard: "Tab to it, Enter is a short press",
+      touch: "As a press. 44 px or more",
+    },
     states: ["idle", "running", "flash"],
   }),
   explains("How it works", {

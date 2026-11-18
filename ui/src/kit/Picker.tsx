@@ -29,6 +29,8 @@ export interface PickerProps extends Pressable {
   picked: string;
   /** `small`: 30 px, for an expert screen that is not pressed during a show. */
   size?: "small" | "regular";
+  /** A choice that plays picks on the way down. Every other one on the way up. A list always picks on the way up. */
+  fires?: "down" | "up";
   onPick: (name: string) => void;
 }
 
@@ -69,7 +71,9 @@ function Group(props: Inner) {
               aria-checked={tabs() ? undefined : option.name === props.picked}
               tabindex={option.name === props.picked ? 0 : -1}
               disabled={!props.open.includes(option.name)}
-              onClick={() => props.onPick(option.name)}
+              onPointerDown={(e) => props.fires === "down" && e.button === 0 && props.onPick(option.name)}
+              // A click with no pointer behind it (detail 0) is Enter or Space.
+              onClick={(e) => (props.fires !== "down" || e.detail === 0) && props.onPick(option.name)}
             >
               <span class="k-label">{option.name}</span>
               <Show when={props.kind === "cards" ? (option.off ?? option.sub) : undefined}>{(line) => <span class={option.off === undefined ? "k-sub" : "k-reason"}>{line()}</span>}</Show>

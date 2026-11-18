@@ -88,16 +88,16 @@ export const pad: Machine<PadState, PadEvent> = {
   },
 };
 
-// ---- Try on lights
+// ---- Play on lights
 
-type TryState = "off" | "flash" | "on" | "onDown";
+type PlayState = "off" | "flash" | "on" | "onDown";
 
-/** The Try pad of the Looks editor: a pad whose look gives back what it touched when it stops. Nothing is kept. */
-export const tryPad: Machine<TryState, PadEvent> = {
-  title: "Try on lights",
+/** 'Play on lights' of the Looks editor: a pad whose look gives back what it touched when it stops. Nothing is kept. */
+export const playPad: Machine<PlayState, PadEvent> = {
+  title: "Play on lights",
   start: "off",
   states: {
-    off: "The look is not tried",
+    off: "The look does not play",
     flash: "Finger down: the look runs",
     on: "The look runs by hand until the next press",
     onDown: "Finger down while it runs: nothing changes yet",
@@ -107,33 +107,102 @@ export const tryPad: Machine<TryState, PadEvent> = {
     off: { down: go("flash", ["StartLook"]), upShort: stay("off"), upLong: stay("off"), release: stay("off") },
     flash: { down: stay("flash"), upShort: go("on"), upLong: go("off", ["EndFlash"]), release: go("off") },
     on: { down: stay("onDown"), upShort: stay("on"), upLong: stay("on"), release: go("off") },
-    onDown: { down: stay("onDown"), upShort: go("off", ["EndFlash"], "a try gives back what it touched"), upLong: stay("on"), release: go("off") },
+    onDown: { down: stay("onDown"), upShort: go("off", ["EndFlash"], "it gives back what it touched"), upLong: stay("on"), release: go("off") },
   },
 };
 
 // ---- Blackout
 
-type BlackoutState = "off" | "held" | "latched";
-type BlackoutEvent = "press" | "spaceDown" | "spaceUp";
+type BlackoutState = "off" | "flash" | "latched" | "latchedDown" | "held";
+type BlackoutEvent = "down" | "upShort" | "upLong" | "spaceDown" | "spaceUp";
 
-/** Blackout: the button latches, Space is dark only while it is down. Leaving the window counts as Space up. */
+/**
+ * Blackout, in the grammar of the pad (owner's decision 30): dark on the way down, a short press latches,
+ * a long hold was dark only while held. Space is always a hold. Leaving the window counts as Space up.
+ * With the button and Space down at once, the button decides.
+ */
 export const blackout: Machine<BlackoutState, BlackoutEvent> = {
   title: "Blackout",
   start: "off",
   states: {
     off: "Lights follow the app. Red outline, 'Blackout'",
-    held: "Dark while Space is down. Red fill, 'Blackout on'",
+    flash: "Finger down on the button: dark. Red fill, 'Blackout on'",
     latched: "Dark until the next press. Red fill, 'Blackout on'",
+    latchedDown: "Finger down on a latched Blackout: nothing changes yet",
+    held: "Dark while Space is down. Red fill, 'Blackout on'",
   },
   events: {
-    press: "the Blackout button or its mapped control",
+    down: "finger, mouse or mapped control goes down on Blackout",
+    upShort: "it comes up within 350 ms",
+    upLong: "it comes up later",
     spaceDown: "Space goes down, outside a text field",
     spaceUp: "Space comes up, or the window loses the keyboard",
   },
   table: {
-    off: { press: go("latched", ["Blackout"]), spaceDown: go("held", ["Blackout"]), spaceUp: stay("off") },
-    held: { press: go("latched", [], "already dark: it stays dark when Space comes up"), spaceDown: stay("held"), spaceUp: go("off", ["Blackout"]) },
-    latched: { press: go("off", ["Blackout"]), spaceDown: stay("latched"), spaceUp: stay("latched") },
+    off: { down: go("flash", ["Blackout"]), upShort: stay("off"), upLong: stay("off"), spaceDown: go("held", ["Blackout"]), spaceUp: stay("off") },
+    flash: {
+      down: stay("flash"),
+      upShort: go("latched", [], "it was a press: it stays dark"),
+      upLong: go("off", ["Blackout"], "it was a hold: the lights are back"),
+      spaceDown: stay("flash"),
+      spaceUp: stay("flash"),
+    },
+    latched: { down: stay("latchedDown"), upShort: stay("latched"), upLong: stay("latched"), spaceDown: stay("latched"), spaceUp: stay("latched") },
+    latchedDown: {
+      down: stay("latchedDown"),
+      upShort: go("off", ["Blackout"], "pressed again: the lights are back"),
+      upLong: go("latched", [], "a long hold on a latched Blackout changes nothing"),
+      spaceDown: stay("latchedDown"),
+      spaceUp: stay("latchedDown"),
+    },
+    held: {
+      down: go("flash", [], "already dark: the button takes over from Space"),
+      upShort: stay("held"),
+      upLong: stay("held"),
+      spaceDown: stay("held"),
+      spaceUp: go("off", ["Blackout"]),
+    },
+  },
+};
+
+// ---- the tempo: the picked feed, or the hand
+
+type TempoState = "feed" | "oneTap" | "tap";
+type TempoEvent = "tap" | "lapse" | "back" | "feedPicked";
+
+/**
+ * Who drives the beat (owner's decision 23): the feed picked on In/Out, until the hand taps. Taps hold
+ * until the words 'from Tap' are pressed. They never end by themselves: not with the next song, not with LIVE.
+ * With Tap as the picked feed there is no way back to give: the words say 'from Tap' and are no button.
+ */
+export const tempo: Machine<TempoState, TempoEvent> = {
+  title: "Tempo: the feed or the hand",
+  start: "feed",
+  states: {
+    feed: "The picked feed drives the beat. Beside the tempo: 'from VirtualDJ', plain words",
+    oneTap: "One tap: the beat dots restart. The tempo is still the feed's",
+    tap: "Taps drive the beat. Beside the tempo: 'from Tap', pink, a button",
+  },
+  events: {
+    tap: "Tap, or its mapped control",
+    lapse: "no second tap came within two seconds",
+    back: "the words 'from Tap' are pressed",
+    feedPicked: "a tempo feed is picked on In/Out",
+  },
+  table: {
+    feed: { tap: go("oneTap", ["TapTempo"]), lapse: stay("feed"), back: stay("feed"), feedPicked: stay("feed") },
+    oneTap: {
+      tap: go("tap", ["TapTempo"], "the second tap: the beat follows the taps"),
+      lapse: go("feed", [], "one tap alone changes no tempo"),
+      back: stay("oneTap"),
+      feedPicked: stay("feed"),
+    },
+    tap: {
+      tap: go("tap", ["TapTempo"]),
+      lapse: stay("tap"),
+      back: go("feed", ["ReleaseTempo"], "the beat is the feed's again, at once"),
+      feedPicked: go("feed", [], "picking a feed is a way back too"),
+    },
   },
 };
 
@@ -172,9 +241,12 @@ export const indicator: Machine<IndicatorState, IndicatorEvent> = {
 // ---- Learn
 
 type LearnState = "off" | "pick" | "wait";
-type LearnEvent = "press" | "pick" | "moved" | "cancel";
+type LearnEvent = "press" | "hold" | "pick" | "moved" | "cancel" | "lockOn";
 
-/** Learn: pick a control on screen, then move a control on the hardware. */
+/**
+ * Learn: pick a control on screen, then move a control on the hardware. Pressed again, Learn ends.
+ * Held, Learn picks itself (the owner's review: 'Learn itself should be learnable'): one hardware button then starts and ends Learn.
+ */
 export const learn: Machine<LearnState, LearnEvent> = {
   title: "Learn",
   start: "off",
@@ -184,19 +256,23 @@ export const learn: Machine<LearnState, LearnEvent> = {
     wait: "Step 2 of 2: waiting for a hardware control to move",
   },
   events: {
-    press: "the Learn button",
+    press: "the Learn button, or the hardware control mapped to it",
+    hold: "the Learn button is held for more than 350 ms",
     pick: "a press on a control that can be learned",
-    moved: "a control on the hardware moves",
-    cancel: "Cancel in the Learn bar, or Escape",
+    moved: "a control on the hardware moves, other than the one mapped to Learn",
+    cancel: "Escape",
+    lockOn: "the lock comes into effect: LIVE on with Lock on",
   },
   table: {
-    off: { press: stay("pick"), pick: stay("off"), moved: stay("off"), cancel: stay("off") },
-    pick: { press: stay("off"), pick: go("wait", ["StartLearn"]), moved: stay("pick"), cancel: stay("off") },
+    off: { press: stay("pick"), hold: go("wait", ["StartLearn"], "Learn picked itself"), pick: stay("off"), moved: stay("off"), cancel: stay("off"), lockOn: stay("off") },
+    pick: { press: stay("off"), hold: go("wait", ["StartLearn"], "Learn picked itself"), pick: go("wait", ["StartLearn"]), moved: stay("pick"), cancel: stay("off"), lockOn: go("off", [], "the lock holds Learn: it ends, nothing is mapped") },
     wait: {
       press: go("off", ["CancelLearn"]),
+      hold: stay("wait"),
       pick: stay("wait"),
       moved: go("off", [], "mapped by the engine. The bar says what was mapped, for four seconds"),
       cancel: go("off", ["CancelLearn"]),
+      lockOn: go("off", ["CancelLearn"], "the lock holds Learn: it ends, nothing is mapped"),
     },
   },
 };
@@ -308,5 +384,5 @@ export const drag: Machine<DragState, DragEvent> = {
   },
 };
 
-export const MACHINES = { pad, tryPad, blackout, indicator, learn, surface, addLights, drag } as const;
+export const MACHINES = { pad, playPad, blackout, tempo, indicator, learn, surface, addLights, drag } as const;
 export type MachineName = keyof typeof MACHINES;

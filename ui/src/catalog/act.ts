@@ -67,6 +67,8 @@ export function act(control: Control, look: Look, gesture: Act): Result {
   const use = USES[control.id];
   const kind = gestureOf(gesture);
   const events = use && kind ? use.on[kind] : undefined;
+  // A control with a machine that reports down and up: what its machine does not list does nothing.
+  if (use && !events && (gesture.is === "down" || gesture.is === "up")) return nothing;
   // The gesture changes the look, the machine keeps its own place.
   return use && events ? machineAct(control, { ...plain.look, at: look.at }, use, events) : plain;
 }

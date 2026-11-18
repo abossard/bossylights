@@ -177,7 +177,7 @@ export const DMX: Control[] = [
     sends: ["ReleaseChannels"],
     gestures: liveButton("Releases every raw channel"),
     in: { "live-off": off("Nothing held"), holding: works("Gives back every raw channel. Looks you hold on the Console stay"), "output-lost": works("Works. Releasing needs no output") },
-    first: change("It says 'Release all', the words of the Console button that gives back everything. This one gives back raw channels only, so it says 'Release channels'"),
+    first: change("The mockup says 'Release all', the words of the Console button that gives back everything. The owner's decision 22: this one gives back raw channels only and says 'Release channels'"),
     states: ["something held", "off: nothing held"],
   }),
   control({

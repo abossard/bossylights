@@ -20,13 +20,15 @@ export const COMMANDS = {
   SetRecording: command("Record what is played while LIVE is on, or not", "on"),
   SetAutopilot: command("The autopilot plays, or not", "on"),
   SetAutopilotStyle: command("Which style the autopilot uses", "style"),
-  SetLock: command("Lock the Console layout while LIVE is on, or not", "on"),
+  SetLock: command("Lock what a press does while LIVE is on, or not: the Console layout, pads, pages, Learn and the mappings", "on"),
   Blackout: command("Every channel goes out at zero. What is held stays held", "on", true),
   Undo: command("Take back the last change to the show file"),
 
   // ---- tempo
-  TapTempo: command("One tap. After two taps the beat follows the taps"),
+  TapTempo: command("One tap. After two taps the beat follows the taps, until ReleaseTempo"),
+  ReleaseTempo: command("The taps let go: the beat follows the picked feed again"),
   SetTempoFeed: command("Which source drives the beat", "feed: tap, audio, midi clock, virtualdj, timecode"),
+  SetFollows: command("Which deck or timecode gives the song and its position", "source: deck 1, deck 2, timecode"),
   SetSpeed: command("Sequences and patterns run at half, normal or double speed", "factor"),
 
   // ---- playing by hand
@@ -41,7 +43,6 @@ export const COMMANDS = {
   SetPosition: command("Aim the movers. The position is held until Release", "pan, tilt"),
   GoCue: command("The cue list steps forward: its look starts, the one before stops", "list"),
   BackCue: command("The cue list steps back", "list"),
-  Surprise: command("Start a look picked at random"),
 
   // ---- the Console layout
   AddPage: command("A new, empty Console page"),
@@ -51,9 +52,8 @@ export const COMMANDS = {
   PutOnConsole: command("A look gets the next free pad of the Main page", "look"),
 
   // ---- songs
-  SetFollows: command("Which deck or timecode gives the song and its position", "source: deck 1, deck 2, timecode"),
-  PlayFrom: command("Run the show of a song from a section, without the deck", "song, section"),
-  StopListening: command("End a run started with PlayFrom"),
+  PlayFrom: command("Play the show of a song from a section, without the deck", "song, section"),
+  StopPlayFrom: command("End what PlayFrom started"),
   MarkReviewed: command("The sections of a song were checked by a person", "song"),
   MoveSectionEdge: command("Move the edge between two sections", "song, edge, to"),
   SplitSection: command("One section becomes two", "song, section"),

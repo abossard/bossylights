@@ -1,6 +1,6 @@
 // The Console: Running on top, then the pages of widgets.
 import { gone, off, works, type Cell } from "../situations.ts";
-import { button, change, choice, control, draggable, everywhere, fader, keep, liveButton, no, remove, select, toggle, NOT_A_LIST, ONLY_DRAGGED, type Control } from "../spec.ts";
+import { button, change, choice, control, draggable, everywhere, fader, keep, liveButton, liveChoice, no, remove, select, toggle, LOCKED, NOT_A_LIST, ONLY_DRAGGED, type Control } from "../spec.ts";
 
 const ARRANGED = off("Being arranged: its edit frame covers it");
 const whileEditing = (cell: Cell) => ({ ...everywhere(gone("It appears with Edit surface")), "edit-surface": cell });
@@ -80,7 +80,7 @@ export const CONSOLE: Control[] = [
       "no-engine": off("Engine not connected"),
     },
     feedback: { screen: "The Manual row empties and the count says 0, when the engine reports it", controller: "The mapped control is lit while something is held" },
-    first: change("Off with no reason today. It says 'Nothing held' under its label"),
+    first: change("Off with no reason today: it says 'Nothing held' under its label. The owner's decision 22: it gives back everything, raw channels too"),
     states: ["nothing held", "something held"],
   }),
   control({
@@ -153,7 +153,7 @@ export const CONSOLE: Control[] = [
     sends: ["AddPage"],
     gestures: button("Adds a page"),
     in: whileEditing(works("Adds an empty page and opens it")),
-    first: change("Today it is a tab that is really an action, and it works while the layout is locked. It becomes a button after the tabs, there only while editing"),
+    first: change("Today it is a tab that is really an action, and it works while the layout is locked. It becomes a button after the tabs, there only while editing: the lock holds pages (decision 21)"),
   }),
   control({
     id: "console.surprise",
@@ -163,11 +163,10 @@ export const CONSOLE: Control[] = [
     from: ["console/Screen/surprise-me"],
     kit: "Button.action",
     kind: "play",
-    does: "Starts a look picked at random, by hand",
-    sends: ["Surprise"],
+    does: "In the mockup: starts a look picked at random, by hand",
     gestures: liveButton("Starts a random look"),
     in: { empty: off("No looks yet"), "edit-surface": gone("'Done editing' is in its place") },
-    first: remove("It does not say what a press will do, and what it starts is held until Release. The autopilot is the surprise. Not in the Console brief"),
+    first: remove("The owner's decision 24: it goes. It does not say what a press will do, and what it starts is held until Release. The autopilot is the surprise"),
   }),
   control({
     id: "console.edit-surface",
@@ -182,7 +181,7 @@ export const CONSOLE: Control[] = [
     gestures: button("Starts editing"),
     in: {
       "live-on": works("Works while Lock is turned off. Widgets do not play while they are arranged"),
-      lock: off("Locked while LIVE is on"),
+      lock: LOCKED,
       "no-engine": off("Engine not connected"),
       empty: works("Works. On an empty page it is the paper button: the one thing to do"),
       "edit-surface": gone("'Done editing' is in its place"),
@@ -332,7 +331,7 @@ export const CONSOLE: Control[] = [
     kind: "play",
     does: "Sequences and patterns run at half, normal or double speed",
     sends: ["SetSpeed"],
-    gestures: choice("Sets that speed"),
+    gestures: liveChoice("Sets that speed"),
     in: { autopilot: works("Works. The autopilot's looks change speed too"), "edit-surface": ARRANGED },
     feedback: { screen: "The chosen segment fills when the engine reports it. The line under it says the tempo that results", controller: "Three pads, the chosen one lit" },
     first: change("In the mockup it changes nothing but its own label. It needs the SetSpeed command"),

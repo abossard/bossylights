@@ -18,7 +18,7 @@ export const CRATES = {
   "rt-thread": { kind: "action", deps: ["engine-core"] }, // the only unsafe: asks for real-time priority
   outputs: { kind: "action", deps: ["engine-core"] }, // opens devices, takes frames: only it knows bytes
   engine: { kind: "action", deps: ["engine-core", "rt-thread", "outputs"] },
-  "engine-server": { kind: "action", deps: ["engine"] },
+  "engine-server": { kind: "action", deps: ["engine", "engine-core", "fixture-library"] }, // reads the fixture folder, answers the library
   shell: { kind: "action", deps: ["engine-core"] }, // knows the API version it speaks, nothing more
 };
 

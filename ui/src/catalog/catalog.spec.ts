@@ -158,7 +158,7 @@ test("the pad: a press latches it, a press on a running pad switches it off and 
   await expect(sent(page, "alone")).toHaveText("StopLook");
 });
 
-test("Blackout: Space holds it, the button latches it", async ({ page }) => {
+test("Blackout: Space holds it, a short press latches it, the next one brings the lights back", async ({ page }) => {
   await page.goto("/#/top.blackout");
   const button = frame(page, "alone").getByRole("button");
   await button.focus();
@@ -170,6 +170,9 @@ test("Blackout: Space holds it, the button latches it", async ({ page }) => {
   await expect(sent(page, "alone")).toHaveText("Blackout on: false");
   await page.keyboard.press("Enter");
   await expect(button).toHaveText(/Blackout on/);
+  await button.click();
+  await expect(button).toHaveText("Blackout");
+  await expect(sent(page, "alone")).toHaveText("Blackout on: false");
 });
 
 test("a fader follows the keyboard and sends its level", async ({ page }) => {

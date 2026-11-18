@@ -197,14 +197,14 @@ export function controlsDoc(inventory) {
     "",
     `## Contradictions: ${CONTRADICTIONS.length}, each resolved`,
     "",
-    "A number in the last column is a question on the owner's decisions page.",
+    "A number is a question on the owner's decisions page. The last column is what the owner answered, there or in the catalog.",
     "",
     ...Object.entries(KIND_OF).flatMap(([kind, title]) => [
       `### ${title}`,
       "",
       table(
-        ["What", "Rows", "Resolved", "Asked"],
-        CONTRADICTIONS.filter((c) => c.kind === kind).map((c) => [c.what, c.where.map(code).join(" "), c.resolved, c.asks ?? ""]),
+        ["What", "Rows", "Resolved", "Asked", "The owner said"],
+        CONTRADICTIONS.filter((c) => c.kind === kind).map((c) => [c.what, c.where.map(code).join(" "), c.resolved, c.asks ?? "", c.decided ?? ""]),
       ),
       "",
     ]),

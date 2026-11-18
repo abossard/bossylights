@@ -25,7 +25,7 @@ async fn start() -> (SocketAddr, Socket, JoinHandle<std::io::Result<Engine>>) {
     let (engine, sender) = Engine::start(Universes::new(2).unwrap()).unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
-    let served = tokio::spawn(engine_server::serve(listener, engine, sender));
+    let served = tokio::spawn(engine_server::serve(listener, engine, sender, None));
     (address, open(address).await, served)
 }
 

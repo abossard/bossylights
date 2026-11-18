@@ -852,6 +852,8 @@ version = "0.0.0"
 dependencies = [
  "axum",
  "engine",
+ "engine-core",
+ "fixture-library",
  "futures-util",
  "outputs",
  "rtrb",

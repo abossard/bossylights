@@ -6,11 +6,11 @@ This is the paper form of the storyboard catalog of issue #102. The catalog show
 ```mermaid
 flowchart LR
   M["8 mockups<br/>235 elements in the code"] --> I["Inventory<br/>by script"]
-  I --> R["172 controls<br/>one row each"]
+  I --> R["173 controls<br/>one row each"]
   I --> N["35 not controls<br/>each with a reason"]
   R --> C["79 commands"]
-  R --> S["8 state machines"]
-  R --> F["Function first<br/>129 keep, 38 change, 5 remove"]
+  R --> S["9 state machines"]
+  R --> F["Function first<br/>127 keep, 40 change, 6 remove"]
 ```
 
 | Where | What |
@@ -42,7 +42,7 @@ flowchart LR
 | --- | --- |
 | LIVE off | Preparing. Lights follow the app, nothing is recorded. |
 | LIVE on | The night is running. The lock has its own column. |
-| Lock on | LIVE is on and the lock is in effect: the Console layout cannot change. |
+| Lock on | LIVE is on and the lock is in effect: nothing that changes what a press does can change. Layout, pads, pages, Learn, mappings. |
 | Recording on | LIVE is on and a song plays: what you play is written into its Recorded row. |
 | Autopilot on | The autopilot plays its picks. |
 | Something held | You hold at least one thing by hand, until Release. |
@@ -61,7 +61,7 @@ flowchart LR
 | --- | --- | --- | --- | --- |
 | LIVE off | Works. The lights follow at once: there is no preview | Works. It is saved by itself, and on the lights at once if it plays | Works. It takes effect at once | Works. It changes only what this screen shows |
 | LIVE on | Works the same | Works. It is a live edit: on the lights at once if it plays | Works. It takes effect at once, mid-show | Works the same |
-| Lock on | Works. The lock holds the layout, not the playing | Works. The lock holds only the Console layout | Works. The lock holds only the Console layout | Works the same |
+| Lock on | Works. The lock holds what a press does, never the playing | Works. The lock holds only what changes a press: layout, pads, pages, Learn, mappings | Works. The lock holds only what changes a press: layout, pads, pages, Learn, mappings | Works the same |
 | Recording on | Works, and it is written into the Recorded row of the song that plays | Works. Edits are not recorded, only what you play | Works. Settings are not recorded | Works. It is not recorded |
 | Autopilot on | Works. A hand beats the autopilot on the lights it touches | Works. If the autopilot plays it, the change shows at once | Works the same | Works the same |
 | Something held | Works. It adds to what you hold | Works. What you hold stays on top | Works the same | Works the same |
@@ -78,38 +78,40 @@ flowchart LR
 
 The test of `DESIGN.md`, run on every control. Proposals until the owner rates them in the catalog.
 
-### Removed: 5
+### Removed: 6
 
 | Control | Screen | Why it goes |
 | --- | --- | --- |
-| Surprise me `console.surprise` | Console | It does not say what a press will do, and what it starts is held until Release. The autopilot is the surprise. Not in the Console brief |
+| Cancel Learn `top.learn.cancel` | Top bar | The owner's review: 'just pressing learn again disabled learn'. Two controls for one thing: Learn pressed again ends Learn, and so does Escape. The Learn bar only says the step |
+| Surprise me `console.surprise` | Console | The owner's decision 24: it goes. It does not say what a press will do, and what it starts is held until Release. The autopilot is the surprise |
 | Back to the outer sequence `looks.back` | Looks | Two controls for one thing: the breadcrumb above it already goes back, and says where to |
 | Order grip `patch.fixtures.order` | Patch | Two controls for one thing, and a grip that is always there. The two arrows on the same row move a light one place, by touch and by keyboard. The number stays: it says the place |
 | Output row `dmx.output.row` | DMX | Two controls for one thing: the universe tabs open a universe. A status table whose rows are also buttons says two things |
 | Tap, on In/Out `inout.tempo.tap` | In/Out | Two controls for one thing. Tap is in the top bar on every screen, right above this one. The Tap feed says 'Tap in the top bar' |
 
-### Changed: 38
+### Changed: 40
 
 | Control | Screen | What changes |
 | --- | --- | --- |
 | Trouble chip `top.trouble` | Top bar | Today it shows only when no light is connected. It also has to say 'Output lost' and 'Engine not connected': mid-show these have no mark outside In/Out |
+| Blackout `top.blackout` | Top bar | In the mockup the button only latches and Space only holds. The owner's decision 30: the button works like a pad. A short press latches, a hold is dark while held |
 | Undo `top.undo` | Top bar | It has to say what it takes back ('Undo: move widget'), and 'Nothing to undo' when off. Both are only in its accessible name today |
 | Workspace tabs `top.workspaces` | Top bar | The tab 'All reviews' is review tooling and goes with the review layer |
-| Cancel Learn `top.learn.cancel` | Top bar | One Cancel, the same in both steps. The quiet second variant goes |
-| Release all `console.running.release-all` | Console | Off with no reason today. It says 'Nothing held' under its label |
-| Add page `console.pages.add` | Console | Today it is a tab that is really an action, and it works while the layout is locked. It becomes a button after the tabs, there only while editing |
+| Learn `top.learn` | Top bar | In the mockup Learn cannot be mapped, and the Learn bar has a Cancel. Learn is picked by a hold, and pressed again it ends Learn |
+| Release all `console.running.release-all` | Console | Off with no reason today: it says 'Nothing held' under its label. The owner's decision 22: it gives back everything, raw channels too |
+| Add page `console.pages.add` | Console | Today it is a tab that is really an action, and it works while the layout is locked. It becomes a button after the tabs, there only while editing: the lock holds pages (decision 21) |
 | Edit surface `console.edit-surface` | Console | An empty page shows it twice. One stays, in the page bar, paper while the page is empty |
 | Back `console.cue.back` | Console | Off with no reason before the first Go. It says 'Not started' |
 | Speed `console.speed` | Console | In the mockup it changes nothing but its own label. It needs the SetSpeed command |
-| Follows `songs.follows` | Songs | It sits in the header of one song but is a setting of the whole app, and it overlaps the DJ link indicator and the tempo feed. Its place is In/Out, beside the tempo feed |
-| Play from a section `songs.play-from` | Songs | Three words for one thing: 'Play from', 'Stop listening', 'Listening'. And no music plays. One word, the one Looks uses: 'Try from Drop', 'Stop'. A song that is not analysed says 'Not analysed yet' |
+| Play from a section `songs.play-from` | Songs | Three words for one thing in the mockup: 'Play from', 'Stop listening', 'Listening'. The owner's decision 28: 'Play from Drop', then 'Stop', and the flag says 'Playing'. A song that is not analysed says 'Not analysed yet' |
 | Mute recorded `songs.recorded.mute` | Songs | Off with no reason while nothing is recorded. It says 'Nothing recorded' |
 | Undo last pass `songs.recorded.undo-last-pass` | Songs | Off with no reason while there is no finished pass. It says 'No pass yet' |
 | Clear recorded `songs.recorded.clear` | Songs | Off with no reason while nothing is recorded. It says 'Nothing recorded'. While a pass is written it is off too |
 | Add look to section `songs.looks.add` | Songs | Off with no reason on a song that is not analysed. It says 'Not analysed yet' |
-| Rename group `looks.library.group.rename` | Looks | A pencil with no word, on every group header at all times. It appears with the mode that uses it: in the widened library, and it says 'Rename' |
-| Delete group `looks.library.group.delete` | Looks | A cross with no word. Everywhere else the cross means 'take out of this place'; here it deletes the group itself. It says 'Delete group' and shows in the widened library only |
-| Put on Console `looks.put-on-console` | Looks | It changes the Console layout, so the lock has to hold it too. Today it works while locked |
+| Rename group `looks.library.group.rename` | Looks | In the mockup: a pencil with no word, on every group header at all times. The owner's decision 27: it says 'Rename' and shows only in the widened library, the view for arranging groups |
+| Delete group `looks.library.group.delete` | Looks | In the mockup: a cross with no word, at all times. Everywhere else the cross means 'take out of this place'; here it deletes the group itself. The owner's decision 27: it says 'Delete group' and shows only in the widened library |
+| Play on lights `looks.try` | Looks | The mockup says 'Try on lights'. The owner's decision 28: the word is Play, here as on Songs. 'Play on lights', then 'Stop' |
+| Put on Console `looks.put-on-console` | Looks | Today it works while locked. It changes what a pad does, so the lock holds it (decision 21) |
 | Add a colour `looks.step.colour.add` | Looks | Off with no reason at four colours. The palette says 'Four colours at most' |
 | Gobo `looks.step.gobo` | Looks | Pictures with no word. The name of the gobo goes under each picture |
 | Item width handle `looks.seq.bar.edge` | Looks | The handle is on every bar at all times. It shows on the selected bar only |
@@ -121,69 +123,70 @@ The test of `DESIGN.md`, run on every control. Proposals until the owner rates t
 | Move to a free address `patch.details.move-to-free` | Patch | With no free place it reads 'Move to no free' and does nothing. It is off then and says 'No free place in this universe' |
 | Back `patch.add.back` | Patch | Off with no reason in step 1. It is gone there |
 | Add the panel `patch.panel.add` | Patch | It lets a panel land on universes that are already used, and nothing says so. It is off then and says which universe is taken |
-| Release channels `dmx.held.release-all` | DMX | It says 'Release all', the words of the Console button that gives back everything. This one gives back raw channels only, so it says 'Release channels' |
+| Release channels `dmx.held.release-all` | DMX | The mockup says 'Release all', the words of the Console button that gives back everything. The owner's decision 22: this one gives back raw channels only and says 'Release channels' |
 | Tempo feed `inout.tempo.feed` | In/Out | A feed with no signal can be picked, and then nothing drives the beat. It is off and says 'No signal' |
+| Follows `inout.follows` | In/Out | In the mockup it sits in the header of one song. The owner's decision 26: it is a setting of the whole app and sits on In/Out, beside the tempo feed. DJ link stays the on or off |
 | Test an output `inout.out.test` | In/Out | It works while LIVE is on: one press and the whole room is at half, mid-show. It is off then and says 'LIVE is on' |
 | Note or controller number `inout.mapping.message` | In/Out | Free text for something that has a shape: 'Note 36', 'CC 48'. Text that is not one of the two is refused and the field says so |
-| Pad to try `how.pad` | How it works | In the mockup it plays on the same lights as the Console. An explainer plays on its own small model and never touches the lights. Whether the explainers ship is the owner's call |
-| Master to try `how.master` | How it works | In the mockup it plays on the same lights as the Console. An explainer plays on its own small model and never touches the lights. Whether the explainers ship is the owner's call |
-| Record `how.record` | How it works | In the mockup it plays on the same lights as the Console. An explainer plays on its own small model and never touches the lights. Whether the explainers ship is the owner's call |
-| Replay on Show `how.replay` | How it works | In the mockup it plays on the same lights as the Console. An explainer plays on its own small model and never touches the lights. Whether the explainers ship is the owner's call |
-| Release `how.release` | How it works | In the mockup it plays on the same lights as the Console. An explainer plays on its own small model and never touches the lights. Whether the explainers ship is the owner's call |
+| Pad to try `how.pad` | How it works | In the mockup it plays on the same lights as the Console. The owner's decision 25: the explainers ship, and play on their own small model. They never touch the lights |
+| Master to try `how.master` | How it works | In the mockup it plays on the same lights as the Console. The owner's decision 25: the explainers ship, and play on their own small model. They never touch the lights |
+| Record `how.record` | How it works | In the mockup it plays on the same lights as the Console. The owner's decision 25: the explainers ship, and play on their own small model. They never touch the lights |
+| Replay on Show `how.replay` | How it works | In the mockup it plays on the same lights as the Console. The owner's decision 25: the explainers ship, and play on their own small model. They never touch the lights |
+| Release `how.release` | How it works | In the mockup it plays on the same lights as the Console. The owner's decision 25: the explainers ship, and play on their own small model. They never touch the lights |
 
 ## Contradictions: 30, each resolved
 
-A number in the last column is a question on the owner's decisions page.
+A number is a question on the owner's decisions page. The last column is what the owner answered, there or in the catalog.
 
 ### Two controls for one thing
 
-| What | Rows | Resolved | Asked |
-| --- | --- | --- | --- |
-| Tap in the top bar and Tap on In/Out | `top.tap` `inout.tempo.tap` | The one on In/Out goes. The top bar is on every screen |  |
-| The breadcrumb and 'Back to' in the Looks editor | `looks.crumb` `looks.back` | 'Back to' goes. The breadcrumb says where it leads |  |
-| The universe tabs and the rows of the Output table on DMX | `dmx.universe` `dmx.output.row` | The rows stop being buttons. A status table shows status |  |
-| The order grip and the two arrows on a light in Patch | `patch.fixtures.order` `patch.fixtures.move` | The grip goes. The arrows work by touch and by keyboard |  |
-| 'Edit surface' in the page bar and again on an empty page | `console.edit-surface` | One button, in the page bar. It is paper while the page is empty |  |
-| Two Cancel buttons in the Learn bar, one per step, with different looks | `top.learn.cancel` | One Cancel, the same in both steps |  |
-| The Autopilot indicator at the LIVE switch and the Autopilot button in Running | `top.indicator.autopilot` `console.autopilot.on` | Kept: one state and one command, shown in two places. They always agree |  |
-| The style list on the Console and 'Use this style' on Looks | `console.autopilot.style` `looks.autopilot.use-style` | Kept: one command from two places, each where you are when you want it |  |
-| A section can be picked in the Sections row and in the Show row | `songs.section` | Kept as one control in two rows: the same section, the same selection |  |
-| Three controls say what is followed: the DJ link indicator, 'Follows' on Songs, the tempo feed on In/Out | `top.indicator.dj` `songs.follows` `inout.tempo.feed` | DJ link is on or off. 'Follows' picks the deck and moves to In/Out, beside the tempo feed that picks the beat | 26 |
+| What | Rows | Resolved | Asked | The owner said |
+| --- | --- | --- | --- | --- |
+| Tap in the top bar and Tap on In/Out | `top.tap` `inout.tempo.tap` | The one on In/Out goes. The top bar is on every screen |  |  |
+| The breadcrumb and 'Back to' in the Looks editor | `looks.crumb` `looks.back` | 'Back to' goes. The breadcrumb says where it leads |  |  |
+| The universe tabs and the rows of the Output table on DMX | `dmx.universe` `dmx.output.row` | The rows stop being buttons. A status table shows status |  |  |
+| The order grip and the two arrows on a light in Patch | `patch.fixtures.order` `patch.fixtures.move` | The grip goes. The arrows work by touch and by keyboard |  |  |
+| 'Edit surface' in the page bar and again on an empty page | `console.edit-surface` | One button, in the page bar. It is paper while the page is empty |  |  |
+| Two Cancel buttons in the Learn bar, one per step, and the Learn button itself: three ways to end Learn | `top.learn.cancel` `top.learn` | Cancel goes. Learn pressed again ends Learn, and so does Escape |  | In the catalog, on Cancel Learn: 'just pressing learn again disabled learn' |
+| The Autopilot indicator at the LIVE switch and the Autopilot button in Running | `top.indicator.autopilot` `console.autopilot.on` | Kept: one state and one command, shown in two places. They always agree |  |  |
+| The style list on the Console and 'Use this style' on Looks | `console.autopilot.style` `looks.autopilot.use-style` | Kept: one command from two places, each where you are when you want it |  |  |
+| A section can be picked in the Sections row and in the Show row | `songs.section` | Kept as one control in two rows: the same section, the same selection |  |  |
+| Three controls say what is followed: the DJ link indicator, 'Follows' on Songs, the tempo feed on In/Out | `top.indicator.dj` `inout.follows` `inout.tempo.feed` | DJ link is on or off. 'Follows' picks the deck and sits on In/Out, beside the tempo feed that picks the beat | 26 | Move it to In/Out, beside the tempo feed |
 
 ### One control or one word, two meanings
 
-| What | Rows | Resolved | Asked |
-| --- | --- | --- | --- |
-| The '+' in the Console pages is a tab that is an action | `console.pages.add` | A button after the tabs, there only while editing |  |
-| The cross takes a thing out of a place (a look out of a group, a colour out of a step). On a group header it deletes the group | `looks.library.group.delete` `looks.groups.remove` `songs.section.remove-look` `looks.step.colour.remove` | The cross always means 'take out of this place'. Deleting a group says 'Delete group' | 27 |
-| 'Release all' on the Console gives back everything. 'Release all' on DMX gives back raw channels only | `console.running.release-all` `dmx.held.release-all` | The Console one gives back raw channels too. The DMX one says 'Release channels' | 22 |
-| 'Play from', 'Stop listening' and the flag 'Listening' name one thing, and no music plays | `songs.play-from` | One word, the one Looks uses for the same idea: 'Try from Drop', 'Stop' | 28 |
-| 'In use' is a pressed button that does nothing when pressed | `looks.autopilot.use-style` | The button is gone while the style is in use. The style list says 'In use' |  |
-| 'Undo' in the top bar and 'Undo last pass' on Songs take back different things | `top.undo` `songs.recorded.undo-last-pass` | Kept. The top bar Undo names its step and never touches the Recorded row |  |
-| Blackout latches from the button and holds from Space | `top.blackout` | Kept, and written down as its state machine. On touch there is no hold | 30 |
-| A pad fires on the way down, an editor button on the way up | `console.pad` `top.blackout` `top.tap` | A rule: what is pressed during a show fires on the way down. Editor buttons fire on the way up, so sliding off cancels | 20 |
+| What | Rows | Resolved | Asked | The owner said |
+| --- | --- | --- | --- | --- |
+| The '+' in the Console pages is a tab that is an action | `console.pages.add` | A button after the tabs, there only while editing |  |  |
+| The cross takes a thing out of a place (a look out of a group, a colour out of a step). On a group header it deletes the group | `looks.library.group.delete` `looks.groups.remove` `songs.section.remove-look` `looks.step.colour.remove` | The cross always means 'take out of this place'. 'Rename' and 'Delete group' are words, and show only in the widened library | 27 | Only in the widened library, with words |
+| 'Release all' on the Console gives back everything. 'Release all' on DMX gives back raw channels only | `console.running.release-all` `dmx.held.release-all` | The Console one gives back raw channels too. The DMX one says 'Release channels' | 22 | Console: everything. DMX: 'Release channels' |
+| 'Play from', 'Stop listening' and the flag 'Listening' name one thing, and no music plays | `songs.play-from` `looks.try` | One word, Play: 'Play from Drop', then 'Stop', the flag says 'Playing'. Looks says 'Play on lights' for the same idea | 28 | 'Try' is weird. 'Play from Drop' and 'Stop' |
+| 'In use' is a pressed button that does nothing when pressed | `looks.autopilot.use-style` | The button is gone while the style is in use. The style list says 'In use' |  |  |
+| 'Undo' in the top bar and 'Undo last pass' on Songs take back different things | `top.undo` `songs.recorded.undo-last-pass` | Kept. The top bar Undo names its step and never touches the Recorded row |  |  |
+| Blackout latches from the button and holds from Space | `top.blackout` | One grammar, the pad's: a short press latches, a hold is dark while held. From the button and from Space | 30 | Yes: a short press latches, a hold is dark while held |
+| A pad fires on the way down, an editor button on the way up | `console.pad` `top.blackout` `top.tap` `console.speed` `songs.play-from` | A rule, checked on every row: what plays fires on the way down. Everything else fires on the way up, so sliding off cancels | 20 | Show controls act on down, editors on up |
 
 ### Off with no reason shown
 
-| What | Rows | Resolved | Asked |
-| --- | --- | --- | --- |
-| Thirteen controls go off and do not say why | `console.running.release-all` `top.undo` `console.cue.back` `songs.recorded.mute` `songs.recorded.undo-last-pass` `songs.recorded.clear` `songs.looks.add` `looks.step.colour.add` `looks.seq.width` `looks.pattern.measure` `patch.fixtures.move` `patch.details.address` `patch.add.back` | Each says its reason under its label, in a few words. Where the reason would be noise (the first step has no Back) the control is gone instead |  |
-| Pads are off while the surface is edited, and look like pads that are broken | `console.pad` `console.fader` `console.xy` | The edit frame covers the whole widget and says its name and size: that is the reason |  |
-| 'Move to no free' is a button that does nothing | `patch.details.move-to-free` | Off, with 'No free place in this universe' |  |
+| What | Rows | Resolved | Asked | The owner said |
+| --- | --- | --- | --- | --- |
+| Thirteen controls go off and do not say why | `console.running.release-all` `top.undo` `console.cue.back` `songs.recorded.mute` `songs.recorded.undo-last-pass` `songs.recorded.clear` `songs.looks.add` `looks.step.colour.add` `looks.seq.width` `looks.pattern.measure` `patch.fixtures.move` `patch.details.address` `patch.add.back` | Each says its reason under its label, in a few words. Where the reason would be noise (the first step has no Back) the control is gone instead |  |  |
+| Pads are off while the surface is edited, and look like pads that are broken | `console.pad` `console.fader` `console.xy` | The edit frame covers the whole widget and says its name and size: that is the reason |  |  |
+| 'Move to no free' is a button that does nothing | `patch.details.move-to-free` | Off, with 'No free place in this universe' |  |  |
 
 ### Against a rule of the product
 
-| What | Rows | Resolved | Asked |
-| --- | --- | --- | --- |
-| The lock holds 'Edit surface', but 'Add page', 'Put on Console', Learn and the mappings still change the surface while it is on | `console.pages.add` `looks.put-on-console` `top.learn` `inout.mapping.edit` `inout.mapping.remove` | The lock holds everything that changes what a press does: layout, pads, Learn, mappings | 21 |
-| 'Test' on an output puts the whole room at half, also while LIVE is on | `inout.out.test` | Off while LIVE is on, and says so |  |
-| A tempo feed with no signal can be picked: then nothing drives the beat | `inout.tempo.feed` | Off, with 'No signal' |  |
-| One press of Tap takes the beat away from the DJ software, and the way back is on In/Out | `top.tap` `inout.tempo.feed` | The tempo says where it comes from. Taps hold until the next song starts, then the picked feed is back | 23 |
-| An output that is lost, or an engine that is not connected, has no mark in the top bar | `top.trouble` | The chip that says 'No lights connected' says these two as well |  |
-| The pads of 'How it works' play the real lights | `how.pad` `how.master` `how.release` `how.record` `how.replay` | An explainer plays on its own small model | 25 |
-| The speed dial changes its own label and nothing else | `console.speed` | It sends SetSpeed |  |
-| 'Every action can be undone' is a principle. A pad press, a release and a blackout are not steps of Undo | `top.undo` `console.pad` | Undo takes back changes to the show file. What is played is taken back by its own opposite: stop, Release | 31 |
-| 'Surprise me' is not in the Console brief, and what it starts stays held | `console.surprise` | It goes. The autopilot is the surprise | 24 |
+| What | Rows | Resolved | Asked | The owner said |
+| --- | --- | --- | --- | --- |
+| The lock holds 'Edit surface', but 'Add page', 'Put on Console', Learn and the mappings still change the surface while it is on | `console.pages.add` `looks.put-on-console` `top.learn` `inout.mapping.edit` `inout.mapping.remove` | The lock holds everything that changes what a press does: layout, pads, pages, Learn, mappings. Each is off and says 'Locked while LIVE is on' | 21 | Everything that changes what a press does |
+| 'Test' on an output puts the whole room at half, also while LIVE is on | `inout.out.test` | Off while LIVE is on, and says so |  |  |
+| A tempo feed with no signal can be picked: then nothing drives the beat | `inout.tempo.feed` | Off, with 'No signal' |  |  |
+| One press of Tap takes the beat away from the DJ software, and the way back is on In/Out | `top.tap` `top.tempo.source` `inout.tempo.feed` | The tempo says where it comes from. Taps hold until the words 'from Tap' are pressed: then the picked feed is back | 23 | Taps hold until you press the words 'from Tap' |
+| An output that is lost, or an engine that is not connected, has no mark in the top bar | `top.trouble` | The chip that says 'No lights connected' says these two as well |  |  |
+| The pads of 'How it works' play the real lights | `how.pad` `how.master` `how.release` `how.record` `how.replay` | The explainers ship. An explainer plays on its own small model and never touches the lights | 25 | Ship them, on their own small model |
+| The speed dial changes its own label and nothing else | `console.speed` | It sends SetSpeed |  |  |
+| 'Every action can be undone' is a principle. A pad press, a release and a blackout are not steps of Undo | `top.undo` `console.pad` | Undo takes back changes to the show file, checked on every row. What is played is taken back by its own opposite: stop, Release | 31 | Undo takes back changes to the project only |
+| 'Surprise me' is not in the Console brief, and what it starts stays held | `console.surprise` | It goes, and its command with it. The autopilot is the surprise | 24 | Remove it |
 
 ## Missing: 14 things with no control in any mockup
 
@@ -217,11 +220,13 @@ The union of what the controls send: the first list of engine commands. A propos
 | `SetRecording` | Record what is played while LIVE is on, or not | on |  | `top.indicator.recording` |
 | `SetAutopilot` | The autopilot plays, or not | on |  | `top.indicator.autopilot` `console.autopilot.on` |
 | `SetAutopilotStyle` | Which style the autopilot uses | style |  | `console.autopilot.style` `looks.autopilot.use-style` |
-| `SetLock` | Lock the Console layout while LIVE is on, or not | on |  | `top.indicator.lock` |
+| `SetLock` | Lock what a press does while LIVE is on, or not: the Console layout, pads, pages, Learn and the mappings | on |  | `top.indicator.lock` |
 | `Blackout` | Every channel goes out at zero. What is held stays held | on | yes | `top.blackout` |
 | `Undo` | Take back the last change to the show file |  |  | `top.undo` |
-| `TapTempo` | One tap. After two taps the beat follows the taps |  |  | `top.tap` `inout.tempo.tap` |
+| `TapTempo` | One tap. After two taps the beat follows the taps, until ReleaseTempo |  |  | `top.tap` `inout.tempo.tap` |
+| `ReleaseTempo` | The taps let go: the beat follows the picked feed again |  |  | `top.tempo.source` |
 | `SetTempoFeed` | Which source drives the beat | feed: tap, audio, midi clock, virtualdj, timecode |  | `inout.tempo.feed` |
+| `SetFollows` | Which deck or timecode gives the song and its position | source: deck 1, deck 2, timecode |  | `inout.follows` |
 | `SetSpeed` | Sequences and patterns run at half, normal or double speed | factor |  | `console.speed` |
 | `StartLook` | A look runs by hand, in the next frame | look |  | `console.pad` `looks.try` |
 | `StopLook` | A look that runs by hand is switched off. What it touched stays held until Release | look |  | `console.pad` |
@@ -234,15 +239,13 @@ The union of what the controls send: the first list of engine commands. A propos
 | `SetPosition` | Aim the movers. The position is held until Release | pan, tilt |  | `console.xy` |
 | `GoCue` | The cue list steps forward: its look starts, the one before stops | list |  | `console.cue.go` |
 | `BackCue` | The cue list steps back | list |  | `console.cue.back` |
-| `Surprise` | Start a look picked at random |  |  | `console.surprise` |
 | `AddPage` | A new, empty Console page |  |  | `console.pages.add` |
 | `AddWidget` | A widget on a page, at the first free place | page, kind |  | `console.drawer.add` |
 | `PlaceWidget` | Move or resize a widget, in whole cells | page, widget, x, y, w, h |  | `console.widget.frame` `console.widget.resize` |
 | `RemoveWidget` | Take a widget off a page | page, widget |  | `console.widget.frame` `console.widget.remove` |
 | `PutOnConsole` | A look gets the next free pad of the Main page | look |  | `looks.put-on-console` |
-| `SetFollows` | Which deck or timecode gives the song and its position | source: deck 1, deck 2, timecode |  | `songs.follows` |
-| `PlayFrom` | Run the show of a song from a section, without the deck | song, section |  | `songs.play-from` |
-| `StopListening` | End a run started with PlayFrom |  |  | `songs.play-from` |
+| `PlayFrom` | Play the show of a song from a section, without the deck | song, section |  | `songs.play-from` |
+| `StopPlayFrom` | End what PlayFrom started |  |  | `songs.play-from` |
 | `MarkReviewed` | The sections of a song were checked by a person | song |  | `songs.sections-look-right` |
 | `MoveSectionEdge` | Move the edge between two sections | song, edge, to |  | `songs.section.edge` |
 | `SplitSection` | One section becomes two | song, section |  | `songs.section.split` |
@@ -292,7 +295,7 @@ The union of what the controls send: the first list of engine commands. A propos
 | `SetOutput` | Set up an output: its kind, universes and rate | output, kind, universes, rate | yes | no control: see Missing |
 | `RemoveOutput` | Remove an output | output | yes | no control: see Missing |
 
-## State machines: 8
+## State machines: 9
 
 A machine is drawn where what a press does depends on what happened before. A choice among a few values, and a row that shows what kind of thing it lists, are not machines.
 Arrows are the pairs that change the state or send a command. The table under each diagram holds every pair.
@@ -352,7 +355,7 @@ stateDiagram-v2
 
 </details>
 
-### Try on lights
+### Play on lights
 
 Used by: `looks.try`
 
@@ -371,7 +374,7 @@ stateDiagram-v2
 
 | State | On screen |
 | --- | --- |
-| off | The look is not tried |
+| off | The look does not play |
 | flash | Finger down: the look runs |
 | on | The look runs by hand until the next press |
 | onDown | Finger down while it runs: nothing changes yet |
@@ -385,7 +388,7 @@ stateDiagram-v2
 
 | From | Event | To | Note |
 | --- | --- | --- | --- |
-| onDown | upShort | off | a try gives back what it touched |
+| onDown | upShort | off | it gives back what it touched |
 
 <details><summary>Every pair of state and event</summary>
 
@@ -406,36 +409,95 @@ Used by: `top.blackout`
 stateDiagram-v2
   direction LR
   [*] --> off
-  off --> latched: press / Blackout
+  off --> flash: down / Blackout
   off --> held: spaceDown / Blackout
-  held --> latched: press
+  flash --> latched: upShort
+  flash --> off: upLong / Blackout
+  latched --> latchedDown: down
+  latchedDown --> off: upShort / Blackout
+  latchedDown --> latched: upLong
+  held --> flash: down
   held --> off: spaceUp / Blackout
-  latched --> off: press / Blackout
 ```
 
 | State | On screen |
 | --- | --- |
 | off | Lights follow the app. Red outline, 'Blackout' |
-| held | Dark while Space is down. Red fill, 'Blackout on' |
+| flash | Finger down on the button: dark. Red fill, 'Blackout on' |
 | latched | Dark until the next press. Red fill, 'Blackout on' |
+| latchedDown | Finger down on a latched Blackout: nothing changes yet |
+| held | Dark while Space is down. Red fill, 'Blackout on' |
 
 | Event | Caused by |
 | --- | --- |
-| press | the Blackout button or its mapped control |
+| down | finger, mouse or mapped control goes down on Blackout |
+| upShort | it comes up within 350 ms |
+| upLong | it comes up later |
 | spaceDown | Space goes down, outside a text field |
 | spaceUp | Space comes up, or the window loses the keyboard |
 
 | From | Event | To | Note |
 | --- | --- | --- | --- |
-| held | press | latched | already dark: it stays dark when Space comes up |
+| flash | upShort | latched | it was a press: it stays dark |
+| flash | upLong | off | it was a hold: the lights are back |
+| latchedDown | upShort | off | pressed again: the lights are back |
+| latchedDown | upLong | latched | a long hold on a latched Blackout changes nothing |
+| held | down | flash | already dark: the button takes over from Space |
 
 <details><summary>Every pair of state and event</summary>
 
-| State | press | spaceDown | spaceUp |
+| State | down | upShort | upLong | spaceDown | spaceUp |
+| --- | --- | --- | --- | --- | --- |
+| off | to flash, sends Blackout | stays | stays | to held, sends Blackout | stays |
+| flash | stays | to latched | to off, sends Blackout | stays | stays |
+| latched | to latchedDown | stays | stays | stays | stays |
+| latchedDown | stays | to off, sends Blackout | to latched | stays | stays |
+| held | to flash | stays | stays | stays | to off, sends Blackout |
+
+</details>
+
+### Tempo: the feed or the hand
+
+Used by: `top.tap`, `top.tempo.source`
+
+```mermaid
+stateDiagram-v2
+  direction LR
+  [*] --> feed
+  feed --> oneTap: tap / TapTempo
+  oneTap --> tap: tap / TapTempo
+  oneTap --> feed: lapse, feedPicked
+  tap --> tap: tap / TapTempo
+  tap --> feed: back / ReleaseTempo, feedPicked
+```
+
+| State | On screen |
+| --- | --- |
+| feed | The picked feed drives the beat. Beside the tempo: 'from VirtualDJ', plain words |
+| oneTap | One tap: the beat dots restart. The tempo is still the feed's |
+| tap | Taps drive the beat. Beside the tempo: 'from Tap', pink, a button |
+
+| Event | Caused by |
+| --- | --- |
+| tap | Tap, or its mapped control |
+| lapse | no second tap came within two seconds |
+| back | the words 'from Tap' are pressed |
+| feedPicked | a tempo feed is picked on In/Out |
+
+| From | Event | To | Note |
 | --- | --- | --- | --- |
-| off | to latched, sends Blackout | to held, sends Blackout | stays |
-| held | to latched | stays | to off, sends Blackout |
-| latched | to off, sends Blackout | stays | stays |
+| oneTap | tap | tap | the second tap: the beat follows the taps |
+| oneTap | lapse | feed | one tap alone changes no tempo |
+| tap | back | feed | the beat is the feed's again, at once |
+| tap | feedPicked | feed | picking a feed is a way back too |
+
+<details><summary>Every pair of state and event</summary>
+
+| State | tap | lapse | back | feedPicked |
+| --- | --- | --- | --- | --- |
+| feed | to oneTap, sends TapTempo | stays | stays | stays |
+| oneTap | to tap, sends TapTempo | to feed | stays | to feed |
+| tap | stays, sends TapTempo | stays | to feed, sends ReleaseTempo | to feed |
 
 </details>
 
@@ -497,9 +559,10 @@ stateDiagram-v2
   direction LR
   [*] --> off
   off --> pick: press
-  pick --> off: press, cancel
-  pick --> wait: pick / StartLearn
-  wait --> off: press / CancelLearn, moved, cancel / CancelLearn
+  off --> wait: hold / StartLearn
+  pick --> off: press, cancel, lockOn
+  pick --> wait: hold / StartLearn, pick / StartLearn
+  wait --> off: press / CancelLearn, moved, cancel / CancelLearn, lockOn / CancelLearn
 ```
 
 | State | On screen |
@@ -510,22 +573,28 @@ stateDiagram-v2
 
 | Event | Caused by |
 | --- | --- |
-| press | the Learn button |
+| press | the Learn button, or the hardware control mapped to it |
+| hold | the Learn button is held for more than 350 ms |
 | pick | a press on a control that can be learned |
-| moved | a control on the hardware moves |
-| cancel | Cancel in the Learn bar, or Escape |
+| moved | a control on the hardware moves, other than the one mapped to Learn |
+| cancel | Escape |
+| lockOn | the lock comes into effect: LIVE on with Lock on |
 
 | From | Event | To | Note |
 | --- | --- | --- | --- |
+| off | hold | wait | Learn picked itself |
+| pick | hold | wait | Learn picked itself |
+| pick | lockOn | off | the lock holds Learn: it ends, nothing is mapped |
 | wait | moved | off | mapped by the engine. The bar says what was mapped, for four seconds |
+| wait | lockOn | off | the lock holds Learn: it ends, nothing is mapped |
 
 <details><summary>Every pair of state and event</summary>
 
-| State | press | pick | moved | cancel |
-| --- | --- | --- | --- | --- |
-| off | to pick | stays | stays | stays |
-| pick | to off | to wait, sends StartLearn | stays | to off |
-| wait | to off, sends CancelLearn | stays | to off | to off, sends CancelLearn |
+| State | press | hold | pick | moved | cancel | lockOn |
+| --- | --- | --- | --- | --- | --- | --- |
+| off | to pick | to wait, sends StartLearn | stays | stays | stays | stays |
+| pick | to off | to wait, sends StartLearn | to wait, sends StartLearn | stays | to off | to off |
+| wait | to off, sends CancelLearn | stays | stays | to off | to off, sends CancelLearn | to off, sends CancelLearn |
 
 </details>
 
@@ -668,7 +737,7 @@ stateDiagram-v2
 
 ## Top bar
 
-13 controls.
+14 controls.
 
 | Control | Name | Does | Sends | Kind |
 | --- | --- | --- | --- | --- |
@@ -676,14 +745,15 @@ stateDiagram-v2
 | DJ link indicator | `top.indicator.dj` | While LIVE is on, the Show row follows the DJ software | `SetFollowDj` | setting |
 | Recording indicator | `top.indicator.recording` | While LIVE is on and a song plays, what you play is written into its Recorded row | `SetRecording` | setting |
 | Autopilot indicator | `top.indicator.autopilot` | While LIVE is on, the autopilot plays its picks. The same state as the Autopilot button in Running | `SetAutopilot` | setting |
-| Lock indicator | `top.indicator.lock` | While LIVE is on, the Console layout and Learn are locked | `SetLock` | setting |
+| Lock indicator | `top.indicator.lock` | While LIVE is on, nothing can change what a press does: the Console layout, its pads and pages, Learn and the mappings are locked | `SetLock` | setting |
 | Trouble chip | `top.trouble` | Says what is wrong with the way to the lights, and opens In/Out | nothing: the open workspace | view |
-| Tap | `top.tap` | Sets the tempo by tapping along. After two taps the beat follows the taps | `TapTempo` | play |
+| Tap | `top.tap` | Sets the tempo by tapping along. After two taps the beat follows the taps, and stays with them until the words 'from Tap' are pressed | `TapTempo` | play |
+| Tempo source | `top.tempo.source` | Says who drives the beat. While taps hold it, the words 'from Tap' are a button: a press gives the beat back to the picked feed. Checked with taps holding the beat | `ReleaseTempo` | play |
 | Blackout | `top.blackout` | Every light goes dark. The only way to go dark | `Blackout` | play |
 | Undo | `top.undo` | Takes back the last change to the show file. Not what was played | `Undo` | edit |
 | Workspace tabs | `top.workspaces` | Opens one of the six workspaces: Console, Songs, Looks, Patch, DMX, In/Out | nothing: the open workspace | view |
 | Learn | `top.learn` | Maps a control on screen to a control on the hardware: pick one here, then move one there | `StartLearn` `CancelLearn` | view |
-| Cancel Learn | `top.learn.cancel` | Ends Learn. Nothing is mapped | `CancelLearn` | view |
+| Cancel Learn | `top.learn.cancel` | In the mockup: ends Learn. Nothing is mapped | `CancelLearn` | view |
 | Now strip | `top.now-strip` | Shows what runs in the three rows, and opens the Console. Not on the Console and on Songs: they have their own time line | nothing: the open workspace | view |
 
 ### Top bar: in each situation
@@ -694,9 +764,10 @@ stateDiagram-v2
 | DJ link indicator | ◆ | ◆ | ● | ● | ● | ● | ○ | ◆ | ● | ● | ◆ | ◆ | ● | – |
 | Recording indicator | ◆ | ◆ | ● | ◆ | ● | ● | ○ | ◆ | ● | ● | ● | ◆ | ● | – |
 | Autopilot indicator | ◆ | ◆ | ● | ● | ◆ | ● | ○ | ◆ | ● | ● | ● | ◆ | ● | – |
-| Lock indicator | ◆ | ◆ | ◆ | ● | ● | ● | ○ | ● | ◆ | ● | ● | ● | ● | – |
+| Lock indicator | ◆ | ◆ | ◆ | ● | ● | ● | ○ | ● | ◆ | ◆ | ● | ● | ● | – |
 | Trouble chip | – | – | – | – | – | – | ◆ | ◆ | – | – | – | – | ◆ | – |
 | Tap | ● | ● | ● | ◆ | ◆ | ◆ | ○ | ◆ | ● | ● | ◆ | ● | ◆ | – |
+| Tempo source | ● | ● | ● | ◆ | ◆ | ◆ | ○ | ◆ | ● | ● | ◆ | ◆ | ◆ | – |
 | Blackout | ● | ● | ◆ | ◆ | ◆ | ◆ | ○ | ◆ | ● | ● | ● | ● | ◆ | – |
 | Undo | ● | ◆ | ● | ◆ | ● | ◆ | ○ | ○ | ● | ● | ● | ● | ● | – |
 | Workspace tabs | ● | ● | ● | ● | ● | ◆ | ● | ● | ◆ | ● | ● | ● | ● | – |
@@ -736,8 +807,9 @@ stateDiagram-v2
 | Autopilot indicator | No song plays | works | On: with no song it plays Never dark |
 | Lock indicator | LIVE off | works | Goes between ready and turned off. Nothing starts before LIVE |
 | Lock indicator | LIVE on | works | Goes between on and turned off, at once |
-| Lock indicator | Lock on | works | Turns the lock off, mid-show: Edit surface and Learn work again |
+| Lock indicator | Lock on | works | Turns the lock off, mid-show: Edit surface, Learn and the mappings work again |
 | Lock indicator | Edit surface | works | Turned on while LIVE is on: the layout locks and editing ends |
+| Lock indicator | Learn mode | works | Turned on while LIVE is on: Learn ends, nothing is mapped |
 | Trouble chip | LIVE off | not there | Nothing is wrong |
 | Trouble chip | LIVE on | not there | Nothing is wrong |
 | Trouble chip | Lock on | not there | Nothing is wrong |
@@ -755,8 +827,15 @@ stateDiagram-v2
 | Tap | Autopilot on | works | Works. The autopilot follows the tapped beat |
 | Tap | Something held | works | Works the same |
 | Tap | Nothing patched | works | Works. The tempo needs no lights |
-| Tap | A song plays | works | Works. Taps take over from the DJ software. The tempo says 'from Tap' |
+| Tap | A song plays | works | Works. Taps take over from the DJ software and hold. The tempo says 'from Tap': a press on these words gives the beat back |
 | Tap | An output lost | works | Works the same |
+| Tempo source | Recording on | works | Works. It is not recorded: a replay takes its tempo from the song |
+| Tempo source | Autopilot on | works | Works. The autopilot follows the feed again |
+| Tempo source | Something held | works | Works. The lights you hold stay held: only the beat goes back |
+| Tempo source | Nothing patched | works | Works. The tempo needs no lights |
+| Tempo source | A song plays | works | Gives the beat back to the DJ software, at once |
+| Tempo source | No song plays | works | Works. A feed with no tempo yet keeps the tapped one until it has one |
+| Tempo source | An output lost | works | Works the same |
 | Blackout | Lock on | works | Works. Nothing locks Blackout |
 | Blackout | Recording on | works | Works. Blackout is not recorded |
 | Blackout | Autopilot on | works | Works. The autopilot runs on in the dark |
@@ -774,7 +853,7 @@ stateDiagram-v2
 | Learn | Recording on | works | Works when Lock is off. Learning is not recorded |
 | Learn | Engine not connected | off | Engine not connected |
 | Learn | Nothing patched | works | Works. Top bar controls can be mapped before any light is patched |
-| Learn | Learn mode | works | Ends Learn. Nothing is mapped |
+| Learn | Learn mode | works | A press ends Learn, nothing is mapped. Held, Learn picks itself |
 | Cancel Learn | LIVE off | not there | Learn is off |
 | Cancel Learn | LIVE on | not there | Learn is off |
 | Cancel Learn | Lock on | not there | Learn is off |
@@ -804,10 +883,11 @@ stateDiagram-v2
 | Lock indicator | Turns it off. Pressed again: it is ready again, or on if LIVE is on. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
 | Trouble chip | Opens In/Out. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
 | Tap | One tap. Fires on the way down | Nothing more: it fired on the way down | Two presses | Nothing. Sliding off does not take it back | Tab to it, then Enter or Space | As a press. 44 px or more |
-| Blackout | Latches: dark until the next press. Fires on the way down | On the button: nothing more. Space is the hold | Two presses | Nothing. Sliding off does not take it back | Space, outside a text field: dark while it is down. On the button, Enter latches | As a press. 44 px or more |
+| Tempo source | Gives the beat back to the picked feed. Fires on the way down | Nothing more: it fired on the way down | Two presses | Nothing. Sliding off does not take it back | Tab to it, then Enter or Space | As a press. 44 px or more |
+| Blackout | Dark on the way down. A short press latches: dark until the next press. On a latched Blackout the lights are back when a short press comes up. Fires on the way down | Down for more than 350 ms it was a hold: the lights are back when the finger lifts. A long hold on a latched Blackout changes nothing | Two presses: dark, then back | Nothing. Sliding off does not take it back: lifting anywhere ends the press | Space, outside a text field: dark while it is down. On the button, Enter latches | As press and hold: the same as a pad. 44 px or more |
 | Undo | Takes back one step. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Cmd or Ctrl and Z, outside a text field. On the button, Enter | As a press. 44 px |
 | Workspace tabs | Opens that workspace. Fires on the way up | Nothing more | As one press: the choice is already made | Nothing. Sliding to another option picks nothing | 1 to 6 from anywhere outside a text field. In the tabs, arrows move and open | As a press. 44 px |
-| Learn | Starts Learn. Pressed again: Learn ends, nothing is mapped. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, Enter or Space. Escape ends Learn from anywhere | As a press. 44 px |
+| Learn | Starts Learn. Pressed again: Learn ends, nothing is mapped. Fires on the way up | Held for more than 350 ms: Learn picks itself. Then move the hardware control that should start and end Learn | Two presses | Sliding off before lifting cancels the press | Tab to it, Enter or Space. Escape ends Learn from anywhere | As a press. 44 px |
 | Cancel Learn | Ends Learn. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Escape from anywhere. On the button, Enter | As a press. 44 px |
 | Now strip | Opens the Console. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
 
@@ -821,12 +901,13 @@ stateDiagram-v2
 | Autopilot indicator | The lamp changes when the engine reports it: paper on, mute ready, empty and struck through off | The mapped control shows on or off | no. Press it again | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
 | Lock indicator | The lamp changes when the engine reports it: paper on, mute ready, empty and struck through off | The mapped control shows on or off | no. Press it again | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
 | Trouble chip | It appears with the trouble and goes with it. Red outline, red lamp | None | no. Nothing in the show file changes | no. It is a notice, there only while something is wrong | **change**. Today it shows only when no light is connected. It also has to say 'Output lost' and 'Engine not connected': mid-show these have no mark outside In/Out |
-| Tap | The beat dots restart on the tap, at once. The tempo changes after the second tap | The mapped pad blinks on the beat | no. Playing is not a change to the show file. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **keep**. Asked for in review 1: always visible beside the tempo |
-| Blackout | Red fill and 'Blackout on' on the way down. The whole app dims its row colours while dark | The mapped control is lit red while dark | no. Playing is not a change to the show file. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
+| Tap | The beat dots restart on the tap, at once. The tempo changes after the second tap, and the words beside it turn to 'from Tap' | The mapped pad blinks on the beat | no. Playing is not a change to the show file. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **keep**. Asked for in review 1: always visible beside the tempo |
+| Tempo source | The words turn to the name of the feed and are plain again, when the engine reports it | The mapped control is lit while taps hold the beat | no. Tap again | yes. A button or a value: one mapping | **keep**. The owner's decision 23: taps hold until you press the words 'from Tap'. The way back is where the eye already is, not on In/Out |
+| Blackout | Red fill and 'Blackout on' on the way down. The whole app dims its row colours while dark | The mapped control is lit red while dark | no. Playing is not a change to the show file. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **change**. In the mockup the button only latches and Space only holds. The owner's decision 30: the button works like a pad. A short press latches, a hold is dark while held |
 | Undo | What was changed goes back, when the engine reports it. The button names the next step to take back | None | no. There is no redo in the mockups. See the list of missing controls | yes. A button or a value: one mapping | **change**. It has to say what it takes back ('Undo: move widget'), and 'Nothing to undo' when off. Both are only in its accessible name today |
 | Workspace tabs | At once: the screen owns this state | None | no. Nothing in the show file changes | yes. A button or a value: one mapping | **change**. The tab 'All reviews' is review tooling and goes with the review layer |
-| Learn | Paper while Learn is on. The Learn bar under the tabs says the step, at once | None | no. Nothing in the show file changes | no. It starts Learn, so it cannot be its target | **keep**. It says what it is and what a press does |
-| Cancel Learn | At once: the screen owns this state | None | no. Nothing in the show file changes | no. It belongs to Learn itself | **change**. One Cancel, the same in both steps. The quiet second variant goes |
+| Learn | Paper while Learn is on. The Learn bar under the tabs says the step, at once | The mapped control is lit while Learn is on | no. Nothing in the show file changes | yes. The owner's review: 'Learn itself should be learnable'. A press ends Learn, so it is picked by holding it | **change**. In the mockup Learn cannot be mapped, and the Learn bar has a Cancel. Learn is picked by a hold, and pressed again it ends Learn |
+| Cancel Learn | At once: the screen owns this state | None | no. Nothing in the show file changes | no. It belongs to Learn itself | **remove**. The owner's review: 'just pressing learn again disabled learn'. Two controls for one thing: Learn pressed again ends Learn, and so does Escape. The Learn bar only says the step |
 | Now strip | At once: the screen owns this state | None | no. Nothing in the show file changes | no. The Console tab is the control to map | **keep**. It says what it is and what a press does |
 
 ## Console
@@ -843,7 +924,7 @@ stateDiagram-v2
 | Autopilot style | `console.autopilot.style` | Picks the style the autopilot uses. Styles are made on Looks | `SetAutopilotStyle` | setting |
 | Console pages | `console.pages` | Opens one page of widgets: Main, Movers, Pixels and your own | nothing: the open page | view |
 | Add page | `console.pages.add` | Adds an empty page and opens it | `AddPage` | edit |
-| Surprise me | `console.surprise` | Starts a look picked at random, by hand | `Surprise` | play |
+| Surprise me | `console.surprise` | In the mockup: starts a look picked at random, by hand | nothing:  | play |
 | Edit surface | `console.edit-surface` | Starts arranging the page: the grid, the edit frames and the widget drawer show | nothing: the Console layout: playing, editing or locked | view |
 | Done editing | `console.done-editing` | Ends arranging. The layout was saved as you went | nothing: the Console layout: playing, editing or locked | view |
 | Look pad | `console.pad` | Starts or stops its look by hand. Held down, it flashes the look until the finger lifts | `StartLook` `StopLook` `EndFlash` | play |
@@ -1048,7 +1129,7 @@ stateDiagram-v2
 | Movers position | A press jumps the movers to that point | Nothing more | Two jumps to the same point | The movers follow the finger, also when it leaves the pad | Arrows move by 1, with Shift by 10 | As a drag. One finger |
 | Go | Steps forward. Fires on the way down | Nothing more: it fired on the way down | Two presses | Nothing. Sliding off does not take it back | Tab to it, then Enter or Space | As a press. 44 px or more |
 | Back | Steps back. Fires on the way down | Nothing more: it fired on the way down | Two presses | Nothing. Sliding off does not take it back | Tab to it, then Enter or Space | As a press. 44 px or more |
-| Speed | Sets that speed. Fires on the way up | Nothing more | As one press: the choice is already made | Nothing. Sliding to another option picks nothing | Tab to the group, arrows move and pick | As a press. 44 px |
+| Speed | Sets that speed. Fires on the way down | Nothing more | As one press: the choice is already made | Nothing. Sliding to another option picks nothing | Tab to the group, arrows move and pick | As a press. 44 px |
 | Widget edit frame | Puts the keyboard on the widget | Nothing more. A drag needs 8 px of movement, not a wait | Two presses | Moves the widget by whole cells. Escape puts it back | Arrows move it, Shift and arrows resize it, Delete removes it | As press and drag. 44 px |
 | Widget resize handle | Nothing | Nothing more. A drag needs 8 px of movement, not a wait | Two presses | Resizes by whole cells. Escape puts it back | On the widget: Shift and arrows | As press and drag. 44 px |
 | Remove widget | Removes the widget. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | On the widget: Delete. On the button: Enter | As a press. 44 px |
@@ -1061,12 +1142,12 @@ stateDiagram-v2
 | Fold Running | At once: the screen owns this state | None | no. Nothing in the show file changes | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
 | Release one | Its chip leaves the Manual row and the hold count drops, when the engine reports it | The pad of the look goes back to idle | no. Playing is not a change to the show file. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
 | Stop one | Its chip leaves the row when the engine reports it | None | no. Playing is not a change to the show file. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
-| Release all | The Manual row empties and the count says 0, when the engine reports it | The mapped control is lit while something is held | no. Playing is not a change to the show file. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **change**. Off with no reason today. It says 'Nothing held' under its label |
+| Release all | The Manual row empties and the count says 0, when the engine reports it | The mapped control is lit while something is held | no. Playing is not a change to the show file. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **change**. Off with no reason today: it says 'Nothing held' under its label. The owner's decision 22: it gives back everything, raw channels too |
 | Autopilot on or off | Its word and the indicator's lamp change together, when the engine reports it | The mapped control shows on or off | no. Press it again | yes. A button or a value: one mapping | **keep**. Two places, one state: this button and the indicator always agree |
 | Autopilot style | The new setting shows when the engine reports it, in the same screen frame | The mapped control shows on or off | yes. One step in Undo | no. A list that opens has no pad or fader to stand for it | **keep**. It says what it is and what a press does |
 | Console pages | At once: the screen owns this state | A pad controller shows the pads of the open page | no. Nothing in the show file changes | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
-| Add page | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | yes. A button or a value: one mapping | **change**. Today it is a tab that is really an action, and it works while the layout is locked. It becomes a button after the tabs, there only while editing |
-| Surprise me | Pressed look on the way down, before the engine answers. Its state when the engine reports it, in the same screen frame | The mapped control shows the same state | no. Playing is not a change to the show file. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **remove**. It does not say what a press will do, and what it starts is held until Release. The autopilot is the surprise. Not in the Console brief |
+| Add page | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | yes. A button or a value: one mapping | **change**. Today it is a tab that is really an action, and it works while the layout is locked. It becomes a button after the tabs, there only while editing: the lock holds pages (decision 21) |
+| Surprise me | Pressed look on the way down, before the engine answers. Its state when the engine reports it, in the same screen frame | The mapped control shows the same state | no. Playing is not a change to the show file. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **remove**. The owner's decision 24: it goes. It does not say what a press will do, and what it starts is held until Release. The autopilot is the surprise |
 | Edit surface | At once: the screen owns this state | None | no. Nothing in the show file changes | yes. A button or a value: one mapping | **change**. An empty page shows it twice. One stays, in the page bar, paper while the page is empty |
 | Done editing | At once: the screen owns this state | None | no. Nothing in the show file changes | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
 | Look pad | A 4 px paper frame on the way down, drawn by the screen. Pink body and the NOW flag when the engine reports it runs, in the same screen frame | The mapped pad shows the look's colour, bright while it runs, and pink while held with the pad off | no. Playing is not a change to the show file. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **keep**. The primary control. Its colour field, its name and who runs it each say one thing |
@@ -1082,15 +1163,14 @@ stateDiagram-v2
 
 ## Songs
 
-19 controls.
+18 controls.
 
 | Control | Name | Does | Sends | Kind |
 | --- | --- | --- | --- | --- |
 | Search songs | `songs.search` | Narrows the library to titles and artists that hold the text | nothing: the search text | view |
 | Library filter | `songs.filter` | Shows only songs of one kind: has a show, no show yet, has recordings, needs review. One at a time | nothing: the filter | view |
 | Song in the library | `songs.song` | Opens the show of that song in the middle | nothing: the open song | view |
-| Follows | `songs.follows` | Which deck, or timecode, gives the song that plays and its position | `SetFollows` | setting |
-| Play from a section | `songs.play-from` | Runs the show of this song on the lights from the selected section, without the deck. No sound | `PlayFrom` `StopListening` | play |
+| Play from a section | `songs.play-from` | Plays the show of this song on the lights from the selected section, without the deck. No sound. It says 'Play from Drop', then 'Stop' | `PlayFrom` `StopPlayFrom` | play |
 | Sections look right | `songs.sections-look-right` | Says a person checked the sections. The banner goes, the song is 'Analysed'. There only on a song that needs review | `MarkReviewed` | edit |
 | Section | `songs.section` | Selects a section, in the Sections row or in the Show row. The editor below and 'Looks to add' act on it | nothing: the selected section of this song | view |
 | Section edge | `songs.section.edge` | Moves the edge between two sections | `MoveSectionEdge` | edit |
@@ -1113,7 +1193,6 @@ stateDiagram-v2
 | Search songs | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ◆ | ● | ● | ● | – |
 | Library filter | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ● | ● | ● | ● | – |
 | Song in the library | ● | ● | ● | ● | ● | ● | ● | – | ● | ● | ◆ | ● | ● | – |
-| Follows | ● | ● | ● | ● | ● | ● | ○ | – | ● | ● | ◆ | ◆ | ● | – |
 | Play from a section | ● | ● | ● | ○ | ● | ◆ | ○ | – | ● | ● | ○ | ◆ | ● | – |
 | Sections look right | ● | ● | ● | ● | ● | ● | ○ | – | ● | ● | ● | ● | ● | – |
 | Section | ● | ● | ● | ● | ● | ● | ● | – | ● | ● | ◆ | ● | ● | – |
@@ -1139,14 +1218,11 @@ stateDiagram-v2
 | Library filter | Nothing patched | works | Works. The list stays empty |
 | Song in the library | Nothing patched | not there | No songs yet: they arrive from the DJ software |
 | Song in the library | A song plays | works | Works. The song that plays is marked 'Playing'. Opening another one changes nothing on the lights |
-| Follows | Nothing patched | not there | No songs yet: they arrive from the DJ software |
-| Follows | A song plays | works | Works. The Show row jumps to the song of that source, at once |
-| Follows | No song plays | works | Works. It counts from the next song on |
 | Play from a section | Recording on | off | A song plays: the deck decides |
 | Play from a section | Something held | works | Works. What you hold stays on top of the show |
 | Play from a section | Nothing patched | not there | No songs yet: they arrive from the DJ software |
 | Play from a section | A song plays | off | A song plays: the deck decides |
-| Play from a section | No song plays | works | Works. A second line, 'Listening', walks through the song |
+| Play from a section | No song plays | works | Works. A second line, 'Playing', walks through the song |
 | Sections look right | Nothing patched | not there | No songs yet: they arrive from the DJ software |
 | Section | Nothing patched | not there | No songs yet: they arrive from the DJ software |
 | Section | A song plays | works | Works. Until you pick one, the selection follows the section that plays |
@@ -1180,8 +1256,7 @@ stateDiagram-v2
 | Search songs | Puts the cursor in the field | Selects a word, as the system does | Selects a word | Selects text | Type a title or an artist. The list narrows with every letter. Escape empties the field | Opens the on-screen keyboard. 44 px high |
 | Library filter | Shows only that kind. Pressed again: all songs show again. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
 | Song in the library | Opens that song. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
-| Follows | Follows that source. Fires on the way up | Nothing more | As one press: the choice is already made | Nothing. Sliding to another option picks nothing | Tab to the group, arrows move and pick | As a press. 44 px |
-| Play from a section | Runs the show from the selected section. Pressed again: the run ends. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
+| Play from a section | Plays the show from the selected section. Pressed again: it stops. Fires on the way down | Nothing more: it fired on the way down | Two presses | Nothing. Sliding off does not take it back | Tab to it, then Enter or Space | As a press. 44 px or more |
 | Sections look right | Marks the song as checked. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
 | Section | Selects that section. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
 | Section edge | Puts the keyboard on the edge | Nothing more. A drag needs 8 px of movement, not a wait | Two presses | Moves the edge. Both sections change length. Escape puts it back | Left and right arrows move it by 4 seconds | As press and drag. 44 px |
@@ -1204,8 +1279,7 @@ stateDiagram-v2
 | Search songs | At once: the screen owns this state | None | no. Nothing in the show file changes | no. Text cannot come from a pad or a fader | **keep**. It says what it is and what a press does |
 | Library filter | At once: the screen owns this state | None | no. Nothing in the show file changes | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
 | Song in the library | At once: the screen owns this state | None | no. Nothing in the show file changes | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
-| Follows | The new setting shows when the engine reports it, in the same screen frame | The mapped control shows on or off | yes. One step in Undo | yes. A button or a value: one mapping | **change**. It sits in the header of one song but is a setting of the whole app, and it overlaps the DJ link indicator and the tempo feed. Its place is In/Out, beside the tempo feed |
-| Play from a section | The flag 'Listening' with the time walks along the rows, from the next screen frame on | The mapped control is lit while it runs | no. Playing is not a change to the show file. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **change**. Three words for one thing: 'Play from', 'Stop listening', 'Listening'. And no music plays. One word, the one Looks uses: 'Try from Drop', 'Stop'. A song that is not analysed says 'Not analysed yet' |
+| Play from a section | The flag 'Playing' with the time walks along the rows, from the next screen frame on | The mapped control is lit while it plays | no. Playing is not a change to the show file. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **change**. Three words for one thing in the mockup: 'Play from', 'Stop listening', 'Listening'. The owner's decision 28: 'Play from Drop', then 'Stop', and the flag says 'Playing'. A song that is not analysed says 'Not analysed yet' |
 | Sections look right | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
 | Section | At once: the screen owns this state | None | no. Nothing in the show file changes | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
 | Section edge | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | no. Arranging is done on screen, not from a controller | **keep**. It says what it is and what a press does |
@@ -1233,15 +1307,15 @@ stateDiagram-v2
 | Type filter | `looks.library.type` | Shows all looks, or only steps, sequences or patterns | nothing: the type filter | view |
 | New group | `looks.library.new-group` | Adds an empty group and opens its name to type | `AddGroup` | edit |
 | Fold a group | `looks.library.group.fold` | Folds a group to its header, or unfolds it. The header says the name and how many looks it holds | nothing: which groups are folded | view |
-| Rename group | `looks.library.group.rename` | Turns the group's name into a field | nothing: which group is being renamed | view |
+| Rename group | `looks.library.group.rename` | Turns the group's name into a field. It says 'Rename', and is there only while the library is widened | nothing: which group is being renamed | view |
 | Group name | `looks.library.group.name` | The name of the group, with Save. The autopilot rules that pick from it follow the new name | `RenameGroup` | edit |
-| Delete group | `looks.library.group.delete` | Removes the group. Its looks stay in the library | `DeleteGroup` | edit |
+| Delete group | `looks.library.group.delete` | Removes the group. Its looks stay in the library. It says 'Delete group', and is there only while the library is widened | `DeleteGroup` | edit |
 | Look in the library | `looks.library.look` | Opens the look in the editor. Dragged onto a group, the look joins that group too | `AddToGroup` | view |
 | Breadcrumb | `looks.crumb` | Goes back up to the sequence you drilled in from. There once you opened an inner sequence | nothing: the path of open looks | view |
 | Back to the outer sequence | `looks.back` | Goes one level up | nothing: the path of open looks | view |
 | Remove from group | `looks.groups.remove` | Takes the open look out of one group. The look and the group stay | `RemoveFromGroup` | edit |
 | Add to a group | `looks.groups.add` | Puts the open look into one more group | `AddToGroup` | edit |
-| Try on lights | `looks.try` | Plays the open look by hand on the real lights. A try gives back what it touched when it stops | `StartLook` `EndFlash` | play |
+| Play on lights | `looks.try` | Plays the open look by hand on the real lights. It gives back what it touched when it stops: nothing stays held. It says 'Play on lights', then 'Stop' | `StartLook` `EndFlash` | play |
 | Put on Console | `looks.put-on-console` | Gives the open look the next free pad of the Console's Main page, and says which one | `PutOnConsole` | edit |
 | Connection box | `looks.connection` | Jumps to what the box names: another look, a Console page, a song and its section, an autopilot rule, or the lights on Patch | nothing: the open workspace, and what is selected there | view |
 | Which fixtures | `looks.step.fixtures` | A group of lights is set by this step, or left alone. One button per group | `SetStepFixtures` | edit |
@@ -1298,7 +1372,7 @@ stateDiagram-v2
 | Back to the outer sequence | ● | ● | ● | ● | ● | ● | ● | – | ● | ● | ● | ● | ● | – |
 | Remove from group | ● | ● | ● | ● | ◆ | ◆ | ○ | – | ● | ● | ● | ● | ● | – |
 | Add to a group | ● | ● | ● | ● | ◆ | ◆ | ○ | – | ● | ◆ | ● | ● | ● | – |
-| Try on lights | ● | ● | ● | ◆ | ● | ◆ | ○ | – | ● | ● | ● | ● | ● | – |
+| Play on lights | ● | ● | ● | ◆ | ● | ◆ | ○ | – | ● | ● | ● | ● | ● | – |
 | Put on Console | ● | ● | ○ | ● | ● | ◆ | ○ | – | ● | ● | ● | ● | ● | – |
 | Connection box | ● | ● | ● | ● | ● | ● | ● | – | ● | ◆ | ● | ● | ● | – |
 | Which fixtures | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ● | ● | ● | ● | – |
@@ -1363,9 +1437,9 @@ stateDiagram-v2
 | Add to a group | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
 | Add to a group | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
 | Add to a group | Learn mode | works | Not picked: a list that opens has no pad or fader to stand for it. It works as usual and Learn keeps waiting |
-| Try on lights | Recording on | works | Works. A try is not recorded: only the Console is |
-| Try on lights | Something held | works | Works. A try never adds to what you hold |
-| Try on lights | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
+| Play on lights | Recording on | works | Works. It is not recorded: only the Console is |
+| Play on lights | Something held | works | Works. It never adds to what you hold |
+| Play on lights | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
 | Put on Console | Lock on | off | Locked while LIVE is on |
 | Put on Console | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
 | Put on Console | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
@@ -1458,7 +1532,7 @@ stateDiagram-v2
 | Back to the outer sequence | Goes one level up. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
 | Remove from group | Takes the look out of that group. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
 | Add to a group | Opens the list. A press on an entry: the look joins that group | Nothing more | Opens and closes the list | Nothing | Tab to it, arrows change the choice, Enter opens the list | Opens the system's picker. 44 px high |
-| Try on lights | Starts the look, on the way down. Pressed again: it stops and gives back what it touched | Down for more than 350 ms it was a flash: the look ends when the finger lifts | Two presses: on, then off | Nothing. Lifting anywhere ends the press | Tab to it, Enter is a short press | As a press. 44 px or more |
+| Play on lights | Starts the look, on the way down. Pressed again: it stops and gives back what it touched | Down for more than 350 ms it was a flash: the look ends when the finger lifts | Two presses: on, then off | Nothing. Lifting anywhere ends the press | Tab to it, Enter is a short press | As a press. 44 px or more |
 | Put on Console | Puts the look on a pad. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
 | Connection box | Jumps there. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
 | Which fixtures | The step sets that group. Pressed again: the step leaves it alone. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
@@ -1507,16 +1581,16 @@ stateDiagram-v2
 | Type filter | At once: the screen owns this state | None | no. Nothing in the show file changes | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
 | New group | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
 | Fold a group | At once: the screen owns this state | None | no. Nothing in the show file changes | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
-| Rename group | At once: the screen owns this state | None | no. Nothing in the show file changes | yes. A button or a value: one mapping | **change**. A pencil with no word, on every group header at all times. It appears with the mode that uses it: in the widened library, and it says 'Rename' |
+| Rename group | At once: the screen owns this state | None | no. Nothing in the show file changes | yes. A button or a value: one mapping | **change**. In the mockup: a pencil with no word, on every group header at all times. The owner's decision 27: it says 'Rename' and shows only in the widened library, the view for arranging groups |
 | Group name | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | no. Text cannot come from a pad or a fader | **keep**. It says what it is and what a press does |
-| Delete group | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | yes. A button or a value: one mapping | **change**. A cross with no word. Everywhere else the cross means 'take out of this place'; here it deletes the group itself. It says 'Delete group' and shows in the widened library only |
+| Delete group | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | yes. A button or a value: one mapping | **change**. In the mockup: a cross with no word, at all times. Everywhere else the cross means 'take out of this place'; here it deletes the group itself. The owner's decision 27: it says 'Delete group' and shows only in the widened library |
 | Look in the library | At once: the screen owns this state | None | yes. Joining a group is one step in Undo. Opening is not a step | no. Opening a look to edit it is done on screen | **keep**. It says what it is and what a press does |
 | Breadcrumb | At once: the screen owns this state | None | no. Nothing in the show file changes | no. Finding your way in the editor is done on screen | **keep**. It says what it is and what a press does |
 | Back to the outer sequence | At once: the screen owns this state | None | no. Nothing in the show file changes | yes. A button or a value: one mapping | **remove**. Two controls for one thing: the breadcrumb above it already goes back, and says where to |
 | Remove from group | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
 | Add to a group | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | no. A list that opens has no pad or fader to stand for it | **keep**. It says what it is and what a press does |
-| Try on lights | A 4 px paper frame on the way down. Pink body and the NOW flag when the engine reports it runs | The mapped pad is lit while the try runs | no. Playing is not a change to the show file. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
-| Put on Console | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | yes. A button or a value: one mapping | **change**. It changes the Console layout, so the lock has to hold it too. Today it works while locked |
+| Play on lights | A 4 px paper frame on the way down. Pink body and the NOW flag when the engine reports it runs | The mapped pad is lit while it plays | no. Playing is not a change to the show file. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **change**. The mockup says 'Try on lights'. The owner's decision 28: the word is Play, here as on Songs. 'Play on lights', then 'Stop' |
+| Put on Console | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | yes. A button or a value: one mapping | **change**. Today it works while locked. It changes what a pad does, so the lock holds it (decision 21) |
 | Connection box | At once: the screen owns this state | None | no. Nothing in the show file changes | no. A jump is there only for the open look | **keep**. It says what it is and what a press does |
 | Which fixtures | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
 | Set a property | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
@@ -1729,7 +1803,7 @@ stateDiagram-v2
 | Move earlier or later | Moves the light one place. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
 | Address | Changes the address by one. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
 | Move to a free address | Moves the light there. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
-| Flash it | The light flashes. Pressed again: it stops. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
+| Flash it | The light flashes. Pressed again: it stops. Fires on the way down | Nothing more: it fired on the way down | Two presses | Nothing. Sliding off does not take it back | Tab to it, then Enter or Space | As a press. 44 px or more |
 | Leave for now | Hides the flow. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
 | Search the fixture library | Puts the cursor in the field | Selects a word, as the system does | Selects a word | Selects text | Type a name or a type. The list narrows with every letter | Opens the on-screen keyboard. 44 px high |
 | Pick a model | Picks that model and goes to step 2. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
@@ -1910,7 +1984,7 @@ stateDiagram-v2
 | Release the channel | Pressed look on the way down, before the engine answers. Its state when the engine reports it, in the same screen frame | The mapped control shows the same state | no. Playing is not a change to the show file. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
 | Held channel in the list | At once: the screen owns this state | None | no. Nothing in the show file changes | no. Finding a channel is done on screen | **keep**. It says what it is and what a press does |
 | Release in the list | Pressed look on the way down, before the engine answers. Its state when the engine reports it, in the same screen frame | The mapped control shows the same state | no. Playing is not a change to the show file. Its opposite is at hand: stop, Release | no. It belongs to one row of a list that changes | **keep**. It says what it is and what a press does |
-| Release channels | Pressed look on the way down, before the engine answers. Its state when the engine reports it, in the same screen frame | The mapped control shows the same state | no. Playing is not a change to the show file. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **change**. It says 'Release all', the words of the Console button that gives back everything. This one gives back raw channels only, so it says 'Release channels' |
+| Release channels | Pressed look on the way down, before the engine answers. Its state when the engine reports it, in the same screen frame | The mapped control shows the same state | no. Playing is not a change to the show file. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **change**. The mockup says 'Release all', the words of the Console button that gives back everything. The owner's decision 22: this one gives back raw channels only and says 'Release channels' |
 | Output row | At once: the screen owns this state | None | no. Nothing in the show file changes | yes. A button or a value: one mapping | **remove**. Two controls for one thing: the universe tabs open a universe. A status table whose rows are also buttons says two things |
 | Brightness among equals | The new setting shows when the engine reports it, in the same screen frame | The mapped control shows on or off | yes. One step in Undo | yes. A button or a value: one mapping | **keep**. The one place where who wins is decided |
 | Manual control ends | The new setting shows when the engine reports it, in the same screen frame | The mapped control shows on or off | yes. One step in Undo | yes. A button or a value: one mapping | **keep**. The one place where who wins is decided |
@@ -1918,11 +1992,12 @@ stateDiagram-v2
 
 ## In/Out
 
-9 controls.
+10 controls.
 
 | Control | Name | Does | Sends | Kind |
 | --- | --- | --- | --- | --- |
-| Tempo feed | `inout.tempo.feed` | Picks what drives the beat: Tap, Audio, MIDI clock, VirtualDJ or Timecode. Each says its tempo and how sure it is | `SetTempoFeed` | setting |
+| Tempo feed | `inout.tempo.feed` | Picks what drives the beat: Tap, Audio, MIDI clock, VirtualDJ or Timecode. Each says its tempo and how sure it is. While taps hold the beat the picked feed waits: 'from Tap' in the top bar gives it back | `SetTempoFeed` | setting |
+| Follows | `inout.follows` | Which deck, or timecode, gives the song that plays and its position. Beside the tempo feed, which gives the beat | `SetFollows` | setting |
 | Tap, on In/Out | `inout.tempo.tap` | The same as Tap in the top bar | `TapTempo` | play |
 | Test an output | `inout.out.test` | Every channel of that output at half for three seconds, then back. To see that the cable works | `TestOutput` | play |
 | Edit a mapping | `inout.mapping.edit` | Turns device, number and feedback of that row into fields. Pressed again as 'Done', they are text again | nothing: which row is being edited | edit |
@@ -1937,6 +2012,7 @@ stateDiagram-v2
 | Control | LIVE off | LIVE on | Lock on | Recording on | Autopilot on | Something held | Engine not connected | Nothing patched | Edit surface | Learn mode | A song plays | No song plays | An output lost | Window closed |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Tempo feed | ● | ◆ | ● | ● | ● | ● | ○ | ● | ● | ● | ◆ | ◆ | ● | – |
+| Follows | ● | ● | ● | ● | ● | ● | ○ | ◆ | ● | ● | ◆ | ◆ | ● | – |
 | Tap, on In/Out | ● | ● | ● | ● | ● | ● | ○ | ● | ● | ● | ● | ● | ● | – |
 | Test an output | ● | ○ | ○ | ○ | ○ | ◆ | ○ | ◆ | ● | ◆ | ● | ● | ○ | – |
 | Edit a mapping | ● | ● | ○ | ● | ● | ● | ○ | ◆ | ● | ◆ | ● | ● | ● | – |
@@ -1953,6 +2029,9 @@ stateDiagram-v2
 | Tempo feed | LIVE on | works | Works mid-show. The beat jumps to the new feed at once |
 | Tempo feed | A song plays | works | Works. VirtualDJ gives the tempo of the song that plays |
 | Tempo feed | No song plays | works | Works. VirtualDJ has no tempo without a song: the last tempo stays |
+| Follows | Nothing patched | works | Works. No song has a show yet: it counts once one has |
+| Follows | A song plays | works | Works. The Show row jumps to the song of that source, at once |
+| Follows | No song plays | works | Works. It counts from the next song on |
 | Test an output | LIVE on | off | LIVE is on |
 | Test an output | Lock on | off | LIVE is on |
 | Test an output | Recording on | off | LIVE is on |
@@ -1985,8 +2064,9 @@ stateDiagram-v2
 | Control | Press | Hold | Double press | Drag | Keyboard | Touch |
 | --- | --- | --- | --- | --- | --- | --- |
 | Tempo feed | The beat follows that feed. Fires on the way up | Nothing more | As one press: the choice is already made | Nothing. Sliding to another option picks nothing | Tab to the group, arrows move and pick | As a press. 44 px |
+| Follows | Follows that source. Fires on the way up | Nothing more | As one press: the choice is already made | Nothing. Sliding to another option picks nothing | Tab to the group, arrows move and pick | As a press. 44 px |
 | Tap, on In/Out | One tap. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
-| Test an output | Starts the test. Pressed again: nothing: it ends by itself after three seconds. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
+| Test an output | Starts the test. Pressed again: nothing: it ends by itself after three seconds. Fires on the way down | Nothing more: it fired on the way down | Two presses | Nothing. Sliding off does not take it back | Tab to it, then Enter or Space | As a press. 44 px or more |
 | Edit a mapping | Opens the row to edit. Pressed again: the row is text again. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
 | Mapping device | Opens the list. A press on an entry: the mapping listens to that device | Nothing more | Opens and closes the list | Nothing | Tab to it, arrows change the choice, Enter opens the list | Opens the system's picker. 44 px high |
 | Note or controller number | Puts the cursor in the field | Selects a word, as the system does | Selects a word | Selects text | Type a note or a controller number. Enter or leaving the field saves, Escape puts the old one back | Opens the on-screen keyboard. 44 px high |
@@ -1999,6 +2079,7 @@ stateDiagram-v2
 | Control | On screen | On a mapped controller | Undo | Learn | Function first |
 | --- | --- | --- | --- | --- | --- |
 | Tempo feed | The new setting shows when the engine reports it, in the same screen frame | The mapped control shows on or off | yes. One step in Undo | yes. A button or a value: one mapping | **change**. A feed with no signal can be picked, and then nothing drives the beat. It is off and says 'No signal' |
+| Follows | The new setting shows when the engine reports it, in the same screen frame | The mapped control shows on or off | yes. One step in Undo | yes. A button or a value: one mapping | **change**. In the mockup it sits in the header of one song. The owner's decision 26: it is a setting of the whole app and sits on In/Out, beside the tempo feed. DJ link stays the on or off |
 | Tap, on In/Out | Pressed look on the way down, before the engine answers. Its state when the engine reports it, in the same screen frame | The mapped control shows the same state | no. Playing is not a change to the show file. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **remove**. Two controls for one thing. Tap is in the top bar on every screen, right above this one. The Tap feed says 'Tap in the top bar' |
 | Test an output | The button says 'Testing' and the line above it says what happens, at once | None | no. Playing is not a change to the show file. Its opposite is at hand: stop, Release | no. A test is started on screen, looking at the lights | **change**. It works while LIVE is on: one press and the whole room is at half, mid-show. It is off then and says 'LIVE is on' |
 | Edit a mapping | The change shows when the engine reports it, in the same screen frame | None | no. Opening a row changes nothing | no. It belongs to one row of a list that changes | **keep**. It says what it is and what a press does |
@@ -2050,7 +2131,7 @@ stateDiagram-v2
 
 | Control | Press | Hold | Double press | Drag | Keyboard | Touch |
 | --- | --- | --- | --- | --- | --- | --- |
-| Pad to try | Starts or stops the look in the explainer. Held, it flashes. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
+| Pad to try | Starts the look in the explainer, on the way down, as a real pad does. On a running pad: it stops | Down for more than 350 ms it was a flash: the look ends when the finger lifts | Two presses: on, then off | Nothing. Lifting anywhere ends the press | Tab to it, Enter is a short press | As a press. 44 px or more |
 | Master to try | A press on the track jumps the explainer's master to that place | Nothing more | Two jumps to the same place | the explainer's master follows the finger, also when it leaves the track | Arrows change it by 1, with Shift by 10. Page up and down by 10, Home and End to the ends | As a drag. The track is 44 px wide |
 | Record | Starts writing presses down. Pressed again: it stops. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
 | Replay on Show | Replays what was written. Pressed again: the replay stops. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
@@ -2062,11 +2143,11 @@ stateDiagram-v2
 
 | Control | On screen | On a mapped controller | Undo | Learn | Function first |
 | --- | --- | --- | --- | --- | --- |
-| Pad to try | At once: the screen owns this state | None | no. Nothing in the show file changes | no. An explainer is read, not played | **change**. In the mockup it plays on the same lights as the Console. An explainer plays on its own small model and never touches the lights. Whether the explainers ship is the owner's call |
-| Master to try | At once: the screen owns this state | None | no. Nothing in the show file changes | no. An explainer is read, not played | **change**. In the mockup it plays on the same lights as the Console. An explainer plays on its own small model and never touches the lights. Whether the explainers ship is the owner's call |
-| Record | At once: the screen owns this state | None | no. Nothing in the show file changes | no. An explainer is read, not played | **change**. In the mockup it plays on the same lights as the Console. An explainer plays on its own small model and never touches the lights. Whether the explainers ship is the owner's call |
-| Replay on Show | At once: the screen owns this state | None | no. Nothing in the show file changes | no. An explainer is read, not played | **change**. In the mockup it plays on the same lights as the Console. An explainer plays on its own small model and never touches the lights. Whether the explainers ship is the owner's call |
-| Release | At once: the screen owns this state | None | no. Nothing in the show file changes | no. An explainer is read, not played | **change**. In the mockup it plays on the same lights as the Console. An explainer plays on its own small model and never touches the lights. Whether the explainers ship is the owner's call |
+| Pad to try | At once: the screen owns this state | None | no. Nothing in the show file changes | no. An explainer is read, not played | **change**. In the mockup it plays on the same lights as the Console. The owner's decision 25: the explainers ship, and play on their own small model. They never touch the lights |
+| Master to try | At once: the screen owns this state | None | no. Nothing in the show file changes | no. An explainer is read, not played | **change**. In the mockup it plays on the same lights as the Console. The owner's decision 25: the explainers ship, and play on their own small model. They never touch the lights |
+| Record | At once: the screen owns this state | None | no. Nothing in the show file changes | no. An explainer is read, not played | **change**. In the mockup it plays on the same lights as the Console. The owner's decision 25: the explainers ship, and play on their own small model. They never touch the lights |
+| Replay on Show | At once: the screen owns this state | None | no. Nothing in the show file changes | no. An explainer is read, not played | **change**. In the mockup it plays on the same lights as the Console. The owner's decision 25: the explainers ship, and play on their own small model. They never touch the lights |
+| Release | At once: the screen owns this state | None | no. Nothing in the show file changes | no. An explainer is read, not played | **change**. In the mockup it plays on the same lights as the Console. The owner's decision 25: the explainers ship, and play on their own small model. They never touch the lights |
 | Pick a walk | At once: the screen owns this state | None | no. Nothing in the show file changes | no. An explainer is read, not played | **keep**. It changes only which walk shows |
 | Walk: Back, Next, Again | At once: the screen owns this state | None | no. Nothing in the show file changes | no. An explainer is read, not played | **keep**. It changes only which step shows |
 
@@ -2386,7 +2467,7 @@ stateDiagram-v2
 | `songs/Screen/search-songs` | screens/songs/index.tsx:180 | Search songs | `songs.search` |
 | `songs/Screen/button` | screens/songs/index.tsx:184 | … | `songs.filter` |
 | `songs/Screen/song-library` | screens/songs/index.tsx:191 | Song library | `songs.song` |
-| `songs/Screen/follows` | screens/songs/index.tsx:246 | Follows | `songs.follows` |
+| `songs/Screen/follows` | screens/songs/index.tsx:246 | Follows | `inout.follows` |
 | `songs/Screen/stop-listening` | screens/songs/index.tsx:259 | Stop listening | `songs.play-from` |
 | `songs/Screen/play-from` | screens/songs/index.tsx:264 | Play from … | `songs.play-from` |
 | `songs/Screen/sections-look-right` | screens/songs/index.tsx:281 | Sections look right | `songs.sections-look-right` |

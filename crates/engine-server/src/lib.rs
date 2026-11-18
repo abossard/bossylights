@@ -5,13 +5,15 @@
 //! |---|---|
 //! | `GET /health` | `ok` while the engine runs |
 //! | `GET /version` | the API version, as text: a client checks it before it talks |
-//! | `GET /api` | WebSocket: `Send`, `Query`, `Subscribe`, `Stop` in, JSON replies out |
+//! | `GET /api` | WebSocket: `Send`, `Query`, `Subscribe`, `Stop`, `Search`, `Fixture`, `Failures` in, JSON replies out |
 //!
 //! The plain routes allow any origin, so a web page can read them: they change nothing.
 //! The WebSocket commands the lights, so only the pages in `ORIGINS` may open it, and
 //! clients that are no web page (they send no `Origin`). Any other page gets 403.
 
 #![forbid(unsafe_code)]
+
+mod library;
 
 use axum::Router;
 use axum::extract::State;
@@ -23,18 +25,22 @@ use axum::routing::get;
 use engine::{
     API_VERSION, ChannelLevel, Engine, Refusal, Reply, Request, Sender, Snapshot, changes,
 };
+use library::Shelf;
 use std::io;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::sync::{Mutex, watch};
 use tokio::time::MissedTickBehavior;
 
 /// Serves the API on `listener` until a client sends `Stop`. Then every connection is
-/// closed and this returns the engine: the caller reports and drops it.
+/// closed and this returns the engine: the caller reports and drops it. The fixture
+/// library is read from `fixtures` while the engine runs.
 pub async fn serve(
     listener: TcpListener,
     mut engine: Engine,
     sender: Sender,
+    fixtures: Option<PathBuf>,
 ) -> io::Result<Engine> {
     let (stop, mut stopped) = watch::channel(false);
     let (painted, pictures) = watch::channel(Arc::new(*engine.latest()));
@@ -43,6 +49,7 @@ pub async fn serve(
         sender: Mutex::new(sender),
         stop,
         pictures,
+        shelf: library::start(fixtures),
     });
     let any = || [(ACCESS_CONTROL_ALLOW_ORIGIN, "*")];
     let routes = Router::new()
@@ -71,6 +78,8 @@ struct Api {
     stop: watch::Sender<bool>,
     /// The newest snapshot, one per frame, the same for every connection.
     pictures: watch::Receiver<Arc<Snapshot>>,
+    /// The fixture library, once it is read.
+    shelf: watch::Receiver<Arc<Shelf>>,
 }
 
 /// The one reader of the engine: takes the newest snapshot twice a beat and shares it
@@ -137,7 +146,7 @@ async fn talk(mut socket: WebSocket, api: Arc<Api>) {
                 Some(Ok(Message::Close(_)) | Err(_)) | None => return,
             },
             Ok(()) = pictures.changed(), if subscription.is_some() => {
-                changed(&mut pictures, &mut subscription)
+                changed(&api, &mut pictures, &mut subscription)
             }
         };
         if let Some(reply) = reply
@@ -164,29 +173,36 @@ async fn answer(
             let sent = api.sender.lock().await.send(command);
             json(&sent.map_or_else(|reason| Reply::Refused { reason }, |()| Reply::Accepted))
         }
-        Request::Query => picture(&pictures.borrow()),
+        Request::Query => picture(api, &pictures.borrow()),
         Request::Stop => {
             api.stop.send_replace(true);
             json(&Reply::Stopping)
         }
         Request::Subscribe => {
             let now = Arc::clone(&pictures.borrow_and_update());
-            let reply = picture(&now);
+            let reply = picture(api, &now);
             *subscription = Some(now);
             reply
         }
+        Request::Search { text } => api.shelf.borrow().found(text.as_str()),
+        Request::Fixture { maker, model } => {
+            api.shelf.borrow().fixture(maker.as_str(), model.as_str())
+        }
+        Request::Failures => api.shelf.borrow().failures(),
     }
 }
 
-fn picture(now: &Snapshot) -> Option<String> {
+fn picture(api: &Api, now: &Snapshot) -> Option<String> {
     json(&Reply::Picture {
         state: now.state,
+        library: api.shelf.borrow().library(),
         universes: now.universes(),
     })
 }
 
 /// `Changed`: the channels that differ from the last snapshot this connection sent.
 fn changed(
+    api: &Api,
     pictures: &mut watch::Receiver<Arc<Snapshot>>,
     subscription: &mut Option<Arc<Snapshot>>,
 ) -> Option<String> {
@@ -195,6 +211,7 @@ fn changed(
     let channels: Vec<ChannelLevel> = changes(last.universes(), now.universes()).collect();
     let reply = json(&Reply::Changed {
         state: now.state,
+        library: api.shelf.borrow().library(),
         channels: &channels,
     });
     *last = now;

@@ -5,7 +5,7 @@
 export const SITUATIONS = [
   { id: "live-off", name: "LIVE off", fact: "Preparing. Lights follow the app, nothing is recorded." },
   { id: "live-on", name: "LIVE on", fact: "The night is running. The lock has its own column." },
-  { id: "lock", name: "Lock on", fact: "LIVE is on and the lock is in effect: the Console layout cannot change." },
+  { id: "lock", name: "Lock on", fact: "LIVE is on and the lock is in effect: nothing that changes what a press does can change. Layout, pads, pages, Learn, mappings." },
   { id: "recording", name: "Recording on", fact: "LIVE is on and a song plays: what you play is written into its Recorded row." },
   { id: "autopilot", name: "Autopilot on", fact: "The autopilot plays its picks." },
   { id: "holding", name: "Something held", fact: "You hold at least one thing by hand, until Release." },

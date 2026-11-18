@@ -7,8 +7,12 @@
 //! | `"Query"` | `{"Picture": ...}`: the state and every level |
 //! | `"Subscribe"` | `{"Picture": ...}`, then `{"Changed": ...}` for each new frame |
 //! | `"Stop"` | `"Stopping"`, then every connection closes and the engine process ends |
+//! | `{"Search": {"text": ...}}` | `{"Found": ...}`: the best matches of the fixture library |
+//! | `{"Fixture": {"maker": ..., "model": ...}}` | `{"Fixture": ...}`: its modes and channels, or `NoSuchFixture` |
+//! | `"Failures"` | `{"Failures": ...}`: the definition files that could not be read |
 //! | anything else | `{"Refused": {"reason": "NotACommand"}}` |
 
+use crate::library::{Failure, FixtureKind, Library, Match, ModeChannels, Text};
 use crate::{ChannelLevel, ChannelNumbers, Command, Levels, OutputKind, RunNumbers, State};
 use serde::{Deserialize, Serialize};
 
@@ -31,6 +35,20 @@ pub enum Request {
     Subscribe,
     /// Stop the engine in an orderly way: answer, close every connection, end.
     Stop,
+    /// The fixtures of the library whose maker and model match `text`, best first.
+    Search {
+        #[cfg_attr(test, ts(type = "string"))]
+        text: Text,
+    },
+    /// One fixture of the library: its modes, each channel by name and function.
+    Fixture {
+        #[cfg_attr(test, ts(type = "string"))]
+        maker: Text,
+        #[cfg_attr(test, ts(type = "string"))]
+        model: Text,
+    },
+    /// The definition files that could not be read, and why.
+    Failures,
 }
 
 /// What the engine sends back.
@@ -46,15 +64,32 @@ pub enum Reply<'a> {
     /// The state and the held levels of every universe.
     Picture {
         state: State,
+        library: Library,
         universes: &'a [Levels],
     },
     /// A new frame: the state, and the channels whose held level changed since the last
     /// message.
     Changed {
         state: State,
+        library: Library,
         channels: &'a [ChannelLevel],
     },
+    /// The answer to `Search`: at most [`MATCHES`], best first. Empty while the library
+    /// is not read.
+    Found { fixtures: &'a [Match<'a>] },
+    /// The answer to `Fixture`.
+    Fixture {
+        maker: &'a str,
+        model: &'a str,
+        kind: FixtureKind<'a>,
+        modes: &'a [ModeChannels<'a>],
+    },
+    /// The answer to `Failures`, in the order of the files' names.
+    Failures { failures: &'a [Failure<'a>] },
 }
+
+/// The most fixtures one `Found` carries.
+pub const MATCHES: usize = 50;
 
 /// Why a command was not taken.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -70,4 +105,6 @@ pub enum Refusal {
     QueueFull,
     /// The output's device or socket could not be opened.
     CannotOpen,
+    /// The library has no fixture of that maker and model.
+    NoSuchFixture,
 }

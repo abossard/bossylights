@@ -99,21 +99,29 @@ const plays = [
   ["a long hold was a flash", "console.pad", "alone", [{ is: "down" }, { is: "up", long: true }], ["StartLook", "EndFlash"], { variant: "idle", at: "off" }],
   ["a press on a running pad: off, still held", "console.pad", "state:running by hand", [{ is: "down" }, { is: "up", long: false }], ["StopLook"], { variant: "kept", at: "kept" }],
   ["Release gives a kept pad back", "console.pad", "state:pad off, still held", [{ is: "release" }], [], { variant: "idle", at: "off" }],
-  ["Blackout latches from the button", "top.blackout", "alone", [{ is: "press" }], ["Blackout on: true"], { on: true, at: "latched" }],
+  ["Blackout: a short press latches", "top.blackout", "alone", [{ is: "down" }, { is: "up", long: false }], ["Blackout on: true"], { on: true, at: "latched" }],
+  ["Blackout: a hold is dark while held", "top.blackout", "alone", [{ is: "down" }, { is: "up", long: true }], ["Blackout on: true", "Blackout on: false"], { on: false, at: "off" }],
+  ["Blackout: it is dark on the way down", "top.blackout", "alone", [{ is: "down" }], ["Blackout on: true"], { on: true, at: "flash" }],
+  ["Blackout: a short press on a latched one brings the lights back", "top.blackout", "state:latched", [{ is: "down" }, { is: "up", long: false }], ["Blackout on: false"], { on: false, at: "off" }],
+  ["Blackout: a long hold on a latched one changes nothing", "top.blackout", "state:latched", [{ is: "down" }, { is: "up", long: true }], [], { on: true, at: "latched" }],
   ["Blackout holds from Space", "top.blackout", "alone", [{ is: "key", down: true }, { is: "key", down: false }], ["Blackout on: true", "Blackout on: false"], { on: false, at: "off" }],
   ["LIVE turns on", "top.live", "alone", [{ is: "press" }], ["SetLive on: true"], { on: true }],
   ["LIVE turns off", "top.live", "live-on", [{ is: "press" }], ["SetLive on: false"], { on: false }],
   ["an indicator that is ready is turned off", "top.indicator.recording", "alone", [{ is: "press" }], ["SetRecording on: false"], { variant: "off", at: "off" }],
   ["an indicator in effect is turned off", "top.indicator.lock", "lock", [{ is: "press" }], ["SetLock on: false"], { variant: "off", at: "offLive" }],
-  ["Learn waits for a pick, then is cancelled", "top.learn", "state:wait", [{ is: "press" }], ["CancelLearn"], { on: false, at: "off" }],
+  ["Learn waits for a pick, then is pressed again", "top.learn", "state:wait", [{ is: "down" }, { is: "up", long: false }], ["CancelLearn"], { on: false, at: "off" }],
+  ["Learn pressed again in Learn mode ends Learn", "top.learn", "learn", [{ is: "down" }, { is: "up", long: false }], [], { on: false, at: "off" }],
+  ["Learn held picks itself", "top.learn", "alone", [{ is: "down" }, { is: "up", long: true }], ["StartLearn"], { on: true, at: "wait" }],
   ["in Learn mode a press picks the control and does not fire it", "top.tap", "learn", [{ is: "press" }], ["StartLearn top.tap"], { learn: true }],
+  ["two taps: the beat follows the taps", "top.tap", "alone", [{ is: "press" }, { is: "press" }], ["TapTempo", "TapTempo"], { at: "tap" }],
+  ["the words 'from Tap' give the beat back to the feed", "top.tempo.source", "alone", [{ is: "press" }], ["ReleaseTempo"], { gone: "The feed drives the beat", at: "feed" }],
   ["Release all is off while nothing is held", "console.running.release-all", "alone", [{ is: "press" }], [], { off: "Nothing held" }],
   ["Release all gives back what is held", "console.running.release-all", "holding", [{ is: "press" }], ["ReleaseAll"], { off: "" }],
   ["a fader sends its level", "console.fader", "alone", [{ is: "set", value: 80, value2: 0 }], ["SetMaster 80"], { value: 80 }],
   ["the XY pad sends pan and tilt", "console.xy", "alone", [{ is: "set", value: 30, value2: 70 }], ["SetPosition pan 30, tilt 70"], { value: 30, value2: 70 }],
   ["a segment is picked", "console.speed", "alone", [{ is: "pick", option: "double" }], ["SetSpeed double"], { picked: "double" }],
   ["a tab changes only the screen", "top.workspaces", "alone", [{ is: "pick", option: "Songs" }], [], { picked: "Songs" }],
-  ["a toggle with two commands: on, then off", "songs.play-from", "alone", [{ is: "press" }, { is: "press" }], ["PlayFrom", "StopListening"], { on: false }],
+  ["a toggle with two commands: on, then off", "songs.play-from", "alone", [{ is: "press" }, { is: "press" }], ["PlayFrom", "StopPlayFrom"], { on: false }],
   ["a feed with no signal cannot be picked", "inout.tempo.feed", "state:off: no signal", [{ is: "pick", option: "Timecode" }], [], { off: "No signal", offOption: "Timecode" }],
   ["a feed with a signal can", "inout.tempo.feed", "state:off: no signal", [{ is: "pick", option: "Audio" }], ["SetTempoFeed Audio"], { picked: "Audio" }],
   ["a stepper at its end goes only the other way", "looks.seq.width", "state:narrower off at a quarter beat", [{ is: "step", by: -1 }, { is: "step", by: 1 }], ["SetSequenceEntry Wider"], { offOption: "Narrower" }],
@@ -141,7 +149,8 @@ for (const [what, id, key, gestures, sent, after] of plays) {
 test("the usual look of a control with a machine starts where the control lives in it", () => {
   assert.equal(usual(byId("console.pad")).at, "off");
   assert.equal(usual(byId("patch.add.confirm")).at, "flash");
-  assert.equal(usual(byId("top.tap")).at, "");
+  assert.equal(usual(byId("top.tempo.source")).at, "tap");
+  assert.equal(usual(byId("top.undo")).at, "");
 });
 
 // The tables of the catalog point at rows, states and situations that exist.
@@ -209,7 +218,10 @@ test("the index by function keeps every control, primitives in the order of the 
 // [control, primitive, kind, colour, fixed props, the primitives inside]
 const recipes = [
   ["top.tap", "Button", "action", "plain", { fires: "down" }, []],
-  ["top.blackout", "Button", "action", "danger", { fires: "down", holds: "3 lines" }, []],
+  ["top.blackout", "Button", "action", "danger", { fires: "down", held: "short press and hold", holds: "3 lines" }, []],
+  ["top.learn", "Button", "toggle", "plain", { held: "short press and hold", holds: "3 lines" }, []],
+  ["console.speed", "Picker", "segments", "plain", { fires: "down" }, []],
+  ["songs.play-from", "Button", "toggle", "plain", { fires: "down", holds: "3 lines" }, []],
   ["top.live", "Button", "toggle", "plain", { mark: "knob", size: "large", holds: "2 lines" }, []],
   ["top.indicator.dj", "Button", "toggle", "plain", { mark: "lamp", quiet: "yes", lamp: "ok" }, []],
   ["top.indicator.autopilot", "Button", "toggle", "autopilot", { mark: "lamp" }, []],
@@ -228,7 +240,7 @@ for (const [id, primitive, kind, colour, props, inside] of recipes) {
 
 // [control, the lines it holds the width for]
 const lines = [
-  ["top.blackout", ["Blackout", "Blackout on", "While Space is down"]],
+  ["top.blackout", ["Blackout", "Blackout on", "While held"]],
   ["top.live", ["LIVE off", "LIVE on"]],
   ["top.tap", []],
 ];

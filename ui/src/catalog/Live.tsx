@@ -51,6 +51,7 @@ export function Live(props: { control: Control; look: Look; act: (act: Act) => v
     colour: l().colour,
     holds,
     onPress: press,
+    ...(r.props.held ? { held: { onDown: () => props.act({ is: "down" }), onUp: (heldMs: number) => props.act({ is: "up", long: heldMs > SHORT_PRESS_MS }) } } : {}),
     ...off(),
     ...some("sub", l().sub),
     ...some("fires", oneOrNone(r.props.fires, ["down"])),
@@ -92,7 +93,7 @@ export function Live(props: { control: Control; look: Look; act: (act: Act) => v
     case "Picker.tabs":
       return <Picker kind="tabs" label={c.name} options={options().map((o, i) => (l().variant === "marked" && i === 1 ? { ...o, marked: true } : o))} picked={l().picked} onPick={pick} />;
     case "Picker.segments":
-      return <Picker kind="segments" label={c.name} options={options()} picked={l().picked} {...some("size", oneOrNone(r.props.size, ["small"]))} {...off()} onPick={pick} />;
+      return <Picker kind="segments" label={c.name} options={options()} picked={l().picked} {...some("size", oneOrNone(r.props.size, ["small"]))} {...some("fires", oneOrNone(r.props.fires, ["down"]))} {...off()} onPick={pick} />;
     case "Picker.cards":
       return <Picker kind="cards" label={c.name} options={options().map((o) => ({ ...o, ...offWith(sideOff(o.name)) }))} picked={l().picked} onPick={pick} />;
     case "Picker.list":

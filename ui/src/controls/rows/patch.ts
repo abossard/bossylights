@@ -1,7 +1,7 @@
 // Patch: universes, the universe grid, the fixtures, and the two flows that add things.
 // Rows are checked with the sample patch: 15 lights on universe 1, one address clash, a pixel panel on 2 to 4.
 import { gone, off, works, type Cell, type SituationId } from "../situations.ts";
-import { button, change, choice, control, draggable, field, keep, no, remove, select, toggle, NOT_A_BUTTON, NOT_A_LIST, ONLY_DRAGGED, type Control, type Row } from "../spec.ts";
+import { button, change, choice, control, draggable, field, keep, liveToggle, no, remove, select, toggle, NOT_A_BUTTON, NOT_A_LIST, ONLY_DRAGGED, type Control, type Row } from "../spec.ts";
 
 const NO_LIGHTS = gone("No lights yet. 'Add lights' is the one thing to do");
 const ON_SCREEN = no("Patching is done on screen");
@@ -190,7 +190,7 @@ export const PATCH: Control[] = [
     kind: "play",
     does: "The selected light flashes, to find it in the room. Pressed again, it stops",
     sends: ["Identify"],
-    gestures: toggle("The light flashes", "it stops"),
+    gestures: liveToggle("The light flashes", "it stops"),
     in: {
       recording: works("Works. Flashing a light is not recorded"),
       autopilot: works("Works. The flash is by hand, so it covers the autopilot on that one light"),

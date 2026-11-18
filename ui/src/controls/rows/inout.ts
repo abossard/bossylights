@@ -1,12 +1,11 @@
 // In/Out: the tempo, the outputs, and the list of what was mapped with Learn.
 import { off, works, type Cell, type SituationId } from "../situations.ts";
-import { button, change, choice, control, field, remove, select, toggle, NOT_A_BUTTON, NOT_A_LIST, no, type Control, type Row } from "../spec.ts";
+import { button, change, choice, control, field, liveToggle, remove, select, toggle, LOCKED, NOT_A_BUTTON, NOT_A_LIST, no, type Control, type Row } from "../spec.ts";
 
-const LOCKED = off("Locked while LIVE is on");
 const LIVE_IS_ON = off("LIVE is on");
 const ROW = no("It belongs to one row of a list that changes");
 
-/** A control of one row of the Mappings table. The lock holds mappings, as it holds the layout. */
+/** A control of one row of the Mappings table. The lock holds mappings, as it holds the layout (decision 21). */
 const MAPPING: Partial<Record<SituationId, Cell>> = { lock: LOCKED, empty: works("Works. Top bar controls can be mapped before any light is patched") };
 const mapping = (row: Omit<Row, "screen" | "kind" | "part">): Control =>
   control({ learn: ROW, ...row, screen: "In/Out", part: "Mappings", kind: "edit", in: { ...MAPPING, ...row.in } });
@@ -20,7 +19,7 @@ export const INOUT: Control[] = [
     from: ["inout/Screen/button"],
     kit: "Picker.cards",
     kind: "setting",
-    does: "Picks what drives the beat: Tap, Audio, MIDI clock, VirtualDJ or Timecode. Each says its tempo and how sure it is",
+    does: "Picks what drives the beat: Tap, Audio, MIDI clock, VirtualDJ or Timecode. Each says its tempo and how sure it is. While taps hold the beat the picked feed waits: 'from Tap' in the top bar gives it back",
     sends: ["SetTempoFeed"],
     gestures: choice("The beat follows that feed"),
     in: {
@@ -30,6 +29,25 @@ export const INOUT: Control[] = [
     },
     first: change("A feed with no signal can be picked, and then nothing drives the beat. It is off and says 'No signal'"),
     states: ["picked", "not picked", "off: no signal"],
+  }),
+  control({
+    id: "inout.follows",
+    name: "Follows",
+    screen: "In/Out",
+    part: "Tempo",
+    from: ["songs/Screen/follows"],
+    kit: "Picker.segments",
+    kind: "setting",
+    does: "Which deck, or timecode, gives the song that plays and its position. Beside the tempo feed, which gives the beat",
+    sends: ["SetFollows"],
+    gestures: choice("Follows that source"),
+    in: {
+      song: works("Works. The Show row jumps to the song of that source, at once"),
+      "no-song": works("Works. It counts from the next song on"),
+      empty: works("Works. No song has a show yet: it counts once one has"),
+    },
+    first: change("In the mockup it sits in the header of one song. The owner's decision 26: it is a setting of the whole app and sits on In/Out, beside the tempo feed. DJ link stays the on or off"),
+    states: ["deck 1", "deck 2", "timecode"],
   }),
   control({
     id: "inout.tempo.tap",
@@ -54,7 +72,7 @@ export const INOUT: Control[] = [
     kind: "play",
     does: "Every channel of that output at half for three seconds, then back. To see that the cable works",
     sends: ["TestOutput"],
-    gestures: toggle("Starts the test", "nothing: it ends by itself after three seconds"),
+    gestures: liveToggle("Starts the test", "nothing: it ends by itself after three seconds"),
     in: {
       "live-on": LIVE_IS_ON,
       lock: LIVE_IS_ON,

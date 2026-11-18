@@ -17,6 +17,8 @@ export interface Contradiction {
   resolved: string;
   /** The number of the question on the decisions page, when the owner has to say. */
   asks?: number;
+  /** What the owner answered. `resolved` says the same as a rule of the product. */
+  decided?: string;
 }
 
 export const CONTRADICTIONS: readonly Contradiction[] = [
@@ -26,21 +28,21 @@ export const CONTRADICTIONS: readonly Contradiction[] = [
   { kind: "two-one", what: "The universe tabs and the rows of the Output table on DMX", where: ["dmx.universe", "dmx.output.row"], resolved: "The rows stop being buttons. A status table shows status" },
   { kind: "two-one", what: "The order grip and the two arrows on a light in Patch", where: ["patch.fixtures.order", "patch.fixtures.move"], resolved: "The grip goes. The arrows work by touch and by keyboard" },
   { kind: "two-one", what: "'Edit surface' in the page bar and again on an empty page", where: ["console.edit-surface"], resolved: "One button, in the page bar. It is paper while the page is empty" },
-  { kind: "two-one", what: "Two Cancel buttons in the Learn bar, one per step, with different looks", where: ["top.learn.cancel"], resolved: "One Cancel, the same in both steps" },
+  { kind: "two-one", what: "Two Cancel buttons in the Learn bar, one per step, and the Learn button itself: three ways to end Learn", where: ["top.learn.cancel", "top.learn"], resolved: "Cancel goes. Learn pressed again ends Learn, and so does Escape", decided: "In the catalog, on Cancel Learn: 'just pressing learn again disabled learn'" },
   { kind: "two-one", what: "The Autopilot indicator at the LIVE switch and the Autopilot button in Running", where: ["top.indicator.autopilot", "console.autopilot.on"], resolved: "Kept: one state and one command, shown in two places. They always agree" },
   { kind: "two-one", what: "The style list on the Console and 'Use this style' on Looks", where: ["console.autopilot.style", "looks.autopilot.use-style"], resolved: "Kept: one command from two places, each where you are when you want it" },
   { kind: "two-one", what: "A section can be picked in the Sections row and in the Show row", where: ["songs.section"], resolved: "Kept as one control in two rows: the same section, the same selection" },
-  { kind: "two-one", what: "Three controls say what is followed: the DJ link indicator, 'Follows' on Songs, the tempo feed on In/Out", where: ["top.indicator.dj", "songs.follows", "inout.tempo.feed"], resolved: "DJ link is on or off. 'Follows' picks the deck and moves to In/Out, beside the tempo feed that picks the beat", asks: 26 },
+  { kind: "two-one", what: "Three controls say what is followed: the DJ link indicator, 'Follows' on Songs, the tempo feed on In/Out", where: ["top.indicator.dj", "inout.follows", "inout.tempo.feed"], resolved: "DJ link is on or off. 'Follows' picks the deck and sits on In/Out, beside the tempo feed that picks the beat", asks: 26, decided: "Move it to In/Out, beside the tempo feed" },
 
   // ---- one control or one word, two meanings
   { kind: "one-two", what: "The '+' in the Console pages is a tab that is an action", where: ["console.pages.add"], resolved: "A button after the tabs, there only while editing" },
-  { kind: "one-two", what: "The cross takes a thing out of a place (a look out of a group, a colour out of a step). On a group header it deletes the group", where: ["looks.library.group.delete", "looks.groups.remove", "songs.section.remove-look", "looks.step.colour.remove"], resolved: "The cross always means 'take out of this place'. Deleting a group says 'Delete group'", asks: 27 },
-  { kind: "one-two", what: "'Release all' on the Console gives back everything. 'Release all' on DMX gives back raw channels only", where: ["console.running.release-all", "dmx.held.release-all"], resolved: "The Console one gives back raw channels too. The DMX one says 'Release channels'", asks: 22 },
-  { kind: "one-two", what: "'Play from', 'Stop listening' and the flag 'Listening' name one thing, and no music plays", where: ["songs.play-from"], resolved: "One word, the one Looks uses for the same idea: 'Try from Drop', 'Stop'", asks: 28 },
+  { kind: "one-two", what: "The cross takes a thing out of a place (a look out of a group, a colour out of a step). On a group header it deletes the group", where: ["looks.library.group.delete", "looks.groups.remove", "songs.section.remove-look", "looks.step.colour.remove"], resolved: "The cross always means 'take out of this place'. 'Rename' and 'Delete group' are words, and show only in the widened library", asks: 27, decided: "Only in the widened library, with words" },
+  { kind: "one-two", what: "'Release all' on the Console gives back everything. 'Release all' on DMX gives back raw channels only", where: ["console.running.release-all", "dmx.held.release-all"], resolved: "The Console one gives back raw channels too. The DMX one says 'Release channels'", asks: 22, decided: "Console: everything. DMX: 'Release channels'" },
+  { kind: "one-two", what: "'Play from', 'Stop listening' and the flag 'Listening' name one thing, and no music plays", where: ["songs.play-from", "looks.try"], resolved: "One word, Play: 'Play from Drop', then 'Stop', the flag says 'Playing'. Looks says 'Play on lights' for the same idea", asks: 28, decided: "'Try' is weird. 'Play from Drop' and 'Stop'" },
   { kind: "one-two", what: "'In use' is a pressed button that does nothing when pressed", where: ["looks.autopilot.use-style"], resolved: "The button is gone while the style is in use. The style list says 'In use'" },
   { kind: "one-two", what: "'Undo' in the top bar and 'Undo last pass' on Songs take back different things", where: ["top.undo", "songs.recorded.undo-last-pass"], resolved: "Kept. The top bar Undo names its step and never touches the Recorded row" },
-  { kind: "one-two", what: "Blackout latches from the button and holds from Space", where: ["top.blackout"], resolved: "Kept, and written down as its state machine. On touch there is no hold", asks: 30 },
-  { kind: "one-two", what: "A pad fires on the way down, an editor button on the way up", where: ["console.pad", "top.blackout", "top.tap"], resolved: "A rule: what is pressed during a show fires on the way down. Editor buttons fire on the way up, so sliding off cancels", asks: 20 },
+  { kind: "one-two", what: "Blackout latches from the button and holds from Space", where: ["top.blackout"], resolved: "One grammar, the pad's: a short press latches, a hold is dark while held. From the button and from Space", asks: 30, decided: "Yes: a short press latches, a hold is dark while held" },
+  { kind: "one-two", what: "A pad fires on the way down, an editor button on the way up", where: ["console.pad", "top.blackout", "top.tap", "console.speed", "songs.play-from"], resolved: "A rule, checked on every row: what plays fires on the way down. Everything else fires on the way up, so sliding off cancels", asks: 20, decided: "Show controls act on down, editors on up" },
 
   // ---- off with no reason shown
   {
@@ -67,15 +69,15 @@ export const CONTRADICTIONS: readonly Contradiction[] = [
   { kind: "no-reason", what: "'Move to no free' is a button that does nothing", where: ["patch.details.move-to-free"], resolved: "Off, with 'No free place in this universe'" },
 
   // ---- against a rule
-  { kind: "rule", what: "The lock holds 'Edit surface', but 'Add page', 'Put on Console', Learn and the mappings still change the surface while it is on", where: ["console.pages.add", "looks.put-on-console", "top.learn", "inout.mapping.edit", "inout.mapping.remove"], resolved: "The lock holds everything that changes what a press does: layout, pads, Learn, mappings", asks: 21 },
+  { kind: "rule", what: "The lock holds 'Edit surface', but 'Add page', 'Put on Console', Learn and the mappings still change the surface while it is on", where: ["console.pages.add", "looks.put-on-console", "top.learn", "inout.mapping.edit", "inout.mapping.remove"], resolved: "The lock holds everything that changes what a press does: layout, pads, pages, Learn, mappings. Each is off and says 'Locked while LIVE is on'", asks: 21, decided: "Everything that changes what a press does" },
   { kind: "rule", what: "'Test' on an output puts the whole room at half, also while LIVE is on", where: ["inout.out.test"], resolved: "Off while LIVE is on, and says so" },
   { kind: "rule", what: "A tempo feed with no signal can be picked: then nothing drives the beat", where: ["inout.tempo.feed"], resolved: "Off, with 'No signal'" },
-  { kind: "rule", what: "One press of Tap takes the beat away from the DJ software, and the way back is on In/Out", where: ["top.tap", "inout.tempo.feed"], resolved: "The tempo says where it comes from. Taps hold until the next song starts, then the picked feed is back", asks: 23 },
+  { kind: "rule", what: "One press of Tap takes the beat away from the DJ software, and the way back is on In/Out", where: ["top.tap", "top.tempo.source", "inout.tempo.feed"], resolved: "The tempo says where it comes from. Taps hold until the words 'from Tap' are pressed: then the picked feed is back", asks: 23, decided: "Taps hold until you press the words 'from Tap'" },
   { kind: "rule", what: "An output that is lost, or an engine that is not connected, has no mark in the top bar", where: ["top.trouble"], resolved: "The chip that says 'No lights connected' says these two as well" },
-  { kind: "rule", what: "The pads of 'How it works' play the real lights", where: ["how.pad", "how.master", "how.release", "how.record", "how.replay"], resolved: "An explainer plays on its own small model", asks: 25 },
+  { kind: "rule", what: "The pads of 'How it works' play the real lights", where: ["how.pad", "how.master", "how.release", "how.record", "how.replay"], resolved: "The explainers ship. An explainer plays on its own small model and never touches the lights", asks: 25, decided: "Ship them, on their own small model" },
   { kind: "rule", what: "The speed dial changes its own label and nothing else", where: ["console.speed"], resolved: "It sends SetSpeed" },
-  { kind: "rule", what: "'Every action can be undone' is a principle. A pad press, a release and a blackout are not steps of Undo", where: ["top.undo", "console.pad"], resolved: "Undo takes back changes to the show file. What is played is taken back by its own opposite: stop, Release", asks: 31 },
-  { kind: "rule", what: "'Surprise me' is not in the Console brief, and what it starts stays held", where: ["console.surprise"], resolved: "It goes. The autopilot is the surprise", asks: 24 },
+  { kind: "rule", what: "'Every action can be undone' is a principle. A pad press, a release and a blackout are not steps of Undo", where: ["top.undo", "console.pad"], resolved: "Undo takes back changes to the show file, checked on every row. What is played is taken back by its own opposite: stop, Release", asks: 31, decided: "Undo takes back changes to the project only" },
+  { kind: "rule", what: "'Surprise me' is not in the Console brief, and what it starts stays held", where: ["console.surprise"], resolved: "It goes, and its command with it. The autopilot is the surprise", asks: 24, decided: "Remove it" },
 ];
 
 /** A thing the product needs a control for, and no mockup shows one. */

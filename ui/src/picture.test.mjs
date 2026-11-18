@@ -3,7 +3,8 @@ import { test } from "node:test";
 import { merge, receive } from "./picture.ts";
 
 const state = (frame) => ({ frame, priority: "RealTime", blackout: false });
-const picture = { state: state(1), universes: [[0, 0, 0], [0, 0, 0]] };
+const read = { Read: { read: 10, failed: 1 } };
+const picture = { state: state(1), library: "Reading", universes: [[0, 0, 0], [0, 0, 0]] };
 
 // [picture before, reply, picture after]
 const table = [
@@ -12,12 +13,19 @@ const table = [
   [picture, "Stopping", picture],
   [picture, { Refused: { reason: "QueueFull" } }, picture],
   [undefined, { Picture: picture }, picture],
-  [undefined, { Changed: { state: state(2), channels: [] } }, undefined],
-  [picture, { Changed: { state: state(2), channels: [] } }, { state: state(2), universes: picture.universes }],
+  [picture, { Found: { fixtures: [] } }, picture],
+  [picture, { Fixture: { maker: "Generic", model: "Generic RGB", kind: "ColorChanger", modes: [] } }, picture],
+  [picture, { Failures: { failures: [] } }, picture],
+  [undefined, { Changed: { state: state(2), library: read, channels: [] } }, undefined],
   [
     picture,
-    { Changed: { state: state(3), channels: [{ universe: 2, address: 3, value: 9 }] } },
-    { state: state(3), universes: [[0, 0, 0], [0, 0, 9]] },
+    { Changed: { state: state(2), library: read, channels: [] } },
+    { state: state(2), library: read, universes: picture.universes },
+  ],
+  [
+    picture,
+    { Changed: { state: state(3), library: "Reading", channels: [{ universe: 2, address: 3, value: 9 }] } },
+    { state: state(3), library: "Reading", universes: [[0, 0, 0], [0, 0, 9]] },
   ],
 ];
 for (const [before, reply, after] of table) {
