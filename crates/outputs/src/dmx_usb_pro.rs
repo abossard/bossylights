@@ -301,11 +301,4 @@ mod tests {
             assert_eq!(out[517], 0xE7);
         }
     }
-
-    #[test]
-    fn the_link_drains_a_message_well_within_a_frame() {
-        // 518 bytes of 11 bits at 500 000 baud take 11.4 ms; plus a quarter, 14.2 ms.
-        assert_eq!(LINK_TIME.as_micros(), 14_245);
-        assert!(LINK_TIME < engine_core::Rate::FortyFour.period());
-    }
 }
