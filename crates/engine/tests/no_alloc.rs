@@ -1,14 +1,22 @@
-//! Proves the tick thread allocates nothing per tick, also while it takes commands.
-//! A counting allocator sees every allocation in this process. While the engine
-//! ticks, the main thread only sends commands, which allocates nothing, and sleeps,
-//! so any allocation is the tick's.
+//! Proves the tick thread allocates nothing per wake, also while it serves a DDP and a
+//! mock output at different rates and takes commands. A counting allocator sees every
+//! allocation in this process. The outputs are added before the window (opening one
+//! allocates, on the sending thread). In the window the main thread only sends channel
+//! commands, which allocates nothing, and sleeps, so any allocation is the tick's.
 
 #![expect(
     unsafe_code,
     reason = "a global allocator can only be written with unsafe"
 )]
+#![expect(
+    clippy::disallowed_types,
+    reason = "a socket here stands for a DDP device; the ban is for the tick thread"
+)]
 
-use engine::{ChannelNumbers, Command, Engine, Universes};
+use engine::{
+    ChannelNumbers, Color, Command, Engine, OutputKind, OutputNumber, Rate, RunNumbers, Universes,
+};
+use std::net::{SocketAddr, UdpSocket};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
@@ -33,8 +41,31 @@ unsafe impl GlobalAlloc for Counting {
 static ALLOCATOR: Counting = Counting;
 
 fn main() {
-    let (engine, mut sender) =
-        Engine::start(Universes::ONE, |_| {}).expect("the tick thread starts");
+    let (engine, mut sender) = Engine::start(Universes::ONE).expect("the tick thread starts");
+    let receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let SocketAddr::V4(address) = receiver.local_addr().unwrap() else {
+        panic!("IPv4");
+    };
+    let outputs = [
+        (
+            1,
+            OutputKind::Ddp {
+                address,
+                color: Color::Rgbw,
+            },
+            Rate::Sixty,
+        ),
+        (2, OutputKind::Mock, Rate::Thirty),
+    ];
+    for (number, kind, rate) in outputs {
+        let command = Command::SetOutput {
+            output: OutputNumber::try_from(number).unwrap(),
+            kind,
+            universes: RunNumbers { first: 1, count: 1 },
+            rate: Some(rate),
+        };
+        sender.send(command).expect("the output is added");
+    }
     thread::sleep(Duration::from_millis(100)); // thread start-up may allocate
 
     let allocations = ALLOCATIONS.load(Ordering::SeqCst);
@@ -48,11 +79,17 @@ fn main() {
         let _ = sender.send(Command::Blackout { on: value % 2 == 0 });
         thread::sleep(Duration::from_millis(2));
     }
-    let ticks = engine.query().frame - frame;
+    let state = engine.query();
+    let ticks = state.frame - frame;
     let new_allocations = ALLOCATIONS.load(Ordering::SeqCst) - allocations;
     drop(engine);
 
     assert!(ticks >= 5, "too few ticks to prove anything: {ticks}");
+    let accepted = state.outputs.map(|o| o.map(|o| o.counters.accepted));
+    assert!(
+        accepted[..2].iter().all(|n| n.is_some_and(|n| n > 5)),
+        "both outputs were served: {accepted:?}"
+    );
     assert_eq!(
         new_allocations, 0,
         "{ticks} ticks made {new_allocations} allocations"
