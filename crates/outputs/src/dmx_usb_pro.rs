@@ -19,12 +19,13 @@
 
 use crate::{Device, Levels, Outcome};
 use engine_core::ADDRESSES;
+use nix::errno::Errno;
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
 use serialport::{DataBits, FlowControl, Parity, SerialPortType, StopBits, TTYPort};
-use std::io::{self, ErrorKind, Write};
+use std::io::{self, ErrorKind};
 use std::os::fd::AsRawFd;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -73,6 +74,21 @@ pub struct DmxUsbPro {
     /// Set while there is no port: the finder looks.
     looking: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
+    lost_with: LostWith,
+}
+
+/// Why the port was lost last: the system's error, as the output thread saw it.
+#[derive(Clone, Default)]
+pub struct LostWith(Arc<AtomicI32>);
+
+impl LostWith {
+    /// The last error that lost the port, if one did.
+    pub fn get(&self) -> Option<io::Error> {
+        match self.0.load(Ordering::Relaxed) {
+            0 => None,
+            code => Some(io::Error::from_raw_os_error(code)),
+        }
+    }
 }
 
 impl DmxUsbPro {
@@ -103,11 +119,18 @@ impl DmxUsbPro {
             lost,
             looking,
             stop,
+            lost_with: LostWith::default(),
         })
     }
 
+    /// Why the port was lost last; readable from any thread.
+    pub fn lost_with(&self) -> LostWith {
+        self.lost_with.clone()
+    }
+
     /// The port is gone: hand it to the finder to close, and let it look.
-    fn lose(&mut self) -> Outcome {
+    fn lose(&mut self, error: Errno) -> Outcome {
+        self.lost_with.0.store(error as i32, Ordering::Relaxed);
         if let Some(port) = self.port.take() {
             let _ = self.lost.push(port); // the finder empties it every WATCH_EVERY
         }
@@ -128,7 +151,7 @@ impl Device for DmxUsbPro {
             self.unsent = 0;
             self.link_free_at = None;
         }
-        let Some(port) = &mut self.port else {
+        let Some(port) = &self.port else {
             return Outcome::Failed;
         };
         let now = Instant::now();
@@ -140,7 +163,7 @@ impl Device for DmxUsbPro {
                     self.unsent -= written;
                     Outcome::Dropped
                 }
-                Err(_) => self.lose(),
+                Err(error) => self.lose(error),
             };
         }
         if self.link_free_at.is_some_and(|free| free > now) {
@@ -154,7 +177,7 @@ impl Device for DmxUsbPro {
                 self.link_free_at = Some(now + LINK_TIME);
                 Outcome::Accepted
             }
-            Err(_) => self.lose(),
+            Err(error) => self.lose(error),
         }
     }
 }
@@ -165,12 +188,13 @@ impl Drop for DmxUsbPro {
     }
 }
 
-/// One write that never waits: how many bytes the driver took, 0 if none.
-fn write(port: &mut TTYPort, bytes: &[u8]) -> io::Result<usize> {
-    match port.write(bytes) {
-        Ok(written) => Ok(written),
-        Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => Ok(0),
-        Err(e) => Err(e),
+/// One `write` call that never waits: how many bytes the driver took, 0 if none. Straight
+/// to the system: serialport's own write polls first, turns an interrupted call or an
+/// odd poll result into an error, and allocates for every error.
+fn write(port: &TTYPort, bytes: &[u8]) -> Result<usize, Errno> {
+    match nix::unistd::write(port.as_raw_fd(), bytes) {
+        Err(Errno::EAGAIN | Errno::EINTR) => Ok(0),
+        result => result,
     }
 }
 
