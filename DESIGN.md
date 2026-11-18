@@ -339,6 +339,23 @@ Every part of a screen is a Region: an 18 px display heading with an optional 13
 
 Neutral paper chrome, no layer colour: paper frames, paper name chips, 44 px handles for remove and resize, a dashed 12 x 12 grid. The review panel is an opaque `--s1` panel at the right.
 
+## Function first
+
+Every mark on screen answers a question the operator has right now. A mark that answers none is noise and goes.
+
+| Question to ask of a mark | If the answer is no |
+|---|---|
+| Does it say what something is, what state it is in, or what a press will do? | remove it |
+| Is it needed in this mode? (a resize handle is needed only while editing) | show it only in that mode |
+| Would the screen read the same without it? (a second border, a box inside a box, a divider next to a gap) | remove it |
+
+| Noise | Instead |
+|---|---|
+| a box inside a box | one edge per thing |
+| handles, grips and icons that are always there | they appear with the mode that uses them |
+| a border and a fill and a label all saying "selected" | one signal per state |
+| decoration to make a screen feel finished | empty space |
+
 ## Do's and Don'ts
 
 ### Do:
