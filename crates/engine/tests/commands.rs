@@ -5,8 +5,9 @@ use engine::{
     RunNumbers, Sender, Status, Universes,
 };
 use mock::Heard;
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, mpsc};
+use std::thread;
+use std::time::{Duration, Instant};
 
 /// An engine with two universes and one mock output that takes both, at 60 a second.
 fn start() -> (Engine, Sender, Arc<Heard>) {
@@ -174,4 +175,55 @@ fn a_full_queue_refuses_and_says_so() {
         .filter(|sent| *sent == Err(Refusal::QueueFull))
         .count();
     assert!(refused > 0, "nothing was refused");
+}
+
+#[test]
+fn after_the_last_output_is_removed_a_command_still_lands_and_the_engine_stops() {
+    // Hang guards of seconds, not a rate. Three seconds of outputs used to leave the
+    // engine asleep for longer than the guard.
+    let guard = Duration::from_secs(2);
+    // (outputs: number and rate)
+    let cases: [&[(u8, Rate)]; 2] = [
+        &[(1, Rate::Sixty)],
+        &[(1, Rate::Sixty), (2, Rate::FortyFour)],
+    ];
+    for outputs in cases {
+        let (engine, mut sender) = Engine::start(Universes::ONE).expect("the tick thread starts");
+        for &(number, rate) in outputs {
+            mock::attach(&mut sender, Universes::ONE, number, run(1, 1), rate);
+        }
+        thread::sleep(Duration::from_secs(3));
+        for &(number, _) in outputs {
+            let remove = Command::RemoveOutput {
+                output: output(number),
+            };
+            assert_eq!(sender.send(remove), Ok(()), "{outputs:?}");
+        }
+        let wait_until = |what: &str, done: &dyn Fn(&Engine) -> bool| {
+            let started = Instant::now();
+            while !done(&engine) {
+                assert!(started.elapsed() < guard, "{outputs:?}: {what}");
+                thread::sleep(Duration::from_millis(1));
+            }
+        };
+        let removed = |engine: &Engine| engine.query().outputs.iter().all(Option::is_none);
+        wait_until("the outputs were never removed", &removed);
+        assert_eq!(sender.send(set(1, 1, 42)), Ok(()), "{outputs:?}");
+        let landed = |engine: &Engine| {
+            let mut universes = [Levels::ZERO];
+            engine.read(&mut universes);
+            universes[0].0[0] == 42
+        };
+        wait_until("the command never landed", &landed);
+        let (stopped, wait) = mpsc::channel();
+        thread::spawn(move || {
+            drop(engine);
+            stopped.send(()).unwrap();
+        });
+        assert_eq!(
+            wait.recv_timeout(guard),
+            Ok(()),
+            "{outputs:?}: the engine never stopped"
+        );
+    }
 }

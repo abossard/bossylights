@@ -210,7 +210,12 @@ pub fn update(state: State, universes: &mut [Levels], command: Command) -> (Stat
             State {
                 frame: state.frame.wrapping_add(1),
                 now,
-                beat: next_frame(state.beat, now, BEAT),
+                // Only a due beat moves on: a wake for an output must not push it ahead.
+                beat: if now < state.beat {
+                    state.beat
+                } else {
+                    next_frame(state.beat, now, BEAT)
+                },
                 ..state
             },
             None,
@@ -422,22 +427,26 @@ mod tests {
                 CALM,
                 held(&[]),
                 tick(0),
+                State { frame: 8, ..CALM },
+                held(&[]),
+            ), // the beat is not due yet: it stays
+            (
+                CALM,
+                held(&[]),
+                Command::Tick { now: BEAT },
                 State {
                     frame: 8,
+                    now: BEAT,
                     beat: BEAT * 2,
                     ..CALM
                 },
                 held(&[]),
-            ),
+            ), // the beat is due: it moves on
             (
                 max,
                 held(&[]),
                 tick(0),
-                State {
-                    frame: 0,
-                    beat: BEAT * 2,
-                    ..CALM
-                },
+                State { frame: 0, ..CALM },
                 held(&[]),
             ), // wraps
             (CALM, held(&[]), set(1, 1, 255), CALM, held(&[(1, 1, 255)])),
@@ -705,6 +714,45 @@ mod tests {
             (72, vec![2]),    // only 2 is left, on its own rate; no beat while it is set
         ];
         assert_eq!(wakes, expected);
+    }
+
+    #[test]
+    fn after_the_last_output_is_removed_the_engine_wakes_within_one_beat() {
+        let calm = State::new(Priority::RealTime);
+        let one_beat = u64::try_from(BEAT.as_millis()).unwrap() + 1;
+        let (thirty, forty_four, sixty) = (Rate::Thirty, Rate::FortyFour, Rate::Sixty);
+        // (outputs set on the first wake, all removed on the first wake after ms)
+        let cases: [(&[(u8, Rate)], u64); 5] = [
+            (&[(1, sixty)], 50),
+            (&[(1, sixty)], 17_000), // about 1000 wakes
+            (&[(1, sixty), (2, forty_four)], 17_000),
+            (&[(1, thirty)], 17_000),
+            (&[(1, sixty), (2, thirty), (3, forty_four)], 17_000),
+        ];
+        for (outputs, after) in cases {
+            let (mut added, mut removed) = (false, None);
+            let wakes = run(calm, after + 100, |ms| {
+                if !added {
+                    added = true;
+                    return outputs
+                        .iter()
+                        .map(|&(n, rate)| set_output(n, rate))
+                        .collect();
+                }
+                if removed.is_some() || ms < after {
+                    return vec![];
+                }
+                removed = Some(ms);
+                let remove = |&(n, _): &(u8, Rate)| Command::RemoveOutput { output: output(n) };
+                outputs.iter().map(remove).collect()
+            });
+            let removed = removed.unwrap();
+            let next = wakes.iter().map(|&(ms, _)| ms).find(|&ms| ms > removed);
+            assert!(
+                next.is_some_and(|ms| ms - removed <= one_beat),
+                "{outputs:?}: removed at {removed} ms, next wake {next:?}"
+            );
+        }
     }
 
     #[test]
