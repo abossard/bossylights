@@ -1,11 +1,13 @@
 mod common;
+mod mock;
 
 use common::Receiver;
 use engine::{
-    ChannelNumbers, Color, Command, Engine, Levels, OutputKind, OutputNumber, QUEUE, Rate,
-    Refusal, RunNumbers, Sender, Status, Universes,
+    ChannelNumbers, Color, Command, Engine, Levels, OutputKind, OutputNumber, QUEUE, Rate, Refusal,
+    RunNumbers, Sender, Status, Universes,
 };
 use std::net::SocketAddrV4;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 /// An engine with two universes and one DDP output that sends both to a receiver here.
@@ -21,7 +23,7 @@ fn channel(universe: u16, address: u16) -> ChannelNumbers {
     ChannelNumbers { universe, address }
 }
 
-fn set(universe: u16, address: u16, value: u8) -> Command<ChannelNumbers, RunNumbers> {
+fn set(universe: u16, address: u16, value: u8) -> Command<ChannelNumbers, RunNumbers, OutputKind> {
     Command::SetChannel {
         channel: channel(universe, address),
         value,
@@ -90,6 +92,11 @@ fn a_command_that_cannot_be_right_is_refused_and_changes_nothing() {
         universes,
         rate: None,
     };
+    let (engine, mut sender, receiver) = start();
+    let reachable = OutputKind::Ddp {
+        address: receiver.address,
+        color: Color::Rgb,
+    };
     // (command, reason)
     let cases = [
         (set(3, 1, 9), Refusal::NoSuchUniverse { universes: 2 }),
@@ -103,16 +110,15 @@ fn a_command_that_cannot_be_right_is_refused_and_changes_nothing() {
             Refusal::NotACommand,
         ),
         (
-            set_output(OutputKind::Mock, run(2, 2)),
+            set_output(reachable, run(2, 2)),
             Refusal::NoSuchUniverse { universes: 2 },
         ),
         (
-            set_output(OutputKind::Mock, run(0, 1)),
+            set_output(reachable, run(0, 1)),
             Refusal::NoSuchUniverse { universes: 2 },
         ),
         (set_output(unreachable, run(1, 1)), Refusal::CannotOpen),
     ];
-    let (engine, mut sender, receiver) = start();
     let before = engine.query();
     for (command, reason) in cases {
         assert_eq!(sender.send(command), Err(reason), "{command:?}");
@@ -123,40 +129,61 @@ fn a_command_that_cannot_be_right_is_refused_and_changes_nothing() {
     assert_eq!(universes, [Levels::ZERO; 2]);
     assert!(!state.blackout);
     assert_eq!(state.outputs[1], None, "no second output");
-    assert_eq!(state.outputs[0].map(|o| o.kind), before.outputs[0].map(|o| o.kind));
+    assert_eq!(
+        state.outputs[0].map(|o| (o.universes, o.rate)),
+        before.outputs[0].map(|o| (o.universes, o.rate))
+    );
 }
 
 #[test]
-fn outputs_are_added_changed_and_removed() {
-    let mock = |rate| Command::SetOutput {
-        output: output(3),
-        kind: OutputKind::Mock,
-        universes: run(2, 1),
-        rate,
-    };
-    let remove = Command::RemoveOutput { output: output(3) };
-    // (commands, the output's rate afterwards, or none)
+fn outputs_are_attached_changed_and_removed() {
+    #[derive(Clone, Copy, Debug)]
+    enum Step {
+        Attach(Rate),
+        Remove,
+    }
+    // (steps for output 3, its rate afterwards, or none)
     let cases = [
-        (vec![mock(None)], Some(Rate::FortyFour)),
-        (vec![mock(Some(Rate::Thirty))], Some(Rate::Thirty)),
-        (vec![mock(None), mock(Some(Rate::Sixty))], Some(Rate::Sixty)),
-        (vec![mock(None), remove], None),
-        (vec![remove], None),
+        (vec![Step::Attach(Rate::FortyFour)], Some(Rate::FortyFour)),
+        (vec![Step::Attach(Rate::Thirty)], Some(Rate::Thirty)),
+        (
+            vec![Step::Attach(Rate::FortyFour), Step::Attach(Rate::Sixty)],
+            Some(Rate::Sixty),
+        ),
+        (vec![Step::Attach(Rate::Thirty), Step::Remove], None),
+        (vec![Step::Remove], None),
     ];
-    for (commands, rate) in cases {
+    for (steps, rate) in cases {
         let (engine, mut sender, receiver) = start();
-        for command in &commands {
-            assert_eq!(sender.send(*command), Ok(()), "{command:?}");
+        let mut heard = None;
+        for step in &steps {
+            match *step {
+                Step::Attach(rate) => {
+                    let universes = engine.universes();
+                    heard = Some(mock::attach(&mut sender, universes, 3, run(2, 1), rate));
+                }
+                Step::Remove => {
+                    let remove = Command::RemoveOutput { output: output(3) };
+                    assert_eq!(sender.send(remove), Ok(()));
+                }
+            }
         }
+        assert_eq!(sender.send(set(2, 1, 77)), Ok(()));
         receiver.two_more_frames();
-        receiver.two_more_frames(); // the mock, at 30 a second, had its first frame
+        receiver.two_more_frames(); // a mock at 30 a second had a frame too
         let state = engine.query();
         let third = state.outputs[2];
-        assert_eq!(third.map(|o| o.rate), rate, "{commands:?}");
-        if let Some(third) = third {
-            assert_eq!(third.status, Status::Running, "{commands:?}");
-            assert!(third.counters.accepted > 0, "{commands:?}");
-            assert!(engine.lateness(output(3)).is_some(), "{commands:?}");
+        assert_eq!(third.map(|o| o.rate), rate, "{steps:?}");
+        if let (Some(third), Some(heard)) = (third, &heard) {
+            assert_eq!(third.status, Status::Running, "{steps:?}");
+            assert!(third.counters.accepted > 0, "{steps:?}");
+            assert!(heard.frames.load(Ordering::Relaxed) > 0, "{steps:?}");
+            assert_eq!(
+                heard.first.load(Ordering::Relaxed),
+                77,
+                "universe 2 of the frame"
+            );
+            assert!(engine.lateness(output(3)).is_some(), "{steps:?}");
         }
         let ddp = state.outputs[0].expect("the DDP output stays");
         assert_eq!(ddp.status, Status::Running);

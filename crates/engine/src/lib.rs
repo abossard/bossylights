@@ -6,7 +6,7 @@
 //! `engine-core` (no `std`, no `alloc`); this crate is the thin action around it.
 //!
 //! ```text
-//! Sender::send ---- command (+ device, opened here) ----> queue --> tick thread --> outputs
+//! Sender::send ---- command (+ device: opened, then attach) --> queue --> tick thread --> outputs
 //!      ^                                                                |
 //!      +--------- retired devices, freed here <------ return queue -----+
 //!                                                                       |
@@ -18,7 +18,7 @@
 //! | No | Check |
 //! |---|---|
 //! | locks | `clippy.toml` bans every std type that locks, here and in `outputs`. Commands and devices come and go through `rtrb`, wait-free; the state leaves through atomics |
-//! | allocation | `engine-core` has no `alloc`; buffers are made in `start`; devices are opened and freed by the `Sender`; `tests/no_alloc.rs` counts every allocation while it ticks, sends DDP and takes commands |
+//! | allocation | `engine-core` has no `alloc`; buffers are made in `start`; devices are opened and freed by the `Sender`; `tests/no_alloc.rs` counts every allocation while it ticks, serves outputs and takes commands |
 //! | blocking calls, files, network | `engine-core` has no `std`; `clippy.toml` bans files, sockets, processes, stdin here and in `rt-thread`. The only send is an output's non-blocking `take`. The only wait is `thread::sleep`, then a spin, until the next output is due |
 //! | logging | `clippy.toml` bans print macros and stdout/stderr; no logger dependency |
 //! | calls outward | `clippy.toml` bans channels and condvars; the tick thread only writes atomics in `Shared`, which others read |
@@ -33,15 +33,14 @@
 
 pub use engine_core::{
     ADDRESSES, BEAT, BestEffort, ChannelLevel, ChannelNumbers, Color, Command, Counters, Levels,
-    MAX_OUTPUTS, MAX_UNIVERSES, Output, OutputKind, OutputNumber, Priority, Rate, Refusal, Reply,
-    Request, RunNumbers, State, Status, Universes, changes,
+    MAX_OUTPUTS, MAX_UNIVERSES, Outcome, Output, OutputKind, OutputNumber, Priority, Rate, Refusal,
+    Reply, Request, Run, RunNumbers, State, Status, Universes, changes,
 };
-
-use engine_core::{
-    Histogram, LATENCY_BUCKETS, LATENESS_BUCKETS, OUTPUT_WORDS, Outcome, bucket, due, frame, from_words,
-    next_wake, percentile, sleep_before, to_words, update, worst,
+pub use engine_core::{
+    Checked, Histogram, LATENCY_BUCKETS, LATENESS_BUCKETS, OUTPUT_WORDS, bucket, due, frame,
+    from_words, next_wake, percentile, sleep_before, to_words, update, worst,
 };
-use outputs::Device;
+pub use outputs::Device;
 use std::hint;
 use std::io;
 use std::sync::Arc;
@@ -64,7 +63,7 @@ pub struct Engine {
 /// thread never does. One sender: each queue has one producer and one consumer.
 pub struct Sender {
     commands: rtrb::Producer<Sent>,
-    retired: rtrb::Consumer<Device>,
+    retired: rtrb::Consumer<Box<dyn Device>>,
     universes: Universes,
     start: Instant,
 }
@@ -73,7 +72,7 @@ pub struct Sender {
 struct Sent {
     command: Command,
     at: Duration,
-    device: Option<Device>,
+    device: Option<Box<dyn Device>>,
 }
 
 /// How late an output's frames were handed over, so far.
@@ -198,24 +197,48 @@ impl Engine {
 
 impl Sender {
     /// Queues a command for the very next wake, or says why not. Nothing changes on a
-    /// refusal. `SetOutput` opens its device here, off the tick thread.
-    pub fn send(&mut self, command: Command<ChannelNumbers, RunNumbers>) -> Result<(), Refusal> {
+    /// refusal. `SetOutput` opens its device here, off the tick thread, then attaches it.
+    pub fn send(
+        &mut self,
+        command: Command<ChannelNumbers, RunNumbers, OutputKind>,
+    ) -> Result<(), Refusal> {
+        match command.check(self.universes)? {
+            Checked::Command(command) => self.push(command, None),
+            Checked::SetOutput {
+                output,
+                kind,
+                universes,
+                rate,
+            } => {
+                let device = outputs::open(kind).map_err(|_| Refusal::CannotOpen)?;
+                let rate = rate.unwrap_or(outputs::default_rate(kind));
+                self.attach(output, device, universes, rate)
+            }
+        }
+    }
+
+    /// Puts an opened device on the tick thread as `output`, in place of the one there.
+    /// Every output gets there this way: `SetOutput` after opening its kind, a test with
+    /// its own device. Its counters start at zero.
+    pub fn attach(
+        &mut self,
+        output: OutputNumber,
+        device: Box<dyn Device>,
+        universes: Run,
+        rate: Rate,
+    ) -> Result<(), Refusal> {
+        let command = Command::Attach {
+            output,
+            universes,
+            rate,
+        };
+        self.push(command, Some(device))
+    }
+
+    fn push(&mut self, command: Command, device: Option<Box<dyn Device>>) -> Result<(), Refusal> {
         while let Ok(device) = self.retired.pop() {
             drop(device); // closed and freed here, never on the tick thread
         }
-        let command = command.check(self.universes)?;
-        let device = match command {
-            Command::SetOutput { kind, .. } => {
-                Some(Device::open(kind).map_err(|_| Refusal::CannotOpen)?)
-            }
-            Command::Tick { .. }
-            | Command::Handed { .. }
-            | Command::SetChannel { .. }
-            | Command::ReleaseChannel { .. }
-            | Command::ReleaseAll
-            | Command::Blackout { .. }
-            | Command::RemoveOutput { .. } => None,
-        };
         let at = self.start.elapsed();
         self.commands
             .push(Sent {
@@ -250,9 +273,9 @@ fn count<const N: usize>(counts: &[AtomicU64; N], time: Duration) {
 struct Ticker {
     shared: Arc<Shared>,
     commands: rtrb::Consumer<Sent>,
-    retired: rtrb::Producer<Device>,
+    retired: rtrb::Producer<Box<dyn Device>>,
     /// By output number, beside `State::outputs`.
-    devices: [Option<Device>; MAX_OUTPUTS],
+    devices: [Option<Box<dyn Device>>; MAX_OUTPUTS],
     /// The held levels: the state's universes.
     held: Vec<Levels>,
     /// The frame that goes out.
@@ -310,11 +333,10 @@ impl Ticker {
         self
     }
 
-    /// For `SetOutput` and `RemoveOutput`: puts `device` at the output, sends the old one
+    /// For `Attach` and `RemoveOutput`: puts `device` at the output, sends the old one
     /// back to the sender and starts the output's lateness afresh. Others change nothing.
-    fn swap(&mut self, command: Command, device: Option<Device>) {
-        let (Command::SetOutput { output, .. } | Command::RemoveOutput { output }) = command
-        else {
+    fn swap(&mut self, command: Command, device: Option<Box<dyn Device>>) {
+        let (Command::Attach { output, .. } | Command::RemoveOutput { output }) = command else {
             return;
         };
         let Some(slot) = self.devices.get_mut(output.slot()) else {
@@ -366,7 +388,9 @@ impl Ticker {
     fn publish(&self, state: &State, levels: bool) {
         let shared = &self.shared;
         let version = shared.version.load(Ordering::Relaxed);
-        shared.version.store(version.wrapping_add(1), Ordering::Relaxed);
+        shared
+            .version
+            .store(version.wrapping_add(1), Ordering::Relaxed);
         fence(Ordering::Release);
         shared.blackout.store(state.blackout, Ordering::Relaxed);
         for (words, output) in shared.outputs.iter().zip(&state.outputs) {
@@ -380,7 +404,9 @@ impl Ticker {
                 cell.store(*level, Ordering::Relaxed);
             }
         }
-        shared.version.store(version.wrapping_add(2), Ordering::Release);
+        shared
+            .version
+            .store(version.wrapping_add(2), Ordering::Release);
         shared.frame.store(state.frame, Ordering::Relaxed);
     }
 }

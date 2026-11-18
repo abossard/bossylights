@@ -1,4 +1,6 @@
-use engine::{BEAT, Command, Engine, OutputKind, OutputNumber, RunNumbers, Universes};
+mod mock;
+
+use engine::{BEAT, Engine, OutputNumber, Rate, RunNumbers, Universes};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -6,8 +8,7 @@ use std::time::{Duration, Instant};
 fn with_no_output_the_counter_advances_on_the_beat() {
     // how long we watch, in ms
     for ms in [250, 500, 1000] {
-        let (engine, _sender) =
-            Engine::start(Universes::ONE).expect("the tick thread starts");
+        let (engine, _sender) = Engine::start(Universes::ONE).expect("the tick thread starts");
         let before = engine.query().frame;
         let started = Instant::now();
         thread::sleep(Duration::from_millis(ms));
@@ -36,13 +37,8 @@ fn every_frame_counts_how_late_its_output_was_served() {
     let (engine, mut sender) = Engine::start(Universes::ONE).expect("the tick thread starts");
     let output = OutputNumber::try_from(1).unwrap();
     assert_eq!(engine.lateness(output), None, "no output yet");
-    let mock = Command::SetOutput {
-        output,
-        kind: OutputKind::Mock,
-        universes: RunNumbers { first: 1, count: 1 },
-        rate: None,
-    };
-    assert_eq!(sender.send(mock), Ok(()));
+    let run = RunNumbers { first: 1, count: 1 };
+    mock::attach(&mut sender, Universes::ONE, 1, run, Rate::FortyFour);
     thread::sleep(Duration::from_millis(250));
     let lateness = engine.lateness(output).expect("frames were counted");
     assert!(
