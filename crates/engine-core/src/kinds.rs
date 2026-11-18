@@ -24,3 +24,10 @@ pub enum Color {
     Rgb,
     Rgbw,
 }
+
+/// A kind for tests elsewhere in `engine-core`, which name none.
+#[cfg(test)]
+pub const EXAMPLE: OutputKind = OutputKind::Ddp {
+    address: core::net::SocketAddrV4::new(core::net::Ipv4Addr::LOCALHOST, 4048),
+    color: Color::Rgb,
+};

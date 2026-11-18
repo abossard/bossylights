@@ -1,25 +1,19 @@
-//! Proves the tick thread allocates nothing per wake, also while it serves a DDP output
-//! and a test's own device at different rates and takes commands. A counting allocator sees every
-//! allocation in this process. The outputs are added before the window (opening one
-//! allocates, on the sending thread). In the window the main thread only sends channel
-//! commands, which allocates nothing, and sleeps, so any allocation is the tick's.
+//! Proves the tick thread allocates nothing per wake, also while it serves two outputs at
+//! different rates and takes commands. A counting allocator sees every allocation in this
+//! process. The outputs are attached before the window (a device is boxed on the sending
+//! thread). In the window the main thread only sends channel commands, which allocates
+//! nothing, and sleeps, so any allocation is the tick's. That each real device's `take`
+//! allocates nothing is proved in `crates/outputs/tests/no_alloc.rs`.
 
 #![expect(
     unsafe_code,
     reason = "a global allocator can only be written with unsafe"
 )]
-#![expect(
-    clippy::disallowed_types,
-    reason = "a socket here stands for a DDP device; the ban is for the tick thread"
-)]
 
 mod mock;
 
-use engine::{
-    ChannelNumbers, Color, Command, Engine, OutputKind, OutputNumber, Rate, RunNumbers, Universes,
-};
+use engine::{ChannelNumbers, Command, Engine, Rate, RunNumbers, Universes};
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::net::{SocketAddr, UdpSocket};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 use std::time::Duration;
@@ -44,21 +38,8 @@ static ALLOCATOR: Counting = Counting;
 
 fn main() {
     let (engine, mut sender) = Engine::start(Universes::ONE).expect("the tick thread starts");
-    let receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
-    let SocketAddr::V4(address) = receiver.local_addr().unwrap() else {
-        panic!("IPv4");
-    };
-    let ddp = Command::SetOutput {
-        output: OutputNumber::try_from(1).unwrap(),
-        kind: OutputKind::Ddp {
-            address,
-            color: Color::Rgbw,
-        },
-        universes: RunNumbers { first: 1, count: 1 },
-        rate: None,
-    };
-    sender.send(ddp).expect("the DDP output is added");
     let run = RunNumbers { first: 1, count: 1 };
+    mock::attach(&mut sender, Universes::ONE, 1, run, Rate::Sixty);
     mock::attach(&mut sender, Universes::ONE, 2, run, Rate::Thirty);
     thread::sleep(Duration::from_millis(100)); // thread start-up may allocate
 

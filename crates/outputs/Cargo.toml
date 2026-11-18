@@ -11,3 +11,7 @@ workspace = true
 
 [dependencies]
 engine-core = { path = "../engine-core" }
+
+[[test]]
+name = "no_alloc"
+harness = false

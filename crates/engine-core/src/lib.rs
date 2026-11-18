@@ -521,10 +521,7 @@ mod tests {
         let one = Universes::ONE;
         let numbers = |universe, address| ChannelNumbers { universe, address };
         // Only the kind's data: the engine opens nothing here.
-        let ddp = OutputKind::Ddp {
-            address: "127.0.0.1:4048".parse().unwrap(),
-            color: Color::Rgb,
-        };
+        let kind = kinds::EXAMPLE;
         // (as sent, checked)
         let cases = [
             (
@@ -567,7 +564,7 @@ mod tests {
             (
                 Command::SetOutput {
                     output: output(1),
-                    kind: ddp,
+                    kind,
                     universes: RunNumbers { first: 1, count: 2 },
                     rate: None,
                 },
@@ -576,13 +573,13 @@ mod tests {
             (
                 Command::SetOutput {
                     output: output(1),
-                    kind: ddp,
+                    kind,
                     universes: RunNumbers { first: 1, count: 1 },
                     rate: None,
                 },
                 Ok(Checked::SetOutput {
                     output: output(1),
-                    kind: ddp,
+                    kind,
                     universes: RunNumbers { first: 1, count: 1 }.check(one).unwrap(),
                     rate: None,
                 }),

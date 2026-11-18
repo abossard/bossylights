@@ -1,22 +1,20 @@
-mod common;
 mod mock;
 
-use common::Receiver;
 use engine::{
-    ChannelNumbers, Color, Command, Engine, Levels, OutputKind, OutputNumber, QUEUE, Rate, Refusal,
+    ChannelNumbers, Command, Engine, Levels, OutputKind, OutputNumber, QUEUE, Rate, Refusal,
     RunNumbers, Sender, Status, Universes,
 };
-use std::net::SocketAddrV4;
-use std::sync::atomic::Ordering;
+use mock::Heard;
+use std::sync::Arc;
 use std::time::Duration;
 
-/// An engine with two universes and one DDP output that sends both to a receiver here.
-fn start() -> (Engine, Sender, Receiver) {
+/// An engine with two universes and one mock output that takes both, at 60 a second.
+fn start() -> (Engine, Sender, Arc<Heard>) {
     let (engine, mut sender) =
         Engine::start(Universes::new(2).unwrap()).expect("the tick thread starts");
-    let receiver = Receiver::start();
-    receiver.add(&mut sender, 2);
-    (engine, sender, receiver)
+    let heard = mock::attach(&mut sender, engine.universes(), 1, run(1, 2), Rate::Sixty);
+    heard.two_more_frames();
+    (engine, sender, heard)
 }
 
 fn channel(universe: u16, address: u16) -> ChannelNumbers {
@@ -66,12 +64,12 @@ fn a_command_reaches_the_frame_and_the_state() {
         ),
     ];
     for (commands, universe, address, held, out) in cases {
-        let (engine, mut sender, receiver) = start();
+        let (engine, mut sender, first) = start();
         for command in &commands {
             assert_eq!(sender.send(*command), Ok(()), "{command:?}");
         }
-        receiver.two_more_frames();
-        assert_eq!(receiver.level(universe, address), out, "{commands:?} out");
+        first.two_more_frames();
+        assert_eq!(first.level(universe, address), out, "{commands:?} out");
         let mut universes = [Levels::ZERO; 2];
         engine.read(&mut universes);
         let level = universes[usize::from(universe - 1)].0[usize::from(address - 1)];
@@ -82,22 +80,8 @@ fn a_command_reaches_the_frame_and_the_state() {
 
 #[test]
 fn a_command_that_cannot_be_right_is_refused_and_changes_nothing() {
-    let unreachable = OutputKind::Ddp {
-        address: SocketAddrV4::new([127, 0, 0, 1].into(), 0),
-        color: Color::Rgb,
-    };
-    let set_output = |kind, universes| Command::SetOutput {
-        output: output(2),
-        kind,
-        universes,
-        rate: None,
-    };
-    let (engine, mut sender, receiver) = start();
-    let reachable = OutputKind::Ddp {
-        address: receiver.address,
-        color: Color::Rgb,
-    };
-    // (command, reason)
+    // (command, reason). Commands with an output kind are checked in engine-core and
+    // over the API: the engine names no kind.
     let cases = [
         (set(3, 1, 9), Refusal::NoSuchUniverse { universes: 2 }),
         (set(0, 1, 9), Refusal::NoSuchUniverse { universes: 2 }),
@@ -109,21 +93,13 @@ fn a_command_that_cannot_be_right_is_refused_and_changes_nothing() {
             },
             Refusal::NotACommand,
         ),
-        (
-            set_output(reachable, run(2, 2)),
-            Refusal::NoSuchUniverse { universes: 2 },
-        ),
-        (
-            set_output(reachable, run(0, 1)),
-            Refusal::NoSuchUniverse { universes: 2 },
-        ),
-        (set_output(unreachable, run(1, 1)), Refusal::CannotOpen),
     ];
+    let (engine, mut sender, first) = start();
     let before = engine.query();
     for (command, reason) in cases {
         assert_eq!(sender.send(command), Err(reason), "{command:?}");
     }
-    receiver.two_more_frames();
+    first.two_more_frames();
     let mut universes = [Levels::ZERO; 2];
     let state = engine.read(&mut universes);
     assert_eq!(universes, [Levels::ZERO; 2]);
@@ -154,7 +130,7 @@ fn outputs_are_attached_changed_and_removed() {
         (vec![Step::Remove], None),
     ];
     for (steps, rate) in cases {
-        let (engine, mut sender, receiver) = start();
+        let (engine, mut sender, first) = start();
         let mut heard = None;
         for step in &steps {
             match *step {
@@ -169,33 +145,28 @@ fn outputs_are_attached_changed_and_removed() {
             }
         }
         assert_eq!(sender.send(set(2, 1, 77)), Ok(()));
-        receiver.two_more_frames();
-        receiver.two_more_frames(); // a mock at 30 a second had a frame too
+        first.two_more_frames();
+        first.two_more_frames(); // a mock at 30 a second had a frame too
         let state = engine.query();
         let third = state.outputs[2];
         assert_eq!(third.map(|o| o.rate), rate, "{steps:?}");
         if let (Some(third), Some(heard)) = (third, &heard) {
             assert_eq!(third.status, Status::Running, "{steps:?}");
             assert!(third.counters.accepted > 0, "{steps:?}");
-            assert!(heard.frames.load(Ordering::Relaxed) > 0, "{steps:?}");
-            assert_eq!(
-                heard.first.load(Ordering::Relaxed),
-                77,
-                "universe 2 of the frame"
-            );
+            assert!(heard.frames() > 0, "{steps:?}");
+            assert_eq!(heard.level(1, 1), 77, "universe 2 of the frame");
             assert!(engine.lateness(output(3)).is_some(), "{steps:?}");
         }
-        let ddp = state.outputs[0].expect("the DDP output stays");
-        assert_eq!(ddp.status, Status::Running);
-        assert_eq!(ddp.rate, Rate::Sixty, "the default for DDP");
-        assert!(ddp.counters.accepted > 0);
-        assert_eq!((ddp.counters.dropped, ddp.counters.failed), (0, 0));
+        let one = state.outputs[0].expect("output 1 stays");
+        assert_eq!((one.status, one.rate), (Status::Running, Rate::Sixty));
+        assert!(one.counters.accepted > 0);
+        assert_eq!((one.counters.dropped, one.counters.failed), (0, 0));
     }
 }
 
 #[test]
 fn a_full_queue_refuses_and_says_so() {
-    let (_engine, mut sender, _receiver) = start();
+    let (_engine, mut sender, _first) = start();
     // A wake takes at most QUEUE commands; four queues' worth in a few microseconds
     // cannot all fit.
     let refused = (0..4 * QUEUE)
