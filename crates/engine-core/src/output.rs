@@ -282,22 +282,68 @@ mod tests {
     }
 
     #[test]
-    fn handed_counts_and_judges_the_interval() {
+    fn handed_counts_judges_the_interval_and_moves_the_status() {
         let ms = Duration::from_millis;
         let us = Duration::from_micros;
+        let ns = Duration::from_nanos;
         let at_16_667 = Output {
             last: Some(ms(100)),
             ..fresh(Rate::Sixty)
         };
-        // (output, outcome, handed at, counters: accepted, dropped, failed, off beat)
+        let period = Rate::Sixty.period();
+        // (output, outcome, handed at, counters: accepted, dropped, failed, off beat, status after)
         let cases = [
-            (fresh(Rate::Sixty), Outcome::Accepted, ms(0), [1, 0, 0, 0]), // no interval yet
-            (at_16_667, Outcome::Accepted, us(116_667), [1, 0, 0, 0]),
-            (at_16_667, Outcome::Dropped, us(118_600), [0, 1, 0, 0]), // 1.9 ms late: on beat
-            (at_16_667, Outcome::Failed, us(118_700), [0, 0, 1, 1]),  // 2.03 ms late
-            (at_16_667, Outcome::Accepted, us(114_600), [1, 0, 0, 1]), // 2.07 ms early
+            (
+                fresh(Rate::Sixty),
+                Outcome::Accepted,
+                ms(0),
+                [1, 0, 0, 0],
+                Status::Connecting,
+            ), // no interval yet
+            (
+                at_16_667,
+                Outcome::Accepted,
+                us(116_667),
+                [1, 0, 0, 0],
+                Status::Connecting,
+            ),
+            (
+                at_16_667,
+                Outcome::Dropped,
+                us(118_600),
+                [0, 1, 0, 0],
+                Status::NotFound,
+            ), // 1.9 ms late: on beat
+            (
+                at_16_667,
+                Outcome::Failed,
+                us(118_700),
+                [0, 0, 1, 1],
+                Status::NotFound,
+            ), // 2.03 ms late
+            (
+                at_16_667,
+                Outcome::Accepted,
+                us(114_600),
+                [1, 0, 0, 1],
+                Status::Connecting,
+            ), // 2.07 ms early
+            (
+                at_16_667,
+                Outcome::Accepted,
+                ms(100) + period + OFF_BEAT,
+                [1, 0, 0, 0],
+                Status::Connecting,
+            ), // exactly 2 ms late: on beat
+            (
+                at_16_667,
+                Outcome::Accepted,
+                ms(100) + period + OFF_BEAT + ns(1),
+                [1, 0, 0, 1],
+                Status::Connecting,
+            ), // 1 ns more: off beat
         ];
-        for (output, outcome, at, [accepted, dropped, failed, off_beat]) in cases {
+        for (output, outcome, at, [accepted, dropped, failed, off_beat], status) in cases {
             let handed = output.handed(outcome, at);
             let expected = Counters {
                 accepted,
@@ -306,6 +352,7 @@ mod tests {
                 off_beat,
             };
             assert_eq!(handed.counters, expected, "{outcome:?} at {at:?}");
+            assert_eq!(handed.status, status, "{outcome:?} at {at:?}");
             assert_eq!(handed.last, Some(at));
             assert_eq!(
                 handed.due,
@@ -349,6 +396,7 @@ mod tests {
         for (first, count, expected) in cases {
             let run = RunNumbers { first, count }.check(four).unwrap();
             let taken: Vec<u8> = run.of(&frame).iter().map(|u| u.0[0]).collect();
+            assert_eq!(run.count(), count, "{first}, {count}");
             assert_eq!(taken, expected, "{first}, {count}");
         }
         let run = RunNumbers { first: 4, count: 1 }.check(four).unwrap();

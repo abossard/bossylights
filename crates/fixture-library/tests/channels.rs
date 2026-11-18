@@ -144,6 +144,31 @@ fn a_channel_does_what_its_group_or_name_says() {
             Coarse,
         ),
         (
+            r#"<Channel Name="Green"><Group Byte="0">Intensity</Group></Channel>"#,
+            Green,
+            Coarse,
+        ),
+        (
+            r#"<Channel Name="Blue"><Group Byte="0">Intensity</Group></Channel>"#,
+            Blue,
+            Coarse,
+        ),
+        (
+            r#"<Channel Name="White"><Group Byte="0">Intensity</Group></Channel>"#,
+            White,
+            Coarse,
+        ),
+        (
+            r#"<Channel Name="Amber"><Group Byte="0">Intensity</Group></Channel>"#,
+            Amber,
+            Coarse,
+        ),
+        (
+            r#"<Channel Name="UV"><Group Byte="0">Intensity</Group></Channel>"#,
+            Uv,
+            Coarse,
+        ),
+        (
             r#"<Channel Name="Dimmer fine"><Group Byte="1">Intensity</Group></Channel>"#,
             Dimmer,
             Fine,
