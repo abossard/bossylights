@@ -21,7 +21,7 @@ use crate::{Device, Levels, Outcome};
 use engine_core::ADDRESSES;
 use nix::errno::Errno;
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
-use serialport::{DataBits, FlowControl, Parity, SerialPortType, StopBits, TTYPort};
+use serialport::{DataBits, FlowControl, Parity, SerialPort, SerialPortType, StopBits, TTYPort};
 use std::io::{self, ErrorKind};
 use std::os::fd::AsRawFd;
 use std::sync::Arc;
@@ -166,9 +166,10 @@ impl Drop for DmxUsbPro {
     /// Stops the port thread and waits until it closed the port, so the port is free
     /// for the next opener. Never on the output thread: the engine frees devices off it.
     /// Each wait of the port thread watches `stop`, so this takes at most a link time
-    /// or a look for the adapter. A message being written is finished first, so the next
-    /// opener's first frame is not garbled: that takes at most a link time, or
-    /// [`STALLED_FOR`] when the port takes no byte.
+    /// or a look for the adapter. Before the port closes, the message being written is
+    /// finished and what the driver holds is sent, so the next opener's first frame is
+    /// whole: about two link times more, at most [`STALLED_FOR`] when the port takes no
+    /// byte.
     fn drop(&mut self) {
         self.shared.stop.store(true, Ordering::Relaxed);
         if let Some(port_thread) = self.port_thread.take() {
@@ -184,9 +185,10 @@ struct PortThread {
     port: Option<TTYPort>,
     link: Link,
     messages: rtrb::Consumer<[u8; MESSAGE]>,
-    /// The newest accepted message that has not gone out: the one whose write lost the
-    /// port, or a newer one taken meanwhile. Written first once the adapter is found
-    /// again, so a loss throws away no frame `take` accepted, only older ones.
+    /// The message whose write lost the port. Written once the adapter is found again,
+    /// unless `take` queued a newer one by then: a loss throws away no frame `take`
+    /// accepted except one a newer frame replaces, and never sends an older frame after
+    /// a newer one.
     unsent: Option<[u8; MESSAGE]>,
     shared: Arc<Shared>,
 }
@@ -209,19 +211,18 @@ impl PortThread {
                     break;
                 }
                 if let Ok(port) = (self.find)() {
-                    if let Ok(newer) = self.messages.pop() {
-                        self.unsent = Some(newer); // taken after the one that failed
-                    }
                     self.port = Some(port);
                     self.link = next(self.link, Seen::Found, Instant::now());
                     self.shared.lost.store(false, Ordering::Release);
                 }
                 continue;
             };
-            let Some(message) = self.unsent.take().or_else(|| self.messages.pop().ok()) else {
+            // The newest first: a queued message replaces the one that failed.
+            let Some(message) = self.messages.pop().ok().or_else(|| self.unsent.take()) else {
                 thread::park_timeout(WATCH_EVERY);
                 continue;
             };
+            self.unsent = None;
             let started = Instant::now();
             self.link = write_all(port, &message, self.link);
             match self.link {
@@ -238,7 +239,32 @@ impl PortThread {
                 Link::NotFound => {}
             }
         }
+        if let Some(port) = &self.port {
+            drain(port);
+        }
     }
+}
+
+/// Waits until the driver sent all it holds, then one link time for bytes still on their
+/// way (in the adapter; on Linux, inside a pseudo terminal, which reports none held).
+/// Closing sooner may throw away the end of the last message. Gives up once no byte
+/// went out for [`STALLED_FOR`].
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the port thread sleeps; the output thread never does"
+)]
+fn drain(port: &TTYPort) {
+    let held = || port.bytes_to_write().unwrap_or(0);
+    let (mut left, mut moved) = (held(), Instant::now());
+    while left > 0 && moved.elapsed() < STALLED_FOR {
+        thread::sleep(QUEUE_FULL);
+        let now = held();
+        if now < left {
+            moved = Instant::now();
+        }
+        left = now;
+    }
+    thread::sleep(LINK_TIME);
 }
 
 /// Writes the whole message, straight to the system: a full driver queue is waited out

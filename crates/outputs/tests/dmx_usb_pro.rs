@@ -159,12 +159,11 @@ fn a_port_that_takes_no_bytes_is_lost_then_found_again() {
         .recv_timeout(Duration::from_secs(10))
         .expect("the stalled port was never lost and found again, or take waited on it");
     assert_eq!(seen.first(), Some(&Outcome::Accepted), "{seen:?}");
-    assert!(
-        seen.ends_with(&[Outcome::Dropped, Outcome::Failed, Outcome::Accepted]),
-        "{seen:?}"
-    );
-    let failed = seen.iter().filter(|o| **o == Outcome::Failed).count();
-    assert_eq!(failed, 1, "{seen:?}");
+    let (before, after) = seen.split_at(seen.iter().position(|o| *o == Outcome::Failed).unwrap());
+    assert_eq!(before.last(), Some(&Outcome::Dropped), "stalled: {seen:?}");
+    // Found again, the frame queued before the stall may still be on its way: busy.
+    let after: Vec<_> = after.iter().filter(|o| **o != Outcome::Dropped).collect();
+    assert_eq!(after, [&Outcome::Failed, &Outcome::Accepted], "{seen:?}");
     taking.join().unwrap();
     drop(drain); // ends by itself once the port is closed and nothing more comes
 }

@@ -115,7 +115,7 @@ fn statuses_until(engine: &mut Engine, done: impl Fn(&engine::Output) -> bool) -
     let mut seen = Vec::new();
     let started = Instant::now();
     loop {
-        // Asked for far more often than the output's frames: every wake's picture is seen.
+        // A paused reader misses a status that lasts one frame: Connecting.
         if let Some(output) = engine.latest().state.outputs[0] {
             if seen.last() != Some(&output.status) {
                 seen.push(output.status);
@@ -166,21 +166,26 @@ fn an_adapter_plugged_in_after_its_output_was_set_is_not_found_then_runs() {
         "no adapter is no refusal"
     );
 
-    // (the adapter is plugged in, the statuses output 1 goes through until it settles)
+    use Status::{Connecting, NotFound, Running};
+    // (the adapter is plugged in, the statuses output 1 may go through until it settles)
     let cases = [
-        (false, vec![Status::NotFound]),
+        (false, vec![vec![NotFound]]),
         (
             true,
-            vec![Status::NotFound, Status::Connecting, Status::Running],
+            // Connecting lasts one frame: a reader that was paused then sees none.
+            vec![vec![NotFound, Connecting, Running], vec![NotFound, Running]],
         ),
     ];
-    for (is_plugged, statuses) in cases {
+    for (is_plugged, may_see) in cases {
         plugged.store(is_plugged, Ordering::Relaxed);
-        let settled = *statuses.last().unwrap();
+        let settled = *may_see[0].last().unwrap();
         let seen = statuses_until(&mut engine, |output| {
             output.status == settled && (is_plugged || output.counters.failed >= 3)
         });
-        assert_eq!(seen, statuses, "plugged in: {is_plugged}");
+        assert!(
+            may_see.contains(&seen),
+            "plugged in: {is_plugged}: {seen:?}"
+        );
     }
     stop.store(true, Ordering::Relaxed);
     reading.join().unwrap();
