@@ -27,6 +27,9 @@ const STOP: Duration = Duration::from_secs(3);
 /// How long an engine may take to connect and to answer `Stop`, each. An engine that does
 /// not answer is killed, if it is ours, after that.
 const ANSWER: Duration = Duration::from_secs(1);
+/// How long an engine this shell started may take to answer, or to end. Longer than the
+/// engine waits for the port of an engine that is stopping (3 s).
+const START: Duration = Duration::from_secs(5);
 
 /// What answered on the engine's address.
 #[derive(Debug, PartialEq, Eq)]
@@ -43,8 +46,10 @@ enum Engine {
     /// Started by this shell.
     Own(Child),
     Adopted,
-    /// Not ours to stop: another version, or none could be started.
+    /// Not ours to stop: another version.
     NotOurs,
+    /// None could be started, or ours ended before it answered.
+    Gone,
 }
 
 fn main() {
@@ -59,9 +64,10 @@ fn main() {
         return;
     };
     let mut engine = meet(address);
+    let window = window_engine(address, &engine);
     tauri::Builder::default()
         .setup(move |app| {
-            eprintln!("bossylights: the window talks to the engine on {address}");
+            eprintln!("bossylights: {window}");
             tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::default())
                 .title("Bossylights")
                 .inner_size(640.0, 420.0)
@@ -86,6 +92,16 @@ fn one_window(address: SocketAddr) -> Option<File> {
     Some(file)
 }
 
+/// Which engine the window talks to, if any. A calculation.
+fn window_engine(address: SocketAddr, engine: &Engine) -> String {
+    match engine {
+        Engine::Own(_) | Engine::Adopted | Engine::NotOurs => {
+            format!("the window talks to the engine on {address}")
+        }
+        Engine::Gone => format!("the window has no engine on {address}"),
+    }
+}
+
 /// What the window runs before its page: which engine it talks to.
 fn window_script(address: SocketAddr) -> String {
     format!("window.__BOSSYLIGHTS_ENGINE__ = \"ws://{address}/api\";")
@@ -108,10 +124,26 @@ fn meet(address: SocketAddr) -> Engine {
             );
             Engine::NotOurs
         }
-        Found::Nothing => start_engine(address).map_or(Engine::NotOurs, |child| {
+        Found::Nothing => {
+            start_engine(address).map_or(Engine::Gone, |child| answered(address, child))
+        }
+    }
+}
+
+/// Waits until the engine this shell started answers on `address`, or ends. One that ends
+/// is gone; one that is still silent after [`START`] is kept, it may answer later.
+fn answered(address: SocketAddr, mut child: Child) -> Engine {
+    let until = Instant::now() + START;
+    loop {
+        if let Ok(Some(status)) = child.try_wait() {
+            eprintln!("bossylights: the engine on {address} ended at start ({status})");
+            return Engine::Gone;
+        }
+        if found(ask_version(address).as_deref()) == Found::Same || Instant::now() >= until {
             eprintln!("bossylights: started the engine on {address}");
-            Engine::Own(child)
-        }),
+            return Engine::Own(child);
+        }
+        thread::sleep(Duration::from_millis(20));
     }
 }
 
@@ -164,7 +196,7 @@ fn found(answer: Option<&str>) -> Found {
 /// whoever listens on its address now is another shell's engine.
 fn orders_stop(engine: &mut Engine) -> bool {
     match engine {
-        Engine::NotOurs => false,
+        Engine::NotOurs | Engine::Gone => false,
         Engine::Adopted => true,
         Engine::Own(child) => matches!(child.try_wait(), Ok(None)),
     }

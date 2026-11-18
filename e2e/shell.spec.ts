@@ -14,8 +14,8 @@ interface Shell {
   said: () => string;
 }
 
-function startShell(): Shell {
-  const child = spawn(SHELL, [], { env: { ...process.env, BOSSYLIGHTS_ENGINE: ADDRESS } });
+function startShell(address = ADDRESS): Shell {
+  const child = spawn(SHELL, [], { env: { ...process.env, BOSSYLIGHTS_ENGINE: address } });
   let text = "";
   child.stdout?.on("data", (chunk: Buffer) => (text += chunk.toString()));
   child.stderr?.on("data", (chunk: Buffer) => (text += chunk.toString()));
@@ -143,5 +143,18 @@ test("another engine version on the port: the shell says so and starts nothing",
   } finally {
     await kill(shell);
     await new Promise((closed) => other.close(closed));
+  }
+});
+
+test("an engine of its own that ends at start: the shell does not say the window talks to it", async () => {
+  test.setTimeout(120_000);
+  // An address of no machine here (TEST-NET-1): nothing answers on it, and the engine cannot listen on it.
+  const nowhere = "192.0.2.1:7797";
+  const shell = startShell(nowhere);
+  try {
+    await expect.poll(shell.said, WAIT).toContain(`the window has no engine on ${nowhere}`);
+    expect(shell.said()).not.toContain("the window talks to");
+  } finally {
+    await kill(shell);
   }
 });
