@@ -17,8 +17,8 @@ Controls are standard: buttons, tabs, sliders, lists, tables. The world never su
 
 - **Top bar:** product name and show name, the six workspaces as tabs, status at the right.
 - **Status, always visible, always in the same place:** the LIVE switch with its four indicators, tempo with four beat dots and a **Tap** button, master level, Blackout, Undo, **Learn**.
-- **Now playing, always visible:** the two VirtualDJ decks sit in the header of the timetable and of the Now strip. Decks are numbered **1 and 2**. Per deck: number, state in a word (Playing, Cued, Stopped), **song title** and artist, tempo, position. The title of the song that plays is the largest text on the screen after the tempo. The words "on air" are not used.
-- **Now strip:** directly under the top bar on every screen except Console and Songs. Three thin lanes (Manual, Show, Autopilot) with the NOW line, about 56 px high. Click it to go to Console. On Console and Songs the full timetable replaces it.
+- **Now playing, always visible:** the two VirtualDJ decks sit in the header of the Running panel on the Console and in the Now strip everywhere else. Decks are numbered **1 and 2**. Per deck: number, state in a word (Playing, Cued, Stopped), **song title** and artist. The words "on air" are not used.
+- **Now strip:** directly under the top bar on every screen except Console and Songs. Three thin lanes (Manual, Show, Autopilot) with the NOW line, about 56 px high. Click it to go to Console. On the Console the Running panel replaces it, on Songs the timeline of the song.
 - **Workspaces, in this order:** Console, Songs, Looks, Patch, DMX, In/Out.
 - **Row colours** are used the same way everywhere: anything started by hand, by the show or by the autopilot carries the colour of its row.
 - **Three rows, nothing to manage:** Manual, Show, Autopilot. There are no layers to add. Manual beats Show, Show beats Autopilot. The rules: `docs/design/who-wins.md`.
@@ -54,6 +54,7 @@ The point of the mockups is your judgement, so the review tools are part of the 
 - Each screen lists the GitHub issues it stands for.
 - A last tab, **Review**, shows all screens with verdict, rating and note count, and has **Export** (a JSON file) and **Copy as Markdown**.
 - Everything is kept in the browser (localStorage) until exported.
+- A screen that was rebuilt after a review shows as "not reviewed" again. What the last review said about it stays readable in its panel ("Review 2 said").
 
 ## The six screens
 
@@ -61,29 +62,33 @@ Each brief: what the screen is for, its regions, the states worth showing, what 
 
 ### 1. Console (home)
 
-- **For:** running the lights by hand on a console you designed.
-- **Regions:** the two decks above the timetable. Timetable (three rows, time ruler, NOW line) on the left; lane headers carry on or off, and for Autopilot the style. Console on the right: page tabs (Main, Movers, Pixels, +), override notice, pad grid 8 x 4, six faders, XY pad. **There is no rig view.** The space it used goes to the timetable and the pads.
-- **States:** three pads running, one held by hand. Notice "Manual overrides Autopilot on PAR 1-8" with Release.
-- **Clickable:** press a pad to start or stop it (a block appears in the Manual lane). Hold a pad to flash. Drag faders and the XY pad. Release. Surprise me. Tap. **Edit surface** switches to edit mode: the grid appears, widgets can be dragged and resized, a widget drawer opens (button, slider, XY pad, cue list, speed dial, label, frame).
+- **For:** running the lights by hand on a console you designed, and seeing and managing everything that runs.
+- **Regions:**
+  - **Running**, full width, on top. It is the timetable and the list of running looks in one: the rows Manual, Show and Autopilot, a time ruler, the NOW line, what runs now and what comes next. Every running look sits in its row with its own button: **Release** for what you hold, **Stop** for a look of the show or the autopilot. The Autopilot row also carries on or off and the style. The header holds the two decks, the hold count and one **Release all**, always in the same spot.
+  - **The hold notice** has one reserved line at the bottom of Running: "You hold, until Release: ...". Showing or hiding it moves nothing, in the panel or below it.
+  - **Running folds** to one line: chips of the running looks in their rank colour, the decks, the hold count and Release all. The folded state is remembered.
+  - **Pages** (Main, Movers, Pixels, +), then the **widget grid**, full width below: pad grid 8 x 4, six faders, XY pad. In edit mode the widget drawer is a row under the page tabs. Pressing pads never moves any of it. **There is no rig view.**
+- **States:** Manual holding Strobe, the autopilot playing its pick for the Build-up. A pad switched off and still held ("pad off"). Running folded.
+- **Clickable:** press a pad to start or stop it. Hold a pad to flash. Release one look, Stop one look, Release all. Fold and unfold Running. Autopilot on or off and its style. Drag faders and the XY pad. Edit surface (locked while LIVE is on).
 - **Issues:** Build your own control surface, Widget set, Surface generated from your rig, Pads mirror the screen, Who wins: manual, show, autopilot, Launch on the beat.
 
 ### 2. Songs (a song has one show)
 
-Song = show. There is no separate Show screen and no "tonight's set": the app does not know the set in advance.
+Song = show. There is no separate Show screen and no "tonight's set": the app does not know the set in advance. The autopilot is not song specific: its settings live on Looks.
 
 - **For:** finding songs, editing the show of a song, and editing it live while the song plays.
 - **Regions:**
-  - **Library**, left: search, filters (has a show, auto only, recorded today, needs review), analysis state, tempo and confidence per song. The song that plays is marked "Playing".
-  - **The show of the selected song**, centre: waveform, the section ruler with the five labels, the show and its **takes** as rows, blocks of looks per section, the **Auto** lane at the bottom, the energy curve. The NOW line is the playhead.
+  - **Library**, left: search, filters (has a show, no show yet, has recordings, needs review), analysis state, tempo and confidence per song. The song that plays is marked "Playing". A song without a show is marked "No show yet".
+  - **The show of the selected song**, centre: waveform, the section ruler with the five labels, one row **Recorded**, one row **Show** with blocks of looks per section, the energy curve. The NOW line is the playhead.
   - **Looks to add**, right: by group.
 - **Sections can be changed:** drag an edge to move it, split one, merge two, rename one.
-- **Takes:** every recording pass is a take. A take can be muted, merged into the show, or deleted.
-- **Autopilot lives in the Auto lane:** on or off, style (Chill, Club, Peak, No strobe), "how wild", which groups it may use. Its picks are outlined blocks with a reason. On a block: Skip, More like this, **Keep** (it becomes a normal block that you own).
-- **Live editing:** when the selected song is the one that plays and LIVE is on, a "Live edit" badge shows and every change is on the lights at once.
-- **Recording:** with Recording on, what happens on the Console is written into the show of the song that plays, as a new take, drawn in red while it records. Pad presses and fader moves are both kept.
-- **States:** a song that plays with LIVE on. A take recorded today beside the show. One section with no blocks, filled by Auto. A song that needs review. A song with no show yet (auto only).
-- **Clickable:** search and filter, pick a song, select a section, move a section edge, rename a section, add or remove a look in a section, Fill from style, mute or merge a take, Keep an auto block, play from a section, autopilot on or off and style, follows (deck 1, deck 2, timecode).
-- **Issues:** Song Director, Song analysis: grid, sections, energy, VirtualDJ link, Show timeline with waveform, Record what you busk, Follow timecode, DJ set shows, Cue lists, Autopilot: the show follows the music, Never-dark fallback, Looks generated from your rig.
+- **Recorded is one row per song.** Recording adds a pass to it, and the row is red while it writes. No list of takes and no merge. Buttons: Mute, Undo last pass, Clear.
+- **Fill empty sections:** the autopilot picks once, with its settings from Looks, and the picks are written into the show.
+- **Live editing:** when the selected song is the one that plays and LIVE is on, a "Live edit" badge shows and every change is heard at once.
+- **Recording:** with Recording on, what happens on the Console is written into the Recorded row of the song that plays. Pad presses and fader moves are both kept.
+- **States:** a song that plays with LIVE on. A Recorded row with one pass from earlier today. One section with no looks. A song that needs review. A song with no show yet.
+- **Clickable:** search and filter, pick a song, select a section, move a section edge, rename a section, add or remove a look in a section, Fill empty sections, mute the show or the recorded row, undo the last pass, clear, play from a section, follows (deck 1, deck 2, timecode).
+- **Issues:** Song Director, Song analysis: grid, sections, energy, VirtualDJ link, Show timeline with waveform, Record what you busk, Follow timecode, DJ set shows, Cue lists, Looks generated from your rig.
 
 ### 3. Looks
 
@@ -91,16 +96,23 @@ Model: `docs/design/looks.md`. A look is anything you can play: a **step**, a **
 
 - **For:** making steps, sequences and patterns, and trying them on the real lights at once.
 - **Regions:**
-  - **Library**, left: search, a kind filter (Step, Sequence, Pattern), groups as chips (one thing can sit in many groups, there are no folders). Each row shows a symbol for its kind, its colour chips and its measure in beats.
+  - **Library**, left: search, a type filter (Step, Sequence, Pattern), and **groups as sections that fold**, each with a count. New group, rename, delete (the looks stay). Drag a look onto a group to add it; one look can be in many groups. "Widen" turns the library into a full view with the groups side by side, "Fold back" returns. Each row shows a symbol for its type, its colour chips and its measure in beats.
   - **Editor**, centre. It changes with the kind:
     - Step: which fixtures, then one card per property: Colour (chips and picker), Position (an x/y grid), Gobo (pictures), Dimmer, Spin. A property you did not set is shown as "not set" and is not part of the step.
     - Sequence: a beat grid. Each row is one item, a step or another sequence. One beat per item by default, drag an edge to change the width. A selected item shows its use settings: speed (÷2, ×1, ×2), loop or once, spread across fixtures, transition. Opening an inner sequence drills in, with a breadcrumb back.
     - Pattern: the kind (plasma, stripes, wave, sparkle), its measure, where the colours come from (a step), and which fixture group or pixel matrix it runs on.
-  - **About this look**, right: "Used in" (every sequence that uses it, so a change here changes them all), its groups, **Try on lights** (press to toggle, hold to flash), "Put on Console".
+  - **The open look** shows its groups as chips at the top, with add and remove.
+  - **Try it**, right: **Try on lights** (press to toggle, hold to flash) and "Put on Console".
+  - **Connections**, right: a small diagram. Left "Made of" (the steps, sequences or colour step it uses), in the middle the look, right "Used by" (sequences, Console pads with page and pad, songs with section, autopilot rules). Below: "Lights" (fixture groups and the properties it sets, for example "PAR 1-8: colour, brightness"). Every box is a jump: to the other look, the Console page, the song and its section, Patch, or the autopilot rule.
+- **A second part of the screen: Autopilot.** A switch at the top goes between "Looks" and "Autopilot". All autopilot settings live here:
+  - **Styles**, left: a named set of rules (Chill, Club, Peak, No strobe). New, rename, delete, "Use this style".
+  - **Rules** of the selected style, centre: each rule is **when** (song section), **pick** (one look from a group), **fit** (loops until the section ends, a full pass ends on the next section, plays once then holds).
+  - **For every style**, right: which lights it may use, how wild, and **Never dark** (what plays when nothing else does).
+  - The LIVE switch and the Console keep only on or off, and which style.
 - **No animated preview.** Looks are told apart by symbols and colour chips. Testing happens on the lights.
 - **States:** the sequence "Build-up end A" open, with "Mover run" used at ×2 and "Flicker" looping. A step that sets only colours. The pattern "Plasma" on the pixel bars taking colours from "Jungle colours". "Mover run" used in three sequences.
-- **Clickable:** pick anything in the library, filter by kind and group, edit a step property, change an item's width, change a use setting, drill into an inner sequence and back, add to or remove from a group, Try on lights.
-- **Issues:** Programmer: touch it, see it, Looks: store what you see, Palettes that stay linked, Effects across a group, Chasers and sequences, Pixel matrix effects, Audio-reactive colour scripts, Collections.
+- **Clickable:** pick anything in the library, search, filter by type, fold a group, new, rename and delete a group, drag a look onto a group, widen and fold back the library, add and remove group chips on the open look, jump from any box in Connections, edit a step property, change an item's width, change a use setting, open a nested sequence and come back, try on lights. In Autopilot: pick a style, rename it, use it, add, change and remove a rule, toggle lights, how wild, Never dark.
+- **Issues:** Programmer: touch it, see it, Looks: store what you see, Palettes that stay linked, Effects across a group, Chasers and sequences, Pixel matrix effects, Audio-reactive colour scripts, Collections, Autopilot: the show follows the music, Never-dark fallback.
 
 ### 4. Patch
 
@@ -111,9 +123,9 @@ Model: `docs/design/looks.md`. A look is anything you can play: a **step**, a **
   - **Fixtures**, beside or below the grid: by name plate, then model and mode, the address last and small. Inside a group the fixtures have an **order** that can be dragged. The order is what "left to right" means.
   - **Details**, right: the selected fixture.
 - **Guided add:** "Add lights" opens a flow in place (not a modal dead end): search with pictures, pick a mode, the app proposes a free address and shows the DIP switches, the fixture flashes, confirm "that is this one".
-- **Add a pixel panel:** columns and rows, wiring (snake or zigzag), start universe. The app spreads it over as many universes as it needs and shows them.
+- **Add a pixel panel:** columns and rows, wiring (snake or zigzag), **pixel type** (RGB or RGBW), **colour order** (RGB, BGR, BRG, GBR, GRB, RBG), start universe. The app spreads it over as many universes as needed: 170 RGB or 128 RGBW pixels per universe.
 - **States:** 15 fixtures on universe 1. A 24 x 16 pixel panel on universes 2 to 4. One address conflict, flagged in the list and in the grid.
-- **Issues:** Patch: fixtures, modes, addresses, Guided patch, Fixture library, Groups and the rig map.
+- **Issues:** Patch: fixtures, modes, addresses, Guided patch, Fixture library, Groups and fixture order.
 
 ### 5. DMX
 
@@ -148,7 +160,8 @@ The theory and the module map as live, animated pages inside the same app, with 
 
 - **For:** seeing which modules exist and how narrow each one is.
 - **Regions:** the boundary map as a diagram. Click a module to open its card: whole interface, what it hides, which screens use it. A depth bar per module. A "trace" button that animates one press through Surface, Engine, Mixer, Rig, Output.
-- **Questions for review** from both documents appear here as A/B choices that are saved with the review export.
+- **Controllers** is a module of its own since review 2 (`devices` `learn` `mappings`), marked "new". Surface is smaller (`layout` `press`). The trace runs Controllers (hardware), Controllers (module), Engine, Mixer, Rig, Output.
+- **Questions for review** appear here as A/B choices with a text field, saved with the review export: the open ones from review 2 first, then the ones from the theory and the module map.
 
 ## Fake data, shared by all screens
 

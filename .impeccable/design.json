@@ -178,7 +178,7 @@
       },
       {
         "name": "The Tempo Rule",
-        "body": "The tempo is the largest text. The song that plays is second. Nothing else exceeds 26 px.",
+        "body": "The tempo is the largest text. Nothing else exceeds 26 px.",
         "section": "typography"
       },
       {
@@ -190,6 +190,11 @@
         "name": "The Release Rule",
         "body": "What you touch on the Console stays yours until Release. A pad that is off but still held keeps a pink outline and a held tag.",
         "section": "components"
+      },
+      {
+        "name": "The No Shift Rule",
+        "body": "On the Console nothing moves when a look starts or stops: Running has a fixed height, its hold notice has a reserved line, lists scroll sideways.",
+        "section": "layout"
       }
     ],
     "dos": [

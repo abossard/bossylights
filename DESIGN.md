@@ -115,7 +115,7 @@ What the eye finds, in this order:
 
 | Order | What | How it wins |
 |---|---|---|
-| 1 | The song that plays | 32 px title, the only text that size |
+| 1 | What runs | The Running panel on top of the Console: three rows, each running look with its button |
 | 2 | The NOW line | A paper line through every lane, with its flag |
 | 3 | What is running | Solid fills in the colour of its row |
 | 4 | Everything else | Quiet: dark surfaces, 18 px headings, 13 to 14 px labels |
@@ -179,7 +179,7 @@ Warm off-black and paper, plus one flat colour for each of the three rows.
 
 **The 13 Rule.** Nothing read during a show is smaller than 13 px.
 
-**The Tempo Rule.** The tempo is the largest text. The song that plays is second. Nothing else exceeds 26 px.
+**The Tempo Rule.** The tempo is the largest text. Nothing else exceeds 26 px. The song that plays is shown compact, in the header of Running and in the Now strip; the full Decks component (32 px title) is kept in the kit for a screen that gives it the room.
 
 **The Narrow Rule.** Where a label is tight, narrow Archivo with `font-stretch: var(--tight)` (82%) before shrinking it. Numbers are tabular everywhere.
 
@@ -298,6 +298,31 @@ What you touch on the Console stays yours until Release. Three marks say so, all
 
 Five numbered rows: rule name, then the rule or its setting. Settings are two-option switches, 30 px high (an expert screen, not pressed during a show). The row names Manual, Show and Autopilot in their colours.
 
+### Running (Console)
+
+One panel, full width, on top. Its height never changes while you play.
+
+| Part | Look |
+|---|---|
+| Header, 52 px | Fold button and "Running", the two decks (compact), the hold count in pink, "Release all". The same line folded or not |
+| Row | Name in its row colour with one status line, then what runs now, then the time line with the NOW line |
+| Running look | 44 px chip outlined in the row colour: swatch, name, and its button filled in the row colour ("Release" or "Stop"). Dashed and "pad off" when the pad is off but still held |
+| Many at once | The list scrolls sideways. On the time line they become thin bars without words |
+| Hold notice | One reserved 30 px line at the bottom, pink edge while you hold something, mute text when not |
+| Folded | The header alone: chips of what runs, filled in the row colour (dashed outline for "pad off") |
+
+### Connections (Looks)
+
+Three columns tied by 2 px brackets: "Made of", the open look as a paper block, "Used by". Under it "Lights". Every box is a 44 px outlined button with a small mute word for what it is (Sequence, Console, Song, Autopilot).
+
+### Folding groups (Looks library)
+
+A group is a 44 px header on `--s1`: chevron, name, count, then rename and delete. A group a look is dragged over turns paper. An empty group says "Empty. Drag a look here."
+
+### Autopilot rule
+
+One row: when, an arrow, pick one from, an arrow, fit, remove. Three selects, 44 px high. The row a jump lands on sits on `--s2`.
+
 ### Learn
 
 "Learn" sits in the top bar. Step 1: click any button, pad, fader or value on any screen. Step 2: move a control on the hardware. A mapped control carries a 9 px paper square in its top left corner. The list of mappings is on In/Out.
@@ -326,6 +351,6 @@ Neutral paper chrome, no layer colour: paper frames, paper name chips, 44 px han
 ### Don't:
 - **Don't** use pink, cyan or marigold for anything but manual, show and autopilot.
 - **Don't** add gradients, glow, shadows or rounded corners.
-- **Don't** set any text larger than the tempo, or as large as the song that plays.
+- **Don't** set any text larger than the tempo.
 - **Don't** rely on hover: every action has a visible control.
 - **Don't** open a modal. Flows happen in place.
