@@ -1,6 +1,6 @@
-//! What the engine knows about each output: its settings, its state and its counters.
-//! The bytes and the device belong to `crates/outputs`; this file is the data and the
-//! calculations around it.
+//! What the engine knows about every output, whatever its kind: a run of universes, a
+//! rate, a state and counters. What kind it is, its device and its bytes belong to
+//! `crates/outputs`; this file is the data and the calculations around it.
 //!
 //! ```text
 //! [*] -> Connecting --accepted--> Running --failed--> Reconnecting --accepted--> Running
@@ -8,7 +8,6 @@
 //! ```
 
 use crate::{Levels, Refusal, Universes};
-use core::net::{Ipv4Addr, SocketAddrV4};
 use core::time::Duration;
 use serde::{Deserialize, Serialize};
 
@@ -41,38 +40,6 @@ impl TryFrom<u8> for OutputNumber {
             Err("outputs are 1 to 16")
         }
     }
-}
-
-/// What kind of output, and where it sends.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub enum OutputKind {
-    /// DDP over UDP, as WLED takes it. `address` is `"192.168.1.50:4048"`.
-    Ddp {
-        #[cfg_attr(test, ts(type = "string"))]
-        address: SocketAddrV4,
-        color: Color,
-    },
-    /// Takes every frame and sends it nowhere. For tests and measurements.
-    Mock,
-}
-
-impl OutputKind {
-    /// The rate when the command names none: 60 for DDP, 44 for DMX kinds.
-    pub const fn default_rate(self) -> Rate {
-        match self {
-            Self::Ddp { .. } => Rate::Sixty,
-            Self::Mock => Rate::FortyFour,
-        }
-    }
-}
-
-/// Channels per pixel.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub enum Color {
-    Rgb,
-    Rgbw,
 }
 
 /// Frames a second.
@@ -211,7 +178,6 @@ pub struct Counters {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub struct Output {
-    pub kind: OutputKind,
     pub universes: Run,
     pub rate: Rate,
     pub status: Status,
@@ -228,9 +194,8 @@ pub struct Output {
 
 impl Output {
     /// A new output, due at once.
-    pub const fn new(kind: OutputKind, universes: Run, rate: Rate, now: Duration) -> Self {
+    pub const fn new(universes: Run, rate: Rate, now: Duration) -> Self {
         Self {
-            kind,
             universes,
             rate,
             status: Status::Connecting,
@@ -268,24 +233,13 @@ impl Output {
 }
 
 /// Words per output when it is handed to readers through atomics.
-pub const OUTPUT_WORDS: usize = 6;
+pub const OUTPUT_WORDS: usize = 5;
 
 /// An output as plain numbers, so it can leave the output thread through atomics.
 /// Word 0 is 0 for no output. The schedule (`due`, `last`) stays behind.
 pub fn to_words(output: Option<&Output>) -> [u64; OUTPUT_WORDS] {
     let Some(output) = output else {
         return [0; OUTPUT_WORDS];
-    };
-    let (kind, color, address) = match output.kind {
-        OutputKind::Mock => (1, 0, 0),
-        OutputKind::Ddp { address, color } => (
-            2,
-            match color {
-                Color::Rgb => 0,
-                Color::Rgbw => 1,
-            },
-            u64::from(address.ip().to_bits()) << 16 | u64::from(address.port()),
-        ),
     };
     let rate = match output.rate {
         Rate::Thirty => 0,
@@ -298,33 +252,23 @@ pub fn to_words(output: Option<&Output>) -> [u64; OUTPUT_WORDS] {
         Status::Running => (2, 0),
         Status::Reconnecting { failures } => (3, failures),
     };
-    let meta = kind
-        | color << 4
+    let meta = 1 // there is an output
         | rate << 8
         | status << 12
         | u64::from(output.universes.first) << 16
         | u64::from(output.universes.count) << 32
         | u64::from(failures) << 48;
     let c = output.counters;
-    [meta, address, c.accepted, c.dropped, c.failed, c.off_beat]
+    [meta, c.accepted, c.dropped, c.failed, c.off_beat]
 }
 
 /// The output back from [`to_words`], with an empty schedule. `None` for no output.
 pub fn from_words(words: [u64; OUTPUT_WORDS]) -> Option<Output> {
-    let [meta, address, accepted, dropped, failed, off_beat] = words;
+    let [meta, accepted, dropped, failed, off_beat] = words;
     let field = |shift: u32, bits: u32| (meta >> shift) & ((1 << bits) - 1);
-    let kind = match field(0, 4) {
-        1 => OutputKind::Mock,
-        2 => OutputKind::Ddp {
-            address: SocketAddrV4::new(Ipv4Addr::from_bits((address >> 16) as u32), address as u16),
-            color: if field(4, 4) == 1 {
-                Color::Rgbw
-            } else {
-                Color::Rgb
-            },
-        },
-        _ => return None,
-    };
+    if field(0, 1) == 0 {
+        return None;
+    }
     let rate = match field(8, 4) {
         0 => Rate::Thirty,
         1 => Rate::FortyFour,
@@ -339,7 +283,6 @@ pub fn from_words(words: [u64; OUTPUT_WORDS]) -> Option<Output> {
         },
     };
     Some(Output {
-        kind,
         universes: Run {
             first: field(16, 16) as u16,
             count: field(32, 16) as u16,
@@ -389,11 +332,11 @@ mod tests {
         }
     }
 
-    fn mock(rate: Rate) -> Output {
+    fn fresh(rate: Rate) -> Output {
         let run = RunNumbers { first: 1, count: 1 }
             .check(Universes::ONE)
             .unwrap();
-        Output::new(OutputKind::Mock, run, rate, Duration::ZERO)
+        Output::new(run, rate, Duration::ZERO)
     }
 
     #[test]
@@ -402,11 +345,11 @@ mod tests {
         let us = Duration::from_micros;
         let at_16_667 = Output {
             last: Some(ms(100)),
-            ..mock(Rate::Sixty)
+            ..fresh(Rate::Sixty)
         };
         // (output, outcome, handed at, counters: accepted, dropped, failed, off beat)
         let cases = [
-            (mock(Rate::Sixty), Outcome::Accepted, ms(0), [1, 0, 0, 0]), // no interval yet
+            (fresh(Rate::Sixty), Outcome::Accepted, ms(0), [1, 0, 0, 0]), // no interval yet
             (at_16_667, Outcome::Accepted, us(116_667), [1, 0, 0, 0]),
             (at_16_667, Outcome::Dropped, us(118_600), [0, 1, 0, 0]), // 1.9 ms late: on beat
             (at_16_667, Outcome::Failed, us(118_700), [0, 0, 1, 1]),  // 2.03 ms late
@@ -431,10 +374,6 @@ mod tests {
 
     #[test]
     fn an_output_survives_the_words() {
-        let ddp = |address: &str, color| OutputKind::Ddp {
-            address: address.parse().unwrap(),
-            color,
-        };
         let run = RunNumbers {
             first: 3,
             count: 62,
@@ -447,26 +386,18 @@ mod tests {
             failed: 3,
             off_beat: 4,
         };
-        // (kind, rate, status)
+        // (rate, status)
         let cases = [
-            (OutputKind::Mock, Rate::Thirty, Status::NotFound),
-            (
-                ddp("127.0.0.1:4048", Color::Rgb),
-                Rate::FortyFour,
-                Status::Connecting,
-            ),
-            (
-                ddp("255.255.255.255:65535", Color::Rgbw),
-                Rate::Sixty,
-                Status::Running,
-            ),
-            (ddp("0.0.0.0:0", Color::Rgbw), Rate::Sixty, R(GIVE_UP - 1)),
+            (Rate::Thirty, Status::NotFound),
+            (Rate::FortyFour, Status::Connecting),
+            (Rate::Sixty, Status::Running),
+            (Rate::Sixty, R(GIVE_UP - 1)),
         ];
-        for (kind, rate, status) in cases {
+        for (rate, status) in cases {
             let output = Output {
                 status,
                 counters,
-                ..Output::new(kind, run, rate, Duration::ZERO)
+                ..Output::new(run, rate, Duration::ZERO)
             };
             assert_eq!(
                 from_words(to_words(Some(&output))),
@@ -537,15 +468,5 @@ mod tests {
                 slot
             );
         }
-    }
-
-    #[test]
-    fn each_kind_has_its_default_rate() {
-        let ddp = OutputKind::Ddp {
-            address: SocketAddrV4::new(Ipv4Addr::LOCALHOST, 4048),
-            color: Color::Rgb,
-        };
-        assert_eq!(ddp.default_rate(), Rate::Sixty);
-        assert_eq!(OutputKind::Mock.default_rate(), Rate::FortyFour);
     }
 }

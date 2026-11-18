@@ -16,17 +16,20 @@
 
 mod api;
 mod channel;
+mod kinds;
 mod output;
 
 pub use api::{Refusal, Reply, Request};
 pub use channel::{
     ADDRESSES, Channel, ChannelLevel, ChannelNumbers, Levels, MAX_UNIVERSES, Universes, changes,
 };
+pub use kinds::{Color, OutputKind};
 pub use output::{
-    Color, Counters, GIVE_UP, MAX_OUTPUTS, OFF_BEAT, OUTPUT_WORDS, Outcome, Output, OutputKind,
-    OutputNumber, Rate, Run, RunNumbers, Status, from_words, to_words,
+    Counters, GIVE_UP, MAX_OUTPUTS, OFF_BEAT, OUTPUT_WORDS, Outcome, Output, OutputNumber, Rate,
+    Run, RunNumbers, Status, from_words, to_words,
 };
 
+use core::convert::Infallible;
 use core::time::Duration;
 use serde::{Deserialize, Serialize};
 
@@ -96,14 +99,16 @@ pub enum BestEffort {
 
 /// What changes the state: the closed list. `C` and `R` are a [`Channel`] and a [`Run`]
 /// inside the engine, and [`ChannelNumbers`] and [`RunNumbers`] as a client sends them,
-/// before [`Command::check`].
+/// before [`Command::check`]. `K` is [`OutputKind`] from a client; inside the engine it
+/// is [`Infallible`], so no `SetOutput` gets there: its device is opened first and it
+/// arrives as `Attach`. The engine never sees a kind.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[cfg_attr(
     test,
     derive(ts_rs::TS),
-    ts(concrete(C = ChannelNumbers, R = RunNumbers))
+    ts(concrete(C = ChannelNumbers, R = RunNumbers, K = OutputKind))
 )]
-pub enum Command<C = Channel, R = Run> {
+pub enum Command<C = Channel, R = Run, K = Infallible> {
     /// The engine woke at `now`, since it started. Never from a client.
     #[serde(skip)]
     #[cfg_attr(test, ts(skip))]
@@ -127,19 +132,43 @@ pub enum Command<C = Channel, R = Run> {
     /// Without a rate, the kind's default.
     SetOutput {
         output: OutputNumber,
-        kind: OutputKind,
+        kind: K,
         universes: R,
         rate: Option<Rate>,
+    },
+    /// An opened device takes the place of `output`. Never from a client: the engine
+    /// makes it from `SetOutput`, or a test from its own device.
+    #[serde(skip)]
+    #[cfg_attr(test, ts(skip))]
+    Attach {
+        output: OutputNumber,
+        universes: Run,
+        rate: Rate,
     },
     /// Remove an output. Nothing happens if there is none.
     RemoveOutput { output: OutputNumber },
 }
 
-impl Command<ChannelNumbers, RunNumbers> {
+/// A client's command after [`Command::check`]: one for the engine, or an output whose
+/// device must be opened first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Checked {
+    Command(Command),
+    SetOutput {
+        output: OutputNumber,
+        kind: OutputKind,
+        universes: Run,
+        rate: Option<Rate>,
+    },
+}
+
+impl Command<ChannelNumbers, RunNumbers, OutputKind> {
     /// The command for this engine, or why it cannot be one. Done once, at the Engine.
-    pub fn check(self, universes: Universes) -> Result<Command, Refusal> {
-        Ok(match self {
-            Self::Tick { .. } | Self::Handed { .. } => return Err(Refusal::NotACommand),
+    pub fn check(self, universes: Universes) -> Result<Checked, Refusal> {
+        Ok(Checked::Command(match self {
+            Self::Tick { .. } | Self::Handed { .. } | Self::Attach { .. } => {
+                return Err(Refusal::NotACommand);
+            }
             Self::SetChannel { channel, value } => Command::SetChannel {
                 channel: channel.check(universes)?,
                 value,
@@ -154,14 +183,16 @@ impl Command<ChannelNumbers, RunNumbers> {
                 kind,
                 universes: run,
                 rate,
-            } => Command::SetOutput {
-                output,
-                kind,
-                universes: run.check(universes)?,
-                rate,
-            },
+            } => {
+                return Ok(Checked::SetOutput {
+                    output,
+                    kind,
+                    universes: run.check(universes)?,
+                    rate,
+                });
+            }
             Self::RemoveOutput { output } => Command::RemoveOutput { output },
-        })
+        }))
     }
 }
 
@@ -191,16 +222,15 @@ pub fn update(state: State, universes: &mut [Levels], command: Command) -> (Stat
             }
             (State { outputs, ..state }, None)
         }
-        Command::SetOutput {
+        Command::SetOutput { kind, .. } => match kind {},
+        Command::Attach {
             output,
-            kind,
             universes: run,
             rate,
         } => {
             let mut outputs = state.outputs;
             if let Some(slot) = outputs.get_mut(output.slot()) {
-                let rate = rate.unwrap_or(kind.default_rate());
-                *slot = Some(Output::new(kind, run, rate, state.now));
+                *slot = Some(Output::new(run, rate, state.now));
             }
             (State { outputs, ..state }, None)
         }
@@ -490,6 +520,11 @@ mod tests {
     fn check_turns_a_sent_command_into_one_for_this_engine() {
         let one = Universes::ONE;
         let numbers = |universe, address| ChannelNumbers { universe, address };
+        // Only the kind's data: the engine opens nothing here.
+        let ddp = OutputKind::Ddp {
+            address: "127.0.0.1:4048".parse().unwrap(),
+            color: Color::Rgb,
+        };
         // (as sent, checked)
         let cases = [
             (
@@ -497,10 +532,10 @@ mod tests {
                     channel: numbers(1, 512),
                     value: 7,
                 },
-                Ok(Command::SetChannel {
+                Ok(Checked::Command(Command::SetChannel {
                     channel: numbers(1, 512).check(one).unwrap(),
                     value: 7,
-                }),
+                })),
             ),
             (
                 Command::SetChannel {
@@ -515,10 +550,13 @@ mod tests {
                 },
                 Err(Refusal::NoSuchAddress),
             ),
-            (Command::ReleaseAll, Ok(Command::ReleaseAll)),
+            (
+                Command::ReleaseAll,
+                Ok(Checked::Command(Command::ReleaseAll)),
+            ),
             (
                 Command::Blackout { on: true },
-                Ok(Command::Blackout { on: true }),
+                Ok(Checked::Command(Command::Blackout { on: true })),
             ),
             (
                 Command::Tick {
@@ -528,12 +566,34 @@ mod tests {
             ),
             (
                 Command::SetOutput {
-                    output: OutputNumber::try_from(1).unwrap(),
-                    kind: OutputKind::Mock,
+                    output: output(1),
+                    kind: ddp,
                     universes: RunNumbers { first: 1, count: 2 },
                     rate: None,
                 },
                 Err(Refusal::NoSuchUniverse { universes: 1 }),
+            ),
+            (
+                Command::SetOutput {
+                    output: output(1),
+                    kind: ddp,
+                    universes: RunNumbers { first: 1, count: 1 },
+                    rate: None,
+                },
+                Ok(Checked::SetOutput {
+                    output: output(1),
+                    kind: ddp,
+                    universes: RunNumbers { first: 1, count: 1 }.check(one).unwrap(),
+                    rate: None,
+                }),
+            ),
+            (
+                Command::Attach {
+                    output: output(1),
+                    universes: RunNumbers { first: 1, count: 1 }.check(one).unwrap(),
+                    rate: Rate::Sixty,
+                },
+                Err(Refusal::NotACommand),
             ),
         ];
         for (sent, expected) in cases {
@@ -546,13 +606,12 @@ mod tests {
     }
 
     fn set_output(number: u8, rate: Rate) -> Command {
-        Command::SetOutput {
+        Command::Attach {
             output: output(number),
-            kind: OutputKind::Mock,
             universes: RunNumbers { first: 1, count: 1 }
                 .check(Universes::ONE)
                 .unwrap(),
-            rate: Some(rate),
+            rate,
         }
     }
 
@@ -802,7 +861,7 @@ mod tests {
              {}",
             [
                 Request::decl(&config),
-                Command::<ChannelNumbers, RunNumbers>::decl(&config),
+                Command::<ChannelNumbers, RunNumbers, OutputKind>::decl(&config),
                 ChannelNumbers::decl(&config),
                 RunNumbers::decl(&config),
                 OutputNumber::decl(&config),

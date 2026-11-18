@@ -8,7 +8,7 @@
 //! | `"Subscribe"` | `{"Picture": ...}`, then `{"Changed": ...}` for each new frame |
 //! | anything else | `{"Refused": {"reason": "NotACommand"}}` |
 
-use crate::{ChannelLevel, ChannelNumbers, Command, Levels, RunNumbers, State};
+use crate::{ChannelLevel, ChannelNumbers, Command, Levels, OutputKind, RunNumbers, State};
 use serde::{Deserialize, Serialize};
 
 /// What a client sends.
@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 pub enum Request {
     /// Change the state. Answered at once, before the frame that carries it.
     Send {
-        command: Command<ChannelNumbers, RunNumbers>,
+        command: Command<ChannelNumbers, RunNumbers, OutputKind>,
     },
     /// The whole picture, once.
     Query,

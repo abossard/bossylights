@@ -11,7 +11,7 @@ export type RunNumbers = { first: number, count: number, };
 
 export type OutputNumber = number;
 
-export type OutputKind = { "Ddp": { address: string, color: Color, } } | "Mock";
+export type OutputKind = { "Ddp": { address: string, color: Color, } };
 
 export type Color = "Rgb" | "Rgbw";
 
@@ -47,7 +47,7 @@ export type Levels = number[];
 
 export type ChannelLevel = { universe: number, address: number, value: number, };
 
-export type Output = { kind: OutputKind, universes: Run, rate: Rate, status: Status, counters: Counters, };
+export type Output = { universes: Run, rate: Rate, status: Status, counters: Counters, };
 
 export type Run = { 
 /**
