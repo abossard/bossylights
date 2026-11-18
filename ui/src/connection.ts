@@ -12,13 +12,25 @@ export const START: [Connection, Effect[]] = ["connecting", ["check"]];
 export function transition(state: Connection, event: ConnectionEvent): [Connection, Effect[]] {
   if (state === "closed") return [state, []];
   if (event === "close") return ["closed", ["shut"]];
-  // An engine of another version is not talked to, and not asked again.
-  if (state === "other version") return [state, []];
+  // An engine of another version is not talked to, but asked again: the right one may be started later.
+  if (state === "other version") {
+    switch (event) {
+      case "matched":
+        return ["connecting", ["open"]];
+      case "mismatched":
+      case "lost":
+        return [state, ["wait"]];
+      case "retry":
+        return [state, ["check"]];
+      case "opened":
+        return [state, []];
+    }
+  }
   switch (event) {
     case "matched":
       return state === "connecting" ? [state, ["open"]] : [state, []];
     case "mismatched":
-      return state === "connecting" ? ["other version", []] : [state, []];
+      return state === "connecting" ? ["other version", ["wait"]] : [state, []];
     case "opened":
       return state === "connecting" ? ["connected", []] : [state, []];
     case "lost":
@@ -32,4 +44,9 @@ export function transition(state: Connection, event: ConnectionEvent): [Connecti
 export function versionEvent(answer: string | undefined, mine: number): ConnectionEvent {
   if (answer === undefined) return "lost";
   return answer.trim() === String(mine) ? "matched" : "mismatched";
+}
+
+/** Why a command sent in this state goes nowhere, or undefined when it goes out. */
+export function notSent(state: Connection): string | undefined {
+  return state === "connected" ? undefined : `not sent: the engine is ${state}`;
 }

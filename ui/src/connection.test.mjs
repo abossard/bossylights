@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { transition, versionEvent } from "./connection.ts";
+import { notSent, transition, versionEvent } from "./connection.ts";
 
 // Every state and event pair: [from, event, to, effects]
 const table = [
   ["connecting", "matched", "connecting", ["open"]],
-  ["connecting", "mismatched", "other version", []],
+  ["connecting", "mismatched", "other version", ["wait"]],
   ["connecting", "opened", "connected", []],
   ["connecting", "lost", "disconnected", ["wait"]],
   ["connecting", "retry", "connecting", []],
@@ -22,11 +22,11 @@ const table = [
   ["disconnected", "lost", "disconnected", []],
   ["disconnected", "retry", "connecting", ["check"]],
   ["disconnected", "close", "closed", ["shut"]],
-  ["other version", "matched", "other version", []],
-  ["other version", "mismatched", "other version", []],
+  ["other version", "matched", "connecting", ["open"]],
+  ["other version", "mismatched", "other version", ["wait"]],
   ["other version", "opened", "other version", []],
-  ["other version", "lost", "other version", []],
-  ["other version", "retry", "other version", []],
+  ["other version", "lost", "other version", ["wait"]],
+  ["other version", "retry", "other version", ["check"]],
   ["other version", "close", "closed", ["shut"]],
   ["closed", "matched", "closed", []],
   ["closed", "mismatched", "closed", []],
@@ -56,4 +56,17 @@ for (const [answer, mine, event] of versions) {
   test(`version ${JSON.stringify(answer)} for ${mine} = ${event}`, () => {
     assert.equal(versionEvent(answer, mine), event);
   });
+}
+
+// A command sent in this state: why it was not sent, or undefined when it goes out
+const unsent = [
+  ["connected", undefined],
+  ["connecting", "not sent: the engine is connecting"],
+  ["disconnected", "not sent: the engine is disconnected"],
+  ["other version", "not sent: the engine is other version"],
+  ["closed", "not sent: the engine is closed"],
+];
+
+for (const [state, reason] of unsent) {
+  test(`a command in ${state}: ${reason ?? "sent"}`, () => assert.equal(notSent(state), reason));
 }

@@ -2,7 +2,7 @@
 // What happens next is decided by the state machine in connection.ts; what the
 // engine reported is kept by picture.ts.
 import { createSignal, type Accessor } from "solid-js";
-import { START, transition, versionEvent, type Connection, type ConnectionEvent, type Effect } from "./connection";
+import { START, notSent, transition, versionEvent, type Connection, type ConnectionEvent, type Effect } from "./connection";
 import { API_VERSION, type Command, type Refusal, type Reply, type Request } from "./engine-api";
 import { receive, type Picture } from "./picture";
 
@@ -11,6 +11,8 @@ export interface Engine {
   /** Why the last command was refused, until one is accepted. */
   refusal: Accessor<Refusal | undefined>;
   connection: Accessor<Connection>;
+  /** Why the last command went nowhere, until the connection is back or a command goes out. */
+  unsent: Accessor<string | undefined>;
   send: (command: Command) => void;
   close: () => void;
 }
@@ -29,6 +31,7 @@ export function connectEngine(url: string): Engine {
   const [picture, setPicture] = createSignal<Picture>();
   const [refusal, setRefusal] = createSignal<Refusal>();
   const [connection, setConnection] = createSignal<Connection>(start);
+  const [unsent, setUnsent] = createSignal<string>();
   let socket: WebSocket | undefined;
   let retry: ReturnType<typeof setTimeout> | undefined;
 
@@ -39,6 +42,7 @@ export function connectEngine(url: string): Engine {
   const send = (event: ConnectionEvent) => {
     const [next, effects] = transition(connection(), event);
     setConnection(next);
+    if (next === "connected") setUnsent(undefined);
     effects.forEach(perform);
   };
 
@@ -81,7 +85,12 @@ export function connectEngine(url: string): Engine {
     picture,
     refusal,
     connection,
-    send: (command) => request({ Send: { command } }),
+    unsent,
+    send: (command) => {
+      const why = notSent(connection());
+      setUnsent(why);
+      if (why === undefined) request({ Send: { command } });
+    },
     close: () => send("close"),
   };
 }

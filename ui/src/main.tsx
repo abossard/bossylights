@@ -77,6 +77,13 @@ function App() {
           )}
         </For>
       </ul>
+      <Show when={engine.unsent()}>
+        {(why) => (
+          <p class="label" data-testid="unsent">
+            {why()}
+          </p>
+        )}
+      </Show>
       <Show when={engine.refusal()}>
         {(refusal) => (
           <p class="label" data-testid="refusal">
