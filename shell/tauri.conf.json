@@ -1,0 +1,19 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "Bossylights",
+  "version": "0.0.0",
+  "identifier": "app.bossylights.desk",
+  "build": {
+    "beforeDevCommand": "npm run ui",
+    "devUrl": "http://127.0.0.1:5174",
+    "beforeBuildCommand": "tsc -p ui && vite build ui",
+    "frontendDist": "../ui/dist"
+  },
+  "app": {
+    "windows": [{ "title": "Bossylights", "width": 640, "height": 420 }],
+    "security": {
+      "csp": "default-src 'self'; connect-src 'self' ws://127.0.0.1:7744; style-src 'self' 'unsafe-inline'"
+    }
+  },
+  "bundle": { "active": false, "icon": ["icons/icon.png"] }
+}

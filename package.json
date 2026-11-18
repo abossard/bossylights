@@ -9,7 +9,7 @@
     "ui": "vite ui",
     "build": "tsc -p ui && vite build ui && cargo build --workspace",
     "test": "npm run test:licences && npm run test:rust && npm run test:ui && npm run test:e2e",
-    "test:licences": "node scripts/check-licences.mjs",
+    "test:licences": "node --test scripts/*.test.mjs && node scripts/check-licences.mjs",
     "test:rust": "cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace",
     "test:ui": "tsc -p ui",
     "test:e2e": "playwright install chromium && playwright test"
