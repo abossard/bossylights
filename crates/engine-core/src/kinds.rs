@@ -15,6 +15,9 @@ pub enum OutputKind {
         address: SocketAddrV4,
         color: Color,
     },
+    /// An ENTTEC DMX USB Pro, found by its USB identity: `adapter` 1 is the first such
+    /// adapter in the order of their USB serial numbers. One universe, 512 channels.
+    DmxUsbPro { adapter: u8 },
 }
 
 /// Channels per pixel.

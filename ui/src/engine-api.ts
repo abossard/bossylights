@@ -11,7 +11,7 @@ export type RunNumbers = { first: number, count: number, };
 
 export type OutputNumber = number;
 
-export type OutputKind = { "Ddp": { address: string, color: Color, } };
+export type OutputKind = { "Ddp": { address: string, color: Color, } } | { "DmxUsbPro": { adapter: number, } };
 
 export type Color = "Rgb" | "Rgbw";
 
