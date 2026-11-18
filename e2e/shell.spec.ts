@@ -101,6 +101,7 @@ test("a second shell for the same engine opens no window and stops nothing", asy
   let second = first;
   try {
     await expect.poll(first.said, WAIT).toContain("the window talks to");
+    await expect.poll(health, { ...WAIT, message: first.said() }).toBe(200); // the engine the first shell started is up
     second = startShell();
     await expect.poll(second.said, WAIT).toContain("a window for the engine on");
     await expect.poll(() => second.process.exitCode, WAIT).toBe(0);
