@@ -5,6 +5,7 @@ use engine::{
     Sender, Snapshot, Status, Universes,
 };
 use mock::Heard;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -215,5 +216,52 @@ fn after_the_last_output_is_removed_a_command_still_lands_and_the_engine_stops()
             Ok(()),
             "{outputs:?}: the engine never stopped"
         );
+    }
+}
+
+/// A device whose drop waits until the test lets it go: a port that closes slowly.
+struct SlowToFree(Arc<AtomicBool>);
+
+impl engine::Device for SlowToFree {
+    fn take(&mut self, _frame: &[Levels]) -> engine::Outcome {
+        engine::Outcome::Accepted
+    }
+}
+
+impl Drop for SlowToFree {
+    fn drop(&mut self) {
+        let started = Instant::now();
+        while !self.0.load(Ordering::Relaxed) && started.elapsed() < Duration::from_secs(10) {
+            thread::sleep(Duration::from_millis(1)); // poll
+        }
+    }
+}
+
+#[test]
+fn a_device_the_full_queue_refuses_is_freed_without_holding_up_the_sender() {
+    // (attempt) until one attach finds the queue full: a wake may empty it in between.
+    let started = Instant::now();
+    loop {
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "the queue was never full"
+        );
+        let (_engine, mut sender) = Engine::start(Universes::ONE).unwrap();
+        let run = run(1, 1).check(Universes::ONE).unwrap();
+        let let_go = Arc::new(AtomicBool::new(false));
+        let device = Box::new(SlowToFree(Arc::clone(&let_go)));
+        while sender.send(set(1, 1, 1)) != Err(Refusal::QueueFull) {}
+        let (done, answered) = mpsc::channel();
+        let attaching = thread::spawn(move || {
+            let _ = done.send(sender.attach(output(1), device, run, Rate::Sixty));
+        });
+        let answer = answered.recv_timeout(Duration::from_secs(2));
+        let_go.store(true, Ordering::Relaxed);
+        attaching.join().unwrap();
+        match answer {
+            Ok(Err(Refusal::QueueFull)) => return,
+            Ok(_) => {} // a wake emptied the queue first: try again
+            Err(_) => panic!("the sender waited for the refused device to be freed"),
+        }
     }
 }

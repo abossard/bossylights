@@ -352,20 +352,35 @@ impl Sender {
             sends_back && changes.is_some_and(|output| self.project.output(output).is_some());
         if retires && on_their_way(&self.shared, self.retired) >= RETIRED as u64 {
             self.free.unpark();
+            free_elsewhere(device);
             return Err(Refusal::QueueFull);
         }
         let at = self.start.elapsed();
-        self.commands
-            .push(Sent {
-                command,
-                at,
-                device,
-            })
-            .map_err(|_| Refusal::QueueFull)?;
+        if let Err(rtrb::PushError::Full(refused)) = self.commands.push(Sent {
+            command,
+            at,
+            device,
+        }) {
+            free_elsewhere(refused.device);
+            return Err(Refusal::QueueFull);
+        }
         if retires {
             self.retired += 1;
         }
         Ok(())
+    }
+}
+
+/// Frees a device the tick thread did not take on a thread of its own: closing a port can
+/// take long, and the sender may be shared behind a lock. Without a thread from the
+/// system, it is freed here after all.
+fn free_elsewhere(device: Option<Box<dyn Device>>) {
+    if let Some(device) = device {
+        drop(
+            thread::Builder::new()
+                .name("free a refused device".into())
+                .spawn(move || drop(device)),
+        );
     }
 }
 
