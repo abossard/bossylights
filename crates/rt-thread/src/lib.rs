@@ -1,5 +1,5 @@
 //! Starts a thread and asks the system for real-time priority for it. The only place
-//! that asks, and the only `unsafe` code outside one test.
+//! that asks, and the only `unsafe` code in the product outside tests. Three tests carry a counting allocator, which needs `unsafe` too.
 //!
 //! | System | Asks for | Refused when |
 //! |---|---|---|

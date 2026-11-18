@@ -22,7 +22,7 @@
 //! | allocation | `engine-core` has no `alloc`; buffers and snapshot boxes are made in `start`; devices are opened by the `Sender` and freed by the free thread; `tests/no_alloc.rs` counts every allocation while it ticks, serves outputs, takes commands and a reader asks for a snapshot on every frame |
 //! | blocking calls, files, network | `engine-core` has no `std`; `clippy.toml` bans files, sockets, processes, stdin here and in `rt-thread`. The only send is an output's non-blocking `take`. The only wait is `thread::sleep`, then a spin, until the next output is due |
 //! | logging | `clippy.toml` bans print macros and stdout/stderr; no logger dependency |
-//! | calls outward | `clippy.toml` bans channels and condvars; the tick thread fills the boxes readers sent, it wakes nobody |
+//! | calls outward | `clippy.toml` bans channels and condvars; the tick thread fills the boxes readers sent and wakes no reader. An output's `take` may wake the output's own port thread (`unpark`, wait-free) |
 
 #![forbid(unsafe_code)]
 #![deny(

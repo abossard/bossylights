@@ -1,6 +1,6 @@
 [package]
 name = "rt-thread"
-description = "Starts a thread and asks the system for real-time priority for it. The only unsafe code."
+description = "Starts a thread and asks the system for real-time priority for it. The only unsafe code outside tests."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

@@ -137,7 +137,7 @@ pub enum Status {
 /// What happened when a frame was handed to an output.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Outcome {
-    /// The device took all of it.
+    /// The device took all of it. For a kind with a thread of its own: that thread took it.
     Accepted,
     /// The device was busy: the frame was dropped, nothing waited.
     Dropped,
