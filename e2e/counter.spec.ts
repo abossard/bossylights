@@ -14,6 +14,11 @@ test("the counter from the engine advances", async ({ page }) => {
   expect(second - first).toBeGreaterThan(10);
 });
 
+test("the debug page shows the output thread's priority", async ({ page }) => {
+  await page.goto(`/?engine=ws://${ENGINE}/state`);
+  await expect(page.getByTestId("priority")).toHaveText(/^output thread: (real-time|best effort: .+)$/);
+});
+
 const states = [
   { engine: `ws://${ENGINE}/state`, status: "connected" },
   { engine: "ws://127.0.0.1:9/state", status: "disconnected" },

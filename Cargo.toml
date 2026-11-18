@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/engine-core", "crates/engine", "crates/engine-server", "shell"]
+members = ["crates/engine-core", "crates/rt-thread", "crates/engine", "crates/engine-server", "shell"]
 exclude = ["spikes"] # throwaway spikes build on their own, outside the product checks
 
 [workspace.package]
@@ -12,7 +12,7 @@ publish = false
 # docs/coding.md: rule 3 (state machines) and rule 6 (errors). Every package uses these.
 # The core crates add unwrap_used, expect_used, panic and indexing_slicing in their lib.rs.
 [workspace.lints.rust]
-unsafe_code = "deny" # each crate root forbids it; only the allocation guard test may expect it
+unsafe_code = "deny" # each crate root forbids it; only rt-thread and the allocation guard test may expect it
 
 [workspace.lints.clippy]
 struct_excessive_bools = "deny"

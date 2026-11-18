@@ -10,7 +10,7 @@
 //! |---|---|
 //! | locks | `clippy.toml` bans every std type that locks |
 //! | allocation | `engine-core` has no `alloc`; `tests/no_alloc.rs` counts every allocation while it ticks |
-//! | blocking calls, files, network | `engine-core` has no `std`; `clippy.toml` bans files, sockets, processes, stdin here. The only wait is `thread::sleep` until the next frame |
+//! | blocking calls, files, network | `engine-core` has no `std`; `clippy.toml` bans files, sockets, processes, stdin here and in `rt-thread`. The only wait is `thread::sleep`, then a spin, until the next frame |
 //! | logging | `clippy.toml` bans print macros and stdout/stderr; no logger dependency |
 //! | calls outward | `clippy.toml` bans channels and condvars; the tick thread only writes atomics in `Shared`, which others read |
 
@@ -22,11 +22,13 @@
     clippy::indexing_slicing
 )]
 
-pub use engine_core::State;
+pub use engine_core::{BestEffort, Priority, State};
 
 use engine_core::{
-    Command, LATENESS_BUCKETS, Lateness, lateness_bucket, next_frame, p99, update, worst,
+    Command, LATENESS_BUCKETS, Lateness, lateness_bucket, next_frame, p99, sleep_before, update,
+    worst,
 };
+use std::hint;
 use std::io;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -37,6 +39,7 @@ use std::time::{Duration, Instant};
 pub struct Engine {
     shared: Arc<Shared>,
     tick: Option<JoinHandle<()>>,
+    priority: Priority,
 }
 
 /// Written by the tick thread, read by anyone. Atomics only.
@@ -49,26 +52,29 @@ struct Shared {
 impl Engine {
     pub const RATE_HZ: u32 = 44;
 
-    /// Starts the tick thread. Fails only when the OS refuses a thread.
+    /// Starts the tick thread with the best priority the system gives. Fails only when
+    /// the OS refuses a thread.
     pub fn start() -> io::Result<Self> {
         let shared = Arc::new(Shared {
             frame: AtomicU64::new(0),
             stop: AtomicBool::new(false),
             lateness: [const { AtomicU64::new(0) }; LATENESS_BUCKETS],
         });
-        let tick = thread::Builder::new().name("tick".into()).spawn({
+        let (tick, priority) = rt_thread::spawn("tick", period(), {
             let shared = Arc::clone(&shared);
-            move || tick(&shared)
+            move |priority| tick(&shared, priority)
         })?;
         Ok(Self {
             shared,
             tick: Some(tick),
+            priority,
         })
     }
 
     pub fn query(&self) -> State {
         State {
             frame: self.shared.frame.load(Ordering::Relaxed),
+            priority: self.priority,
         }
     }
 
@@ -99,17 +105,22 @@ impl Drop for Engine {
     }
 }
 
-/// The real-time loop, an action: reads the clock, sleeps, publishes. The logic is in
+fn period() -> Duration {
+    Duration::from_secs(1) / Engine::RATE_HZ
+}
+
+/// The real-time loop, an action: reads the clock, waits, publishes. The logic is in
 /// `engine-core`. Nothing here may lock, allocate, block, log or call out.
-fn tick(shared: &Shared) {
-    let period = Duration::from_secs(1) / Engine::RATE_HZ;
+fn tick(shared: &Shared, priority: Priority) {
+    let period = period();
     let start = Instant::now();
-    let mut state = State { frame: 0 };
+    let mut state = State { frame: 0, priority };
     let mut due = period;
     while !shared.stop.load(Ordering::Relaxed) {
-        let now = start.elapsed();
-        if due > now {
-            thread::sleep(due - now);
+        // Sleep, then spin the last millisecond: a sleep can wake late, a spin cannot.
+        thread::sleep(sleep_before(due, start.elapsed()));
+        while start.elapsed() < due {
+            hint::spin_loop();
         }
         let late = start.elapsed().saturating_sub(due);
         if let Some(count) = shared.lateness.get(lateness_bucket(late)) {

@@ -2,10 +2,11 @@
 // What happens next is decided by the state machine in connection.ts.
 import { createSignal, type Accessor } from "solid-js";
 import { START, transition, type Connection, type ConnectionEvent, type Effect } from "./connection";
-import type { State } from "./engine-api";
+import type { Priority, State } from "./engine-api";
 
 export interface Engine {
   frame: Accessor<number | undefined>;
+  priority: Accessor<Priority | undefined>;
   connection: Accessor<Connection>;
   close: () => void;
 }
@@ -22,6 +23,7 @@ export function engineUrl(): string {
 export function connectEngine(url: string): Engine {
   const [start, startEffects] = START;
   const [frame, setFrame] = createSignal<number>();
+  const [priority, setPriority] = createSignal<Priority>();
   const [connection, setConnection] = createSignal<Connection>(start);
   let socket: WebSocket | undefined;
   let retry: ReturnType<typeof setTimeout> | undefined;
@@ -41,6 +43,7 @@ export function connectEngine(url: string): Engine {
         socket.onmessage = (message: MessageEvent<string>) => {
           const state = JSON.parse(message.data) as State;
           setFrame(state.frame);
+          setPriority(state.priority);
         };
         return;
       case "wait":
@@ -54,5 +57,5 @@ export function connectEngine(url: string): Engine {
   };
 
   startEffects.forEach(perform);
-  return { frame, connection, close: () => send("close") };
+  return { frame, priority, connection, close: () => send("close") };
 }

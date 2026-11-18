@@ -3,7 +3,7 @@
 //! | Route         | What                                                 |
 //! |---------------|------------------------------------------------------|
 //! | `GET /health` | `ok` while the engine runs                           |
-//! | `GET /state`  | WebSocket, one JSON `State` per new frame: `{"frame":123}` |
+//! | `GET /state`  | WebSocket, one JSON `State` per new frame: `{"frame":123,"priority":"RealTime"}` |
 
 #![forbid(unsafe_code)]
 

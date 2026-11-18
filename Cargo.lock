@@ -833,6 +833,7 @@ name = "engine"
 version = "0.0.0"
 dependencies = [
  "engine-core",
+ "rt-thread",
 ]
 
 [[package]]
@@ -2747,6 +2748,14 @@ dependencies = [
  "wasm-bindgen-futures",
  "wasm-streams",
  "web-sys",
+]
+
+[[package]]
+name = "rt-thread"
+version = "0.0.0"
+dependencies = [
+ "engine-core",
+ "libc",
 ]
 
 [[package]]

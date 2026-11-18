@@ -14,7 +14,8 @@
  */
 export const CRATES = {
   "engine-core": { kind: "core", deps: ["serde"] },
-  engine: { kind: "action", deps: ["engine-core"] },
+  "rt-thread": { kind: "action", deps: ["engine-core"] }, // the only unsafe: asks for real-time priority
+  engine: { kind: "action", deps: ["engine-core", "rt-thread"] },
   "engine-server": { kind: "action", deps: ["engine"] },
   shell: { kind: "action", deps: [] },
 };

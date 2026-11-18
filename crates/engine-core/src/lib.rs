@@ -24,6 +24,34 @@ pub struct State {
     /// Frames computed since the engine started.
     #[cfg_attr(test, ts(type = "number"))]
     pub frame: u64,
+    /// What the system gave the output thread. Asked once, when the thread starts.
+    pub priority: Priority,
+}
+
+/// The output thread's priority, as the system answered when the thread started.
+///
+/// ```text
+/// start the thread -> ask for real-time -> granted ----------> RealTime
+///                                       -> refused ----------> BestEffort { Refused }
+///                                       -> no such policy ---> BestEffort { NotSupported }
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub enum Priority {
+    /// The system's real-time class: the thread wakes on time.
+    RealTime,
+    /// The default class: the thread may wake late.
+    BestEffort { reason: BestEffort },
+}
+
+/// Why the output thread runs best effort.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub enum BestEffort {
+    /// The system said no. `code` is its answer: a Mach `kern_return_t` or an `errno`.
+    Refused { code: i32 },
+    /// This system has no real-time policy we know how to ask for.
+    NotSupported,
 }
 
 /// What changes the state. Only the tick, for now.
@@ -45,6 +73,7 @@ pub fn update(state: State, command: Command) -> (State, Option<Effect>) {
         Command::Tick => (
             State {
                 frame: state.frame.wrapping_add(1),
+                ..state
             },
             None,
         ),
@@ -64,6 +93,15 @@ pub fn next_frame(due: Duration, now: Duration, period: Duration) -> Duration {
     } else {
         next
     }
+}
+
+/// The output thread sleeps until this long before a frame is due, then spins: a
+/// sleep can wake late, a spin cannot. Measured in spike #23.
+pub const SPIN: Duration = Duration::from_millis(1);
+
+/// How long to sleep at `now` before spinning until `due`. All times since the engine started.
+pub fn sleep_before(due: Duration, now: Duration) -> Duration {
+    due.saturating_sub(now).saturating_sub(SPIN)
 }
 
 /// Tick lateness is counted in buckets this wide.
@@ -118,11 +156,26 @@ mod tests {
             (41, Command::Tick, 42, None),
             (u64::MAX, Command::Tick, 0, None), // wraps, never panics
         ];
+        let priority = Priority::BestEffort {
+            reason: BestEffort::NotSupported,
+        };
         for (before, command, after, effect) in cases {
-            let result = update(State { frame: before }, command);
+            let result = update(
+                State {
+                    frame: before,
+                    priority,
+                },
+                command,
+            );
             assert_eq!(
                 result,
-                (State { frame: after }, effect),
+                (
+                    State {
+                        frame: after,
+                        priority
+                    },
+                    effect
+                ),
                 "{before} + {command:?}"
             );
         }
@@ -148,6 +201,29 @@ mod tests {
             next_frame(Duration::MAX, Duration::MAX, period),
             Duration::MAX
         );
+    }
+
+    #[test]
+    fn sleep_before_leaves_the_last_millisecond_to_spin() {
+        let due = Duration::from_secs(5);
+        // (µs before due, µs to sleep)
+        let cases = [
+            (22_727, 21_727), // a whole frame ahead
+            (1_001, 1),
+            (1_000, 0), // spin all of it
+            (400, 0),
+            (0, 0),
+        ];
+        for (ahead, sleep) in cases {
+            let now = due - Duration::from_micros(ahead);
+            assert_eq!(
+                sleep_before(due, now),
+                Duration::from_micros(sleep),
+                "{ahead} µs ahead"
+            );
+        }
+        // past due: no sleep
+        assert_eq!(sleep_before(due, due * 2), Duration::ZERO);
     }
 
     #[test]
@@ -234,8 +310,10 @@ mod tests {
         let generated = format!(
             "// Generated from crates/engine-core. Do not edit.\n\
              // Update: UPDATE_TS=1 cargo test -p engine-core\n\n\
-             export {}\n\nexport {}\n",
+             export {}\n\nexport {}\n\nexport {}\n\nexport {}\n",
             State::decl(&config),
+            Priority::decl(&config),
+            BestEffort::decl(&config),
             Command::decl(&config),
         );
         if std::env::var_os("UPDATE_TS").is_some() {
