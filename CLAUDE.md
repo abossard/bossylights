@@ -28,6 +28,7 @@ Rust engine, web UI in a Tauri shell, Apache-2.0. Status: skeleton (engine count
 - Map of all work: the GitHub issue labelled `map`, and `docs/plan/map/index.html`.
 - Requirements: `docs/plan/requirements.md`. Research: `docs/plan/capability-map.md`.
 - A map item is not a ticket. It becomes buildable in two steps: a spec on the item, then tickets labelled `ready-for-agent` that name it as their parent.
+- Gate for the real UI: no product UI ticket starts before its controls are approved in the storyboard catalog (issue #102): every element, in every situation.
 
 ## Rules
 
