@@ -4,6 +4,7 @@
 use engine::{Engine, Universes};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -283,6 +284,74 @@ async fn the_plain_routes_answer_in_text() {
             response.ends_with(&format!("\r\n\r\n{body}")),
             "{route}: {response}"
         );
+    }
+}
+
+/// What a subscriber saw of one frame: the state, and the levels it built from the stream.
+type Seen = BTreeMap<u64, (Value, Vec<Vec<Value>>)>;
+
+/// Reads a subscriber's stream until channel 1 of universe 1 is `value`, keeping each frame.
+async fn see_until(socket: &mut Socket, levels: &mut [Vec<Value>], seen: &mut Seen, value: u16) {
+    while levels[0][0] != json!(value) {
+        let reply = next(socket).await;
+        let Some(changed) = reply.get("Changed") else {
+            continue;
+        };
+        for channel in changed["channels"].as_array().unwrap() {
+            let universe = channel["universe"].as_u64().unwrap() as usize - 1;
+            let address = channel["address"].as_u64().unwrap() as usize - 1;
+            levels[universe][address] = channel["value"].clone();
+        }
+        let frame = changed["state"]["frame"].as_u64().unwrap();
+        seen.insert(frame, (changed["state"].clone(), levels.to_vec()));
+    }
+}
+
+#[tokio::test]
+async fn every_subscriber_gets_the_same_picture_of_a_frame() {
+    // (subscribers)
+    for subscribers in [2, 3] {
+        let (address, mut commands, _served) = start().await;
+        let (_udp, add) = receiver().await;
+        send(&mut commands, &add).await;
+        assert_eq!(answer(&mut commands).await, json!("Accepted"));
+        let mut watching = vec![];
+        for _ in 0..subscribers {
+            let mut socket = open(address).await;
+            send(&mut socket, &json!("Subscribe")).await;
+            let picture = next(&mut socket).await;
+            let universes = picture["Picture"]["universes"].as_array().unwrap();
+            let levels: Vec<Vec<Value>> = universes
+                .iter()
+                .map(|u| u.as_array().unwrap().clone())
+                .collect();
+            watching.push((socket, levels, Seen::new()));
+        }
+        for value in 1..=20 {
+            send(&mut commands, &set(1, 1, value)).await;
+            assert_eq!(answer(&mut commands).await, json!("Accepted"));
+            for (socket, levels, seen) in &mut watching {
+                see_until(socket, levels, seen, value).await;
+            }
+        }
+        let (_, _, first) = &watching[0];
+        for (n, (_, _, seen)) in watching.iter().enumerate().skip(1) {
+            let both: Vec<_> = seen
+                .keys()
+                .filter(|frame| first.contains_key(frame))
+                .collect();
+            assert!(
+                both.len() >= 10,
+                "{subscribers}: subscriber {n} shares {} frames",
+                both.len()
+            );
+            for frame in both {
+                assert_eq!(
+                    seen[frame], first[frame],
+                    "{subscribers}: subscriber {n}, frame {frame}"
+                );
+            }
+        }
     }
 }
 
