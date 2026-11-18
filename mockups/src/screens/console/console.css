@@ -118,7 +118,7 @@
   grid-template-columns: 96px minmax(0, 1fr);
   grid-template-rows: auto 1fr;
   column-gap: var(--sp-2);
-  padding: 4px var(--sp-2) 4px var(--sp-3);
+  padding: 2px var(--sp-2) 2px var(--sp-3);
 }
 
 .run .tt-label.has-controls h3 {
@@ -153,6 +153,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
+  box-sizing: content-box;
   height: var(--target);
   padding-left: 8px;
   border: var(--rule) solid var(--layer);
