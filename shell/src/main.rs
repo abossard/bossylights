@@ -344,10 +344,16 @@ mod tests {
         );
         assert!(one_window(other).is_some(), "a window for another engine");
         drop(held);
-        assert!(
-            one_window(first).is_some(),
-            "the lock is free once the window is gone"
-        );
+        // The lock is free once every copy of the file is closed. A child that another test
+        // is starting right now holds one until it runs its program.
+        let started = Instant::now();
+        while one_window(first).is_none() {
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "the lock stays held after the window is gone"
+            );
+            thread::yield_now();
+        }
     }
 
     #[test]
