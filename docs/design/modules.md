@@ -89,7 +89,7 @@ The bar shows depth: interface size on the left, what it hides on the right.
 | **Clock** | `now` `follow` | tap, audio beat, MIDI clock, DJ position, timecode, smoothing | ▮▮ → ▮▮▮▮▮▮ |
 | **Rig** | `fixtures` `groups` `resolve` | addresses, modes, 16-bit, colour mixing, pan/tilt limits, curves, fixture swap | ▮▮▮ → ▮▮▮▮▮▮▮▮▮ |
 | **Fixture library** | `search` `model` | QLC+, OFL and GDTF file formats | ▮▮ → ▮▮▮▮▮ |
-| **Output** | `devices` `send` | USB timing, reconnects, Art-Net, sACN, DDP, laser DAC | ▮▮ → ▮▮▮▮▮▮▮ |
+| **Output** | `devices` `send` | USB timing, the rate of each device (44 for DMX, 60 for DDP by default), reconnects, Art-Net, sACN, DDP, laser DAC | ▮▮ → ▮▮▮▮▮▮▮▮ |
 | **Project** | `read` `edit` `undo` `redo` | file format, autosave, migration, history | ▮▮▮▮ → ▮▮▮▮▮▮ |
 | **Surface** | `layout` `press` | widgets, pages | ▮▮ → ▮▮▮▮▮ |
 | **Controllers** (new, not rated yet) | `devices` `learn` `mappings` | MIDI, OSC, controller profiles, pad colours sent back | ▮▮▮ → ▮▮▮▮▮▮ |
@@ -110,9 +110,10 @@ sequenceDiagram
   participant O as Output
   S->>D: send(start Sunset on Manual)
   D->>M: apply(command)
-  loop 44 times a second
-    M->>R: frame(time) gives a look
-    R->>O: resolve(look) gives universes
+  loop each output, at its own rate
+    O->>M: frame(time), gives a look
+    M->>R: resolve(look), gives universes
+    R->>O: universes
   end
   M-->>D: state
   D-->>S: reflect(state)

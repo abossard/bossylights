@@ -24,7 +24,7 @@ flowchart LR
     AUTO["AUTOPILOT"]
   end
 
-  FRAME(["Frame<br/>what every light does now<br/>44 times a second"])
+  FRAME(["Frame<br/>what every light does<br/>at a moment in time"])
   RIG["Rig<br/>lights to DMX"]
   OUT["Output"]
 
@@ -61,6 +61,24 @@ flowchart LR
     C --> F(["Frame"])
   end
 ```
+
+**Each output asks at its own rate.** A frame is computed for a moment in time, so nothing in it knows a rate.
+
+```mermaid
+flowchart LR
+  C["Commands"] --> U["State<br/>changes on the engine tick"]
+  U --> F["frame(time)<br/>a calculation"]
+  F -- "asked 44 times a second" --> D["DMX output"]
+  F -- "asked 60 times a second" --> W["DDP output"]
+```
+
+| Output | Default rate | Can be set |
+|---|---|---|
+| USB DMX | 44 a second | lower, for fixtures that need it |
+| Art-Net, sACN | 44 a second | yes |
+| DDP (WLED and other pixel controllers) | 60 a second | 30, 44, 60 |
+
+Decided on 2026-11-18: the rate belongs to the output, with a default per protocol. There is no global frame rate.
 
 No shared state to corrupt. Stop means "stop contributing".
 
@@ -165,7 +183,7 @@ flowchart LR
 ```mermaid
 flowchart LR
   OUTSIDE["Outside: clever, may be slow, may crash<br/>UI, song analysis, autopilot choices, files, agents"]
-  subgraph CORE["Core: 44 times a second, never waits"]
+  subgraph CORE["Core: on a steady beat, never waits"]
     direction LR
     E["Evaluate"] --> M["Merge"] --> P["Patch"] --> S["Send"]
   end

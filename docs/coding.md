@@ -127,7 +127,7 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-  O["Everything else"] -- "messages,<br/>no shared locks" --> RT["Tick thread<br/>44 times a second"] -- "frames" --> OUT["Output"]
+  O["Everything else"] -- "messages,<br/>no shared locks" --> RT["Tick thread<br/>on a steady beat"] -- "frames" --> OUT["Output"]
 ```
 
 | On the tick thread | |
