@@ -11,32 +11,33 @@ export interface Page {
   widgets: Widget[];
 }
 
+// The grid is wide and low now (the Running panel sits above it): pads left, faders and position beside them.
 const initialPages = (): Page[] => [
   {
     id: "main",
     name: "Main",
     widgets: [
-      { id: "pads", kind: "pads", title: "Pads", x: 0, y: 0, w: 12, h: 7, ref: "main" },
-      { id: "faders", kind: "faders", title: "Faders", x: 0, y: 7, w: 7, h: 5, ref: "main" },
-      { id: "xy", kind: "xy", title: "Movers position", x: 7, y: 7, w: 5, h: 5 },
+      { id: "pads", kind: "pads", title: "Pads", x: 0, y: 0, w: 6, h: 12, ref: "main" },
+      { id: "faders", kind: "faders", title: "Faders", x: 6, y: 0, w: 4, h: 12, ref: "main" },
+      { id: "xy", kind: "xy", title: "Movers position", x: 10, y: 0, w: 2, h: 12 },
     ],
   },
   {
     id: "movers",
     name: "Movers",
     widgets: [
-      { id: "pads", kind: "pads", title: "Pads", x: 0, y: 0, w: 12, h: 4, ref: "movers" },
-      { id: "xy", kind: "xy", title: "Movers position", x: 0, y: 4, w: 8, h: 8 },
-      { id: "faders", kind: "faders", title: "Faders", x: 8, y: 4, w: 4, h: 8, ref: "movers" },
+      { id: "pads", kind: "pads", title: "Pads", x: 0, y: 0, w: 6, h: 12, ref: "movers" },
+      { id: "xy", kind: "xy", title: "Movers position", x: 6, y: 0, w: 3, h: 12 },
+      { id: "faders", kind: "faders", title: "Faders", x: 9, y: 0, w: 3, h: 12, ref: "movers" },
     ],
   },
   {
     id: "pixels",
     name: "Pixels",
     widgets: [
-      { id: "pads", kind: "pads", title: "Pads", x: 0, y: 0, w: 12, h: 4, ref: "pixels" },
-      { id: "faders", kind: "faders", title: "Faders", x: 0, y: 4, w: 8, h: 8, ref: "pixels" },
-      { id: "speed", kind: "speed", title: "Speed", x: 8, y: 4, w: 4, h: 3 },
+      { id: "pads", kind: "pads", title: "Pads", x: 0, y: 0, w: 6, h: 12, ref: "pixels" },
+      { id: "faders", kind: "faders", title: "Faders", x: 6, y: 0, w: 4, h: 12, ref: "pixels" },
+      { id: "speed", kind: "speed", title: "Speed", x: 10, y: 0, w: 2, h: 5 },
     ],
   },
 ];
@@ -49,7 +50,8 @@ const inside = (r: Rect) => r.x >= 0 && r.y >= 0 && r.x + r.w <= COLS && r.y + r
 /** Pages, the current page and edit mode. Shared by the page bar and the grid. */
 export function createConsole() {
   const [pages, setPages] = createStore<Page[]>(initialPages());
-  const [pageId, setPageId] = createSignal("main");
+  // a jump from the Looks screen ("used by: Console, Main, pad 25") lands on its page
+  const [pageId, setPageId] = createSignal(store.state.jump.consolePage ?? "main");
   const [editing, setEditing] = createSignal(false);
   const [message, setMessage] = createSignal("");
   let seq = 1;

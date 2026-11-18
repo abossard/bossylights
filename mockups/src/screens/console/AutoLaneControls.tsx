@@ -1,12 +1,5 @@
 import { For } from "solid-js";
-import { store, type AutopilotStyle } from "../../fake/store";
-
-const STYLES: { value: AutopilotStyle; label: string }[] = [
-  { value: "chill", label: "Chill" },
-  { value: "club", label: "Club" },
-  { value: "peak", label: "Peak" },
-  { value: "no-strobe", label: "No strobe" },
-];
+import { store } from "../../fake/store";
 
 /** The compact autopilot header in the Console timetable: on/off and style. */
 export function AutoLaneControls() {
@@ -24,9 +17,9 @@ export function AutoLaneControls() {
       <select
         aria-label="Autopilot style"
         value={store.state.autopilot.style}
-        onChange={(e) => store.setAutopilot("style", e.currentTarget.value as AutopilotStyle)}
+        onChange={(e) => store.setAutopilot("style", e.currentTarget.value)}
       >
-        <For each={STYLES}>{(s) => <option value={s.value}>{s.label}</option>}</For>
+        <For each={store.state.autopilot.styles}>{(s) => <option value={s.id}>{s.name}</option>}</For>
       </select>
     </>
   );
