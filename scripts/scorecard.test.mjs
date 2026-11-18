@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { codeLines, escapeHatches, publicItems, scorecard, withoutTests } from "./scorecard.mjs";
+import { codeLines, escapeHatches, mutationReport, publicItems, scorecard, withoutTests } from "./scorecard.mjs";
 
 // [source, code lines]
 const lineCases = [
@@ -67,3 +67,15 @@ test("scorecard renders the numbers as tables", () => {
   assert.equal(scorecard(crates, hatches, 640), expected);
   assert.match(scorecard(crates, hatches, undefined), /Tick lateness, p99 \| not measured \|/);
 });
+
+// [outcomes, score cell]
+const mutationCases = [
+  [{ caught: 9, missed: 1, timeout: 0, unviable: 4 }, "| 90% | 9 | 1 | 0 | 4 |"],
+  [{ caught: 2, missed: 0, timeout: 1, unviable: 0 }, "| 67% | 2 | 0 | 1 | 0 |"],
+  [{ caught: 0, missed: 0, timeout: 0, unviable: 3 }, "| - | 0 | 0 | 0 | 3 |"],
+];
+for (const [outcomes, row] of mutationCases) {
+  test(`mutation report ${row}`, () => {
+    assert.ok(mutationReport(["engine-core"], outcomes).includes(`${row}\n`));
+  });
+}

@@ -1,0 +1,23 @@
+name: Mutation testing
+
+# Nightly: how many deliberate bugs in the calculation crates do the tests catch? (docs/coding.md, rule 8)
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+jobs:
+  mutants:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants
+      - name: Mutation testing (score in the run summary)
+        run: npm run mutants

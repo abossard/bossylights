@@ -1,7 +1,8 @@
 // The scorecard: numbers that show whether the code follows docs/coding.md, tracked per CI run.
 // Calculations only; scripts/print-scorecard.mjs reads the files and runs the engine.
 
-const CALCULATION_KINDS = ["core", "calc"];
+/** Crate kinds from scripts/layers.mjs that hold calculations. */
+export const CALCULATION_KINDS = ["core", "calc"];
 
 /** Lines that hold code: not blank, not a comment line. */
 export function codeLines(source) {
@@ -53,6 +54,22 @@ export function scorecard(crates, hatches, p99Micros) {
     "| Crate | Kind | Public items | Lines | Lines per public item |",
     "|---|---|---|---|---|",
     ...crates.map((c) => `| ${c.name} | ${c.kind} | ${c.publicItems} | ${c.lines} | ${perItem(c)} |`),
+    "",
+  ].join("\n");
+}
+
+/** Mutation testing as Markdown. counts: cargo-mutants' outcomes.json (caught, missed, timeout, unviable). */
+export function mutationReport(crates, { caught, missed, timeout, unviable }) {
+  const tested = caught + missed + timeout;
+  const score = tested === 0 ? "-" : `${Math.round((100 * caught) / tested)}%`;
+  return [
+    "## Mutation testing",
+    "",
+    `Crates: ${crates.join(", ")}`,
+    "",
+    "| Score | Caught | Missed | Timeout | Unviable |",
+    "|---|---|---|---|---|",
+    `| ${score} | ${caught} | ${missed} | ${timeout} | ${unviable} |`,
     "",
   ].join("\n");
 }
