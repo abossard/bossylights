@@ -1,13 +1,155 @@
 # Bossylights
 
-An open-source lighting desk that is easy first and deep on request.
+An open-source lighting desk: easy first, deep on request.
 
-- Live busking, recording what you busk, timecoded shows, and an autopilot that follows the music.
-- A control surface you design yourself, mirrored on pad controllers.
-- Reads the QLC+ fixture library.
-- Built for AI agents too: one engine API, with an MCP server on top.
+![The Console: what runs on Manual, Show and Autopilot over time, pads to play looks, faders. Design, not built yet](docs/images/design-console.png)
 
-Status: skeleton. A debug window shows the engine's frame counter, its outputs, and sets raw channels through the API. Outputs: DDP (WLED), ENTTEC DMX USB Pro.
+<sub>The Console. **Design, not built yet** (`mockups/`).</sub>
+
+| Live busking | Record what you busk | Timecoded shows | Autopilot to the music |
+|---|---|---|---|
+| **Your own surface, mirrored on pads** | **Reads the QLC+ fixture library** | **One engine API, MCP for AI agents** | **Rust engine, web UI, Apache-2.0** |
+
+## What it looks like
+
+| | |
+|---|---|
+| ![Looks: a sequence on the beat grid, what it is made of and where it is used](docs/images/design-looks.png) | ![Patch: lights placed on the universe grid, a clash shown in red](docs/images/design-patch.png) |
+| **Looks**: steps, sequences, patterns. *Design, not built yet* | **Patch**: lights, not channels. *Design, not built yet* |
+| ![DMX: every channel by light, held by hand, outputs, the who-wins panel](docs/images/design-dmx.png) | ![Storyboard catalog: the Blackout control alone and in every situation](docs/images/catalog-blackout.png) |
+| **DMX**: channels, outputs, who wins. *Design, not built yet* | **Storyboard catalog**: every control, every situation. *Runs today* (`npm run catalog`) |
+
+<img src="docs/images/runs-today-debug-ui.png" width="420" alt="Debug UI: connected, engine wake counter, eight channel faders, one DDP output Running with its counters">
+
+**Runs today**: the debug UI against the real engine. Wakes, the real-time thread, faders that set channels, an output and its counters.
+
+| Status | |
+|---|---|
+| Built | engine, API, outputs DDP (WLED) and ENTTEC DMX USB Pro, fixture library reader, debug UI |
+| Not built | the product screens above: they wait for the storyboard catalog ([#102](https://github.com/abossard/bossylights/issues/102)) |
+
+## The theory in one picture
+
+```mermaid
+flowchart LR
+  subgraph W["Five writers, one kind of command"]
+    direction TB
+    YOU["You<br/>screen, touch"]
+    PAD["Controller<br/>Launchpad, OSC"]
+    AGENT["AI agent<br/>MCP"]
+    SHOWP["Show<br/>replays commands"]
+    AUTOP["Autopilot<br/>commands from music"]
+  end
+  subgraph L["Three ranks"]
+    direction TB
+    LIVE["MANUAL"]
+    SHOW["SHOW"]
+    AUTO["AUTOPILOT"]
+  end
+  FRAME(["Frame<br/>computed fresh,<br/>never stored"])
+  YOU --> LIVE
+  PAD --> LIVE
+  AGENT --> LIVE
+  SHOWP --> SHOW
+  AUTOP --> AUTO
+  LIVE --> FRAME
+  SHOW --> FRAME
+  AUTO --> FRAME
+  FRAME --> RIG["Rig<br/>lights to DMX"] --> OUT["Outputs<br/>each at its own rate"]
+```
+
+**Every frame is computed fresh from what plays, manual over show over autopilot, and everything that happens is a command.**
+
+| # | Idea | # | Idea |
+|---|---|---|---|
+| 1 | A frame is computed, never stored | 6 | One clock |
+| 2 | Lights, not channels | 7 | Everything is a command |
+| 3 | A step is a value | 8 | Two kinds of state: project, performance |
+| 4 | Everything that moves is a source | 9 | The real-time core is small and dumb |
+| 5 | Who wins: one small set of rules | | |
+
+Each idea as a picture: [docs/design/theory.md](docs/design/theory.md).
+
+## Architecture
+
+### Two processes
+
+```mermaid
+flowchart LR
+  subgraph WIN["Window process: may crash, may hide"]
+    direction TB
+    SH["shell/<br/>Tauri window"]
+    UI["ui/<br/>SolidJS"]
+    SH -- "hosts" --> UI
+  end
+  subgraph ENG["Engine process: outlives the window"]
+    direction TB
+    ES["engine-server<br/>bossylights-engine, the API"]
+    EN["engine<br/>tick thread"]
+    CO["engine-core<br/>update, frame<br/>no std, no alloc"]
+    OU["outputs<br/>DDP, DMX USB Pro bytes"]
+    RT["rt-thread<br/>real-time priority<br/>the only unsafe"]
+    FL["fixture-library<br/>QLC+ .qxf in, a model out"]
+    ES --> EN
+    ES --> FL
+    EN --> CO
+    EN --> OU
+    EN --> RT
+  end
+  SH -- "adopts or starts" --> ES
+  UI -- "WebSocket /api" --> ES
+  OU -- "UDP, USB serial" --> LIGHTS(["Lights"])
+```
+
+- A crashed or hidden window never touches the lights. The next window adopts the running engine.
+- Allowed edges: [scripts/layers.mjs](scripts/layers.mjs), checked by `npm test`.
+
+### A press, to the next frame
+
+```mermaid
+sequenceDiagram
+  participant UI as UI
+  participant S as engine-server
+  participant T as tick thread
+  participant O as output
+  UI->>S: Send SetChannel (WebSocket)
+  S->>T: command queue (rtrb, wait-free)
+  S-->>UI: Accepted
+  Note over T: wakes when the next output is due
+  T->>T: apply commands, compute the frame
+  T->>O: take(frame), never waits
+  T->>S: the snapshot, in a box the server sent (rtrb)
+  S-->>UI: Changed, the same picture for every subscriber
+```
+
+- The tick thread never locks, blocks or allocates. Two boxes go round for the snapshot: no shared memory, no atomics.
+- Each output has its own rate: by default 60 a second for DDP, 44 for DMX.
+
+### Who wins
+
+```mermaid
+flowchart LR
+  A["Two looks want<br/>the same property<br/>of the same light"] --> B{"One under<br/>manual control?"}
+  B -- "yes" --> M(["Manual wins,<br/>until Release"])
+  B -- "no" --> C{"Show or<br/>autopilot?"}
+  C -- "show" --> S(["Show wins"])
+  C -- "same rank" --> D(["Started last wins"])
+```
+
+All rules live in one table: [docs/design/who-wins.md](docs/design/who-wins.md).
+
+## Milestones
+
+```mermaid
+flowchart LR
+  M1["M1 done<br/>Command to light"] --> M2["M2 in progress<br/>Lights, not channels"] --> M3["M3<br/>Looks and who wins"] --> M4["M4<br/>First real screens"] --> M5["M5<br/>One great night"]
+  classDef done stroke:#3fb950,stroke-width:3px
+  classDef now stroke:#d29922,stroke-width:3px,stroke-dasharray:6 3
+  class M1 done
+  class M2 now
+```
+
+A gate review sits between each two. How the work is run: [docs/agents/orchestration.md](docs/agents/orchestration.md).
 
 ## Build, run, test
 
@@ -20,152 +162,25 @@ Needs Rust, Node 24 and npm. On Linux also the [Tauri system libraries](https://
 | All tests | `npm test` |
 | Build | `npm run build` |
 | Engine only, no window | `npm run engine` (API on `127.0.0.1:7744`; `-- --universes 64` for more, 4 by default) |
+| Engine with the fixture library | `npm run engine -- --fixtures <folder>` (a QLC+ checkout) |
 | UI in a browser | `npm run engine` and `npm run ui`, then open http://127.0.0.1:5174 |
-| Storyboard catalog: the ten primitives of the kit, then every control, alone, in every situation | `npm run catalog` (opens http://127.0.0.1:5175, needs no engine) |
+| Storyboard catalog | `npm run catalog` (opens http://127.0.0.1:5175, needs no engine) |
+| Design mockups | `npm install` and `npm run dev` in `mockups/` (on http://localhost:5199) |
+| Scorecard, mutation score | `npm run scorecard`, `npm run mutants` |
 
-```mermaid
-flowchart LR
-  SH["shell/<br/>Tauri window"] -- "starts" --> EB["crates/engine-server<br/>bossylights-engine"]
-  EB -- "runs" --> EN["crates/engine<br/>tick thread, wakes when<br/>the next output is due"]
-  EN -- "calls" --> CO["crates/engine-core<br/>update, schedule,<br/>no std, no alloc"]
-  EN -- "hands frames to" --> OU["crates/outputs<br/>every kind:<br/>DDP, DMX USB Pro"]
-  EN -- "starts it with" --> RT["crates/rt-thread<br/>real-time priority,<br/>the only unsafe"]
-  SH -- "hosts" --> UI["ui/<br/>SolidJS"]
-  UI -- "WebSocket /api" --> EB
-```
+## More
 
-```mermaid
-flowchart LR
-  C["client<br/>Send"] --> SE["Sender<br/>SetOutput: outputs::open,<br/>then attach"] -- "Attach + device" --> Q["queue (rtrb)<br/>never locks"] --> U["tick thread<br/>update, frame"] -- "take, never waits" --> O["outputs"]
-  U -- "old device" --> R["return queue (rtrb)"] -- "freed on the next send" --> SE
-  U -- "seqlock,<br/>atomics only" --> S["Subscribe, Query"]
-```
-
-The engine knows "an output": a run of universes, a rate, a state, counters, and a `Device` that takes a frame without waiting. Kinds, devices and bytes live only in `crates/outputs`; `engine-core` only lists the kinds a client may ask for, as data (`kinds.rs`).
-
-How an output gets on and off the tick thread:
-
-| Step | Where | What |
-|---|---|---|
-| 1 | `Sender::send` | checks `SetOutput`; `outputs::open(kind)` makes a `Box<dyn Device>` (for DDP: a socket bound, connected, non-blocking) |
-| 2 | `Sender::attach` | the one door for every device, also a test's own: sends `Attach` with the device |
-| 3 | tick thread | puts it in the output's slot; the old device goes to the return queue |
-| 4 | tick thread | when the output is due: `take(frame)` sends or drops, never waits |
-| 5 | free thread | `RemoveOutput` or a replaced output: the old device is freed within a beat of its own (its port closed), and `SetOutput` waits for that before it opens. `SetOutput` for the kind the output already has keeps its device: only the run and the rate change |
-
-Engine API: `GET /health` (`ok` while the engine runs) and the WebSocket `GET /api`. Types: `ui/src/engine-api.ts`, generated from `crates/engine-core/src/api.rs`.
-
-| Who may open `/api` | Why |
+| Read | For |
 |---|---|
-| a client that is no web page (sends no `Origin`) | the shell, tests, scripts |
-| the app window (`tauri://localhost`, `http://tauri.localhost`) | the desk itself |
-| the UI in a browser (`http://127.0.0.1:5174`, and `:5299` under the end-to-end tests) | development |
-| any other web page | refused with 403: a page must not stop or steer the lights. `/health` and `/version` stay open, they change nothing |
+| [docs/engine.md](docs/engine.md) | the engine in detail: API, commands, output states, DMX port thread, hand checks, what `npm test` proves |
+| [docs/coding.md](docs/coding.md) | how we write code |
+| [The map issue](https://github.com/abossard/bossylights/issues?q=is%3Aissue+label%3Amap), [interactive map](docs/plan/map/index.html) | every area, feature, requirement and task |
+| [docs/plan/requirements.md](docs/plan/requirements.md) | requirements |
+| [docs/plan/capability-map.md](docs/plan/capability-map.md) | what QLC+, BlinderKitten, Chataigne, Mizer and xLights can do |
 
-### Fixture library
-
-| | |
+| Decided | |
 |---|---|
-| Start | `npm run engine -- --fixtures <folder>`: every `.qxf` under the folder, read on a thread of its own while the engine runs |
-| Where definitions come from | [QLC+](https://github.com/mcallegari/qlcplus), `resources/fixtures/`, Apache-2.0. Not shipped with the app yet: point `--fixtures` at a QLC+ checkout |
-| State | `library` in `Picture` and `Changed`: `NoFolder`, `Reading`, `Read { read, failed }`, `CannotOpen` |
-| Requests | `Search { text }`: best matches, each mode with its channel count. `Fixture { maker, model }`: each mode's channels by name and function. `Failures`: each file that could not be read, its line and why. A broken file never stops the engine |
-
-The list is `ORIGINS` in `crates/engine-server/src/lib.rs`. No pairing or token yet: that comes with a remote on a tablet or phone.
-
-| Client sends | Engine answers |
-|---|---|
-| `{"Send": {"command": {"SetChannel": {"channel": {"universe": 1, "address": 1}, "value": 255}}}}` | `"Accepted"`, or `{"Refused": {"reason": "NoSuchAddress"}}` and nothing changes |
-| `"Query"` | `{"Picture": {"state": ..., "universes": [[...512 levels]]}}` |
-| `"Subscribe"` | the `Picture`, then `{"Changed": {"state": ..., "channels": [...]}}` with every frame |
-
-| Command | Does |
-|---|---|
-| `SetChannel` (universe, address, value) | holds that channel at the value |
-| `ReleaseChannel` (universe, address) | lets it go back to zero |
-| `ReleaseAll` | lets every held channel go |
-| `Blackout` (on) | every channel goes out at zero while on; the held values stay |
-| `SetOutput` (output 1 to 16, kind, universes, rate) | adds or replaces an output. Kind `{"Ddp": {"address": "ip:port", "color": "Rgb" or "Rgbw"}}` or `{"DmxUsbPro": {"adapter": 1}}` (the first ENTTEC DMX USB Pro by USB identity, in the order of their USB serial numbers, when the output is set; from then on the output finds that same adapter by its serial, so a lost adapter never comes back as another). Universes `{"first": 1, "count": 3}`, sent as one stream of channels. Rate `"30"`, `"44"`, `"60"` or `null`: 60 for DDP, 44 for the DMX USB Pro |
-| `RemoveOutput` (output) | removes it |
-
-```json
-{"Send": {"command": {"SetOutput": {"output": 1, "kind": {"Ddp": {"address": "192.168.1.50:4048", "color": "Rgbw"}}, "universes": {"first": 1, "count": 3}, "rate": null}}}}
-```
-
-Each output in the state:
-
-```mermaid
-stateDiagram-v2
-  [*] --> Connecting: SetOutput
-  Connecting --> Running: accepted
-  Running --> Reconnecting: failed
-  Connecting --> Reconnecting: failed
-  Reconnecting --> Running: accepted
-  Reconnecting --> NotFound: 100 failures in a row
-  NotFound --> Connecting: accepted
-```
-
-Counters: `accepted`, `dropped` (the socket or the link was busy: the frame is dropped, never waited for), `failed`, `off_beat` (intervals more than 2 ms from the rate). With no output the engine still wakes 44 times a second and publishes its state.
-
-The output thread never calls the serial driver: a vanishing device holds the driver up for many milliseconds. Each DMX USB Pro has a port thread that does every call:
-
-```mermaid
-sequenceDiagram
-  participant O as output thread
-  participant P as port thread (one per adapter)
-  O->>P: the message (one-slot wait-free queue), wake
-  P->>P: write it, then wait until the link is free
-  Note over P: unplugged: write fails
-  P->>P: close the port, set "lost"
-  O->>O: next frames: Failed, at once
-  loop every 500 ms while lost
-    P->>P: list USB serial ports, match the identity, open at 500 000 baud
-  end
-  P->>P: clear "lost"
-  O->>O: next frame: Accepted, the state goes back to Running
-```
-
-| Who looks | How often | Cost |
-|---|---|---|
-| the port thread of each DMX USB Pro output | writes each message; while the port is lost, lists the USB serial ports every 500 ms | asleep between messages. One listing is an IOKit or sysfs query of a few ms, never on the output thread |
-
-Checks that need hands or hardware. Each prints what to do and when, with a bell:
-
-| What | Command |
-|---|---|
-| WLED pattern (4 dots on 320 RGBW pixels, 30 s) | `cargo run -p engine-server --example wled_pattern -- 192.168.1.50` (port 4048 by default, or `ip:port`; optional seconds) |
-| DMX USB Pro, 10 minutes: no interval off, nothing dropped | `cargo run --release -p engine-server --example dmx_usb_pro -- <port> ten-minutes` |
-| DMX USB Pro, unplug and plug back in | `cargo run --release -p engine-server --example dmx_usb_pro -- <port> unplug` |
-| DMX USB Pro, sleep and wake (press Enter once awake) | `cargo run --release -p engine-server --example dmx_usb_pro -- <port> sleep` |
-
-`<port>` is the adapter's port (`/dev/cu.usbserial-...` on macOS). It only says which adapter; the output finds it by its USB identity.
-
-The DMX USB Pro checks print a timed line for every state change (with the system error that lost the port), every interval off by more than 2 ms, and every `take` slower than 2 ms.
-
-`npm test` runs:
-
-| Check | Proves |
-|---|---|
-| licence check | every crate and npm package is compatible with Apache-2.0 |
-| layers check | crates and ui files depend only along the edges in `scripts/layers.mjs`; `engine-core` has no `std` and no `alloc` |
-| names check | `engine-core` and `engine` name no protocol or device (DDP, UDP, DMX USB Pro, serial) outside the list of kinds (`scripts/names.mjs`) |
-| `cargo clippy` | the lints for state machines and errors (root `Cargo.toml`, core crates); nothing on the tick thread can lock, block, do I/O or log (`crates/engine/clippy.toml`, linked from `crates/rt-thread`); every `unsafe` block says why it is sound |
-| `cargo test` | `update`, `frame`, which output is due next, each output's state machine, DDP packets (every header byte, split at 1440 bytes), DMX USB Pro messages and the thread's priority as tables, no allocation while serving two test devices and taking commands (`crates/engine/tests/no_alloc.rs`) and in each kind's `take` (`crates/outputs/tests/no_alloc.rs`); a DMX USB Pro against a fake serial port (a pseudo terminal): every byte, and unplugged, it fails until its port thread opens a new port; a port stuck in the driver never holds up `take`, and one that takes no byte for half a second is lost and looked for again, `ui/src/engine-api.ts` matches the Rust types; over the WebSocket: an output added, then "set channel" changes the bytes on its DDP socket in the next frame, wrong requests are refused (`crates/engine-server/tests/api.rs`) |
-| `tsc`, oxlint, `node --test` | the UI type-checks; exhaustive switches, no `any`, only `engine.ts` talks to the engine; its connection state machine, every state and event; how replies change its picture |
-| Playwright | engine + UI in a browser: the counter advances, the thread's priority shows, a fader sets a channel, an output and its counters show |
-
-`npm run scorecard` prints numbers to watch, measured on the release build: lateness per output with two outputs at 60 and 44 a second, the same at the limits the API allows (16 outputs of 64 universes), intervals off by more than 2 ms, and send to frame, counted per output. A measurement that fails makes it exit non-zero. CI writes the line counts, public items and escape hatches into each run's summary. The timing numbers read "not measured on CI": run `npm run scorecard` on a real machine. A nightly workflow runs `npm run mutants`.
-
-## Plan
-
-- [The map issue](https://github.com/abossard/bossylights/issues?q=is%3Aissue+label%3Amap): every area, feature, requirement and task, with blockers.
-- [Interactive map](docs/plan/map/index.html): open it in a browser.
-- [Requirements](docs/plan/requirements.md)
-- [Capability map](docs/plan/capability-map.md): what QLC+, BlinderKitten, Chataigne, Mizer and xLights can do.
-
-## Decisions so far
-
-- A new engine in Rust, a web UI in a Tauri shell.
-- Looks, layers and pads on top of a programmer engine.
-- Apache-2.0.
-- Version 1 is one great night on one rig.
+| Engine | new, in Rust; web UI in a Tauri shell |
+| Model | looks and pads on top of a programmer engine |
+| Licence | Apache-2.0 |
+| Version 1 | one great night on one rig |
