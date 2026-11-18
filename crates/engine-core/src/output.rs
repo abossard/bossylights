@@ -7,9 +7,9 @@
 //!                               Connecting --failed----------------------->  Reconnecting --gave up--> NotFound
 //! ```
 //!
-//! "Accepted" is the device's word: a DMX USB Pro accepts only once its adapter is found.
-//! DDP gets no answer from the device, so for it accepted, and Running, mean the frames
-//! were sent.
+//! "Accepted" is the device's word: a device that must be found accepts only once it is.
+//! A kind that gets no answer from its device accepts what it sent: for it, Running means
+//! the frames were sent.
 
 use crate::{Levels, Refusal, Universes};
 use core::time::Duration;
