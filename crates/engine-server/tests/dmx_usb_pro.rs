@@ -3,6 +3,10 @@
 //! while another output never fails. An adapter plugged in after its output was set is
 //! not found until then, and runs by itself once it is there.
 
+#[path = "../../outputs/tests/common/mod.rs"]
+mod common;
+
+use common::Fake;
 use engine::{
     Adapter, ChannelNumbers, Command, Device, Engine, Levels, Open, Outcome, OutputKind,
     OutputNumber, Rate, Refusal, RunNumbers, Sender, Status, Universes,
@@ -25,11 +29,11 @@ impl Device for Nowhere {
 
 /// Reads every message on the test's ends of the fake ports; drops the current end when
 /// told to unplug.
-fn reader(mut ends: rtrb::Consumer<TTYPort>, unplug: Arc<AtomicBool>, stop: Arc<AtomicBool>) {
+fn reader(mut fake: Fake, unplug: Arc<AtomicBool>, stop: Arc<AtomicBool>) {
     let mut end: Option<TTYPort> = None;
     let mut message = [0; MESSAGE];
     while !stop.load(Ordering::Relaxed) {
-        if let Ok(new) = ends.pop() {
+        if let Some(new) = fake.new_end() {
             end = Some(new);
         }
         if unplug.swap(false, Ordering::Relaxed) {
@@ -62,22 +66,14 @@ fn status_until(engine: &mut Engine, done: impl Fn(Status) -> bool) -> Status {
 
 #[test]
 fn unplugged_it_reconnects_and_runs_again_by_itself() {
-    let (mut give, ends) = rtrb::RingBuffer::new(8);
-    let find: Find = Box::new(move || {
-        let (mut ours, port) = TTYPort::pair()?;
-        never_wait(&port)?;
-        ours.set_timeout(Duration::from_millis(20))?;
-        give.push(ours)
-            .map_err(|_| std::io::Error::other("too many ports"))?;
-        Ok(port)
-    });
+    let (find, fake) = Fake::new(true);
     let (unplug, stop) = (
         Arc::new(AtomicBool::new(false)),
         Arc::new(AtomicBool::new(false)),
     );
     let reading = {
         let (unplug, stop) = (Arc::clone(&unplug), Arc::clone(&stop));
-        thread::spawn(move || reader(ends, unplug, stop))
+        thread::spawn(move || reader(fake, unplug, stop))
     };
 
     let (mut engine, mut sender) = Engine::start(Universes::ONE).unwrap();
@@ -131,22 +127,8 @@ fn statuses_until(engine: &mut Engine, done: impl Fn(&engine::Output) -> bool) -
 
 #[test]
 fn an_adapter_plugged_in_after_its_output_was_set_is_not_found_then_runs() {
-    let plugged = Arc::new(AtomicBool::new(false));
-    let (mut give, ends) = rtrb::RingBuffer::new(8);
-    let find: Find = {
-        let plugged = Arc::clone(&plugged);
-        Box::new(move || {
-            if !plugged.load(Ordering::Relaxed) {
-                return Err(std::io::Error::from(std::io::ErrorKind::NotFound));
-            }
-            let (mut ours, port) = TTYPort::pair()?;
-            never_wait(&port)?;
-            ours.set_timeout(Duration::from_millis(20))?;
-            give.push(ours)
-                .map_err(|_| std::io::Error::other("too many ports"))?;
-            Ok(port)
-        })
-    };
+    let (find, fake) = Fake::new(false);
+    let plugged = fake.plugged();
     let mut find = Some(find);
     let open: Open = Box::new(move |kind| match (kind, find.take()) {
         (
@@ -160,7 +142,7 @@ fn an_adapter_plugged_in_after_its_output_was_set_is_not_found_then_runs() {
     let stop = Arc::new(AtomicBool::new(false));
     let reading = {
         let stop = Arc::clone(&stop);
-        thread::spawn(move || reader(ends, Arc::new(AtomicBool::new(false)), stop))
+        thread::spawn(move || reader(fake, Arc::new(AtomicBool::new(false)), stop))
     };
     let (mut engine, mut sender) = Engine::start_with(Universes::ONE, open).unwrap();
     assert_eq!(
@@ -198,9 +180,9 @@ fn an_adapter_plugged_in_after_its_output_was_set_is_not_found_then_runs() {
 /// terminal opened by its name, exclusive. Returns the engine's `open`, the test's end
 /// and the port's name.
 fn exclusive_adapter() -> (Open, TTYPort, String) {
-    let (mut ours, theirs) = TTYPort::pair().unwrap();
+    let (ours, theirs) = TTYPort::pair().unwrap();
     let name = theirs.name().unwrap();
-    ours.set_timeout(Duration::from_millis(50)).unwrap();
+    let ours = common::end(ours).unwrap();
     let path = name.clone();
     let open: Open = Box::new(move |kind| match kind {
         OutputKind::DmxUsbPro {

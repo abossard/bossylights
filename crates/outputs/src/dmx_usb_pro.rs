@@ -185,10 +185,9 @@ struct PortThread {
     port: Option<TTYPort>,
     link: Link,
     messages: rtrb::Consumer<[u8; MESSAGE]>,
-    /// The message whose write lost the port. Written once the adapter is found again,
-    /// unless `take` queued a newer one by then: a loss throws away no frame `take`
-    /// accepted except one a newer frame replaces, and never sends an older frame after
-    /// a newer one.
+    /// The message whose write lost the port. Written first once the adapter is found
+    /// again, then the one `take` queued meanwhile, if any: a loss throws away no frame
+    /// `take` accepted, and sends them in the order they were taken.
     unsent: Option<[u8; MESSAGE]>,
     shared: Arc<Shared>,
 }
@@ -217,12 +216,11 @@ impl PortThread {
                 }
                 continue;
             };
-            // The newest first: a queued message replaces the one that failed.
-            let Some(message) = self.messages.pop().ok().or_else(|| self.unsent.take()) else {
+            // The one that failed was taken before the one queued.
+            let Some(message) = self.unsent.take().or_else(|| self.messages.pop().ok()) else {
                 thread::park_timeout(WATCH_EVERY);
                 continue;
             };
-            self.unsent = None;
             let started = Instant::now();
             self.link = write_all(port, &message, self.link);
             match self.link {
