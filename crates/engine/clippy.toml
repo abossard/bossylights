@@ -1,5 +1,5 @@
-# The tick thread never blocks, locks or allocates (see CLAUDE.md).
-# This crate holds the real-time core, so anything that can take a lock is banned here.
+# The tick thread does five things less (docs/coding.md, rule 7).
+# This crate holds the real-time core, so anything that can lock, block, do I/O or log is banned here.
 disallowed-types = [
   { path = "std::sync::Mutex", reason = "the tick thread never locks" },
   { path = "std::sync::RwLock", reason = "the tick thread never locks" },
@@ -11,6 +11,23 @@ disallowed-types = [
   { path = "std::sync::mpsc::Sender", reason = "channels lock and allocate" },
   { path = "std::sync::mpsc::SyncSender", reason = "channels lock and allocate" },
   { path = "std::sync::mpsc::Receiver", reason = "channels lock and allocate" },
+  { path = "std::fs::File", reason = "the tick thread does no file I/O" },
+  { path = "std::fs::OpenOptions", reason = "the tick thread does no file I/O" },
+  { path = "std::net::TcpStream", reason = "the tick thread does no network I/O" },
+  { path = "std::net::TcpListener", reason = "the tick thread does no network I/O" },
+  { path = "std::net::UdpSocket", reason = "the tick thread does no network I/O" },
+  { path = "std::process::Command", reason = "the tick thread starts nothing" },
+  { path = "std::io::Stdin", reason = "blocks" },
+  { path = "std::io::Stdout", reason = "logging: stdout takes a lock" },
+  { path = "std::io::Stderr", reason = "logging: stderr takes a lock" },
+]
+disallowed-methods = [
+  { path = "std::fs::read", reason = "the tick thread does no file I/O" },
+  { path = "std::fs::read_to_string", reason = "the tick thread does no file I/O" },
+  { path = "std::fs::write", reason = "the tick thread does no file I/O" },
+  { path = "std::io::stdin", reason = "blocks" },
+  { path = "std::io::stdout", reason = "logging: stdout takes a lock" },
+  { path = "std::io::stderr", reason = "logging: stderr takes a lock" },
 ]
 disallowed-macros = [
   { path = "std::println", reason = "stdout takes a lock" },

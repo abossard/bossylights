@@ -1,10 +1,20 @@
 //! The Bossylights engine. Everything outside talks to it; it never calls out.
 //!
 //! For now it only runs the real-time core: a tick thread that counts frames
-//! 44 times a second. The tick thread never blocks, locks or allocates:
-//! - no locks: `clippy.toml` in this crate bans every std type that can lock,
-//!   and `cargo clippy -- -D warnings` runs in the test command.
-//! - no allocations: `tests/no_alloc.rs` counts every allocation while it ticks.
+//! 44 times a second. State changes only in [`update`], a calculation; the tick
+//! thread reads the clock, calls it, performs the effects and publishes the state.
+//!
+//! The tick thread does five things less (`docs/coding.md`, rule 7). Each has a check:
+//!
+//! | No | Check |
+//! |---|---|
+//! | locks | `clippy.toml` bans every std type that locks |
+//! | allocation | `tests/no_alloc.rs` counts every allocation while it ticks |
+//! | blocking calls, files, network | `clippy.toml` bans files, sockets, processes, stdin. The only wait is `thread::sleep` until the next frame |
+//! | logging | `clippy.toml` bans print macros and stdout/stderr; the crate has no dependencies, so no logger |
+//! | calls outward | `clippy.toml` bans channels and condvars; the tick thread only writes atomics in `Shared`, which others read |
+//!
+//! `cargo clippy -- -D warnings` runs in `npm test`.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -16,6 +26,28 @@ use std::time::{Duration, Instant};
 pub struct State {
     /// Frames computed since the engine started.
     pub frame: u64,
+}
+
+/// What changes the state. Only the tick, for now.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Command {
+    Tick,
+}
+
+/// What must happen outside after an update, as data. None exist yet.
+#[derive(Debug)]
+pub(crate) enum Effect {}
+
+/// The only place state changes: state and command in, new state and effects out.
+pub(crate) fn update(state: State, command: Command) -> (State, Vec<Effect>) {
+    match command {
+        Command::Tick => (
+            State {
+                frame: state.frame.wrapping_add(1),
+            },
+            Vec::new(),
+        ),
+    }
 }
 
 /// The running engine. Dropping it stops the tick thread.
@@ -64,16 +96,24 @@ impl Drop for Engine {
     }
 }
 
-/// The real-time loop. Only atomics, the clock and sleep: nothing here may lock or allocate.
+/// The real-time loop, an action: reads the clock, sleeps, publishes. The logic is in
+/// [`update`] and [`next_frame`]. Nothing here may lock, allocate, block, log or call out.
 fn tick(shared: &Shared) {
     let period = Duration::from_secs(1) / Engine::RATE_HZ;
+    let mut state = State { frame: 0 };
     let mut next = Instant::now() + period;
     while !shared.stop.load(Ordering::Relaxed) {
         let now = Instant::now();
         if next > now {
             thread::sleep(next - now);
         }
-        shared.frame.fetch_add(1, Ordering::Relaxed);
+        let effects;
+        (state, effects) = update(state, Command::Tick);
+        #[expect(clippy::never_loop, reason = "no effect exists yet")]
+        for effect in effects {
+            match effect {}
+        }
+        shared.frame.store(state.frame, Ordering::Relaxed);
         next = next_frame(next, Instant::now(), period);
     }
 }
@@ -95,6 +135,21 @@ fn next_frame(due: Instant, now: Instant, period: Duration) -> Instant {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn update_turns_a_command_into_a_new_state() {
+        // (before, command, after); no command has effects yet
+        let cases = [
+            (0, Command::Tick, 1),
+            (41, Command::Tick, 42),
+            (u64::MAX, Command::Tick, 0), // wraps, never panics
+        ];
+        for (before, command, after) in cases {
+            let (state, effects) = update(State { frame: before }, command);
+            assert_eq!(state, State { frame: after }, "{before} + {command:?}");
+            assert!(effects.is_empty());
+        }
+    }
 
     #[test]
     fn next_frame_catches_up_when_late_and_resyncs_after_a_stall() {
