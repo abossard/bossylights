@@ -66,7 +66,7 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-  C["Commands"] --> U["State<br/>changes on the engine tick"]
+  C["Commands"] --> U["State<br/>changes when a command is applied,<br/>right before a frame"]
   U --> F["frame(time)<br/>a calculation"]
   F -- "asked 44 times a second" --> D["DMX output"]
   F -- "asked 60 times a second" --> W["DDP output"]

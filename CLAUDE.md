@@ -35,7 +35,10 @@ Rust engine, web UI in a Tauri shell, Apache-2.0. Status: skeleton (engine count
 - How we write code: `docs/coding.md`. Read it before writing or reviewing code: data, calculations and actions apart; state flows one way (view, command, update, state); state machines written down; deep modules; errors as states.
 - Allowed edges between crates and ui layers: `scripts/layers.mjs`. A new crate or ui file goes there first.
 - One engine, one API, no UI inside the engine.
-- The output thread never blocks, locks or allocates.
+- The output thread never blocks, locks or allocates. It runs with the real-time policy of the system.
+- The engine is its own process and outlives the window. A UI crash or a hidden window never touches the lights.
+- A press is in the very next frame. Each output has its own rate (`docs/design/theory.md`, idea 1).
+- First engine slice: `docs/design/engine-slice-1.md`.
 - Every feature has an end-to-end test that checks DMX output.
 - Apache-2.0 only: no GPL or AGPL code or dependencies. Ideas from BlinderKitten, Chataigne and Mizer are fine, their code is not.
 - Plain words in the default view: looks, pads.
