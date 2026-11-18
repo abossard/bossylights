@@ -168,3 +168,62 @@ fn a_port_that_takes_no_bytes_is_lost_then_found_again() {
     taking.join().unwrap();
     drop(drain); // ends by itself once the port is closed and nothing more comes
 }
+
+#[test]
+fn a_loss_throws_away_no_accepted_frame_the_last_goes_out_first_on_the_new_port() {
+    let (find, mut ends) = fake();
+    let mut device = DmxUsbPro::open(find).unwrap();
+    take_when_free(&mut device, &[Levels([1; 512])]);
+
+    drop(ends.pop().unwrap()); // unplugged
+    let (mut level, mut last_accepted, mut failed) = (1_u8, 1, false);
+    let started = Instant::now();
+    loop {
+        assert!(started.elapsed() < Duration::from_secs(10), "never back");
+        thread::sleep(Duration::from_millis(25)); // poll
+        level = level.wrapping_add(1).max(2);
+        match device.take(&[Levels([level; 512])]) {
+            Outcome::Accepted if failed => break,
+            Outcome::Accepted => last_accepted = level,
+            Outcome::Failed => failed = true,
+            Outcome::Dropped => {}
+        }
+    }
+    let mut end = ends.pop().expect("the finder opened a new port");
+    // (message on the new port, level on channel 1)
+    let cases = [(1, last_accepted), (2, level)];
+    for (n, expected) in cases {
+        assert_eq!(read_message(&mut end)[5], expected, "message {n}");
+    }
+}
+
+#[test]
+fn a_stop_in_the_middle_of_a_message_finishes_it() {
+    let (find, mut ends) = fake();
+    let mut device = DmxUsbPro::open(find).unwrap();
+    let mut end = ends.pop().unwrap();
+    // Nobody reads the other end: the driver queue fills, and the port thread waits in
+    // the middle of a message. Then `take` drops every frame.
+    let (mut dropped, started) = (0, Instant::now());
+    while dropped < 20 {
+        assert!(started.elapsed() < Duration::from_secs(10), "never full");
+        dropped = match device.take(&[Levels([7; 512])]) {
+            Outcome::Dropped => dropped + 1,
+            Outcome::Accepted | Outcome::Failed => 0,
+        };
+        thread::sleep(Duration::from_millis(5)); // poll
+    }
+    let stopping = thread::spawn(move || drop(device));
+    // Once the port closes, what it had queued is gone: a stop that did not wait leaves
+    // nothing to read.
+    let mut bytes = 0;
+    let mut chunk = [0; 4096];
+    while let Ok(read @ 1..) = end.read(&mut chunk) {
+        bytes += read;
+    }
+    stopping.join().unwrap();
+    assert!(
+        bytes > 0 && bytes % MESSAGE == 0,
+        "{bytes} bytes: not whole messages"
+    );
+}

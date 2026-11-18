@@ -119,6 +119,7 @@ impl DmxUsbPro {
             port,
             link,
             messages,
+            unsent: None,
             shared: Arc::clone(&shared),
         };
         let handle = thread::Builder::new()
@@ -165,7 +166,9 @@ impl Drop for DmxUsbPro {
     /// Stops the port thread and waits until it closed the port, so the port is free
     /// for the next opener. Never on the output thread: the engine frees devices off it.
     /// Each wait of the port thread watches `stop`, so this takes at most a link time
-    /// or a look for the adapter.
+    /// or a look for the adapter. A message being written is finished first, so the next
+    /// opener's first frame is not garbled: that takes at most a link time, or
+    /// [`STALLED_FOR`] when the port takes no byte.
     fn drop(&mut self) {
         self.shared.stop.store(true, Ordering::Relaxed);
         if let Some(port_thread) = self.port_thread.take() {
@@ -181,6 +184,10 @@ struct PortThread {
     port: Option<TTYPort>,
     link: Link,
     messages: rtrb::Consumer<[u8; MESSAGE]>,
+    /// The newest accepted message that has not gone out: the one whose write lost the
+    /// port, or a newer one taken meanwhile. Written first once the adapter is found
+    /// again, so a loss throws away no frame `take` accepted, only older ones.
+    unsent: Option<[u8; MESSAGE]>,
     shared: Arc<Shared>,
 }
 
@@ -192,8 +199,8 @@ impl PortThread {
     fn run(mut self) {
         while !self.shared.stop.load(Ordering::Relaxed) {
             let Some(port) = &self.port else {
-                // An adapter not found or lost is gone for a while; then look again. `drop` wakes it;
-                // a wake left over from `take` does not cut the wait short.
+                // An adapter not found or lost is gone for a while; then look again.
+                // `drop` wakes it; a wake left over from `take` does not cut the wait short.
                 let look_at = Instant::now() + LOOK_EVERY;
                 while Instant::now() < look_at && !self.shared.stop.load(Ordering::Relaxed) {
                     thread::park_timeout(look_at.saturating_duration_since(Instant::now()));
@@ -202,24 +209,27 @@ impl PortThread {
                     break;
                 }
                 if let Ok(port) = (self.find)() {
-                    while self.messages.pop().is_ok() {} // from before the loss
+                    if let Ok(newer) = self.messages.pop() {
+                        self.unsent = Some(newer); // taken after the one that failed
+                    }
                     self.port = Some(port);
                     self.link = next(self.link, Seen::Found, Instant::now());
                     self.shared.lost.store(false, Ordering::Release);
                 }
                 continue;
             };
-            let Ok(message) = self.messages.pop() else {
+            let Some(message) = self.unsent.take().or_else(|| self.messages.pop().ok()) else {
                 thread::park_timeout(WATCH_EVERY);
                 continue;
             };
             let started = Instant::now();
-            self.link = write_all(port, &message, &self.shared.stop, self.link);
+            self.link = write_all(port, &message, self.link);
             match self.link {
                 Link::Writing | Link::Stalled { .. } => {
                     thread::sleep(LINK_TIME.saturating_sub(started.elapsed()));
                 }
                 Link::Lost { with } => {
+                    self.unsent = Some(message);
                     self.shared.lost_with.store(with as i32, Ordering::Relaxed);
                     self.shared.lost.store(true, Ordering::Release);
                     self.port = None; // closed here, never on the output thread
@@ -233,14 +243,15 @@ impl PortThread {
 
 /// Writes the whole message, straight to the system: a full driver queue is waited out
 /// here, on the port thread, until [`STALLED_FOR`] passes with no byte taken. Half a
-/// message would garble the link. Returns the link as it is after the write.
+/// message would garble the link, so a stop waits for the rest too. Returns the link as
+/// it is after the write.
 #[expect(
     clippy::disallowed_methods,
     reason = "the port thread sleeps; the output thread never does"
 )]
-fn write_all(port: &TTYPort, message: &[u8], stop: &AtomicBool, mut link: Link) -> Link {
+fn write_all(port: &TTYPort, message: &[u8], mut link: Link) -> Link {
     let mut rest = message;
-    while !rest.is_empty() && !stop.load(Ordering::Relaxed) {
+    while !rest.is_empty() {
         let seen = match nix::unistd::write(port.as_raw_fd(), rest) {
             Ok(0) | Err(Errno::EAGAIN | Errno::EINTR) => Seen::NoBytes,
             Ok(written) => {
