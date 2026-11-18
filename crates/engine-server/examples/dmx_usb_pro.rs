@@ -10,12 +10,19 @@
 //!
 //! `<port>` is the adapter's port, such as `/dev/cu.usbserial-...` on macOS. The engine
 //! finds the adapter by its USB identity; the port only says which adapter.
+//!
+//! Every state change, every interval off by more than 2 ms and every `take` slower than
+//! 2 ms is printed with the time it was seen (within 10 ms), so a failed run says when.
 
 use engine::{
     ChannelNumbers, Command, Counters, Device, Engine, Levels, Outcome, OutputKind, OutputNumber,
     Rate, RunNumbers, State, Status, Universes,
 };
+use outputs::dmx_usb_pro::{self, DmxUsbPro, LostWith};
+use std::mem::discriminant;
 use std::process::ExitCode;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -23,6 +30,13 @@ const USAGE: &str = "usage: dmx_usb_pro <port> ten-minutes|unplug|sleep";
 const BELL: &str = "\x07";
 /// Before and after the hands-on step.
 const CALM: Duration = Duration::from_secs(15);
+/// How often the state is looked at.
+const STEP: Duration = Duration::from_millis(10);
+/// Channel 1 moves every this many steps: every 250 ms.
+const MOVE_EVERY: u32 = 25;
+/// A `take` slower than this is printed.
+const SLOW_TAKE: Duration = Duration::from_millis(2);
+const NAMES: [&str; 2] = ["adapter", "other"];
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -49,6 +63,22 @@ impl Device for Nowhere {
     }
 }
 
+/// The adapter, with the time of its slowest `take` since the last look.
+struct Timed {
+    device: DmxUsbPro,
+    slowest: Arc<AtomicU64>,
+}
+
+impl Device for Timed {
+    fn take(&mut self, frame: &[Levels]) -> Outcome {
+        let started = Instant::now();
+        let outcome = self.device.take(frame);
+        let took = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
+        self.slowest.fetch_max(took, Ordering::Relaxed);
+        outcome
+    }
+}
+
 fn number(n: u8) -> Result<OutputNumber, String> {
     OutputNumber::try_from(n).map_err(str::to_string)
 }
@@ -57,16 +87,22 @@ fn run(port: &str, check: &str) -> Result<bool, String> {
     let adapter = outputs::dmx_usb_pro::adapter_of(port)
         .map_err(|e| format!("not a DMX USB Pro port: {e}"))?;
     let (engine, mut sender) = Engine::start(Universes::ONE).map_err(|e| e.to_string())?;
-    let pro = Command::SetOutput {
-        output: number(1)?,
-        kind: OutputKind::DmxUsbPro { adapter },
-        universes: RunNumbers { first: 1, count: 1 },
-        rate: None,
-    };
-    sender.send(pro).map_err(|r| format!("refused: {r:?}"))?;
     let run = RunNumbers { first: 1, count: 1 }
         .check(Universes::ONE)
         .map_err(|r| format!("{r:?}"))?;
+    // What `SetOutput` does, by hand, to keep a hold on why the port was lost and how
+    // long each `take` took.
+    let pro = DmxUsbPro::open(dmx_usb_pro::find(adapter)).map_err(|e| e.to_string())?;
+    let lost_with = pro.lost_with();
+    let slowest = Arc::new(AtomicU64::new(0));
+    let timed = Timed {
+        device: pro,
+        slowest: Arc::clone(&slowest),
+    };
+    let rate = outputs::default_rate(OutputKind::DmxUsbPro { adapter });
+    sender
+        .attach(number(1)?, Box::new(timed), run, rate)
+        .map_err(|r| format!("refused: {r:?}"))?;
     sender
         .attach(number(2)?, Box::new(Nowhere), run, Rate::Sixty)
         .map_err(|r| format!("refused: {r:?}"))?;
@@ -75,7 +111,11 @@ fn run(port: &str, check: &str) -> Result<bool, String> {
     let mut watch = Watch {
         engine: &engine,
         started: Instant::now(),
+        steps: 0,
         level: 0,
+        seen: [None; 2],
+        lost_with,
+        slowest,
     };
     let passed = match check {
         "ten-minutes" => ten_minutes(&mut watch, &mut sender),
@@ -88,26 +128,72 @@ fn run(port: &str, check: &str) -> Result<bool, String> {
     Ok(passed)
 }
 
-/// Watches the engine and keeps channel 1 moving, so every frame differs.
+/// Watches the engine, prints what changed, and keeps channel 1 moving.
 struct Watch<'a> {
     engine: &'a Engine,
     started: Instant,
+    steps: u32,
     level: u8,
+    seen: [Option<engine::Output>; 2],
+    lost_with: LostWith,
+    slowest: Arc<AtomicU64>,
 }
 
 impl Watch<'_> {
     fn tick(&mut self, sender: &mut engine::Sender) -> State {
-        thread::sleep(Duration::from_millis(250));
-        self.level = self.level.wrapping_add(1);
-        let channel = ChannelNumbers {
-            universe: 1,
-            address: 1,
-        };
-        let _ = sender.send(Command::SetChannel {
-            channel,
-            value: self.level,
-        });
-        self.engine.query()
+        thread::sleep(STEP);
+        self.steps += 1;
+        if self.steps.is_multiple_of(MOVE_EVERY) {
+            self.level = self.level.wrapping_add(1);
+            let channel = ChannelNumbers {
+                universe: 1,
+                address: 1,
+            };
+            let _ = sender.send(Command::SetChannel {
+                channel,
+                value: self.level,
+            });
+        }
+        let state = self.engine.query();
+        self.events(&state);
+        state
+    }
+
+    /// Prints each state change, each new interval off the beat and each slow `take`.
+    fn events(&mut self, state: &State) {
+        let at = self.started.elapsed().as_secs_f64();
+        let now = outputs(state);
+        for ((name, before), after) in NAMES.iter().zip(self.seen).zip(now) {
+            let Some(after) = after else { continue };
+            let changed =
+                before.is_none_or(|b| discriminant(&b.status) != discriminant(&after.status));
+            if changed {
+                let why = match (after.status, self.lost_with.get()) {
+                    (Status::Reconnecting { .. } | Status::NotFound, Some(e))
+                        if *name == NAMES[0] =>
+                    {
+                        format!(", lost with: {e}")
+                    }
+                    _ => String::new(),
+                };
+                println!("{at:>9.3} s  {name}: {:?}{why}", after.status);
+            }
+            let off = after.counters.off_beat - before.map_or(0, |b| b.counters.off_beat);
+            if off > 0 {
+                println!(
+                    "{at:>9.3} s  {name}: {off} interval(s) off by > 2 ms, {} in all",
+                    after.counters.off_beat
+                );
+            }
+        }
+        let slowest = Duration::from_micros(self.slowest.swap(0, Ordering::Relaxed));
+        if slowest > SLOW_TAKE {
+            println!(
+                "{at:>9.3} s  adapter: a take took {:.1} ms",
+                slowest.as_secs_f64() * 1000.0
+            );
+        }
+        self.seen = now;
     }
 
     fn line(&self, state: &State) {
@@ -193,6 +279,10 @@ fn hands_on(watch: &mut Watch, sender: &mut engine::Sender, step: Step) -> bool 
         state = watch.tick(sender);
     }
     watch.line(&state);
+    if state.outputs[0].is_none_or(|o| o.status != Status::Running) {
+        println!("FAILED: the adapter was not running before the bell. Its lines above say when.");
+        return false;
+    }
 
     match step {
         Step::Unplug => {

@@ -119,6 +119,8 @@ Checks that need hands or hardware. Each prints what to do and when, with a bell
 
 `<port>` is the adapter's port (`/dev/cu.usbserial-...` on macOS). It only says which adapter; the output finds it by its USB identity.
 
+The DMX USB Pro checks print a timed line for every state change (with the system error that lost the port), every interval off by more than 2 ms, and every `take` slower than 2 ms.
+
 `npm test` runs:
 
 | Check | Proves |
