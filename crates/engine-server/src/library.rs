@@ -10,11 +10,12 @@
 
 use engine_core::{
     ChannelFunction, Failure, FixtureKind, Library, MATCHES, Match, ModeChannels, ModeSize,
-    NamedChannel, Refusal, Reply,
+    NamedChannel, Refusal, Reply, Text,
 };
-use fixture_library::{Fixture, Function, Kind, parse, search};
-use std::fs;
-use std::io;
+use fixture_library::{Fixture, Function, Kind, MOST_BYTES, Problem, parse, search};
+use std::collections::HashMap;
+use std::fs::{self, File};
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread;
@@ -67,10 +68,34 @@ fn read(folder: &Path) -> Shelf {
     }
     paths.sort();
     let files = paths.into_iter().map(|path| {
-        let bytes = fs::read(&path);
+        let bytes = bytes(&path);
         (path, bytes)
     });
-    shelve(files.collect(), unlisted, folder)
+    shelve(files, unlisted, folder)
+}
+
+/// The bytes of the file at `path`. Only a file is opened: a named pipe or a device could
+/// keep the reader waiting for ever. A file larger than a definition may be is not read;
+/// one that grows while it is read is read one byte past the most, which `parse` refuses.
+fn bytes(path: &Path) -> io::Result<Vec<u8>> {
+    let size = fs::metadata(path)?;
+    if !size.is_file() {
+        return Err(io::Error::other("not a file"));
+    }
+    let most = u64::try_from(MOST_BYTES).unwrap_or(u64::MAX);
+    if size.len() > most {
+        let bytes = usize::try_from(size.len()).unwrap_or(usize::MAX);
+        let large = Problem::TooLarge {
+            bytes,
+            most: MOST_BYTES,
+        };
+        return Err(io::Error::other(large.to_string()));
+    }
+    let mut bytes = Vec::new();
+    File::open(path)?
+        .take(most.saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    Ok(bytes)
 }
 
 /// Every `.qxf` file under `dir` into `found`; a folder below it that cannot be listed
@@ -94,9 +119,10 @@ fn files(
 }
 
 /// The shelf for these files: each parsed, or a failure that says why. Names are under
-/// `folder`, with `/` between folders.
+/// `folder`, with `/` between folders. Files are taken one at a time: only the fixtures
+/// read stay.
 fn shelve(
-    files: Vec<(PathBuf, io::Result<Vec<u8>>)>,
+    files: impl IntoIterator<Item = (PathBuf, io::Result<Vec<u8>>)>,
     unlisted: Vec<(PathBuf, io::Error)>,
     folder: &Path,
 ) -> Shelf {
@@ -117,24 +143,51 @@ fn shelve(
             problem: error.to_string(),
         })
         .collect();
+    // Each maker and model, and the file it came from.
+    let mut shelved: HashMap<(String, String), String> = HashMap::new();
     for (path, bytes) in files {
         let file = name(&path);
-        match bytes.map(|bytes| parse(&file, &bytes)) {
-            Ok(Ok(fixture)) => fixtures.push(fixture),
-            Ok(Err(error)) => failures.push(Failed {
+        let read = (bytes.map_err(|error| (None, error.to_string())))
+            .and_then(|bytes| {
+                parse(&file, &bytes).map_err(|error| (error.line, error.problem.to_string()))
+            })
+            .and_then(|fixture| match unaskable(&fixture, &shelved) {
+                Some(problem) => Err((None, problem)),
+                None => Ok(fixture),
+            });
+        match read {
+            Ok(fixture) => {
+                shelved.insert((fixture.maker.clone(), fixture.model.clone()), file);
+                fixtures.push(fixture);
+            }
+            Err((line, problem)) => failures.push(Failed {
                 file,
-                line: error.line,
-                problem: error.problem.to_string(),
-            }),
-            Err(error) => failures.push(Failed {
-                file,
-                line: None,
-                problem: error.to_string(),
+                line,
+                problem,
             }),
         }
     }
     failures.sort_by(|a, b| a.file.cmp(&b.file));
     Shelf::Read { fixtures, failures }
+}
+
+/// Why `fixture` stays off the shelf, if it does: `Fixture` could not ask for it by maker
+/// and model. Its maker or model is longer than a client may send, or a fixture of the
+/// same maker and model is on the shelf already.
+fn unaskable(fixture: &Fixture, shelved: &HashMap<(String, String), String>) -> Option<String> {
+    let long = [("maker", &fixture.maker), ("model", &fixture.model)]
+        .into_iter()
+        .find(|(_, text)| Text::new(text).is_none());
+    if let Some((what, text)) = long {
+        return Some(format!(
+            "the {what} is {} bytes, at most {}: it could not be asked for",
+            text.len(),
+            Text::MOST
+        ));
+    }
+    shelved
+        .get(&(fixture.maker.clone(), fixture.model.clone()))
+        .map(|first| format!("the same maker and model as {first}"))
 }
 
 impl Shelf {
@@ -310,8 +363,8 @@ fn function(function: &Function) -> ChannelFunction<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Failed, PathBuf, Shelf, shelve};
-    use engine_core::Library;
+    use super::{Failed, MOST_BYTES, PathBuf, Shelf, bytes, shelve};
+    use engine_core::{Library, Text};
     use std::io;
 
     #[test]
@@ -324,9 +377,31 @@ mod tests {
             problem: problem.into(),
         };
         let not_xml = "not valid xml: the root node was opened but never closed";
+        let named = |maker: &str, model: &str| {
+            let text = String::from_utf8(rgb.to_vec()).unwrap();
+            let text = text.replace(
+                "<Manufacturer>Generic</Manufacturer>",
+                &format!("<Manufacturer>{maker}</Manufacturer>"),
+            );
+            Ok(text
+                .replace(
+                    "<Model>Generic RGB</Model>",
+                    &format!("<Model>{model}</Model>"),
+                )
+                .into_bytes())
+        };
+        let most = "a".repeat(Text::MOST);
+        let over = "a".repeat(Text::MOST + 1);
+        let too_long = |what: &str| {
+            format!(
+                "the {what} is {} bytes, at most {}: it could not be asked for",
+                Text::MOST + 1,
+                Text::MOST
+            )
+        };
         // (files, folders that could not be listed, read, failures)
         type Files = Vec<(&'static str, io::Result<Vec<u8>>)>;
-        let cases: [(Files, Vec<&str>, u32, Vec<Failed>); 5] = [
+        let cases: [(Files, Vec<&str>, u32, Vec<Failed>); 6] = [
             (vec![], vec![], 0, vec![]),
             (
                 vec![("Generic/rgb.qxf", Ok(rgb.to_vec()))],
@@ -356,18 +431,35 @@ mod tests {
                 vec![
                     ("rgb.qxf", Ok(rgb.to_vec())),
                     ("rgb copy.qxf", Ok(rgb.to_vec())),
+                    ("Other/rgb.qxf", named("Other", "Generic RGB")),
                 ],
                 vec![],
                 2,
+                vec![failed(
+                    "rgb copy.qxf",
+                    None,
+                    "the same maker and model as rgb.qxf",
+                )],
+            ),
+            (
+                vec![
+                    ("most.qxf", named(&most, &most)),
+                    ("model.qxf", named("Generic", &over)),
+                    ("maker.qxf", named(&over, "Generic RGB")),
+                ],
                 vec![],
+                1,
+                vec![
+                    failed("maker.qxf", None, &too_long("maker")),
+                    failed("model.qxf", None, &too_long("model")),
+                ],
             ),
         ];
         let folder = PathBuf::from("/fixtures");
         for (files, unlisted, read, failures) in cases {
             let files = files
                 .into_iter()
-                .map(|(name, bytes)| (folder.join(name), bytes))
-                .collect();
+                .map(|(name, bytes)| (folder.join(name), bytes));
             let unlisted = unlisted
                 .into_iter()
                 .map(|name| (folder.join(name), gone()))
@@ -380,5 +472,34 @@ mod tests {
             };
             assert_eq!(got, failures);
         }
+    }
+
+    #[test]
+    fn a_file_is_read_up_to_the_most_a_definition_may_have() {
+        let folder = std::env::temp_dir().join(format!("bossylights-bytes-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let most = u64::try_from(MOST_BYTES).unwrap();
+        let too_large = |size: u64| Err(format!("too large: {size} bytes, at most {most}"));
+        // (name, size, read)
+        let cases: [(&str, u64, Result<usize, String>); 4] = [
+            ("empty", 0, Ok(0)),
+            ("most", most, Ok(MOST_BYTES)),
+            ("one over", most + 1, too_large(most + 1)),
+            ("twice", 2 * most, too_large(2 * most)),
+        ];
+        for (name, size, read) in cases {
+            let path = folder.join(name);
+            std::fs::File::create(&path).unwrap().set_len(size).unwrap();
+            let got = bytes(&path)
+                .map(|bytes| bytes.len())
+                .map_err(|e| e.to_string());
+            assert_eq!(got, read, "{name}");
+        }
+        assert_eq!(
+            bytes(&folder).map_err(|e| e.to_string()),
+            Err("not a file".to_owned()),
+            "a folder"
+        );
+        std::fs::remove_dir_all(folder).unwrap();
     }
 }

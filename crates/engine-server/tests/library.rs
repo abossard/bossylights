@@ -30,8 +30,8 @@ fn folder() -> PathBuf {
     folder
 }
 
-/// An engine process, killed when the test ends however it ends.
-struct Running(Child);
+/// An engine process and where it listens, killed when the test ends however it ends.
+struct Running(Child, String);
 
 impl Drop for Running {
     fn drop(&mut self) {
@@ -57,6 +57,7 @@ async fn engine(args: &[&str]) -> (Running, Socket) {
             .stdout(Stdio::piped())
             .spawn()
             .unwrap(),
+        listen.clone(),
     );
     let mut line = String::new();
     BufReader::new(running.0.stdout.as_mut().unwrap())
@@ -197,5 +198,106 @@ async fn the_library_answers_search_fixture_and_failures() {
             Some(&expected),
             "{request}: {answer}"
         );
+    }
+}
+
+/// A named pipe never ends while nobody writes to it: it is a failure, and the rest is read.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_named_pipe_is_a_failure_and_the_rest_is_read() {
+    let folder = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("pipe-{}", process::id()));
+    let _ = fs::remove_dir_all(&folder);
+    fs::create_dir_all(&folder).unwrap();
+    let rgb = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../fixture-library/tests/definitions/Generic-Generic-RGB.qxf");
+    fs::copy(rgb, folder.join("rgb.qxf")).unwrap();
+    let made = Command::new("mkfifo")
+        .arg(folder.join("pipe.qxf"))
+        .status()
+        .unwrap();
+    assert!(made.success());
+    let (_running, mut socket) = engine(&["--fixtures", folder.to_str().unwrap()]).await;
+    let library = tokio::time::timeout(Duration::from_secs(10), read(&mut socket))
+        .await
+        .expect("the library is read within 10 s");
+    assert_eq!(library, json!({"Read": {"read": 1, "failed": 1}}));
+    let failures = ask(&mut socket, &json!("Failures")).await;
+    assert_eq!(
+        failures,
+        json!({"Failures": {"failures": [
+            {"file": "pipe.qxf", "line": null, "problem": "not a file"},
+        ]}})
+    );
+}
+
+/// Every client sees one library per frame: a subscriber and a client that asks again and
+/// again see the same one for the same frame, also in the frame the library is read.
+#[tokio::test]
+async fn every_client_sees_the_same_library_in_the_same_frame() {
+    let folder = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("many-{}", process::id()));
+    let definitions =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../fixture-library/tests/definitions");
+    for copy in 0..50 {
+        let into = folder.join(copy.to_string());
+        fs::create_dir_all(&into).unwrap();
+        for entry in fs::read_dir(&definitions).unwrap() {
+            let path = entry.unwrap().path();
+            fs::copy(&path, into.join(path.file_name().unwrap())).unwrap();
+        }
+    }
+    let (running, mut subscriber) = engine(&["--fixtures", folder.to_str().unwrap()]).await;
+    let (mut asker, _) = tokio_tungstenite::connect_async(format!("ws://{}/api", running.1))
+        .await
+        .unwrap();
+    // (frame, library) as each client saw them, until a few frames after the library is read.
+    let seen = |reply: &Value| {
+        let picture = reply
+            .get("Picture")
+            .or_else(|| reply.get("Changed"))
+            .unwrap();
+        (
+            picture["state"]["frame"].as_u64().unwrap(),
+            picture["library"].clone(),
+        )
+    };
+    let subscribed = async {
+        subscriber
+            .send(Message::text("\"Subscribe\""))
+            .await
+            .unwrap();
+        let mut frames = Vec::new();
+        while frames
+            .iter()
+            .filter(|(_, l)| *l != json!("Reading"))
+            .count()
+            < 5
+        {
+            frames.push(seen(&next(&mut subscriber).await));
+        }
+        frames
+    };
+    let asked = async {
+        let mut frames = Vec::new();
+        while frames
+            .iter()
+            .filter(|(_, l)| *l != json!("Reading"))
+            .count()
+            < 200
+        {
+            frames.push(seen(&ask(&mut asker, &json!("Query")).await));
+        }
+        frames
+    };
+    let (subscribed, asked) = tokio::join!(subscribed, asked);
+    assert!(
+        subscribed
+            .iter()
+            .any(|(_, library)| *library == json!("Reading")),
+        "the folder was read before the test could look: make it larger"
+    );
+    for (frame, library) in &asked {
+        if let Some((_, seen)) = subscribed.iter().find(|(f, _)| f == frame) {
+            assert_eq!(library, seen, "frame {frame}");
+        }
     }
 }

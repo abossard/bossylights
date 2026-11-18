@@ -10,7 +10,7 @@ use alloc::vec::Vec;
 use roxmltree::{Document, Node, ParsingOptions};
 
 /// The largest real definition is 133 kB: this is about seven times that.
-const MOST_BYTES: usize = 1024 * 1024;
+pub const MOST_BYTES: usize = 1024 * 1024;
 
 /// The line of the `[` that opens declarations in a DOCTYPE, when there is one. Quoted text is skipped.
 fn declarations_at(text: &str) -> Option<u32> {

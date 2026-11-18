@@ -26,6 +26,7 @@ use engine::{
     API_VERSION, ChannelLevel, Command, Engine, Project, Refusal, Reply, Request, Sender, Snapshot,
     changes,
 };
+use engine_core::Library;
 use library::Shelf;
 use std::io;
 use std::path::PathBuf;
@@ -44,14 +45,18 @@ pub async fn serve(
     fixtures: Option<PathBuf>,
 ) -> io::Result<Engine> {
     let (stop, mut stopped) = watch::channel(false);
-    let (painted, pictures) = watch::channel(Arc::new(*engine.latest()));
-    let reader = tokio::spawn(read(engine, painted, stop.subscribe()));
+    let shelf = library::start(fixtures);
+    let (painted, pictures) = watch::channel(Arc::new(Picture {
+        snapshot: *engine.latest(),
+        library: shelf.borrow().library(),
+    }));
+    let reader = tokio::spawn(read(engine, shelf.clone(), painted, stop.subscribe()));
     let api = Arc::new(Api {
         project: watch::channel(sender.project()).0,
         sender: Mutex::new(sender),
         stop,
         pictures,
-        shelf: library::start(fixtures),
+        shelf,
     });
     let any = || [(ACCESS_CONTROL_ALLOW_ORIGIN, "*")];
     let routes = Router::new()
@@ -80,17 +85,25 @@ struct Api {
     project: watch::Sender<Project>,
     /// Turns true once, on `Stop`. Every connection and the server watch it.
     stop: watch::Sender<bool>,
-    /// The newest snapshot, one per frame, the same for every connection.
-    pictures: watch::Receiver<Arc<Snapshot>>,
+    /// The newest picture, one per frame, the same for every connection.
+    pictures: watch::Receiver<Arc<Picture>>,
     /// The fixture library, once it is read.
     shelf: watch::Receiver<Arc<Shelf>>,
 }
 
-/// The one reader of the engine: takes the newest snapshot twice a beat and shares it
-/// when it is of a new frame. Until `Stop`, then it gives the engine back.
+/// A frame as every connection shows it: the engine's snapshot, and the library as it was
+/// when the snapshot was taken.
+struct Picture {
+    snapshot: Snapshot,
+    library: Library,
+}
+
+/// The one reader of the engine: takes the newest snapshot twice a beat and shares it,
+/// with the library, when it is of a new frame. Until `Stop`, then it gives the engine back.
 async fn read(
     mut engine: Engine,
-    painted: watch::Sender<Arc<Snapshot>>,
+    shelf: watch::Receiver<Arc<Shelf>>,
+    painted: watch::Sender<Arc<Picture>>,
     mut stopped: watch::Receiver<bool>,
 ) -> Engine {
     let mut poll = tokio::time::interval(engine::BEAT / 2);
@@ -99,9 +112,12 @@ async fn read(
         tokio::select! {
             _ = stopped.wait_for(|stop| *stop) => return engine,
             _ = poll.tick() => {
-                let picture = engine.latest();
-                if picture.state.frame != painted.borrow().state.frame {
-                    painted.send_replace(Arc::new(*picture));
+                let snapshot = engine.latest();
+                if snapshot.state.frame != painted.borrow().snapshot.state.frame {
+                    painted.send_replace(Arc::new(Picture {
+                        snapshot: *snapshot,
+                        library: shelf.borrow().library(),
+                    }));
                 }
             }
         }
@@ -135,7 +151,7 @@ async fn connect(
 async fn talk(mut socket: WebSocket, api: Arc<Api>) {
     let mut pictures = api.pictures.clone();
     // What a subscribed connection sent last.
-    let mut subscription: Option<Arc<Snapshot>> = None;
+    let mut subscription: Option<Arc<Picture>> = None;
     let mut stopped = api.stop.subscribe();
     loop {
         let reply = tokio::select! {
@@ -164,8 +180,8 @@ async fn talk(mut socket: WebSocket, api: Arc<Api>) {
 async fn answer(
     api: &Api,
     text: &str,
-    pictures: &mut watch::Receiver<Arc<Snapshot>>,
-    subscription: &mut Option<Arc<Snapshot>>,
+    pictures: &mut watch::Receiver<Arc<Picture>>,
+    subscription: &mut Option<Arc<Picture>>,
 ) -> Option<String> {
     let Ok(request) = serde_json::from_str::<Request>(text) else {
         return json(&Reply::Refused {
@@ -212,28 +228,29 @@ async fn send(api: &Api, command: Command) -> Result<(), Refusal> {
     sent
 }
 
-fn picture(api: &Api, now: &Snapshot) -> Option<String> {
+fn picture(api: &Api, now: &Picture) -> Option<String> {
     json(&Reply::Picture {
-        state: now.state,
+        state: now.snapshot.state,
         project: *api.project.borrow(),
-        library: api.shelf.borrow().library(),
-        universes: now.universes(),
+        library: now.library,
+        universes: now.snapshot.universes(),
     })
 }
 
 /// `Changed`: the channels that differ from the last snapshot this connection sent.
 fn changed(
     api: &Api,
-    pictures: &mut watch::Receiver<Arc<Snapshot>>,
-    subscription: &mut Option<Arc<Snapshot>>,
+    pictures: &mut watch::Receiver<Arc<Picture>>,
+    subscription: &mut Option<Arc<Picture>>,
 ) -> Option<String> {
     let last = subscription.as_mut()?;
     let now = Arc::clone(&pictures.borrow_and_update());
-    let channels: Vec<ChannelLevel> = changes(last.universes(), now.universes()).collect();
+    let channels: Vec<ChannelLevel> =
+        changes(last.snapshot.universes(), now.snapshot.universes()).collect();
     let reply = json(&Reply::Changed {
-        state: now.state,
+        state: now.snapshot.state,
         project: *api.project.borrow(),
-        library: api.shelf.borrow().library(),
+        library: now.library,
         channels: &channels,
     });
     *last = now;

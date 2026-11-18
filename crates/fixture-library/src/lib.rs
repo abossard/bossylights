@@ -51,5 +51,5 @@ pub use model::{
     Byte, Channel, Degrees, Direction, Does, Fixture, Function, Hertz, Kind, Layout, Mode, Pace,
     Range, Rgb, Turn,
 };
-pub use read::parse;
+pub use read::{MOST_BYTES, parse};
 pub use search::search;
