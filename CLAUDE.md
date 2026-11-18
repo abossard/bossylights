@@ -29,6 +29,7 @@ Rust engine, web UI in a Tauri shell, Apache-2.0. Status: skeleton (engine count
 
 ## Rules
 
+- How we write code: `docs/coding.md`. Read it before writing or reviewing code: data, calculations and actions apart; state flows one way (view, command, update, state); state machines written down; deep modules; errors as states.
 - One engine, one API, no UI inside the engine.
 - The output thread never blocks, locks or allocates.
 - Every feature has an end-to-end test that checks DMX output.
