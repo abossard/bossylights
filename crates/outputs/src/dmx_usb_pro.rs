@@ -176,8 +176,12 @@ impl PortThread {
     fn run(mut self) {
         while !self.shared.stop.load(Ordering::Relaxed) {
             let Some(port) = &self.port else {
-                // A lost adapter is gone for a while; then look again. `drop` wakes it.
-                thread::park_timeout(LOOK_EVERY);
+                // A lost adapter is gone for a while; then look again. `drop` wakes it;
+                // a wake left over from `take` does not cut the wait short.
+                let look_at = Instant::now() + LOOK_EVERY;
+                while Instant::now() < look_at && !self.shared.stop.load(Ordering::Relaxed) {
+                    thread::park_timeout(look_at.saturating_duration_since(Instant::now()));
+                }
                 if self.shared.stop.load(Ordering::Relaxed) {
                     break;
                 }
