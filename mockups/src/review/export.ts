@@ -59,7 +59,7 @@ export function toMarkdown(): string {
     lines.push(`- Verdict: ${verdictLabel(s.verdict)}`);
     lines.push(`- Rating: ${s.rating ? `${s.rating}/5` : "none"}`);
     if (s.comment.trim()) lines.push(`- Comment: ${s.comment.trim().replace(/\n+/g, " ")}`);
-    if (s.review2Said) lines.push(`- Review 2 said: ${s.review2Said.replace(/\n+/g, " ")}`);
+    if (s.review2Said) lines.push(`- Earlier you said: ${s.review2Said.replace(/\n+/g, " ")}`);
     if (s.regionNotes.length) {
       lines.push("- Region notes:");
       for (const n of s.regionNotes) lines.push(`  - ${n.title}: ${n.note.trim().replace(/\n+/g, " ")}`);

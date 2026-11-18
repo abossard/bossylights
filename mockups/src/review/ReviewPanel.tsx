@@ -105,7 +105,7 @@ export function ReviewPanel() {
                   />
                   <Show when={r().previous}>
                     <p class="rp-previous">
-                      <b>Review 2 said</b> {r().previous}
+                      <b>Earlier you said</b> {r().previous}
                     </p>
                     <p class="mute">This screen was rebuilt after that, so it is open again.</p>
                   </Show>
