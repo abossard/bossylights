@@ -1,0 +1,16 @@
+[package]
+name = "engine-server"
+description = "The headless engine process: runs the engine and serves its API on localhost."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "bossylights-engine"
+path = "src/main.rs"
+
+[dependencies]
+engine = { path = "../engine" }
+axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio", "ws"] }
+tokio = { version = "1.54.1", features = ["rt", "macros", "net", "time"] }
