@@ -19,7 +19,8 @@ function priorityText(priority: Priority | undefined): string {
 /** Why a command was refused, by name. */
 function refusalText(refusal: Refusal): string {
   if (typeof refusal === "string") return refusal;
-  return `NoSuchUniverse: this engine has ${refusal.NoSuchUniverse.universes}`;
+  if ("NoSuchUniverse" in refusal) return `NoSuchUniverse: this engine has ${refusal.NoSuchUniverse.universes}`;
+  return `TooManyUniverses: this kind takes at most ${refusal.TooManyUniverses.most}`;
 }
 
 /** An output in one line: what it sends, how often, its state and counters. */

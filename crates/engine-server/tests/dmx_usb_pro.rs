@@ -4,8 +4,8 @@
 //! not found until then, and runs by itself once it is there.
 
 use engine::{
-    ChannelNumbers, Command, Device, Engine, Levels, Open, Outcome, OutputKind, OutputNumber, Rate,
-    Refusal, RunNumbers, Sender, Status, Universes,
+    Adapter, ChannelNumbers, Command, Device, Engine, Levels, Open, Outcome, OutputKind,
+    OutputNumber, Rate, Refusal, RunNumbers, Sender, Status, Universes,
 };
 use outputs::dmx_usb_pro::{DmxUsbPro, Find, MESSAGE, never_wait};
 use serialport::{SerialPort, TTYPort};
@@ -149,9 +149,12 @@ fn an_adapter_plugged_in_after_its_output_was_set_is_not_found_then_runs() {
     };
     let mut find = Some(find);
     let open: Open = Box::new(move |kind| match (kind, find.take()) {
-        (OutputKind::DmxUsbPro { adapter: 1 }, Some(find)) => {
-            Ok(Box::new(DmxUsbPro::open(find)?) as Box<dyn Device>)
-        }
+        (
+            OutputKind::DmxUsbPro {
+                adapter: Adapter::FIRST,
+            },
+            Some(find),
+        ) => Ok(Box::new(DmxUsbPro::open(find)?) as Box<dyn Device>),
         _ => Err(std::io::Error::other("one adapter in this test")),
     });
     let stop = Arc::new(AtomicBool::new(false));
@@ -200,7 +203,9 @@ fn exclusive_adapter() -> (Open, TTYPort, String) {
     ours.set_timeout(Duration::from_millis(50)).unwrap();
     let path = name.clone();
     let open: Open = Box::new(move |kind| match kind {
-        OutputKind::DmxUsbPro { adapter: 1 } => {
+        OutputKind::DmxUsbPro {
+            adapter: Adapter::FIRST,
+        } => {
             let path = path.clone();
             let find: Find = Box::new(move || {
                 // Baud 0: a pseudo terminal takes no speed. Exclusive is the default.
@@ -235,7 +240,9 @@ fn hear(end: &mut TTYPort, level: u8) {
 fn set_output(output: u8, rate: Option<Rate>) -> Command {
     Command::SetOutput {
         output: OutputNumber::try_from(output).unwrap(),
-        kind: OutputKind::DmxUsbPro { adapter: 1 },
+        kind: OutputKind::DmxUsbPro {
+            adapter: Adapter::FIRST,
+        },
         universes: RunNumbers { first: 1, count: 1 },
         rate,
     }

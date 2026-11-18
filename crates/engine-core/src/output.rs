@@ -107,6 +107,11 @@ impl RunNumbers {
 }
 
 impl Run {
+    /// How many universes.
+    pub const fn count(self) -> u16 {
+        self.count
+    }
+
     /// This run's universes of a frame. Empty if the frame is shorter.
     pub fn of(self, frame: &[Levels]) -> &[Levels] {
         let start = usize::from(self.first.saturating_sub(1));

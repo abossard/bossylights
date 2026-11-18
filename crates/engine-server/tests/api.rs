@@ -224,6 +224,22 @@ async fn a_request_that_cannot_be_right_is_refused_and_changes_nothing() {
             refused(json!("CannotOpen")),
         ),
         (
+            output(
+                json!({"DmxUsbPro": {"adapter": 1}}),
+                json!({"first": 1, "count": 2}),
+                json!(null),
+            ),
+            refused(json!({"TooManyUniverses": {"most": 1}})),
+        ),
+        (
+            output(
+                json!({"DmxUsbPro": {"adapter": 0}}),
+                json!({"first": 1, "count": 1}),
+                json!(null),
+            ),
+            refused(json!("NotACommand")),
+        ),
+        (
             json!({"Send": {"command": "Explode"}}),
             refused(json!("NotACommand")),
         ),

@@ -109,4 +109,6 @@ pub enum Refusal {
     NoSuchFixture,
     /// The output's device is being opened. Send again once it is open.
     Opening,
+    /// This kind of output takes at most `most` universes.
+    TooManyUniverses { most: u16 },
 }

@@ -11,7 +11,13 @@ export type RunNumbers = { first: number, count: number, };
 
 export type OutputNumber = number;
 
-export type OutputKind = { "Ddp": { address: string, color: Color, } } | { "DmxUsbPro": { adapter: number, } };
+export type OutputKind = { "Ddp": { address: string, 
+/**
+ * Whole pixels only: RGB sends 510 of a universe's 512 channels, RGBW all 512.
+ */
+color: Color, } } | { "DmxUsbPro": { adapter: Adapter, } };
+
+export type Adapter = number;
 
 export type Color = "Rgb" | "Rgbw";
 
@@ -19,7 +25,7 @@ export type Rate = "30" | "44" | "60";
 
 export type Reply = "Accepted" | "Stopping" | { "Refused": { reason: Refusal, } } | { "Picture": { state: State, project: Project, library: Library, universes: Array<Levels>, } } | { "Changed": { state: State, project: Project, library: Library, channels: Array<ChannelLevel>, } } | { "Found": { fixtures: Array<Match>, } } | { "Fixture": { maker: string, model: string, kind: FixtureKind, modes: Array<ModeChannels>, } } | { "Failures": { failures: Array<Failure>, } };
 
-export type Refusal = "NotACommand" | { "NoSuchUniverse": { universes: number, } } | "NoSuchAddress" | "QueueFull" | "CannotOpen" | "NoSuchFixture" | "Opening";
+export type Refusal = "NotACommand" | { "NoSuchUniverse": { universes: number, } } | "NoSuchAddress" | "QueueFull" | "CannotOpen" | "NoSuchFixture" | "Opening" | { "TooManyUniverses": { most: number, } };
 
 export type State = { 
 /**

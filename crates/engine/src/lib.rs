@@ -33,10 +33,10 @@
 )]
 
 pub use engine_core::{
-    ADDRESSES, API_VERSION, BEAT, BestEffort, ChannelLevel, ChannelNumbers, Color, Command,
-    Counters, Levels, MAX_OUTPUTS, MAX_UNIVERSES, Outcome, Output, OutputKind, OutputNumber,
-    Priority, Project, ProjectOutput, Rate, Refusal, Reply, Request, Run, RunNumbers, State,
-    Status, Universes, changes,
+    ADDRESSES, API_VERSION, Adapter, BEAT, BestEffort, ChannelLevel, ChannelNumbers, Color,
+    Command, Counters, Levels, MAX_OUTPUTS, MAX_UNIVERSES, Outcome, Output, OutputKind,
+    OutputNumber, Priority, Project, ProjectOutput, Rate, Refusal, Reply, Request, Run, RunNumbers,
+    State, Status, Universes, changes,
 };
 pub use engine_core::{
     EngineCommand, Histogram, LATENCY_BUCKETS, LATENESS_BUCKETS, bucket, due, frame, next_wake,
@@ -223,6 +223,17 @@ impl Sender {
     /// must be opened first: until [`Sender::finish`] the output is `Opening`.
     pub fn begin(&mut self, command: Command) -> Result<Option<Opening>, Refusal> {
         let (project, effect) = self.project.update(ProjectEvent::Client(command))?;
+        if let Some(
+            ProjectEffect::Keep {
+                kind, universes, ..
+            }
+            | ProjectEffect::Open {
+                kind, universes, ..
+            },
+        ) = effect
+        {
+            outputs::limits(kind).check(universes)?;
+        }
         let opening = match effect {
             None => None,
             Some(ProjectEffect::Send(command)) => {

@@ -106,7 +106,8 @@ fn run(port: &str, check: &str) -> Result<bool, String> {
     sender
         .attach(number(2)?, Box::new(Nowhere), run, Rate::Sixty)
         .map_err(|r| format!("refused: {r:?}"))?;
-    println!("adapter {adapter} at 44 a second, a second output at 60 a second.");
+    let number = adapter.number();
+    println!("adapter {number} at 44 a second, a second output at 60 a second.");
 
     let mut watch = Watch {
         engine: &mut engine,

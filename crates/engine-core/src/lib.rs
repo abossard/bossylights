@@ -25,7 +25,7 @@ pub use api::{API_VERSION, MATCHES, Refusal, Reply, Request};
 pub use channel::{
     ADDRESSES, Channel, ChannelLevel, ChannelNumbers, Levels, MAX_UNIVERSES, Universes, changes,
 };
-pub use kinds::{Color, OutputKind};
+pub use kinds::{Adapter, Color, OutputKind};
 pub use library::{
     ChannelFunction, Failure, FixtureKind, Library, Match, ModeChannels, ModeSize, NamedChannel,
     Text,
@@ -860,6 +860,7 @@ mod tests {
                 RunNumbers::decl(&config),
                 OutputNumber::decl(&config),
                 OutputKind::decl(&config),
+                Adapter::decl(&config),
                 Color::decl(&config),
                 Rate::decl(&config),
                 Reply::decl(&config),

@@ -1,6 +1,6 @@
 //! A DDP output sends to a socket on this machine; every byte that arrives is checked.
 
-use outputs::{Color, Levels, Outcome, OutputKind, Rate};
+use outputs::{Adapter, Color, Levels, Outcome, OutputKind, Rate};
 use std::net::{SocketAddr, UdpSocket};
 use std::time::Duration;
 
@@ -76,7 +76,12 @@ fn each_kind_has_its_default_rate() {
             },
             Rate::Sixty,
         ),
-        (OutputKind::DmxUsbPro { adapter: 1 }, Rate::FortyFour),
+        (
+            OutputKind::DmxUsbPro {
+                adapter: Adapter::FIRST,
+            },
+            Rate::FortyFour,
+        ),
     ];
     for (kind, rate) in cases {
         assert_eq!(outputs::default_rate(kind), rate, "{kind:?}");

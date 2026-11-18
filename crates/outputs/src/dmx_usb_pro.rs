@@ -17,7 +17,7 @@
 //! | output thread | [`DmxUsbPro::take`]: puts the message in a one-slot wait-free queue and wakes the port thread. Never calls the serial driver: a vanishing device holds the driver up for many milliseconds |
 //! | port thread, one per adapter | owns the port: writes each message, never more often than the link drains. While the adapter is not there yet, or after a write fails or the port takes no byte for [`STALLED_FOR`] (then it closes the port first), it looks for the adapter every [`LOOK_EVERY`] |
 
-use crate::{Device, Levels, Outcome};
+use crate::{Adapter, Device, Levels, Outcome};
 use engine_core::ADDRESSES;
 use nix::errno::Errno;
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
@@ -352,7 +352,7 @@ fn next(link: Link, seen: Seen, now: Instant) -> Link {
 /// The finder for real adapters: the `adapter`th DMX USB Pro by USB identity when it
 /// first finds one, from then on that same adapter by its serial.
 /// Opened at [`BAUD`], 8 data bits, 2 stop bits, writes that never wait.
-pub fn find(adapter: u8) -> Find {
+pub fn find(adapter: Adapter) -> Find {
     let mut wanted = None;
     Box::new(move || {
         let listed = adapters()?;
@@ -377,10 +377,10 @@ struct Listed {
 /// or put in the state.
 struct Wanted(String);
 
-/// The `adapter`th in the list, counted from 1.
-fn pick(listed: &[Listed], adapter: u8) -> Option<Wanted> {
+/// The `adapter`th in the list.
+fn pick(listed: &[Listed], adapter: Adapter) -> Option<Wanted> {
     listed
-        .get(usize::from(adapter).wrapping_sub(1))
+        .get(usize::from(adapter.number() - 1))
         .map(|listed| Wanted(listed.serial.clone()))
 }
 
@@ -393,12 +393,15 @@ fn port_of<'a>(listed: &'a [Listed], wanted: &Wanted) -> Option<&'a str> {
 }
 
 /// The adapter number of the port with this name, as [`find`] counts.
-pub fn adapter_of(port: &str) -> io::Result<u8> {
+pub fn adapter_of(port: &str) -> io::Result<Adapter> {
     let at = adapters()?
         .iter()
         .position(|listed| listed.port == port)
         .ok_or_else(|| io::Error::new(ErrorKind::NotFound, "that port is no DMX USB Pro"))?;
-    u8::try_from(at + 1).map_err(|_| io::Error::other("too many adapters"))
+    u8::try_from(at + 1)
+        .ok()
+        .and_then(|number| Adapter::try_from(number).ok())
+        .ok_or_else(|| io::Error::other("too many adapters"))
 }
 
 /// Every DMX USB Pro, in the order of their USB serial numbers.
@@ -531,7 +534,10 @@ mod tests {
             (vec![a.clone()], 2, vec![a.clone(), b.clone()], None), // never there
         ];
         for (n, (at_set, adapter, now, port)) in cases.into_iter().enumerate() {
-            let found = pick(&at_set, adapter).and_then(|wanted| port_of(&now, &wanted));
+            let found = Adapter::try_from(adapter)
+                .ok()
+                .and_then(|adapter| pick(&at_set, adapter))
+                .and_then(|wanted| port_of(&now, &wanted));
             assert_eq!(found, port, "case {n}");
         }
     }
