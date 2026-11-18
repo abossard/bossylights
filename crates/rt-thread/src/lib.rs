@@ -25,7 +25,6 @@ use std::io;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
 
 /// Starts a thread named `name` that wakes when it has work, asks for real-time
 /// priority on it, then runs `run` with the answer. Returns once the answer is known.
@@ -105,6 +104,8 @@ fn from_bits(bits: u64) -> Option<Priority> {
     reason = "the Mach thread policy has no safe wrapper; each block says why it is sound"
 )]
 fn ask() -> Option<i32> {
+    use std::time::Duration;
+
     /// Sleep, then spin the last millisecond, then compute the frame.
     const COMPUTATION: Duration = Duration::from_millis(2);
     const CONSTRAINT: Duration = Duration::from_millis(5);

@@ -107,7 +107,7 @@ fn tally(fixtures: &[Fixture]) {
         }
     }
     let mut sorted: Vec<_> = by_function.into_iter().collect();
-    sorted.sort_by(|a, b| b.1.cmp(&a.1));
+    sorted.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
     for (name, count) in sorted {
         row(&name, count, total);
     }
@@ -129,7 +129,7 @@ fn tally(fixtures: &[Fixture]) {
     row("with a direction", with_direction, total);
 
     let mut others: Vec<_> = others.into_iter().collect();
-    others.sort_by(|a, b| b.1.cmp(&a.1));
+    others.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
     println!("\n| Most common \"other\" | Count |\n|---|---|");
     for (name, count) in others.iter().take(15) {
         println!("| {name} | {count} |");
