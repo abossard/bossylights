@@ -1,0 +1,21 @@
+# The tick thread never blocks, locks or allocates (see CLAUDE.md).
+# This crate holds the real-time core, so anything that can take a lock is banned here.
+disallowed-types = [
+  { path = "std::sync::Mutex", reason = "the tick thread never locks" },
+  { path = "std::sync::RwLock", reason = "the tick thread never locks" },
+  { path = "std::sync::Condvar", reason = "the tick thread never waits on others" },
+  { path = "std::sync::Barrier", reason = "the tick thread never waits on others" },
+  { path = "std::sync::Once", reason = "can block" },
+  { path = "std::sync::OnceLock", reason = "can block" },
+  { path = "std::sync::LazyLock", reason = "can block" },
+  { path = "std::sync::mpsc::Sender", reason = "channels lock and allocate" },
+  { path = "std::sync::mpsc::SyncSender", reason = "channels lock and allocate" },
+  { path = "std::sync::mpsc::Receiver", reason = "channels lock and allocate" },
+]
+disallowed-macros = [
+  { path = "std::println", reason = "stdout takes a lock" },
+  { path = "std::print", reason = "stdout takes a lock" },
+  { path = "std::eprintln", reason = "stderr takes a lock" },
+  { path = "std::eprint", reason = "stderr takes a lock" },
+  { path = "std::dbg", reason = "stderr takes a lock" },
+]
