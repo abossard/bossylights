@@ -1,0 +1,32 @@
+# `take` runs on the output thread (docs/coding.md, rule 7): nothing here may lock, wait
+# on others or log. Sockets are allowed: an output is the one place that sends. The full
+# list for the rest of the tick thread is crates/engine/clippy.toml.
+disallowed-types = [
+  { path = "std::sync::Mutex", reason = "the output thread never locks" },
+  { path = "std::sync::RwLock", reason = "the output thread never locks" },
+  { path = "std::sync::Condvar", reason = "the output thread never waits on others" },
+  { path = "std::sync::Barrier", reason = "the output thread never waits on others" },
+  { path = "std::sync::Once", reason = "can block" },
+  { path = "std::sync::OnceLock", reason = "can block" },
+  { path = "std::sync::LazyLock", reason = "can block" },
+  { path = "std::sync::mpsc::Sender", reason = "channels lock and allocate" },
+  { path = "std::sync::mpsc::SyncSender", reason = "channels lock and allocate" },
+  { path = "std::sync::mpsc::Receiver", reason = "channels lock and allocate" },
+  { path = "std::process::Command", reason = "the output thread starts nothing" },
+  { path = "std::io::Stdin", reason = "blocks" },
+  { path = "std::io::Stdout", reason = "logging: stdout takes a lock" },
+  { path = "std::io::Stderr", reason = "logging: stderr takes a lock" },
+]
+disallowed-methods = [
+  { path = "std::io::stdin", reason = "blocks" },
+  { path = "std::io::stdout", reason = "logging: stdout takes a lock" },
+  { path = "std::io::stderr", reason = "logging: stderr takes a lock" },
+  { path = "std::thread::sleep", reason = "an output never waits" },
+]
+disallowed-macros = [
+  { path = "std::println", reason = "stdout takes a lock" },
+  { path = "std::print", reason = "stdout takes a lock" },
+  { path = "std::eprintln", reason = "stderr takes a lock" },
+  { path = "std::eprint", reason = "stderr takes a lock" },
+  { path = "std::dbg", reason = "stderr takes a lock" },
+]

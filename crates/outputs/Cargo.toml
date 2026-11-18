@@ -1,0 +1,13 @@
+[package]
+name = "outputs"
+description = "The outputs: open a device off the output thread, then take frames on it without waiting. DDP and a mock."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+engine-core = { path = "../engine-core" }
