@@ -29,6 +29,16 @@ async function kill(shell: Shell) {
   await exited;
 }
 
+/** No engine process for this address is left. The engine answers no more before it ends, and keeps the port's lock until it has: a new engine started too early is refused. */
+const gone = () => {
+  try {
+    execFileSync("pgrep", ["-f", `bossylights-engine --listen ${ADDRESS}`], { stdio: "ignore" });
+    return false;
+  } catch {
+    return true; // pgrep exits 1 when it finds none
+  }
+};
+
 /** The engine's first answer to a request that is not a `Changed`. */
 async function request(message: unknown): Promise<any> {
   const socket = new WebSocket(`ws://${ADDRESS}/api`);
@@ -91,6 +101,7 @@ test("kill the shell: the engine keeps sending, a new shell adopts it and the fr
     if (second) await kill(second);
     if ((await health()) === 200) expect(await request("Stop")).toBe("Stopping");
     await expect.poll(health, WAIT).toBe("nobody");
+    await expect.poll(gone, WAIT).toBe(true);
     udp.close();
   }
 });
@@ -101,7 +112,7 @@ test("a second shell for the same engine opens no window and stops nothing", asy
   let second = first;
   try {
     await expect.poll(first.said, WAIT).toContain("the window talks to");
-    await expect.poll(health, { ...WAIT, message: first.said() }).toBe(200); // the engine the first shell started is up
+    await expect.poll(health, WAIT).toBe(200); // the engine the first shell started is up
     second = startShell();
     await expect.poll(second.said, WAIT).toContain("a window for the engine on");
     await expect.poll(() => second.process.exitCode, WAIT).toBe(0);
@@ -112,6 +123,7 @@ test("a second shell for the same engine opens no window and stops nothing", asy
     await kill(first);
     if ((await health()) === 200) expect(await request("Stop")).toBe("Stopping");
     await expect.poll(health, WAIT).toBe("nobody");
+    await expect.poll(gone, WAIT).toBe(true);
   }
 });
 
