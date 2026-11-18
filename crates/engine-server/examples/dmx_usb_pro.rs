@@ -22,7 +22,7 @@ use outputs::dmx_usb_pro::{self, DmxUsbPro, LostWith};
 use std::mem::discriminant;
 use std::process::ExitCode;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -310,18 +310,39 @@ fn hands_on(watch: &mut Watch, sender: &mut engine::Sender, step: Step) -> bool 
         }
         Step::Sleep => {
             println!(
-                "{BELL}\n>>> NOW: put the Mac to sleep (Apple menu, Sleep). Wake it after about 30 s. <<<\n"
+                "{BELL}\n>>> NOW: put the Mac to sleep (Apple menu, Sleep). Wake it after about 30 s, then press Enter here. <<<\n"
             );
-            let (wall, mono) = (SystemTime::now(), Instant::now());
+            // The owner says when the Mac is awake: a clock gap alone misses a short sleep.
+            let pressed = Arc::new(AtomicBool::new(false));
+            {
+                let pressed = Arc::clone(&pressed);
+                thread::spawn(move || {
+                    let mut line = String::new();
+                    if std::io::stdin().read_line(&mut line).is_ok() {
+                        pressed.store(true, Ordering::Relaxed);
+                    }
+                });
+            }
+            let (wall, uptime) = (SystemTime::now(), Instant::now());
             let woke = wait_until(watch, sender, Duration::from_secs(600), |_| {
-                let wall = wall.elapsed().unwrap_or_default();
-                wall > mono.elapsed() + Duration::from_secs(5)
+                pressed.load(Ordering::Relaxed)
             });
             if woke.is_none() {
-                println!("FAILED: no sleep seen within 10 minutes.");
+                println!("FAILED: no Enter within 10 minutes.");
                 return false;
             }
-            println!("{BELL}\nawake. Waiting for the adapter to run again.");
+            let asleep = wall
+                .elapsed()
+                .unwrap_or_default()
+                .saturating_sub(uptime.elapsed());
+            println!(
+                "{BELL}\nawake. Wall clock ran {:.1} s more than uptime since the bell: that long asleep, as the clocks see it.",
+                asleep.as_secs_f64()
+            );
+            if asleep < Duration::from_secs(1) {
+                println!("WARNING: the clocks saw almost no sleep. Did the Mac sleep?");
+            }
+            println!("Waiting for the adapter to run again.");
         }
     }
     let back = Instant::now();
