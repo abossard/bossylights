@@ -1,0 +1,1 @@
+{"label":"load mock","sink":"mock","os":"macos","priority":"Realtime","prioritySet":"ok","wait":"Spin","seconds":600,"loadThreads":10,"frames":26400,"intervalMs":{"min":22.710,"mean":22.727,"p50":22.727,"p99":22.727,"max":22.743},"offBy2ms":0,"lateMs":{"p99":0.000,"max":0.016},"resyncs":0,"sendErrors":0,"dropped":0,"reconnects":0}

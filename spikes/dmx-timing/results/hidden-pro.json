@@ -1,0 +1,1 @@
+{"label":"hidden pro","sink":"pro","os":"macos","priority":"Realtime","prioritySet":"ok","wait":"Spin","seconds":600,"loadThreads":0,"frames":4656,"intervalMs":{"min":103.390,"mean":128.874,"p50":122.223,"p99":231.622,"max":1041.630},"offBy2ms":4655,"lateMs":{"p99":206.641,"max":1018.829},"resyncs":4656,"sendErrors":0,"dropped":0,"reconnects":0}

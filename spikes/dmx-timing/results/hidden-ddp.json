@@ -1,0 +1,1 @@
+{"label":"hidden ddp","sink":"ddp","os":"macos","priority":"Realtime","prioritySet":"ok","wait":"Spin","seconds":600,"loadThreads":0,"frames":4626,"intervalMs":{"min":103.241,"mean":129.687,"p50":122.339,"p99":245.938,"max":1364.413},"offBy2ms":4625,"lateMs":{"p99":203.822,"max":725.871},"resyncs":4644,"sendErrors":18,"dropped":0,"reconnects":0}

@@ -1,0 +1,1 @@
+{"label":"hidden mock","sink":"mock","os":"macos","priority":"Realtime","prioritySet":"ok","wait":"Spin","seconds":600,"loadThreads":0,"frames":4679,"intervalMs":{"min":96.415,"mean":128.219,"p50":121.808,"p99":226.041,"max":1043.263},"offBy2ms":4678,"lateMs":{"p99":203.312,"max":1020.534},"resyncs":4679,"sendErrors":0,"dropped":0,"reconnects":0}
