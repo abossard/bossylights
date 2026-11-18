@@ -149,7 +149,8 @@ pub enum Pace {
     Unsaid,
     /// From slow to fast (up) or fast to slow (down) across the range.
     Goes(Direction),
-    /// At random.
+    /// At random. `StrobeRandomSlowToFast` and its reverse keep only this: 469 ranges of
+    /// the library lose which way they run.
     Random,
     /// In hertz, from the start of the range to its end.
     Hertz(Hertz),
