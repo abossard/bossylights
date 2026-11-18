@@ -1,10 +1,38 @@
 .lk-screen {
-  display: grid;
-  grid-template-columns: 264px minmax(0, 1fr) 260px;
-  gap: var(--sp-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
   padding: var(--sp-3) var(--gutter);
   height: 100%;
   min-height: 560px;
+}
+
+/* the two parts of the screen: what exists, and how the autopilot picks */
+.lk-parts {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+.lk-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr) 316px;
+  gap: var(--sp-4);
+}
+
+.lk-body.is-wide {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.lk-side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .lk-label {
@@ -54,29 +82,148 @@
   font-size: var(--display-xs);
 }
 
-.lk-groups {
+/* ---------------- library: filters, then groups that fold ---------------- */
+.lk-lib-tools {
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
+  align-items: center;
+  gap: var(--sp-2);
 }
 
-.lk-group {
-  min-height: 30px;
-  padding: 0 8px;
-  border: 1px solid var(--line);
+.lk-wide {
+  min-height: 36px;
+  padding: 0 10px;
+}
+
+.lk-lib-filters {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.lk-lib.is-wide .lk-lib-filters {
+  flex-direction: row;
+  align-items: center;
+}
+
+.lk-lib.is-wide .lk-lib-filters input {
+  max-width: 280px;
+}
+
+.lk-lib.is-wide .lk-kinds {
+  align-self: auto;
+}
+
+.lk-sections {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  position: relative;
+  border-top: 1px solid var(--line);
+}
+
+/* widened: the groups stand side by side */
+.lk-lib.is-wide .lk-sections {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 0 var(--sp-4);
+  align-content: start;
+}
+
+.lk-sec-head {
+  display: flex;
+  align-items: stretch;
+  min-height: var(--target);
+  border-bottom: 1px solid var(--line);
+  background: var(--s1);
+}
+
+.lk-sec-fold {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 0 var(--sp-2);
+  text-align: left;
+}
+
+.lk-sec-fold b {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lk-sec-fold svg {
+  flex: none;
+  transform: rotate(90deg);
+  transition: transform var(--t-fast);
+}
+
+.lk-sec.is-folded .lk-sec-fold svg {
+  transform: none;
+}
+
+.lk-count {
+  min-width: 2ch;
+  text-align: right;
   font-size: var(--text-sm);
   font-weight: 700;
-  font-stretch: var(--tight);
+  color: var(--mute);
 }
 
-.lk-group:hover {
-  border-color: var(--mute);
+.lk-sec-tool {
+  flex: none;
+  width: 36px;
+  display: grid;
+  place-items: center;
+  color: var(--mute);
 }
 
-.lk-group[aria-pressed="true"] {
+.lk-sec-tool:hover,
+.lk-sec-fold:hover {
+  color: var(--paper);
+  background: var(--s2);
+}
+
+.lk-sec-rename {
+  flex: 1;
+  display: flex;
+  gap: 4px;
+  padding: 2px;
+}
+
+.lk-sec-rename input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* a look is dragged over this group */
+.lk-sec.is-over .lk-sec-head {
   background: var(--paper);
-  border-color: var(--paper);
   color: var(--ink);
+}
+
+.lk-sec.is-over .lk-count,
+.lk-sec.is-over .lk-sec-tool {
+  color: var(--ink);
+}
+
+.lk-sections.is-dragging .lk-row {
+  cursor: grabbing;
+}
+
+.lk-ghost {
+  position: fixed;
+  z-index: 50;
+  padding: 4px 8px;
+  background: var(--paper);
+  color: var(--ink);
+  font-size: var(--text-sm);
+  font-weight: 700;
+  pointer-events: none;
+  white-space: nowrap;
 }
 
 .lk-list,
@@ -84,12 +231,8 @@
   list-style: none;
 }
 
-.lk-list {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  position: relative;
-  border-top: 1px solid var(--line);
+.lk-row {
+  touch-action: none;
 }
 
 .lk-row {
@@ -641,14 +784,13 @@
 
 /* ---------------- about ---------------- */
 .lk-about {
-  min-height: 0;
-  overflow-y: auto;
-  gap: var(--sp-4);
+  flex: none;
+  gap: var(--sp-2);
 }
 
 .lk-try .pad {
   width: 100%;
-  height: 96px;
+  height: 72px;
 }
 
 .lk-try {
@@ -664,16 +806,17 @@
   gap: 4px;
 }
 
-.lk-about-sec {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
 .lk-tags {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
+  align-items: center;
+  gap: 4px 6px;
+}
+
+.lk-tag-add {
+  min-height: 34px;
+  width: auto;
+  font-size: var(--text-sm);
 }
 
 .lk-tag {
@@ -699,19 +842,330 @@
   background: var(--s2);
 }
 
-.lk-addgroup {
-  display: flex;
-  gap: 6px;
+/* ---------------- connections: made of, the look, used by, lights ---------------- */
+.lk-conn {
+  flex: none;
+  gap: var(--sp-2);
 }
 
-.lk-addgroup input {
+.lk-conn-map {
+  display: grid;
+  grid-template-columns: minmax(0, 5fr) minmax(0, 4fr) minmax(0, 6fr);
+  align-items: start;
+}
+
+.lk-conn-col {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* the brackets that tie the three columns together */
+.lk-conn-col.is-made {
+  padding-right: 8px;
+  border-right: var(--rule) solid var(--line);
+}
+
+.lk-conn-col.is-used {
+  padding-left: 8px;
+  border-left: var(--rule) solid var(--line);
+}
+
+.lk-conn-mid {
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  position: relative;
+  padding: 0 8px;
+}
+
+.lk-conn-mid::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  border-top: var(--rule) solid var(--line);
+}
+
+.lk-conn-mid b {
+  position: relative;
+  width: 100%;
+  padding: 8px 6px;
+  background: var(--paper);
+  color: var(--ink);
+  font-size: var(--text-sm);
+  font-stretch: var(--tight);
+  line-height: 1.2;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.lk-node {
+  width: 100%;
+  min-height: var(--target);
+  padding: 4px 6px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--mute);
+  font-size: var(--text-sm);
+  font-weight: 700;
+  font-stretch: var(--tight);
+  line-height: 1.2;
+  text-align: left;
+}
+
+.lk-conn-col.is-used .lk-node {
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 0;
+}
+
+.lk-node small {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--mute);
+}
+
+.lk-node span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.lk-node:hover {
+  border-color: var(--paper);
+  background: var(--s1);
+}
+
+.lk-conn-none {
+  padding: 6px 0;
+  font-size: var(--text-sm);
+  color: var(--mute);
+  line-height: 1.25;
+}
+
+.lk-conn-lights {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: var(--sp-2);
+  border-top: 1px solid var(--line);
+}
+
+.lk-node.is-light b {
+  font-weight: 700;
+}
+
+.lk-node.is-light {
+  font-weight: 500;
+}
+
+.lk-conn-warn {
+  font-size: var(--text-sm);
+}
+
+/* ---------------- autopilot: styles, rules, limits ---------------- */
+.ap {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr) 300px;
+  gap: var(--sp-4);
+}
+
+.ap > .region {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.ap-style-list {
+  list-style: none;
+  border-top: 1px solid var(--line);
+}
+
+.ap-style {
+  width: 100%;
+  min-height: var(--target);
+  padding: 6px var(--sp-2);
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  column-gap: var(--sp-2);
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+}
+
+.ap-style .mute {
+  grid-column: 1;
+  font-size: var(--text-sm);
+}
+
+.ap-style:hover {
+  background: var(--s1);
+}
+
+.ap-style[aria-current="true"] {
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.ap-style[aria-current="true"] .mute {
+  color: var(--ink);
+}
+
+.ap-inuse {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  padding: 2px 6px;
+  background: var(--layer-autopilot);
+  color: var(--ink);
+  font-style: normal;
+  font-size: var(--text-sm);
+  font-weight: 700;
+}
+
+.ap-style-head {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--sp-2);
+}
+
+.ap-style-head label {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ap-style-head input {
   min-height: var(--target);
 }
 
+.ap-rule-list {
+  list-style: none;
+  border-top: 1px solid var(--line);
+}
+
+.ap-rule {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) 22px minmax(0, 5fr) 22px minmax(0, 6fr) var(--target);
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.ap-rule-head {
+  padding: 4px 0;
+  font-size: var(--text-sm);
+  font-weight: 700;
+  color: var(--mute);
+}
+
+.ap-rule select {
+  width: 100%;
+  min-width: 0;
+  min-height: var(--target);
+}
+
+.ap-pick {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ap-pick small {
+  flex: none;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--mute);
+  white-space: nowrap;
+}
+
+.ap-pick small.is-empty {
+  color: var(--danger);
+}
+
+.ap-arrow {
+  color: var(--mute);
+}
+
+/* the rule a jump landed on, or the one just added */
+.ap-rule.is-marked {
+  background: var(--s2);
+}
+
+.ap-remove {
+  width: var(--target);
+  height: var(--target);
+  display: grid;
+  place-items: center;
+  color: var(--mute);
+}
+
+.ap-remove:hover {
+  color: var(--paper);
+  background: var(--s2);
+}
+
+.ap-add {
+  align-self: flex-start;
+}
+
+.ap-none {
+  padding: var(--sp-3) 0;
+}
+
+.ap-limits {
+  gap: var(--sp-4);
+}
+
+.ap-limits section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ap-limits select {
+  min-height: var(--target);
+}
+
+.ap-groups {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.ap-now {
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--line);
+}
+
 @media (max-width: 1180px) {
-  .lk-screen {
-    grid-template-columns: 220px minmax(0, 1fr) 216px;
+  .lk-body {
+    grid-template-columns: 228px minmax(0, 1fr) 268px;
     gap: var(--sp-3);
+  }
+
+  .ap {
+    grid-template-columns: 184px minmax(0, 1fr) 232px;
+    gap: var(--sp-3);
+  }
+
+  .ap-rule {
+    grid-template-columns: minmax(0, 3fr) 14px minmax(0, 5fr) 14px minmax(0, 5fr) var(--target);
+    gap: 4px;
+  }
+
+  .ap-pick small {
+    display: none;
+  }
+
+  .ap-style-head {
+    flex-wrap: wrap;
   }
 
   .lk-grid {

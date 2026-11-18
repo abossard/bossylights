@@ -2,6 +2,9 @@ import { createSignal, For, Match, Show, Switch } from "solid-js";
 import { store, type Item } from "../../fake/store";
 import { Button, Pad, Region, Segmented, type PadState } from "../../kit";
 import type { Issue } from "../../shell/registry";
+import { Autopilot } from "./Autopilot";
+import { Connections } from "./Connections";
+import { Library } from "./Library";
 import { PatternEditor } from "./PatternEditor";
 import { SequenceEditor } from "./SequenceEditor";
 import { StepEditor } from "./StepEditor";
@@ -20,16 +23,22 @@ export const issues: Issue[] = [
   { number: 60, title: "Pixel matrix effects" },
   { number: 62, title: "Audio-reactive color scripts (HUE Matrix)" },
   { number: 71, title: "Collections" },
+  { number: 87, title: "Autopilot: the show follows the music" },
+  { number: 86, title: "Never-dark fallback" },
 ];
 
 const HOLD_MS = 350;
-type Kind = "all" | Item["kind"];
 
 export function Screen() {
   // ---- what is open: a path, so drilling in has a way back
-  const [path, setPath] = createSignal<string[]>(["build-up-end-a"]);
+  // a jump from another screen can land on a look or on an autopilot rule
+  const jump = store.state.jump;
+  const [part, setPart] = createSignal<"looks" | "autopilot">(jump.autopilotRule ? "autopilot" : "looks");
+  const [apTarget, setApTarget] = createSignal<{ styleId?: string; ruleId?: string }>({ ruleId: jump.autopilotRule });
+  const [wide, setWide] = createSignal(false);
+  const [path, setPath] = createSignal<string[]>([jump.look && store.item(jump.look) ? jump.look : "build-up-end-a"]);
   const current = () => store.item(path()[path().length - 1])!;
-  const open = (id: string) => setPath([id]);
+  const open = (id: string) => (setPath([id]), setWide(false));
   const drill = (id: string) => setPath([...path(), id]);
   const [selectedEntry, setSelectedEntry] = createSignal<string | null>(null);
   const entryOf = () => {
@@ -37,18 +46,6 @@ export function Screen() {
     if (c.kind !== "sequence") return null;
     return selectedEntry() && c.entries.some((x) => x.id === selectedEntry()) ? selectedEntry() : (c.entries[0]?.id ?? null);
   };
-
-  // ---- library filters
-  const [query, setQuery] = createSignal("");
-  const [kind, setKind] = createSignal<Kind>("all");
-  const [group, setGroup] = createSignal<string | null>(null);
-  const shown = () =>
-    store
-      .items()
-      .filter((i) => kind() === "all" || i.kind === kind())
-      .filter((i) => !group() || i.groups.includes(group()!))
-      .filter((i) => !query().trim() || i.name.toLowerCase().includes(query().trim().toLowerCase()))
-      .sort((a, b) => (a.kind === b.kind ? a.name.localeCompare(b.name) : ["sequence", "pattern", "step"].indexOf(a.kind) - ["sequence", "pattern", "step"].indexOf(b.kind)));
 
   // ---- try on lights: tap toggles, hold flashes. A try gives back what it touched when it stops.
   let wasRunning = false;
@@ -66,52 +63,27 @@ export function Screen() {
   };
   const tryState = (): PadState => store.lookState(current().id) ?? "idle";
 
-  const [newGroup, setNewGroup] = createSignal("");
   const [consoleMsg, setConsoleMsg] = createSignal("");
 
   return (
     <div class="lk-screen">
-      <Region id="library" title="Library" class="lk-lib" aside={<span class="mute">{shown().length} looks</span>}>
-        <input type="text" placeholder="Search" aria-label="Search the library" value={query()} onInput={(e) => setQuery(e.currentTarget.value)} />
+      <div class="lk-parts">
         <Segmented
-          label="Kind"
-          value={kind()}
-          onChange={setKind}
+          label="Part of the Looks screen"
+          value={part()}
+          onChange={setPart}
           options={[
-            { value: "all", label: "All" },
-            { value: "step", label: "Step" },
-            { value: "sequence", label: "Sequence" },
-            { value: "pattern", label: "Pattern" },
+            { value: "looks", label: "Looks" },
+            { value: "autopilot", label: "Autopilot" },
           ]}
-          class="lk-kinds"
         />
-        <div class="lk-groups" role="group" aria-label="Groups">
-          <For each={store.allGroups()}>
-            {(g) => (
-              <button type="button" class="lk-group" aria-pressed={group() === g} onClick={() => setGroup(group() === g ? null : g)}>
-                {g}
-              </button>
-            )}
-          </For>
-        </div>
-        <ul class="lk-list" aria-label="Looks">
-          <For each={shown()} fallback={<li class="mute lk-none">Nothing matches. Clear the search or the filters.</li>}>
-            {(i) => (
-              <li>
-                <button type="button" class="lk-row" aria-current={current().id === i.id ? "true" : undefined} onClick={() => open(i.id)}>
-                  <KindSymbol kind={i.kind} />
-                  <span class="lk-row-text">{i.name}</span>
-                  <span class="lk-chips is-small">
-                    <For each={store.colorsOf(i.id).slice(0, 4)}>{(c) => <i style={{ background: c }} />}</For>
-                  </span>
-                  <span class="lk-meas">{store.measureOf(i.id) ? `${store.measureOf(i.id)} b` : ""}</span>
-                </button>
-              </li>
-            )}
-          </For>
-        </ul>
-      </Region>
+        <span class="mute">{part() === "looks" ? "What exists: steps, sequences and patterns, in groups" : "How the autopilot picks from those groups"}</span>
+      </div>
+      <Show when={part() === "looks"} fallback={<Autopilot styleId={apTarget().styleId} ruleId={apTarget().ruleId} />}>
+      <div class="lk-body" classList={{ "is-wide": wide() }}>
+      <Library currentId={current().id} onOpen={open} wide={wide()} onWide={setWide} />
 
+      <Show when={!wide()}>
       <Region id="editor" title="Editor" bare class="lk-editor">
         <nav class="lk-crumbs" aria-label="Where you are">
           <For each={path()}>
@@ -144,6 +116,33 @@ export function Screen() {
             </Button>
           </Show>
         </header>
+        <div class="lk-tags" role="group" aria-label="Groups this look is in">
+          <span class="lk-label">In groups</span>
+          <For each={current().groups} fallback={<span class="mute">none</span>}>
+            {(g) => (
+              <span class="lk-tag">
+                {g}
+                <button type="button" aria-label={`Remove from ${g}`} onClick={() => store.removeFromGroup(current().id, g)}>
+                  <svg width="10" height="10" viewBox="0 0 12 12" aria-hidden="true">
+                    <path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" stroke-width="2.5" />
+                  </svg>
+                </button>
+              </span>
+            )}
+          </For>
+          <select
+            class="lk-tag-add"
+            aria-label="Add to a group"
+            value=""
+            onChange={(e) => {
+              if (e.currentTarget.value) store.addToGroup(current().id, e.currentTarget.value);
+              e.currentTarget.value = "";
+            }}
+          >
+            <option value="">Add to a group</option>
+            <For each={store.allGroups().filter((g) => !current().groups.includes(g))}>{(g) => <option value={g}>{g}</option>}</For>
+          </select>
+        </div>
         <Switch>
           <Match when={current().kind === "sequence" && current()}>
             {(c) => (
@@ -163,7 +162,8 @@ export function Screen() {
         </Switch>
       </Region>
 
-      <Region id="about" title="About this look" class="lk-about">
+      <div class="lk-side">
+      <Region id="about" title="Try it" class="lk-about">
         <div class="lk-try">
           <Pad label="Try on lights" colors={store.colorsOf(current().id).length ? store.colorsOf(current().id) : ["#000000"]} state={tryState()} onDown={tryDown} onUp={tryUp} />
           <p class="mute">Tap to play it by hand, tap again to stop. Hold to flash.</p>
@@ -182,60 +182,19 @@ export function Screen() {
           </span>
         </div>
 
-        <section class="lk-about-sec">
-          <h3 class="lk-label">Used in</h3>
-          <Show when={store.usedIn(current().id).length} fallback={<p class="mute">No sequence uses it yet.</p>}>
-            <p class="mute">A change here changes all of them.</p>
-            <ul class="lk-used">
-              <For each={store.usedIn(current().id)}>
-                {(s) => (
-                  <li>
-                    <button type="button" class="lk-row" onClick={() => open(s.id)}>
-                      <KindSymbol kind="sequence" />
-                      <span class="lk-row-text">{s.name}</span>
-                      <span class="lk-meas">{store.measureOf(s.id)} b</span>
-                    </button>
-                  </li>
-                )}
-              </For>
-            </ul>
-          </Show>
-        </section>
-
-        <section class="lk-about-sec">
-          <h3 class="lk-label">Groups</h3>
-          <div class="lk-tags">
-            <For each={current().groups} fallback={<span class="mute">In no group.</span>}>
-              {(g) => (
-                <span class="lk-tag">
-                  {g}
-                  <button type="button" aria-label={`Remove from ${g}`} onClick={() => store.removeFromGroup(current().id, g)}>
-                    <svg width="10" height="10" viewBox="0 0 12 12" aria-hidden="true">
-                      <path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" stroke-width="2.5" />
-                    </svg>
-                  </button>
-                </span>
-              )}
-            </For>
-          </div>
-          <form
-            class="lk-addgroup"
-            onSubmit={(e) => {
-              e.preventDefault();
-              store.addToGroup(current().id, newGroup());
-              setNewGroup("");
-            }}
-          >
-            <input type="text" list="lk-group-names" placeholder="Add to a group" aria-label="Add to a group" value={newGroup()} onInput={(e) => setNewGroup(e.currentTarget.value)} />
-            <datalist id="lk-group-names">
-              <For each={store.allGroups().filter((g) => !current().groups.includes(g))}>{(g) => <option value={g} />}</For>
-            </datalist>
-            <Button type="submit" disabled={!newGroup().trim()} reason="Type a name">
-              Add
-            </Button>
-          </form>
-        </section>
       </Region>
+      <Connections
+        id={current().id}
+        onOpen={open}
+        onRule={(styleId, ruleId) => {
+          setApTarget({ styleId, ruleId });
+          setPart("autopilot");
+        }}
+      />
+      </div>
+      </Show>
+      </div>
+      </Show>
     </div>
   );
 }
