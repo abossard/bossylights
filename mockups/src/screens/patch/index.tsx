@@ -1,5 +1,5 @@
 import { createMemo, createSignal, For, Show } from "solid-js";
-import { store, type Fixture, type PixelPanel } from "../../fake/store";
+import { COLOUR_ORDERS, store, type ColourOrder, type Fixture, type PixelPanel } from "../../fake/store";
 import { Button, Region, Segmented } from "../../kit";
 import type { Issue } from "../../shell/registry";
 import { AddFlow, flow, flowInProgress, ghost, openFlow, STEPS } from "./AddFlow";
@@ -12,7 +12,7 @@ export const issues: Issue[] = [
   { number: 50, title: "Patch: fixtures, modes, addresses" },
   { number: 54, title: "Guided patch" },
   { number: 41, title: "Fixture library: QLC+, OFL, GDTF" },
-  { number: 56, title: "Groups and the rig map" },
+  { number: 56, title: "Groups and fixture order" },
 ];
 
 const COLS = 32;
@@ -38,7 +38,9 @@ function segments(address: number, channels: number) {
 
 export function Screen() {
   const [universe, setUniverse] = createSignal(1);
-  const [selectedId, setSelectedId] = createSignal<string>(store.conflicts()[0]?.b.id ?? store.rig[0].id);
+  // a jump from the Looks screen ("Lights: PAR 1-8") lands on the first light of that group
+  const jumped = store.rig.find((f) => f.group === store.state.jump.fixtureGroup);
+  const [selectedId, setSelectedId] = createSignal<string>(jumped?.id ?? store.conflicts()[0]?.b.id ?? store.rig[0].id);
   const [panelId, setPanelId] = createSignal<string | null>(null);
   const [side, setSide] = createSignal<"details" | "panel">("details");
   const [query, setQuery] = createSignal("");
@@ -141,9 +143,10 @@ export function Screen() {
   };
 
   // ---- add a pixel panel
-  const [pp, setPp] = createSignal({ name: "Pixel panel 2", cols: 16, rows: 8, wiring: "snake" as PixelPanel["wiring"], startUniverse: 0 });
+  const [pp, setPp] = createSignal({ name: "Pixel panel 2", cols: 16, rows: 8, wiring: "snake" as PixelPanel["wiring"], startUniverse: 0, pixel: "RGB" as PixelPanel["pixel"], order: "RGB" as ColourOrder });
   const ppStart = () => pp().startUniverse || store.firstFreeUniverse();
-  const ppUniverses = () => Math.ceil((pp().cols * pp().rows) / 170);
+  const ppPerUniverse = () => (pp().pixel === "RGBW" ? 128 : 170);
+  const ppUniverses = () => Math.ceil((pp().cols * pp().rows) / ppPerUniverse());
 
   return (
     <div class="patch-screen">
@@ -425,7 +428,7 @@ export function Screen() {
                     <header>
                       <h2 class="display">{p().name}</h2>
                       <span class="mute">
-                        {p().cols} x {p().rows} pixels, {p().wiring === "snake" ? "snake" : "zigzag"} wiring
+                        {p().cols} x {p().rows} {p().pixel} pixels, order {p().pixel === "RGBW" ? `${p().order}W` : p().order}, {p().wiring === "snake" ? "snake" : "zigzag"} wiring
                       </span>
                     </header>
                     <ul class="patch-panel-runs">
@@ -486,12 +489,32 @@ export function Screen() {
               <svg class="patch-wiring" viewBox="0 0 120 40" aria-hidden="true">
                 <path d={pp().wiring === "snake" ? "M6 8H114V20H6V32H114" : "M6 8H114L6 20H114L6 32H114"} />
               </svg>
+              <div class="patch-two">
+                <div class="patch-field">
+                  <span class="mute">Pixel type</span>
+                  <Segmented
+                    label="Pixel type"
+                    value={pp().pixel}
+                    onChange={(v) => setPp({ ...pp(), pixel: v })}
+                    options={[
+                      { value: "RGB", label: "RGB" },
+                      { value: "RGBW", label: "RGBW" },
+                    ]}
+                  />
+                </div>
+                <label>
+                  <span class="mute">Colour order</span>
+                  <select value={pp().order} onChange={(e) => setPp({ ...pp(), order: e.currentTarget.value as ColourOrder })}>
+                    <For each={COLOUR_ORDERS}>{(o) => <option value={o}>{pp().pixel === "RGBW" ? `${o}W` : o}</option>}</For>
+                  </select>
+                </label>
+              </div>
               <label>
                 <span class="mute">Start universe</span>
                 <input type="text" inputMode="numeric" value={ppStart()} onInput={(e) => setPp({ ...pp(), startUniverse: Math.max(1, Number(e.currentTarget.value) || 1) })} />
               </label>
               <p class="patch-panel-sum">
-                {pp().cols * pp().rows} pixels need {ppUniverses()} {ppUniverses() === 1 ? "universe" : "universes"}: {ppStart()}
+                {pp().cols * pp().rows} {pp().pixel} pixels, {ppPerUniverse()} per universe, need {ppUniverses()} {ppUniverses() === 1 ? "universe" : "universes"}: {ppStart()}
                 {ppUniverses() > 1 ? ` to ${ppStart() + ppUniverses() - 1}` : ""}.
               </p>
               <Button type="submit" variant="primary">

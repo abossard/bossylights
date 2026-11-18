@@ -453,6 +453,16 @@
   min-height: var(--target);
 }
 
+.patch-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.patch-panel-form select {
+  min-height: var(--target);
+}
+
 .patch-two {
   display: grid;
   grid-template-columns: 1fr 1fr;
