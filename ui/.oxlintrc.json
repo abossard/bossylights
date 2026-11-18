@@ -1,0 +1,77 @@
+{
+  "$schema": "../node_modules/oxlint/configuration_schema.json",
+  "plugins": [
+    "typescript"
+  ],
+  "categories": {
+    "correctness": "error"
+  },
+  "rules": {
+    "typescript/switch-exhaustiveness-check": [
+      "error",
+      {
+        "requireDefaultForNonUnion": true
+      }
+    ],
+    "typescript/no-explicit-any": "error",
+    "typescript/no-unsafe-argument": "error",
+    "typescript/no-unsafe-assignment": "error",
+    "typescript/no-unsafe-call": "error",
+    "typescript/no-unsafe-member-access": "error",
+    "typescript/no-unsafe-return": "error",
+    "no-restricted-globals": [
+      "error",
+      {
+        "name": "WebSocket",
+        "message": "Only src/engine.ts talks to the engine."
+      },
+      {
+        "name": "fetch",
+        "message": "Only src/engine.ts talks to the engine."
+      },
+      {
+        "name": "EventSource",
+        "message": "Only src/engine.ts talks to the engine."
+      },
+      {
+        "name": "XMLHttpRequest",
+        "message": "Only src/engine.ts talks to the engine."
+      }
+    ]
+  },
+  "overrides": [
+    {
+      "files": [
+        "src/engine.ts"
+      ],
+      "rules": {
+        "no-restricted-globals": "off"
+      }
+    },
+    {
+      "files": [
+        "src/**/*.tsx"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "**",
+                  "!**/*.css"
+                ],
+                "importNamePattern": "^set[A-Z]",
+                "message": "A view draws state and sends commands. It never sets state."
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "ignorePatterns": [
+    "src/**/*.test.mjs"
+  ]
+}

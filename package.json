@@ -8,10 +8,10 @@
     "engine": "cargo run -p engine-server",
     "ui": "vite ui",
     "build": "tsc -p ui && vite build ui && cargo build --workspace",
-    "test": "npm run test:licences && npm run test:rust && npm run test:ui && npm run test:e2e",
-    "test:licences": "node --test scripts/*.test.mjs && node scripts/check-licences.mjs",
+    "test": "npm run test:checks && npm run test:rust && npm run test:ui && npm run test:e2e",
+    "test:checks": "node --test scripts/*.test.mjs && node scripts/check-licences.mjs && node scripts/check-layers.mjs",
     "test:rust": "cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace",
-    "test:ui": "tsc -p ui && node --test ui/src/*.test.mjs",
+    "test:ui": "tsc -p ui && oxlint --type-aware --deny-warnings -c ui/.oxlintrc.json ui/src && node --test ui/src/*.test.mjs",
     "test:e2e": "playwright install chromium && playwright test"
   },
   "dependencies": {
@@ -20,6 +20,8 @@
   "devDependencies": {
     "@playwright/test": "1.65.0",
     "@tauri-apps/cli": "2.12.4",
+    "oxlint": "1.93.0",
+    "oxlint-tsgolint": "7.0.2006",
     "typescript": "7.0.2",
     "vite": "8.3.5",
     "vite-plugin-solid": "2.11.15"
