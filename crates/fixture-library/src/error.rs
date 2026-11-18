@@ -27,6 +27,8 @@ pub enum Problem {
         text: String,
     },
     UnknownChannel(String),
+    /// A head names a channel number the mode does not have.
+    UnknownHeadChannel(u16),
     DuplicateNumber(u16),
     SkippedNumber(u16),
     BackwardsRange {
@@ -61,6 +63,9 @@ impl fmt::Display for Problem {
             }
             Self::UnknownChannel(name) => {
                 write!(f, "the mode names channel \"{name}\", which is not defined")
+            }
+            Self::UnknownHeadChannel(n) => {
+                write!(f, "a head names channel {n}, which the mode does not have")
             }
             Self::DuplicateNumber(n) => write!(f, "channel number {n} is used twice in a mode"),
             Self::SkippedNumber(n) => write!(f, "channel number {n} skips a number in a mode"),

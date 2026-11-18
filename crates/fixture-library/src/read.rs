@@ -2,7 +2,7 @@
 
 use crate::error::{Error, Problem};
 use crate::function::function_of;
-use crate::model::{Byte, Channel, Fixture, Kind, Layout, Mode, Range};
+use crate::model::{Byte, Channel, Does, Fixture, Kind, Layout, Mode, Range, Rgb};
 use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -156,6 +156,10 @@ fn channel<'a>(node: Node<'a, 'a>) -> Result<Channel, Failure<'a>> {
         None => None,
     };
     let (function, byte) = function_of(node.attribute("Preset"), group, &name);
+    let default = match node.attribute("Default") {
+        Some(_) => Some(number(node, "Default")?),
+        None => None,
+    };
     let ranges = node
         .children()
         .filter(|n| n.has_tag_name("Capability"))
@@ -165,6 +169,7 @@ fn channel<'a>(node: Node<'a, 'a>) -> Result<Channel, Failure<'a>> {
         name,
         function,
         byte,
+        default,
         ranges,
     })
 }
@@ -175,7 +180,50 @@ fn range<'a>(node: Node<'a, 'a>) -> Result<Range, Failure<'a>> {
         return Err((node, Problem::BackwardsRange { min, max }));
     }
     let label = node.text().unwrap_or_default().trim().to_string();
-    Ok(Range { min, max, label })
+    let does = node
+        .attribute("Preset")
+        .and_then(|preset| does(preset, node.attribute("Res1"), node.attribute("Res2")));
+    Ok(Range {
+        min,
+        max,
+        label,
+        does,
+    })
+}
+
+/// What a QLC+ capability preset does (`engine/src/qlccapability.h`), with its colours.
+/// A colour preset without a colour it can read says nothing, as in QLC+.
+fn does(preset: &str, first: Option<&str>, second: Option<&str>) -> Option<Does> {
+    match preset {
+        "ShutterOpen" => Some(Does::Open),
+        "ShutterClose" => Some(Does::Closed),
+        "LampOn" => Some(Does::LampOn),
+        "ColorMacro" => Some(Does::Color(rgb(first?)?)),
+        "ColorDoubleMacro" => Some(Does::Colors(rgb(first?)?, rgb(second?)?)),
+        _ if ["Strobe", "Pulse", "Ramp"]
+            .iter()
+            .any(|start| preset.starts_with(start)) =>
+        {
+            Some(Does::Strobe)
+        }
+        _ if preset.starts_with("Reset") => Some(Does::Reset),
+        _ => None,
+    }
+}
+
+/// `#rrggbb`, as every colour in the QLC+ library is written.
+fn rgb(text: &str) -> Option<Rgb> {
+    let hex = text.trim().strip_prefix('#')?;
+    let byte = |at: usize| {
+        hex.get(at..at + 2)
+            .and_then(|pair| u8::from_str_radix(pair, 16).ok())
+    };
+    (hex.len() == 6).then_some(())?;
+    Some(Rgb {
+        red: byte(0)?,
+        green: byte(2)?,
+        blue: byte(4)?,
+    })
 }
 
 /// A mode: its channels by number, its pixels (`Head`s) and its layout.
@@ -217,38 +265,53 @@ fn mode<'a>(
             .unwrap_or(node);
         return Err((entry, Problem::SkippedNumber(number)));
     }
-    let channels = by_number.values().map(|c| (*c).clone()).collect();
-    let pixels = node
+    let channels: Vec<Channel> = by_number.values().map(|c| (*c).clone()).collect();
+    let pixels: Vec<Vec<u16>> = node
         .children()
         .filter(|n| n.has_tag_name("Head"))
         .map(|head| {
             head.children()
                 .filter(|n| n.has_tag_name("Channel"))
-                .map(|n| {
-                    n.text().unwrap_or_default().trim().parse().map_err(|_| {
-                        (
-                            n,
-                            Problem::BadNumber {
-                                what: "Head channel",
-                                text: n.text().unwrap_or_default().to_string(),
-                            },
-                        )
-                    })
-                })
+                .map(|n| head_channel(n, channels.len()))
                 .collect::<Result<Vec<u16>, _>>()
         })
         .collect::<Result<_, _>>()?;
-    let layout = layout_in(node).or_else(|| {
-        root.children()
-            .find(|n| n.has_tag_name("Physical"))
-            .and_then(layout_in)
-    });
+    // A layout must have a cell for every head. 244 modes of the QLC+ library give one
+    // that does not (most share the fixture's grid with a mode of fewer heads): their
+    // layout is left out, the heads stay.
+    let layout = layout_in(node)
+        .or_else(|| {
+            root.children()
+                .find(|n| n.has_tag_name("Physical"))
+                .and_then(layout_in)
+        })
+        .filter(|l: &Layout| {
+            pixels.is_empty() || usize::from(l.width) * usize::from(l.height) == pixels.len()
+        });
     Ok(Mode {
         name,
         channels,
         pixels,
         layout,
     })
+}
+
+/// A channel of a head: a number of a channel the mode has.
+fn head_channel<'a>(node: Node<'a, 'a>, count: usize) -> Result<u16, Failure<'a>> {
+    let text = node.text().unwrap_or_default();
+    let number: u16 = text.trim().parse().map_err(|_| {
+        (
+            node,
+            Problem::BadNumber {
+                what: "Head channel",
+                text: text.to_string(),
+            },
+        )
+    })?;
+    if usize::from(number) >= count {
+        return Err((node, Problem::UnknownHeadChannel(number)));
+    }
+    Ok(number)
 }
 
 /// The `Layout` under a mode or under the fixture's own `Physical`.

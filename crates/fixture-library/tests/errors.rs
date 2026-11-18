@@ -86,6 +86,23 @@ fn a_broken_file_names_the_file_and_the_place() {
             "300",
         ),
         (
+            "a default past 255",
+            format!(
+                "{HEAD} <Manufacturer>A</Manufacturer><Model>M</Model><Type>Dimmer</Type>\n <Channel Name=\"C\" Default=\"256\" Preset=\"IntensityRed\"/>\n</FixtureDefinition>"
+            ),
+            Some(4),
+            "256",
+        ),
+        (
+            "a head names a channel the mode does not have",
+            format!(
+                "{HEAD} <Manufacturer>A</Manufacturer><Model>M</Model><Type>Dimmer</Type>\n{}\n <Mode Name=\"X\">\n  <Channel Number=\"0\">Red</Channel>\n  <Head>\n   <Channel>0</Channel>\n   <Channel>1</Channel>\n  </Head>\n </Mode>\n</FixtureDefinition>",
+                ok_channel()
+            ),
+            Some(9),
+            "head",
+        ),
+        (
             "a channel number that is not a number",
             format!(
                 "{HEAD} <Manufacturer>A</Manufacturer><Model>M</Model><Type>Dimmer</Type>\n{}\n <Mode Name=\"X\">\n  <Channel Number=\"two\">Red</Channel>\n </Mode>\n</FixtureDefinition>",

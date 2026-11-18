@@ -4,40 +4,52 @@
 use crate::model::{Byte, Function};
 use alloc::string::{String, ToString};
 
-/// A QLC+ preset name. `None` when the list does not know it.
-fn from_preset(preset: &str) -> Option<(Function, Byte)> {
-    let (stem, byte) = match preset.strip_suffix("Fine") {
-        Some(stem) => (stem, Byte::Fine),
-        None => (preset, Byte::Coarse),
-    };
+/// A QLC+ channel preset (`engine/src/qlcchannel.h`), every one of them, without its
+/// `Fine` ending. `None` when the list does not know it.
+fn from_preset(stem: &str) -> Option<Function> {
     let function = match stem {
-        "IntensityDimmer" | "IntensityMasterDimmer" => Function::Dimmer,
+        "IntensityMasterDimmer" | "IntensityDimmer" => Function::Dimmer,
         "IntensityRed" => Function::Red,
         "IntensityGreen" => Function::Green,
         "IntensityBlue" => Function::Blue,
-        "IntensityWhite" => Function::White,
-        "IntensityAmber" => Function::Amber,
-        "IntensityUV" => Function::Uv,
-        "IntensityLime" => Function::Lime,
         "IntensityCyan" => Function::Cyan,
         "IntensityMagenta" => Function::Magenta,
         "IntensityYellow" => Function::Yellow,
+        "IntensityAmber" => Function::Amber,
+        "IntensityWhite" => Function::White,
+        "IntensityUV" => Function::Uv,
+        "IntensityIndigo" => Function::Indigo,
+        "IntensityLime" => Function::Lime,
+        "IntensityHue" => Function::Hue,
+        "IntensitySaturation" => Function::Saturation,
+        "IntensityLightness" => Function::Lightness,
+        "IntensityValue" => Function::Value,
         "PositionPan" => Function::Pan,
         "PositionTilt" => Function::Tilt,
-        "ColorMacro" | "ColorDoubleMacro" | "ColorWheel" => Function::ColorWheel,
-        "ShutterOpen" | "ShutterClose" => Function::Shutter,
-        "ShutterStrobeSlowFast" => Function::Strobe,
-        _ if stem.starts_with("BeamZoom") => Function::Zoom,
-        _ if stem.starts_with("BeamFocus") => Function::Focus,
-        _ if stem.starts_with("Gobo") => Function::Gobo,
-        _ if stem.starts_with("Strobe") => Function::Strobe,
-        _ if stem.starts_with("Prism") => Function::Prism,
-        _ if stem.starts_with("SpeedPanTilt") => Function::Speed,
-        _ if stem.starts_with("Rotation") => Function::Rotation,
-        _ if stem.starts_with("Reset") || stem.starts_with("Lamp") => Function::Control,
+        // Other on purpose: the X or Y of a laser or an effect, not where a beam points.
+        // QLC+ itself gives them no pan or tilt meaning.
+        "PositionXAxis" | "PositionYAxis" => return None,
+        "SpeedPanSlowFast"
+        | "SpeedPanFastSlow"
+        | "SpeedTiltSlowFast"
+        | "SpeedTiltFastSlow"
+        | "SpeedPanTiltSlowFast"
+        | "SpeedPanTiltFastSlow" => Function::Speed,
+        "ColorMacro" | "ColorWheel" => Function::ColorWheel,
+        // Other on purpose: one channel that picks a whole colour, two channels in the
+        // library. Nothing says how its values map to red, green and blue.
+        "ColorRGBMixer" => return None,
+        "ColorCTOMixer" | "ColorCTCMixer" | "ColorCTBMixer" => Function::ColorTemperature,
+        "GoboWheel" | "GoboIndex" => Function::Gobo,
+        "ShutterStrobeSlowFast" | "ShutterStrobeFastSlow" => Function::Strobe,
+        "ShutterIrisMinToMax" | "ShutterIrisMaxToMin" | "ShutterIris" => Function::Iris,
+        "BeamFocusNearFar" | "BeamFocusFarNear" | "BeamFocus" => Function::Focus,
+        "BeamZoomSmallBig" | "BeamZoomBigSmall" | "BeamZoom" => Function::Zoom,
+        "PrismRotationSlowFast" | "PrismRotationFastSlow" => Function::Prism,
+        "NoFunction" => Function::NoFunction,
         _ => return None,
     };
-    Some((function, byte))
+    Some(function)
 }
 
 /// A channel's colour or dimmer, said only by its name inside the Intensity group.
@@ -60,13 +72,18 @@ fn beam_by_name(name: &str) -> Option<Function> {
         Some(Function::Focus)
     } else if name.contains("zoom") {
         Some(Function::Zoom)
+    } else if name.contains("iris") {
+        Some(Function::Iris)
+    } else if name.contains("frost") {
+        Some(Function::Frost)
     } else {
         None
     }
 }
 
 /// What a channel does: its preset if it has one, else its group, else it is `Other`.
-/// `group` is the group's name and the byte it says.
+/// `group` is the group's name and the byte it says. A preset ending in `Fine` is the
+/// fine byte, also when the list does not know the preset.
 pub fn function_of(
     preset: Option<&str>,
     group: Option<(&str, Byte)>,
@@ -74,8 +91,12 @@ pub fn function_of(
 ) -> (Function, Byte) {
     let other = || Function::Other(name.to_string());
     if let Some(preset) = preset {
-        return from_preset(preset)
-            .unwrap_or_else(|| (Function::Other(String::from(preset)), Byte::Coarse));
+        let (stem, byte) = match preset.strip_suffix("Fine") {
+            Some(stem) => (stem, Byte::Fine),
+            None => (preset, Byte::Coarse),
+        };
+        let function = from_preset(stem).unwrap_or_else(|| Function::Other(String::from(preset)));
+        return (function, byte);
     }
     let Some((group, byte)) = group else {
         return (other(), Byte::Coarse);
@@ -92,6 +113,7 @@ pub fn function_of(
         "Prism" => Function::Prism,
         "Beam" => beam_by_name(name).unwrap_or_else(other),
         "Maintenance" => Function::Control,
+        "Nothing" => Function::NoFunction,
         _ => other(),
     };
     (function, byte)

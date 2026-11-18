@@ -3,7 +3,7 @@
 
 use Byte::{Coarse, Fine};
 use Function::{Blue, Dimmer, Effect, Focus, Green, Pan, Red, Shutter, Tilt, White, Zoom};
-use fixture_library::{Byte, Function, Kind, Layout, parse, search};
+use fixture_library::{Byte, Does, Function, Kind, Layout, Rgb, parse, search};
 
 fn read(file: &str) -> fixture_library::Fixture {
     let path = format!("{}/tests/definitions/{file}", env!("CARGO_MANIFEST_DIR"));
@@ -13,6 +13,8 @@ fn read(file: &str) -> fixture_library::Fixture {
 
 type Plan = Vec<(Function, Byte)>;
 type Ranges = Vec<(u8, u8, &'static str)>;
+/// A channel's name and the value that lets light out.
+type OpenAt = Vec<(&'static str, u8)>;
 
 fn plan(mode: &fixture_library::Mode) -> Plan {
     mode.channels
@@ -272,6 +274,195 @@ fn a_channel_keeps_its_ranges() {
             .map(|r| (r.min, r.max, r.label.as_str()))
             .collect();
         assert_eq!(ranges, expected, "{file} {}", channel.name);
+    }
+}
+
+fn channel(file: &str, mode: &str, name: &str) -> fixture_library::Channel {
+    read(file)
+        .modes
+        .into_iter()
+        .find(|m| m.name == mode)
+        .and_then(|m| m.channels.into_iter().find(|c| c.name == name))
+        .expect("the channel is there")
+}
+
+// file, mode, channel, what its first ranges do
+#[test]
+fn a_range_says_what_it_does_when_its_preset_says() {
+    let red = Rgb {
+        red: 255,
+        green: 0,
+        blue: 0,
+    };
+    let yellow = Rgb {
+        red: 255,
+        green: 255,
+        blue: 0,
+    };
+    let green = Rgb {
+        red: 0,
+        green: 255,
+        blue: 0,
+    };
+    let cases: [(&str, &str, &str, Vec<Option<Does>>); 4] = [
+        (
+            "JB-Systems-Lounge-Laser-DMX.qxf",
+            "7-Channel",
+            "LED Strobe",
+            vec![
+                Some(Does::Closed),
+                Some(Does::Open),
+                Some(Does::Strobe),
+                None,
+            ],
+        ),
+        (
+            "XStatic-X-240Bar-RGB.qxf",
+            "2 Channel",
+            "Function",
+            vec![None, Some(Does::Color(red)), Some(Does::Color(yellow))],
+        ),
+        (
+            "XStatic-X-240Bar-RGB.qxf",
+            "7 Channel",
+            "Function",
+            vec![None, Some(Does::Color(red))],
+        ),
+        (
+            "Elation-EVC-MH.qxf",
+            "12-CH",
+            "Function",
+            vec![None, None, None, None, Some(Does::Reset), None],
+        ),
+    ];
+    for (file, mode, name, expected) in cases {
+        let found = channel(file, mode, name);
+        let does: Vec<Option<Does>> = found
+            .ranges
+            .iter()
+            .take(expected.len())
+            .map(|r| r.does)
+            .collect();
+        assert_eq!(does, expected, "{file} {mode} {name}");
+    }
+    let split = channel("XStatic-X-240Bar-RGB.qxf", "7 Channel", "Function");
+    assert_eq!(
+        split.ranges.iter().find(|r| r.min == 216).map(|r| r.does),
+        Some(Some(Does::Colors(red, green)))
+    );
+}
+
+// file, every mode's shutter and strobe channels with the value that lets light out
+#[test]
+fn a_mode_says_which_value_lets_its_light_out() {
+    let cases: [(&str, Vec<(&str, OpenAt)>); 6] = [
+        ("Showtec-Par-64-100W-COB-UV.qxf", vec![("8 Bit", vec![])]),
+        ("Generic-Generic-RGB.qxf", vec![("Dimmer RGB", vec![])]),
+        ("Generic-Generic-RGBW.qxf", vec![("RGBW Dimmer", vec![])]),
+        ("Elation-EVC-MH.qxf", vec![("12-CH", vec![])]),
+        (
+            "XStatic-X-240Bar-RGB.qxf",
+            vec![
+                ("2 Channel", vec![]),
+                ("7 Channel", vec![("Flash", 0)]),
+                ("26 Channel", vec![("Flash", 0)]),
+            ],
+        ),
+        (
+            "JB-Systems-Lounge-Laser-DMX.qxf",
+            vec![
+                ("1-Channel", vec![]),
+                (
+                    "7-Channel",
+                    vec![
+                        ("Red Laser Strobe", 5),
+                        ("Green Laser Strobe", 5),
+                        ("LED Strobe", 5),
+                    ],
+                ),
+            ],
+        ),
+    ];
+    for (file, modes) in cases {
+        let fixture = read(file);
+        for (mode, expected) in modes {
+            let found = fixture
+                .modes
+                .iter()
+                .find(|m| m.name == mode)
+                .expect("the mode is there");
+            let open: Vec<(&str, u8)> = found
+                .channels
+                .iter()
+                .filter_map(|c| c.open().map(|v| (c.name.as_str(), v)))
+                .collect();
+            assert_eq!(open, expected, "{file} {mode}");
+        }
+        // none of the six gives a default
+        assert!(
+            fixture
+                .modes
+                .iter()
+                .flat_map(|m| &m.channels)
+                .all(|c| c.default.is_none()),
+            "{file}"
+        );
+    }
+}
+
+// heads in the mode, the layout under the mode or the fixture, the layout kept
+#[test]
+fn a_layout_is_kept_only_when_it_has_a_cell_for_every_head() {
+    let layout =
+        |w: u16, h: u16| format!(r#"<Physical><Layout Width="{w}" Height="{h}"/></Physical>"#);
+    let cases: Vec<(usize, String, String, Option<Layout>)> = vec![
+        (
+            2,
+            layout(2, 1),
+            String::new(),
+            Some(Layout {
+                width: 2,
+                height: 1,
+            }),
+        ),
+        (
+            2,
+            String::new(),
+            layout(1, 2),
+            Some(Layout {
+                width: 1,
+                height: 2,
+            }),
+        ),
+        (2, layout(3, 1), String::new(), None),
+        (2, String::new(), layout(1, 1), None),
+        (4, layout(2, 1), String::new(), None),
+        // no heads: the layout stays as the definition gives it
+        (
+            0,
+            String::new(),
+            layout(1, 1),
+            Some(Layout {
+                width: 1,
+                height: 1,
+            }),
+        ),
+    ];
+    for (heads, in_mode, in_fixture, expected) in cases {
+        let channels: String = (0..4)
+            .map(|n| format!(r#"<Channel Number="{n}">C</Channel>"#))
+            .collect();
+        let heads: String = (0..heads)
+            .map(|n| format!("<Head><Channel>{}</Channel></Head>", n % 4))
+            .collect();
+        let source = format!(
+            r#"<FixtureDefinition><Manufacturer>A</Manufacturer><Model>M</Model><Type>Other</Type>
+ <Channel Name="C" Preset="IntensityRed"/>{in_fixture}
+ <Mode Name="M">{in_mode}{channels}{heads}</Mode></FixtureDefinition>"#
+        );
+        let fixture = parse("t.qxf", source.as_bytes()).expect("a definition reads");
+        let mode = fixture.modes.first().expect("one mode");
+        assert_eq!(mode.layout, expected, "{source}");
     }
 }
 

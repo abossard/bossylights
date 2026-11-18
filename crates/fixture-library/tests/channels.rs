@@ -2,10 +2,11 @@
 
 use Byte::{Coarse, Fine};
 use Function::{
-    Amber, Blue, ColorWheel, Control, Dimmer, Effect, Focus, Gobo, Green, Lime, Other, Pan, Prism,
-    Red, Rotation, Shutter, Speed, Strobe, Tilt, Uv, White, Zoom,
+    Amber, Blue, ColorTemperature, ColorWheel, Control, Cyan, Dimmer, Effect, Focus, Frost, Gobo,
+    Green, Hue, Indigo, Iris, Lightness, Lime, Magenta, NoFunction, Other, Pan, Prism, Red,
+    Saturation, Shutter, Speed, Strobe, Tilt, Uv, Value, White, Yellow, Zoom,
 };
-use fixture_library::{Byte, Function, parse};
+use fixture_library::{Byte, Channel, Function, parse};
 
 fn definition(channel: &str) -> Vec<u8> {
     let name = channel
@@ -24,122 +25,114 @@ fn definition(channel: &str) -> Vec<u8> {
     .into_bytes()
 }
 
+fn only_channel(channel: &str) -> Channel {
+    let fixture = parse("t.qxf", &definition(channel)).expect("a definition reads");
+    fixture
+        .modes
+        .into_iter()
+        .next()
+        .and_then(|m| m.channels.into_iter().next())
+        .expect("one channel")
+}
+
 fn other(name: &str) -> Function {
     Other(name.to_string())
 }
 
-// the channel element, what it does
+// the QLC+ channel presets (engine/src/qlcchannel.h), every one: what the channel does, its byte
 #[test]
-fn a_channel_does_what_its_preset_group_or_name_says() {
+fn every_qlc_channel_preset_has_a_function_and_keeps_its_byte() {
     let cases: Vec<(&str, Function, Byte)> = vec![
-        (
-            r#"<Channel Name="C" Preset="IntensityDimmer"/>"#,
-            Dimmer,
-            Coarse,
-        ),
-        (
-            r#"<Channel Name="C" Preset="IntensityMasterDimmer"/>"#,
-            Dimmer,
-            Coarse,
-        ),
-        (
-            r#"<Channel Name="C" Preset="IntensityMasterDimmerFine"/>"#,
-            Dimmer,
-            Fine,
-        ),
-        (r#"<Channel Name="C" Preset="IntensityRed"/>"#, Red, Coarse),
-        (
-            r#"<Channel Name="C" Preset="IntensityGreen"/>"#,
-            Green,
-            Coarse,
-        ),
-        (
-            r#"<Channel Name="C" Preset="IntensityBlue"/>"#,
-            Blue,
-            Coarse,
-        ),
-        (
-            r#"<Channel Name="C" Preset="IntensityRedFine"/>"#,
-            Red,
-            Fine,
-        ),
-        (
-            r#"<Channel Name="C" Preset="IntensityWhite"/>"#,
-            White,
-            Coarse,
-        ),
-        (
-            r#"<Channel Name="C" Preset="IntensityAmber"/>"#,
-            Amber,
-            Coarse,
-        ),
-        (r#"<Channel Name="C" Preset="IntensityUV"/>"#, Uv, Coarse),
-        (
-            r#"<Channel Name="C" Preset="IntensityLime"/>"#,
-            Lime,
-            Coarse,
-        ),
-        (r#"<Channel Name="C" Preset="PositionPan"/>"#, Pan, Coarse),
-        (r#"<Channel Name="C" Preset="PositionPanFine"/>"#, Pan, Fine),
-        (r#"<Channel Name="C" Preset="PositionTilt"/>"#, Tilt, Coarse),
-        (
-            r#"<Channel Name="C" Preset="PositionTiltFine"/>"#,
-            Tilt,
-            Fine,
-        ),
-        (
-            r#"<Channel Name="C" Preset="BeamZoomSmallBig"/>"#,
-            Zoom,
-            Coarse,
-        ),
-        (
-            r#"<Channel Name="C" Preset="BeamFocusNearFar"/>"#,
-            Focus,
-            Coarse,
-        ),
-        (r#"<Channel Name="C" Preset="GoboMacro"/>"#, Gobo, Coarse),
-        (r#"<Channel Name="C" Preset="GoboIndexFine"/>"#, Gobo, Fine),
-        (
-            r#"<Channel Name="C" Preset="ColorMacro"/>"#,
-            ColorWheel,
-            Coarse,
-        ),
-        (
-            r#"<Channel Name="C" Preset="ColorWheelFine"/>"#,
-            ColorWheel,
-            Fine,
-        ),
-        (
-            r#"<Channel Name="C" Preset="ShutterStrobeSlowFast"/>"#,
-            Strobe,
-            Coarse,
-        ),
-        (
-            r#"<Channel Name="C" Preset="StrobeSlowToFast"/>"#,
-            Strobe,
-            Coarse,
-        ),
-        (
-            r#"<Channel Name="C" Preset="ShutterOpen"/>"#,
-            Shutter,
-            Coarse,
-        ),
-        (
-            r#"<Channel Name="C" Preset="PrismEffectOn"/>"#,
-            Prism,
-            Coarse,
-        ),
-        (
-            r#"<Channel Name="C" Preset="SpeedPanTiltFastSlow"/>"#,
-            Speed,
-            Coarse,
-        ),
-        (
-            r#"<Channel Name="C" Preset="RotationClockwise"/>"#,
-            Rotation,
-            Coarse,
-        ),
-        (r#"<Channel Name="C" Preset="ResetAll"/>"#, Control, Coarse),
+        ("IntensityMasterDimmer", Dimmer, Coarse),
+        ("IntensityMasterDimmerFine", Dimmer, Fine),
+        ("IntensityDimmer", Dimmer, Coarse),
+        ("IntensityDimmerFine", Dimmer, Fine),
+        ("IntensityRed", Red, Coarse),
+        ("IntensityRedFine", Red, Fine),
+        ("IntensityGreen", Green, Coarse),
+        ("IntensityGreenFine", Green, Fine),
+        ("IntensityBlue", Blue, Coarse),
+        ("IntensityBlueFine", Blue, Fine),
+        ("IntensityCyan", Cyan, Coarse),
+        ("IntensityCyanFine", Cyan, Fine),
+        ("IntensityMagenta", Magenta, Coarse),
+        ("IntensityMagentaFine", Magenta, Fine),
+        ("IntensityYellow", Yellow, Coarse),
+        ("IntensityYellowFine", Yellow, Fine),
+        ("IntensityAmber", Amber, Coarse),
+        ("IntensityAmberFine", Amber, Fine),
+        ("IntensityWhite", White, Coarse),
+        ("IntensityWhiteFine", White, Fine),
+        ("IntensityUV", Uv, Coarse),
+        ("IntensityUVFine", Uv, Fine),
+        ("IntensityIndigo", Indigo, Coarse),
+        ("IntensityIndigoFine", Indigo, Fine),
+        ("IntensityLime", Lime, Coarse),
+        ("IntensityLimeFine", Lime, Fine),
+        ("IntensityHue", Hue, Coarse),
+        ("IntensityHueFine", Hue, Fine),
+        ("IntensitySaturation", Saturation, Coarse),
+        ("IntensitySaturationFine", Saturation, Fine),
+        ("IntensityLightness", Lightness, Coarse),
+        ("IntensityLightnessFine", Lightness, Fine),
+        ("IntensityValue", Value, Coarse),
+        ("IntensityValueFine", Value, Fine),
+        ("PositionPan", Pan, Coarse),
+        ("PositionPanFine", Pan, Fine),
+        ("PositionTilt", Tilt, Coarse),
+        ("PositionTiltFine", Tilt, Fine),
+        ("ColorWheel", ColorWheel, Coarse),
+        ("ColorWheelFine", ColorWheel, Fine),
+        ("GoboWheel", Gobo, Coarse),
+        ("GoboWheelFine", Gobo, Fine),
+        ("GoboIndex", Gobo, Coarse),
+        ("GoboIndexFine", Gobo, Fine),
+        ("ShutterIrisFine", Iris, Fine),
+        ("BeamFocusFine", Focus, Fine),
+        ("BeamZoomFine", Zoom, Fine),
+        ("PositionXAxis", other("PositionXAxis"), Coarse),
+        ("PositionYAxis", other("PositionYAxis"), Coarse),
+        ("SpeedPanSlowFast", Speed, Coarse),
+        ("SpeedPanFastSlow", Speed, Coarse),
+        ("SpeedTiltSlowFast", Speed, Coarse),
+        ("SpeedTiltFastSlow", Speed, Coarse),
+        ("SpeedPanTiltSlowFast", Speed, Coarse),
+        ("SpeedPanTiltFastSlow", Speed, Coarse),
+        ("ColorMacro", ColorWheel, Coarse),
+        ("ColorRGBMixer", other("ColorRGBMixer"), Coarse),
+        ("ColorCTOMixer", ColorTemperature, Coarse),
+        ("ColorCTCMixer", ColorTemperature, Coarse),
+        ("ColorCTBMixer", ColorTemperature, Coarse),
+        ("ShutterStrobeSlowFast", Strobe, Coarse),
+        ("ShutterStrobeFastSlow", Strobe, Coarse),
+        ("ShutterIrisMinToMax", Iris, Coarse),
+        ("ShutterIrisMaxToMin", Iris, Coarse),
+        ("BeamFocusNearFar", Focus, Coarse),
+        ("BeamFocusFarNear", Focus, Coarse),
+        ("BeamZoomSmallBig", Zoom, Coarse),
+        ("BeamZoomBigSmall", Zoom, Coarse),
+        ("PrismRotationSlowFast", Prism, Coarse),
+        ("PrismRotationFastSlow", Prism, Coarse),
+        ("NoFunction", NoFunction, Coarse),
+        // not a QLC+ preset: kept under its own name, and its byte
+        ("SomethingNew", other("SomethingNew"), Coarse),
+        ("SomethingNewFine", other("SomethingNewFine"), Fine),
+        // capability presets, not channel presets
+        ("RotationClockwise", other("RotationClockwise"), Coarse),
+        ("ResetAll", other("ResetAll"), Coarse),
+        ("ShutterOpen", other("ShutterOpen"), Coarse),
+    ];
+    for (preset, function, byte) in cases {
+        let channel = format!(r#"<Channel Name="C" Preset="{preset}"/>"#);
+        let found = only_channel(&channel);
+        assert_eq!((&found.function, found.byte), (&function, byte), "{preset}");
+    }
+}
+
+// a channel without a preset: its group and name say what it does
+#[test]
+fn a_channel_does_what_its_group_or_name_says() {
+    let cases: Vec<(&str, Function, Byte)> = vec![
         (
             r#"<Channel Name="C"><Group Byte="0">Intensity</Group></Channel>"#,
             Dimmer,
@@ -205,46 +198,82 @@ fn a_channel_does_what_its_preset_group_or_name_says() {
             Control,
             Coarse,
         ),
-        // never dropped: what is not in the list stays, under its own name
         (
-            r#"<Channel Name="C" Preset="PulseSlowToFast"/>"#,
-            other("PulseSlowToFast"),
-            Coarse,
-        ),
-        (
-            r#"<Channel Name="C" Preset="SomethingNew"/>"#,
-            other("SomethingNew"),
+            r#"<Channel Name="Nothing here"><Group Byte="0">Nothing</Group></Channel>"#,
+            NoFunction,
             Coarse,
         ),
         (
             r#"<Channel Name="Iris"><Group Byte="0">Beam</Group></Channel>"#,
-            other("Iris"),
+            Iris,
             Coarse,
+        ),
+        (
+            r#"<Channel Name="Iris fine"><Group Byte="1">Beam</Group></Channel>"#,
+            Iris,
+            Fine,
+        ),
+        (
+            r#"<Channel Name="Frost"><Group Byte="0">Beam</Group></Channel>"#,
+            Frost,
+            Coarse,
+        ),
+        (
+            r#"<Channel Name="Zoom"><Group Byte="0">Beam</Group></Channel>"#,
+            Zoom,
+            Coarse,
+        ),
+        (
+            r#"<Channel Name="Focus"><Group Byte="0">Beam</Group></Channel>"#,
+            Focus,
+            Coarse,
+        ),
+        (
+            r#"<Channel Name="Beam angle"><Group Byte="1">Beam</Group></Channel>"#,
+            other("Beam angle"),
+            Fine,
         ),
         (
             r#"<Channel Name="Odd"><Group Byte="0">Sparkle</Group></Channel>"#,
             other("Odd"),
             Coarse,
         ),
-        (
-            r#"<Channel Name="Nothing here"><Group Byte="0">Nothing</Group></Channel>"#,
-            other("Nothing here"),
-            Coarse,
-        ),
         (r#"<Channel Name="C"/>"#, other("C"), Coarse),
     ];
     for (channel, function, byte) in cases {
-        let fixture = parse("t.qxf", &definition(channel)).expect("a definition reads");
-        let found = fixture
-            .modes
-            .first()
-            .and_then(|m| m.channels.first())
-            .expect("one channel");
+        let found = only_channel(channel);
         assert_eq!(
             (&found.function, found.byte),
             (&function, byte),
             "{channel}"
         );
+    }
+}
+
+// the channel element, its default value
+#[test]
+fn a_channel_carries_the_default_its_definition_gives() {
+    let cases: [(&str, Option<u8>); 5] = [
+        (r#"<Channel Name="C" Preset="IntensityRed"/>"#, None),
+        (
+            r#"<Channel Name="C" Default="128" Preset="PositionPan"/>"#,
+            Some(128),
+        ),
+        (
+            r#"<Channel Name="C" Default="0"><Group Byte="0">Shutter</Group></Channel>"#,
+            Some(0),
+        ),
+        (
+            r#"<Channel Name="C" Default="255"><Group Byte="0">Effect</Group></Channel>"#,
+            Some(255),
+        ),
+        (
+            r#"<Channel Name="C" Default=" 32 " Preset="NoFunction"/>"#,
+            Some(32),
+        ),
+    ];
+    for (channel, default) in cases {
+        assert_eq!(only_channel(channel).default, default, "{channel}");
     }
 }
 
