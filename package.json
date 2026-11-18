@@ -12,7 +12,8 @@
     "test:checks": "node --test scripts/*.test.mjs && node scripts/check-licences.mjs && node scripts/check-layers.mjs",
     "test:rust": "cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace",
     "test:ui": "tsc -p ui && oxlint --type-aware --deny-warnings -c ui/.oxlintrc.json ui/src && node --test ui/src/*.test.mjs",
-    "test:e2e": "playwright install chromium && playwright test"
+    "test:e2e": "playwright install chromium && playwright test",
+    "scorecard": "node scripts/print-scorecard.mjs"
   },
   "dependencies": {
     "solid-js": "1.9.18"

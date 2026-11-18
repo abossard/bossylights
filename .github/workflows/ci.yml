@@ -29,3 +29,5 @@ jobs:
       - run: npm ci
       - run: npx playwright install --with-deps chromium
       - run: npm test
+      - name: Scorecard (written into the run summary)
+        run: npm run scorecard
