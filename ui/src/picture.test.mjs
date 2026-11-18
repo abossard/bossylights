@@ -4,7 +4,9 @@ import { merge, receive } from "./picture.ts";
 
 const state = (frame) => ({ frame, priority: "RealTime", blackout: false });
 const read = { Read: { read: 10, failed: 1 } };
-const picture = { state: state(1), library: "Reading", universes: [[0, 0, 0], [0, 0, 0]] };
+const none = { outputs: [null, null] };
+const ddp = { outputs: [{ Kind: { kind: { Ddp: { address: "127.0.0.1:4048", color: "Rgb" } } } }, null] };
+const picture = { state: state(1), project: none, library: "Reading", universes: [[0, 0, 0], [0, 0, 0]] };
 
 // [picture before, reply, picture after]
 const table = [
@@ -16,16 +18,23 @@ const table = [
   [picture, { Found: { fixtures: [] } }, picture],
   [picture, { Fixture: { maker: "Generic", model: "Generic RGB", kind: "ColorChanger", modes: [] } }, picture],
   [picture, { Failures: { failures: [] } }, picture],
-  [undefined, { Changed: { state: state(2), library: read, channels: [] } }, undefined],
+  [undefined, { Changed: { state: state(2), project: none, library: read, channels: [] } }, undefined],
   [
     picture,
-    { Changed: { state: state(2), library: read, channels: [] } },
-    { state: state(2), library: read, universes: picture.universes },
+    { Changed: { state: state(2), project: ddp, library: read, channels: [] } },
+    { state: state(2), project: ddp, library: read, universes: picture.universes },
   ],
   [
     picture,
-    { Changed: { state: state(3), library: "Reading", channels: [{ universe: 2, address: 3, value: 9 }] } },
-    { state: state(3), library: "Reading", universes: [[0, 0, 0], [0, 0, 9]] },
+    {
+      Changed: {
+        state: state(3),
+        project: none,
+        library: "Reading",
+        channels: [{ universe: 2, address: 3, value: 9 }],
+      },
+    },
+    { state: state(3), project: none, library: "Reading", universes: [[0, 0, 0], [0, 0, 9]] },
   ],
 ];
 for (const [before, reply, after] of table) {

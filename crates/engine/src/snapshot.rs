@@ -12,8 +12,8 @@
 //! for, it sends no picture.
 
 use crate::{
-    Command, Histogram, LATENCY_BUCKETS, LATENESS_BUCKETS, Levels, MAX_OUTPUTS, MAX_UNIVERSES,
-    OutputNumber, Priority, State, Universes, bucket, percentile, update,
+    EngineCommand, Histogram, LATENCY_BUCKETS, LATENESS_BUCKETS, Levels, MAX_OUTPUTS,
+    MAX_UNIVERSES, OutputNumber, Priority, State, Universes, bucket, percentile, update,
 };
 use engine_core::Effect;
 use std::thread;
@@ -81,7 +81,7 @@ impl Snapshot {
     }
 
     /// The only change to the state and the held levels: through `engine_core::update`.
-    pub(crate) fn update(&mut self, command: Command) -> Option<Effect> {
+    pub(crate) fn update(&mut self, command: EngineCommand) -> Option<Effect> {
         let count = usize::from(self.universes.count());
         let held = self.held.get_mut(..count).unwrap_or_default();
         let (state, effect) = update(self.state, held, command);

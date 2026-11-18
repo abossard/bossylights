@@ -6,7 +6,7 @@ The reference behind the [README](../README.md): how a command reaches the light
 
 ```mermaid
 flowchart LR
-  C["client<br/>Send"] --> SE["Sender<br/>SetOutput: outputs::open,<br/>then attach"]
+  C["client<br/>Command"] --> SE["Sender, the engine front<br/>Project::update checks it,<br/>SetOutput: outputs::open, then attach"]
   SE -- "command + device" --> Q["command queue (rtrb)<br/>never locks"]
   Q --> U["tick thread<br/>update, frame"]
   U -- "take, never waits" --> O["outputs"]
@@ -29,7 +29,8 @@ How an output gets on and off the tick thread:
 
 | Step | Where | What |
 |---|---|---|
-| 1 | `Sender::send` | checks `SetOutput`; `outputs::open(kind)` makes a `Box<dyn Device>` (for DDP: a socket bound, connected, non-blocking) |
+| 1 | `Sender::begin` | `Project::update` checks the client `Command` against the project (`crates/engine-core/src/project.rs`, a calculation) and says what follows: an `EngineCommand` for the tick thread, keep the device, or open one. Only this makes an `EngineCommand` |
+| 1b | `Opening::open`, then `Sender::finish` | `outputs::open(kind)` makes a `Box<dyn Device>` (for DDP: a socket bound, connected, non-blocking). The server runs it on the blocking pool, without the `Sender`: other clients are answered meanwhile. One device opens at a time; until it is open, `SetOutput` and `RemoveOutput` answer `Opening`. Once open, the project holds the output's kind |
 | 2 | `Sender::attach` | the one door for every device, also a test's own: sends `Attach` with the device |
 | 3 | tick thread | puts it in the output's slot; the old device goes to the return queue |
 | 4 | tick thread | when the output is due: `take(frame)` sends or drops, never waits |
@@ -37,7 +38,7 @@ How an output gets on and off the tick thread:
 
 ## API
 
-`GET /health` (`ok` while the engine runs) and the WebSocket `GET /api`. Types: `ui/src/engine-api.ts`, generated from `crates/engine-core/src/api.rs`.
+Version 2. `GET /health` (`ok` while the engine runs) and the WebSocket `GET /api`. Types: `ui/src/engine-api.ts`, generated from `crates/engine-core/src/api.rs`.
 
 | Who may open `/api` | Why |
 |---|---|
@@ -51,8 +52,8 @@ The list is `ORIGINS` in `crates/engine-server/src/lib.rs`. No pairing or token 
 | Client sends | Engine answers |
 |---|---|
 | `{"Send": {"command": {"SetChannel": {"channel": {"universe": 1, "address": 1}, "value": 255}}}}` | `"Accepted"`, or `{"Refused": {"reason": "NoSuchAddress"}}` and nothing changes |
-| `"Query"` | `{"Picture": {"state": ..., "universes": [[...512 levels]]}}` |
-| `"Subscribe"` | the `Picture`, then `{"Changed": {"state": ..., "channels": [...]}}` with every frame |
+| `"Query"` | `{"Picture": {"state": ..., "project": ..., "library": ..., "universes": [[...512 levels]]}}`. `project.outputs`: per output `null`, `{"Kind": {"kind": ...}}` (what it sends to) or `"Attached"` (a test's own device) |
+| `"Subscribe"` | the `Picture`, then `{"Changed": {"state": ..., "project": ..., "library": ..., "channels": [...]}}` with every frame |
 
 | Command | Does |
 |---|---|

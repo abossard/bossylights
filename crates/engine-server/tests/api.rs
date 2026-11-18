@@ -428,3 +428,56 @@ async fn only_the_app_and_the_dev_ui_may_open_the_api() {
         assert_eq!(status, expected, "{origin:?}");
     }
 }
+
+// Threads of its own: if an open blocked the server, the test still runs and fails.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_device_that_opens_slowly_stalls_no_other_client_and_the_project_shows_its_kind() {
+    // The device of output 1 opens only once the test says so.
+    let (opening, opened) = std::sync::mpsc::channel::<()>();
+    let (release, released) = std::sync::mpsc::channel::<()>();
+    let slow_open: engine::Open = Box::new(move |kind| {
+        opening.send(()).unwrap();
+        // Never longer than 5 s: a server that waits for it still ends the test.
+        let _ = released.recv_timeout(Duration::from_secs(5));
+        outputs::open(kind)
+    });
+    let (engine, sender) = Engine::start_with(Universes::new(2).unwrap(), slow_open).unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(engine_server::serve(listener, engine, sender, None));
+    let (mut slow, mut other) = (open(address).await, open(address).await);
+    let (_udp, add) = receiver().await;
+
+    send(&mut slow, &add).await;
+    tokio::task::spawn_blocking(move || opened.recv().unwrap())
+        .await
+        .unwrap();
+    // While output 1 opens: (request of another client, its answer)
+    let add_2 = json!({"Send": {"command": {"SetOutput": {
+        "output": 2,
+        "kind": add["Send"]["command"]["SetOutput"]["kind"],
+        "universes": {"first": 1, "count": 1},
+        "rate": null,
+    }}}});
+    let remove_1 = json!({"Send": {"command": {"RemoveOutput": {"output": 1}}}});
+    let refused = |reason: &str| json!({"Refused": {"reason": reason}});
+    let cases = [
+        (set(1, 1, 9), json!("Accepted")),
+        (add_2, refused("Opening")),
+        (remove_1, refused("Opening")),
+    ];
+    for (request, expected) in cases {
+        send(&mut other, &request).await;
+        assert_eq!(answer(&mut other).await, expected, "{request}");
+    }
+    send(&mut other, &json!("Query")).await;
+    let outputs = answer(&mut other).await["Picture"]["project"]["outputs"].clone();
+    assert_eq!(outputs[0], json!(null), "not open yet");
+
+    release.send(()).unwrap();
+    assert_eq!(answer(&mut slow).await, json!("Accepted"));
+    send(&mut other, &json!("Query")).await;
+    let outputs = answer(&mut other).await["Picture"]["project"]["outputs"].clone();
+    let kind = &add["Send"]["command"]["SetOutput"]["kind"];
+    assert_eq!(outputs[0], json!({"Kind": {"kind": kind}}));
+}

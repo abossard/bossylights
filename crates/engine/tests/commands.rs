@@ -1,8 +1,8 @@
 mod mock;
 
 use engine::{
-    ChannelNumbers, Command, Engine, Levels, OutputKind, OutputNumber, QUEUE, Rate, Refusal,
-    RunNumbers, Sender, Snapshot, Status, Universes,
+    ChannelNumbers, Command, Engine, Levels, OutputNumber, QUEUE, Rate, Refusal, RunNumbers,
+    Sender, Snapshot, Status, Universes,
 };
 use mock::Heard;
 use std::sync::{Arc, mpsc};
@@ -22,7 +22,7 @@ fn channel(universe: u16, address: u16) -> ChannelNumbers {
     ChannelNumbers { universe, address }
 }
 
-fn set(universe: u16, address: u16, value: u8) -> Command<ChannelNumbers, RunNumbers, OutputKind> {
+fn set(universe: u16, address: u16, value: u8) -> Command {
     Command::SetChannel {
         channel: channel(universe, address),
         value,
@@ -87,12 +87,6 @@ fn a_command_that_cannot_be_right_is_refused_and_changes_nothing() {
         (set(0, 1, 9), Refusal::NoSuchUniverse { universes: 2 }),
         (set(1, 0, 9), Refusal::NoSuchAddress),
         (set(1, 513, 9), Refusal::NoSuchAddress),
-        (
-            Command::Tick {
-                now: Duration::ZERO,
-            },
-            Refusal::NotACommand,
-        ),
     ];
     let (mut engine, mut sender, _first) = start();
     let before = engine.fresh().state;

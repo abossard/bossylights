@@ -1,0 +1,380 @@
+//! The project: what the engine was asked to be, owned by the engine front, off the tick
+//! thread. Today its outputs; patch and groups come with their tickets.
+//!
+//! ```text
+//! client Command --> Project::update --> new project + effect --> the front performs it:
+//!                                                                 send an EngineCommand,
+//!                                                                 or open a device, then Opened / OpenFailed
+//! ```
+//!
+//! One output, as the project sees it:
+//!
+//! ```text
+//! None --SetOutput--> opening --Opened--> Kind --SetOutput, same kind--> Kind (device kept)
+//!                            --OpenFailed--> as before
+//! any --RemoveOutput--> None        any --Attached--> Attached (a device brought by a test)
+//! ```
+
+use crate::{
+    Command, EngineCommand, MAX_OUTPUTS, OutputKind, OutputNumber, Rate, Refusal, Run, Universes,
+};
+use serde::Serialize;
+
+/// What the front owns. Only [`Project::update`] changes it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct Project {
+    /// The outputs, by number. `None` where none is set.
+    #[cfg_attr(test, ts(type = "Array<ProjectOutput | null>"))]
+    pub outputs: [Option<ProjectOutput>; MAX_OUTPUTS],
+    /// The engine's universes: what a command is checked against.
+    #[serde(skip)]
+    #[cfg_attr(test, ts(skip))]
+    universes: Universes,
+    /// Outputs whose device is being opened. They take no `SetOutput` or `RemoveOutput`
+    /// until it is open or failed.
+    #[serde(skip)]
+    #[cfg_attr(test, ts(skip))]
+    opening: [bool; MAX_OUTPUTS],
+}
+
+/// What an output sends to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub enum ProjectOutput {
+    /// A device the engine opened for this kind: where it sends is in the kind.
+    Kind { kind: OutputKind },
+    /// A device a test brought itself. Its kind is not known.
+    Attached,
+}
+
+/// What happens to the project: a client's command, or what came of an effect.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProjectEvent {
+    Client(Command),
+    /// The device of an `Open` effect is open and on its way to the tick thread.
+    Opened {
+        output: OutputNumber,
+        kind: OutputKind,
+    },
+    /// The device of an `Open` effect could not be opened or sent.
+    OpenFailed {
+        output: OutputNumber,
+    },
+    /// A device a test brought takes the place of `output`.
+    Attached {
+        output: OutputNumber,
+    },
+}
+
+/// What the front must do after an update, as data. `rate: None` is the kind's default,
+/// which only `outputs` knows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProjectEffect {
+    /// Send this to the tick thread.
+    Send(EngineCommand),
+    /// The output keeps its device: only its run and rate change.
+    Keep {
+        output: OutputNumber,
+        kind: OutputKind,
+        universes: Run,
+        rate: Option<Rate>,
+    },
+    /// Open a device of `kind`, off the tick thread and off the API, then attach it and
+    /// tell the project `Opened`, or `OpenFailed`.
+    Open {
+        output: OutputNumber,
+        kind: OutputKind,
+        universes: Run,
+        rate: Option<Rate>,
+    },
+}
+
+impl Project {
+    /// An empty project for an engine of `universes`.
+    pub const fn new(universes: Universes) -> Self {
+        Self {
+            outputs: [None; MAX_OUTPUTS],
+            universes,
+            opening: [false; MAX_OUTPUTS],
+        }
+    }
+
+    /// The only place the project changes: event in, new project and effect out, or why
+    /// not. On a refusal nothing changed.
+    pub fn update(self, event: ProjectEvent) -> Result<(Self, Option<ProjectEffect>), Refusal> {
+        let send = |command| Ok((self, Some(ProjectEffect::Send(command))));
+        let universes = self.universes;
+        match event {
+            ProjectEvent::Client(command) => match command {
+                Command::SetChannel { channel, value } => send(EngineCommand::SetChannel {
+                    channel: channel.check(universes)?,
+                    value,
+                }),
+                Command::ReleaseChannel { channel } => send(EngineCommand::ReleaseChannel {
+                    channel: channel.check(universes)?,
+                }),
+                Command::ReleaseAll => send(EngineCommand::ReleaseAll),
+                Command::Blackout { on } => send(EngineCommand::Blackout { on }),
+                Command::SetOutput {
+                    output,
+                    kind,
+                    universes: run,
+                    rate,
+                } => {
+                    let universes = run.check(universes)?;
+                    self.idle(output)?;
+                    if self.output(output) == Some(ProjectOutput::Kind { kind }) {
+                        let keep = ProjectEffect::Keep {
+                            output,
+                            kind,
+                            universes,
+                            rate,
+                        };
+                        return Ok((self, Some(keep)));
+                    }
+                    let open = ProjectEffect::Open {
+                        output,
+                        kind,
+                        universes,
+                        rate,
+                    };
+                    Ok((self.with(output, |_, opening| *opening = true), Some(open)))
+                }
+                Command::RemoveOutput { output } => {
+                    self.idle(output)?;
+                    let project = self.with(output, |slot, _| *slot = None);
+                    Ok((
+                        project,
+                        Some(ProjectEffect::Send(EngineCommand::RemoveOutput { output })),
+                    ))
+                }
+            },
+            ProjectEvent::Opened { output, kind } => {
+                let project = self.with(output, |slot, opening| {
+                    *slot = Some(ProjectOutput::Kind { kind });
+                    *opening = false;
+                });
+                Ok((project, None))
+            }
+            ProjectEvent::OpenFailed { output } => {
+                Ok((self.with(output, |_, opening| *opening = false), None))
+            }
+            ProjectEvent::Attached { output } => {
+                self.idle(output)?;
+                Ok((
+                    self.with(output, |slot, _| *slot = Some(ProjectOutput::Attached)),
+                    None,
+                ))
+            }
+        }
+    }
+
+    /// What `output` sends to, if it is set.
+    pub fn output(&self, output: OutputNumber) -> Option<ProjectOutput> {
+        self.outputs.get(output.slot()).copied().flatten()
+    }
+
+    /// `Opening` while the device of `output` is being opened.
+    fn idle(&self, output: OutputNumber) -> Result<(), Refusal> {
+        match self.opening.get(output.slot()) {
+            Some(true) => Err(Refusal::Opening),
+            Some(false) | None => Ok(()),
+        }
+    }
+
+    /// This project with `change` made to the slot of `output`.
+    fn with(
+        mut self,
+        output: OutputNumber,
+        change: impl FnOnce(&mut Option<ProjectOutput>, &mut bool),
+    ) -> Self {
+        let slot = output.slot();
+        if let (Some(kind), Some(opening)) =
+            (self.outputs.get_mut(slot), self.opening.get_mut(slot))
+        {
+            change(kind, opening);
+        }
+        self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Channel, ChannelNumbers, RunNumbers, kinds};
+
+    fn output(number: u8) -> OutputNumber {
+        OutputNumber::try_from(number).unwrap()
+    }
+
+    fn checked(universe: u16, address: u16) -> Channel {
+        ChannelNumbers { universe, address }
+            .check(Universes::ONE)
+            .unwrap()
+    }
+
+    #[test]
+    fn update_checks_a_command_against_the_project_and_says_what_to_do() {
+        use ProjectEvent::{Attached, Client, OpenFailed, Opened};
+        let empty = Project::new(Universes::ONE);
+        let kind = kinds::EXAMPLE;
+        let other = kinds::OTHER;
+        let one = RunNumbers { first: 1, count: 1 };
+        let run = one.check(Universes::ONE).unwrap();
+        let numbers = |universe, address| ChannelNumbers { universe, address };
+        let set_output = |kind| {
+            Client(Command::SetOutput {
+                output: output(1),
+                kind,
+                universes: one,
+                rate: None,
+            })
+        };
+        let open = |kind| ProjectEffect::Open {
+            output: output(1),
+            kind,
+            universes: run,
+            rate: None,
+        };
+        let opened = |kind| Opened {
+            output: output(1),
+            kind,
+        };
+        let remove = Client(Command::RemoveOutput { output: output(1) });
+        // (events before, event, its effect or why not, output 1 after)
+        type Done = Result<Option<ProjectEffect>, Refusal>;
+        let cases: [(Vec<ProjectEvent>, ProjectEvent, Done, Option<ProjectOutput>); 15] = [
+            (
+                vec![],
+                Client(Command::SetChannel {
+                    channel: numbers(1, 512),
+                    value: 7,
+                }),
+                Ok(Some(ProjectEffect::Send(EngineCommand::SetChannel {
+                    channel: checked(1, 512),
+                    value: 7,
+                }))),
+                None,
+            ),
+            (
+                vec![],
+                Client(Command::SetChannel {
+                    channel: numbers(2, 1),
+                    value: 7,
+                }),
+                Err(Refusal::NoSuchUniverse { universes: 1 }),
+                None,
+            ),
+            (
+                vec![],
+                Client(Command::ReleaseChannel {
+                    channel: numbers(1, 0),
+                }),
+                Err(Refusal::NoSuchAddress),
+                None,
+            ),
+            (
+                vec![],
+                Client(Command::ReleaseAll),
+                Ok(Some(ProjectEffect::Send(EngineCommand::ReleaseAll))),
+                None,
+            ),
+            (
+                vec![],
+                Client(Command::Blackout { on: true }),
+                Ok(Some(ProjectEffect::Send(EngineCommand::Blackout {
+                    on: true,
+                }))),
+                None,
+            ),
+            (
+                vec![],
+                Client(Command::SetOutput {
+                    output: output(1),
+                    kind,
+                    universes: RunNumbers { first: 1, count: 2 },
+                    rate: None,
+                }),
+                Err(Refusal::NoSuchUniverse { universes: 1 }),
+                None,
+            ),
+            // a new output: open its device; the project changes once it is open
+            (vec![], set_output(kind), Ok(Some(open(kind))), None),
+            (
+                vec![set_output(kind)],
+                opened(kind),
+                Ok(None),
+                Some(ProjectOutput::Kind { kind }),
+            ),
+            (
+                vec![set_output(kind)],
+                OpenFailed { output: output(1) },
+                Ok(None),
+                None,
+            ),
+            // while it opens, the output takes no other device
+            (
+                vec![set_output(kind)],
+                set_output(other),
+                Err(Refusal::Opening),
+                None,
+            ),
+            (vec![set_output(kind)], remove, Err(Refusal::Opening), None),
+            // the same kind keeps its device, another kind opens one
+            (
+                vec![set_output(kind), opened(kind)],
+                Client(Command::SetOutput {
+                    output: output(1),
+                    kind,
+                    universes: one,
+                    rate: Some(Rate::Thirty),
+                }),
+                Ok(Some(ProjectEffect::Keep {
+                    output: output(1),
+                    kind,
+                    universes: run,
+                    rate: Some(Rate::Thirty),
+                })),
+                Some(ProjectOutput::Kind { kind }),
+            ),
+            (
+                vec![set_output(kind), opened(kind)],
+                set_output(other),
+                Ok(Some(open(other))),
+                Some(ProjectOutput::Kind { kind }),
+            ),
+            (
+                vec![set_output(kind), opened(kind)],
+                remove,
+                Ok(Some(ProjectEffect::Send(EngineCommand::RemoveOutput {
+                    output: output(1),
+                }))),
+                None,
+            ),
+            (
+                vec![set_output(kind), opened(kind)],
+                Attached { output: output(1) },
+                Ok(None),
+                Some(ProjectOutput::Attached),
+            ),
+        ];
+        for (before, event, expected, after) in cases {
+            let project = before
+                .iter()
+                .fold(empty, |project, event| project.update(*event).unwrap().0);
+            let updated = project.update(event);
+            assert_eq!(
+                updated.map(|(_, effect)| effect),
+                expected,
+                "{event:?} after {before:?}"
+            );
+            let project = updated.map_or(project, |(project, _)| project);
+            assert_eq!(
+                project.output(output(1)),
+                after,
+                "{event:?} after {before:?}"
+            );
+        }
+    }
+}

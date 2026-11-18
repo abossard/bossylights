@@ -19,6 +19,7 @@ mod channel;
 mod kinds;
 mod library;
 mod output;
+mod project;
 
 pub use api::{API_VERSION, MATCHES, Refusal, Reply, Request};
 pub use channel::{
@@ -33,8 +34,8 @@ pub use output::{
     Counters, GIVE_UP, MAX_OUTPUTS, OFF_BEAT, Outcome, Output, OutputNumber, Rate, Run, RunNumbers,
     Status,
 };
+pub use project::{Project, ProjectEffect, ProjectEvent, ProjectOutput};
 
-use core::convert::Infallible;
 use core::time::Duration;
 use serde::{Deserialize, Serialize};
 
@@ -102,33 +103,15 @@ pub enum BestEffort {
     NotSupported,
 }
 
-/// What changes the state: the closed list. `C` and `R` are a [`Channel`] and a [`Run`]
-/// inside the engine, and [`ChannelNumbers`] and [`RunNumbers`] as a client sends them,
-/// before [`Command::check`]. `K` is [`OutputKind`] from a client; inside the engine it
-/// is [`Infallible`], so no `SetOutput` gets there: its device is opened first and it
-/// arrives as `Attach`. The engine never sees a kind.
+/// What a client may send: the closed list, numbers as sent. The engine front checks it
+/// against the project ([`Project::update`]); only that makes an [`EngineCommand`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
-#[cfg_attr(
-    test,
-    derive(ts_rs::TS),
-    ts(concrete(C = ChannelNumbers, R = RunNumbers, K = OutputKind))
-)]
-pub enum Command<C = Channel, R = Run, K = Infallible> {
-    /// The engine woke at `now`, since it started. Never from a client.
-    #[serde(skip)]
-    #[cfg_attr(test, ts(skip))]
-    Tick { now: Duration },
-    /// A frame was handed to an output. Never from a client.
-    #[serde(skip)]
-    #[cfg_attr(test, ts(skip))]
-    Handed {
-        output: OutputNumber,
-        outcome: Outcome,
-    },
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub enum Command {
     /// Hold a channel at a level.
-    SetChannel { channel: C, value: u8 },
+    SetChannel { channel: ChannelNumbers, value: u8 },
     /// Let a channel go back to zero.
-    ReleaseChannel { channel: C },
+    ReleaseChannel { channel: ChannelNumbers },
     /// Let every channel go back to zero.
     ReleaseAll,
     /// Every channel out at zero while on. The held levels stay and come back when off.
@@ -137,68 +120,49 @@ pub enum Command<C = Channel, R = Run, K = Infallible> {
     /// Without a rate, the kind's default.
     SetOutput {
         output: OutputNumber,
-        kind: K,
-        universes: R,
+        kind: OutputKind,
+        universes: RunNumbers,
         rate: Option<Rate>,
-    },
-    /// An opened device takes the place of `output`. Never from a client: the engine
-    /// makes it from `SetOutput`, or a test from its own device.
-    #[serde(skip)]
-    #[cfg_attr(test, ts(skip))]
-    Attach {
-        output: OutputNumber,
-        universes: Run,
-        rate: Rate,
     },
     /// Remove an output. Nothing happens if there is none.
     RemoveOutput { output: OutputNumber },
 }
 
-/// A client's command after [`Command::check`]: one for the engine, or an output whose
-/// device must be opened first.
+/// What changes the state on the tick thread. The front makes these from a checked
+/// [`Command`]; the tick thread makes `Tick` and `Handed` itself. No kind gets here: a
+/// device is opened first and arrives with `Attach`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Checked {
-    Command(Command),
-    SetOutput {
-        output: OutputNumber,
-        kind: OutputKind,
-        universes: Run,
-        rate: Option<Rate>,
+pub enum EngineCommand {
+    /// The engine woke at `now`, since it started.
+    Tick {
+        now: Duration,
     },
-}
-
-impl Command<ChannelNumbers, RunNumbers, OutputKind> {
-    /// The command for this engine, or why it cannot be one. Done once, at the Engine.
-    pub fn check(self, universes: Universes) -> Result<Checked, Refusal> {
-        Ok(Checked::Command(match self {
-            Self::Tick { .. } | Self::Handed { .. } | Self::Attach { .. } => {
-                return Err(Refusal::NotACommand);
-            }
-            Self::SetChannel { channel, value } => Command::SetChannel {
-                channel: channel.check(universes)?,
-                value,
-            },
-            Self::ReleaseChannel { channel } => Command::ReleaseChannel {
-                channel: channel.check(universes)?,
-            },
-            Self::ReleaseAll => Command::ReleaseAll,
-            Self::Blackout { on } => Command::Blackout { on },
-            Self::SetOutput {
-                output,
-                kind,
-                universes: run,
-                rate,
-            } => {
-                return Ok(Checked::SetOutput {
-                    output,
-                    kind,
-                    universes: run.check(universes)?,
-                    rate,
-                });
-            }
-            Self::RemoveOutput { output } => Command::RemoveOutput { output },
-        }))
-    }
+    /// A frame was handed to an output.
+    Handed {
+        output: OutputNumber,
+        outcome: Outcome,
+    },
+    SetChannel {
+        channel: Channel,
+        value: u8,
+    },
+    ReleaseChannel {
+        channel: Channel,
+    },
+    ReleaseAll,
+    Blackout {
+        on: bool,
+    },
+    /// An opened device takes the place of `output`, or the device there stays and only
+    /// its run and rate change. Its counters start at zero.
+    Attach {
+        output: OutputNumber,
+        universes: Run,
+        rate: Rate,
+    },
+    RemoveOutput {
+        output: OutputNumber,
+    },
 }
 
 /// What must happen outside after an update, as data. None exist yet.
@@ -209,9 +173,13 @@ pub enum Effect {}
 /// `universes` are the held levels, a buffer the caller owns; a command changes them
 /// in place. At most one effect, so nothing allocates. A command that needs more
 /// widens this to a fixed-size array, never to a `Vec`.
-pub fn update(state: State, universes: &mut [Levels], command: Command) -> (State, Option<Effect>) {
+pub fn update(
+    state: State,
+    universes: &mut [Levels],
+    command: EngineCommand,
+) -> (State, Option<Effect>) {
     match command {
-        Command::Tick { now } => (
+        EngineCommand::Tick { now } => (
             State {
                 frame: state.frame.wrapping_add(1),
                 now,
@@ -225,15 +193,14 @@ pub fn update(state: State, universes: &mut [Levels], command: Command) -> (Stat
             },
             None,
         ),
-        Command::Handed { output, outcome } => {
+        EngineCommand::Handed { output, outcome } => {
             let mut outputs = state.outputs;
             if let Some(Some(handed)) = outputs.get_mut(output.slot()) {
                 *handed = handed.handed(outcome, state.now);
             }
             (State { outputs, ..state }, None)
         }
-        Command::SetOutput { kind, .. } => match kind {},
-        Command::Attach {
+        EngineCommand::Attach {
             output,
             universes: run,
             rate,
@@ -245,30 +212,30 @@ pub fn update(state: State, universes: &mut [Levels], command: Command) -> (Stat
             }
             (State { outputs, ..state }, None)
         }
-        Command::RemoveOutput { output } => {
+        EngineCommand::RemoveOutput { output } => {
             let mut outputs = state.outputs;
             if let Some(slot) = outputs.get_mut(output.slot()) {
                 *slot = None;
             }
             (State { outputs, ..state }, None)
         }
-        Command::SetChannel { channel, value } => {
+        EngineCommand::SetChannel { channel, value } => {
             if let Some(level) = channel.level(universes) {
                 *level = value;
             }
             (state, None)
         }
-        Command::ReleaseChannel { channel } => {
+        EngineCommand::ReleaseChannel { channel } => {
             if let Some(level) = channel.level(universes) {
                 *level = 0;
             }
             (state, None)
         }
-        Command::ReleaseAll => {
+        EngineCommand::ReleaseAll => {
             universes.fill(Levels::ZERO);
             (state, None)
         }
-        Command::Blackout { on } => (
+        EngineCommand::Blackout { on } => (
             State {
                 blackout: on,
                 ..state
@@ -434,19 +401,19 @@ mod tests {
             .unwrap()
     }
 
-    fn tick(ms: u64) -> Command {
-        Command::Tick {
+    fn tick(ms: u64) -> EngineCommand {
+        EngineCommand::Tick {
             now: Duration::from_millis(ms),
         }
     }
 
     #[test]
     fn update_turns_a_command_into_a_new_state() {
-        let set = |universe, address, value| Command::SetChannel {
+        let set = |universe, address, value| EngineCommand::SetChannel {
             channel: channel(universe, address),
             value,
         };
-        let release = |universe, address| Command::ReleaseChannel {
+        let release = |universe, address| EngineCommand::ReleaseChannel {
             channel: channel(universe, address),
         };
         let max = State {
@@ -465,7 +432,7 @@ mod tests {
             (
                 CALM,
                 held(&[]),
-                Command::Tick { now: BEAT },
+                EngineCommand::Tick { now: BEAT },
                 State {
                     frame: 8,
                     now: BEAT,
@@ -500,21 +467,21 @@ mod tests {
             (
                 CALM,
                 held(&[(1, 1, 1), (2, 2, 2)]),
-                Command::ReleaseAll,
+                EngineCommand::ReleaseAll,
                 CALM,
                 held(&[]),
             ),
             (
                 CALM,
                 held(&[(1, 1, 80)]),
-                Command::Blackout { on: true },
+                EngineCommand::Blackout { on: true },
                 DARK,
                 held(&[(1, 1, 80)]),
             ),
             (
                 DARK,
                 held(&[(1, 1, 80)]),
-                Command::Blackout { on: false },
+                EngineCommand::Blackout { on: false },
                 CALM,
                 held(&[(1, 1, 80)]),
             ),
@@ -530,7 +497,7 @@ mod tests {
     #[test]
     fn a_channel_on_a_shorter_buffer_changes_nothing() {
         let mut one = [Levels::ZERO];
-        let command = Command::SetChannel {
+        let command = EngineCommand::SetChannel {
             channel: channel(2, 1),
             value: 9,
         };
@@ -557,94 +524,12 @@ mod tests {
         }
     }
 
-    #[test]
-    fn check_turns_a_sent_command_into_one_for_this_engine() {
-        let one = Universes::ONE;
-        let numbers = |universe, address| ChannelNumbers { universe, address };
-        // Only the kind's data: the engine opens nothing here.
-        let kind = kinds::EXAMPLE;
-        // (as sent, checked)
-        let cases = [
-            (
-                Command::SetChannel {
-                    channel: numbers(1, 512),
-                    value: 7,
-                },
-                Ok(Checked::Command(Command::SetChannel {
-                    channel: numbers(1, 512).check(one).unwrap(),
-                    value: 7,
-                })),
-            ),
-            (
-                Command::SetChannel {
-                    channel: numbers(2, 1),
-                    value: 7,
-                },
-                Err(Refusal::NoSuchUniverse { universes: 1 }),
-            ),
-            (
-                Command::ReleaseChannel {
-                    channel: numbers(1, 0),
-                },
-                Err(Refusal::NoSuchAddress),
-            ),
-            (
-                Command::ReleaseAll,
-                Ok(Checked::Command(Command::ReleaseAll)),
-            ),
-            (
-                Command::Blackout { on: true },
-                Ok(Checked::Command(Command::Blackout { on: true })),
-            ),
-            (
-                Command::Tick {
-                    now: Duration::ZERO,
-                },
-                Err(Refusal::NotACommand),
-            ),
-            (
-                Command::SetOutput {
-                    output: output(1),
-                    kind,
-                    universes: RunNumbers { first: 1, count: 2 },
-                    rate: None,
-                },
-                Err(Refusal::NoSuchUniverse { universes: 1 }),
-            ),
-            (
-                Command::SetOutput {
-                    output: output(1),
-                    kind,
-                    universes: RunNumbers { first: 1, count: 1 },
-                    rate: None,
-                },
-                Ok(Checked::SetOutput {
-                    output: output(1),
-                    kind,
-                    universes: RunNumbers { first: 1, count: 1 }.check(one).unwrap(),
-                    rate: None,
-                }),
-            ),
-            (
-                Command::Attach {
-                    output: output(1),
-                    universes: RunNumbers { first: 1, count: 1 }.check(one).unwrap(),
-                    rate: Rate::Sixty,
-                },
-                Err(Refusal::NotACommand),
-            ),
-        ];
-        for (sent, expected) in cases {
-            assert_eq!(sent.check(one), expected, "{sent:?}");
-        }
-    }
-
     fn output(number: u8) -> OutputNumber {
         OutputNumber::try_from(number).unwrap()
     }
 
-    fn set_output(number: u8, rate: Rate) -> Command {
-        Command::Attach {
+    fn set_output(number: u8, rate: Rate) -> EngineCommand {
+        EngineCommand::Attach {
             output: output(number),
             universes: RunNumbers { first: 1, count: 1 }
                 .check(Universes::ONE)
@@ -658,7 +543,11 @@ mod tests {
 
     /// Runs the schedule like the output thread does, on time: wake, hand every due
     /// output a frame. Returns, per wake, the time in ms and the outputs served.
-    fn run(mut state: State, until_ms: u64, mut at: impl FnMut(u64) -> Vec<Command>) -> Wakes {
+    fn run(
+        mut state: State,
+        until_ms: u64,
+        mut at: impl FnMut(u64) -> Vec<EngineCommand>,
+    ) -> Wakes {
         let mut wakes = vec![];
         let mut universes = [Levels::ZERO];
         loop {
@@ -667,13 +556,13 @@ mod tests {
             if ms > until_ms {
                 return wakes;
             }
-            state = update(state, &mut universes, Command::Tick { now }).0;
+            state = update(state, &mut universes, EngineCommand::Tick { now }).0;
             for command in at(ms) {
                 state = update(state, &mut universes, command).0;
             }
             let served: Vec<u8> = due(&state, now).map(|n| n.slot() as u8 + 1).collect();
             for &number in &served {
-                let handed = Command::Handed {
+                let handed = EngineCommand::Handed {
                     output: output(number),
                     outcome: Outcome::Accepted,
                 };
@@ -689,7 +578,7 @@ mod tests {
         let (thirty, forty_four, sixty) = (Rate::Thirty, Rate::FortyFour, Rate::Sixty);
         // (outputs set on the first wake, until ms, wakes: ms and outputs served)
         // 60 and 30 a second meet at 56.06 ms, 1 ns apart: one wake serves both.
-        let cases: [(Vec<Command>, u64, Wakes); 4] = [
+        let cases: [(Vec<EngineCommand>, u64, Wakes); 4] = [
             (vec![], 70, vec![(22, vec![]), (45, vec![]), (68, vec![])]), // the beat
             (
                 vec![set_output(1, sixty)],
@@ -726,7 +615,7 @@ mod tests {
     #[test]
     fn outputs_added_or_removed_while_running_change_the_wakes() {
         let calm = State::new(Priority::RealTime);
-        let remove = Command::RemoveOutput { output: output(1) };
+        let remove = EngineCommand::RemoveOutput { output: output(1) };
         let wakes = run(calm, 100, |ms| match ms {
             22 => vec![set_output(1, Rate::Sixty)],
             39 => vec![set_output(2, Rate::Thirty)],
@@ -800,7 +689,8 @@ mod tests {
                     return vec![];
                 }
                 removed = Some(ms);
-                let remove = |&(n, _): &(u8, Rate)| Command::RemoveOutput { output: output(n) };
+                let remove =
+                    |&(n, _): &(u8, Rate)| EngineCommand::RemoveOutput { output: output(n) };
                 outputs.iter().map(remove).collect()
             });
             let removed = removed.unwrap();
@@ -820,11 +710,11 @@ mod tests {
         state = update(state, &mut universes, set_output(2, Rate::Thirty)).0;
         // the machine slept for a second
         let now = Duration::from_secs(1);
-        state = update(state, &mut universes, Command::Tick { now }).0;
+        state = update(state, &mut universes, EngineCommand::Tick { now }).0;
         let served: Vec<_> = due(&state, now).collect();
         assert_eq!(served, vec![output(1), output(2)]);
         for number in served {
-            let handed = Command::Handed {
+            let handed = EngineCommand::Handed {
                 output: number,
                 outcome: Outcome::Accepted,
             };
@@ -882,7 +772,11 @@ mod tests {
         for (state, ahead, sleep, spins) in cases {
             let now = due - us(ahead);
             let spin = spins.then_some(due);
-            assert_eq!(wait(&state, now), (us(sleep), spin), "{ahead} µs ahead, spins {spins}");
+            assert_eq!(
+                wait(&state, now),
+                (us(sleep), spin),
+                "{ahead} µs ahead, spins {spins}"
+            );
         }
         // past due: no sleep
         assert_eq!(wait(&with_output, due * 2), (Duration::ZERO, Some(due)));
@@ -961,7 +855,7 @@ mod tests {
              {}",
             [
                 Request::decl(&config),
-                Command::<ChannelNumbers, RunNumbers, OutputKind>::decl(&config),
+                Command::decl(&config),
                 ChannelNumbers::decl(&config),
                 RunNumbers::decl(&config),
                 OutputNumber::decl(&config),
@@ -987,6 +881,8 @@ mod tests {
                 Failure::decl(&config),
                 FixtureKind::decl(&config),
                 ChannelFunction::decl(&config),
+                Project::decl(&config),
+                ProjectOutput::decl(&config),
             ]
             .map(|declaration| format!("export {declaration}\n"))
             .join("\n"),

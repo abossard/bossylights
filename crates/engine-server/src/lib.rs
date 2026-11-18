@@ -23,7 +23,8 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use engine::{
-    API_VERSION, ChannelLevel, Engine, Refusal, Reply, Request, Sender, Snapshot, changes,
+    API_VERSION, ChannelLevel, Command, Engine, Project, Refusal, Reply, Request, Sender, Snapshot,
+    changes,
 };
 use library::Shelf;
 use std::io;
@@ -46,6 +47,7 @@ pub async fn serve(
     let (painted, pictures) = watch::channel(Arc::new(*engine.latest()));
     let reader = tokio::spawn(read(engine, painted, stop.subscribe()));
     let api = Arc::new(Api {
+        project: watch::channel(sender.project()).0,
         sender: Mutex::new(sender),
         stop,
         pictures,
@@ -71,9 +73,11 @@ pub async fn serve(
 }
 
 struct Api {
-    /// The queue has one producer; connections take turns. The tick thread never sees
-    /// this lock.
+    /// The engine front; connections take turns. Nobody holds it while a device opens.
+    /// The tick thread never sees this lock.
     sender: Mutex<Sender>,
+    /// The front's project after the last command, the same for every connection.
+    project: watch::Sender<Project>,
     /// Turns true once, on `Stop`. Every connection and the server watch it.
     stop: watch::Sender<bool>,
     /// The newest snapshot, one per frame, the same for every connection.
@@ -170,7 +174,7 @@ async fn answer(
     };
     match request {
         Request::Send { command } => {
-            let sent = api.sender.lock().await.send(command);
+            let sent = send(api, command).await;
             json(&sent.map_or_else(|reason| Reply::Refused { reason }, |()| Reply::Accepted))
         }
         Request::Query => picture(api, &pictures.borrow()),
@@ -192,9 +196,26 @@ async fn answer(
     }
 }
 
+/// Sends `command` to the front. A device it needs is opened on a thread of the blocking
+/// pool, without the front: every other client is answered meanwhile.
+async fn send(api: &Api, command: Command) -> Result<(), Refusal> {
+    let begun = api.sender.lock().await.begin(command);
+    let sent = match begun {
+        Ok(Some(opening)) => match tokio::task::spawn_blocking(move || opening.open()).await {
+            Ok(opened) => api.sender.lock().await.finish(opened),
+            Err(_) => Err(Refusal::CannotOpen), // the task was cancelled: the engine stops
+        },
+        Ok(None) => Ok(()),
+        Err(reason) => Err(reason),
+    };
+    api.project.send_replace(api.sender.lock().await.project());
+    sent
+}
+
 fn picture(api: &Api, now: &Snapshot) -> Option<String> {
     json(&Reply::Picture {
         state: now.state,
+        project: *api.project.borrow(),
         library: api.shelf.borrow().library(),
         universes: now.universes(),
     })
@@ -211,6 +232,7 @@ fn changed(
     let channels: Vec<ChannelLevel> = changes(last.universes(), now.universes()).collect();
     let reply = json(&Reply::Changed {
         state: now.state,
+        project: *api.project.borrow(),
         library: api.shelf.borrow().library(),
         channels: &channels,
     });

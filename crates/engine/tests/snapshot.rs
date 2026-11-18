@@ -5,7 +5,7 @@ mod mock;
 
 use engine::{ChannelNumbers, Command, Engine, Rate, RunNumbers, Universes};
 
-fn set(value: u8) -> Command<ChannelNumbers, RunNumbers, engine::OutputKind> {
+fn set(value: u8) -> Command {
     Command::SetChannel {
         channel: ChannelNumbers {
             universe: 1,

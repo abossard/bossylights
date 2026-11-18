@@ -34,3 +34,4 @@ rtrb = "0.4.1"
 serialport = { version = "4.10.1", default-features = false } # a fake serial port in tests
 futures-util = { version = "0.3.34", default-features = false, features = ["sink"] }
 tokio-tungstenite = "0.29.0"
+tokio = { version = "1.54.1", features = ["rt-multi-thread"] } # one test runs on threads

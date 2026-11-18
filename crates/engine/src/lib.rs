@@ -35,19 +35,23 @@
 pub use engine_core::{
     ADDRESSES, API_VERSION, BEAT, BestEffort, ChannelLevel, ChannelNumbers, Color, Command,
     Counters, Levels, MAX_OUTPUTS, MAX_UNIVERSES, Outcome, Output, OutputKind, OutputNumber,
-    Priority, Rate, Refusal, Reply, Request, Run, RunNumbers, State, Status, Universes, changes,
+    Priority, Project, ProjectOutput, Rate, Refusal, Reply, Request, Run, RunNumbers, State,
+    Status, Universes, changes,
 };
 pub use engine_core::{
-    Checked, Histogram, LATENCY_BUCKETS, LATENESS_BUCKETS, bucket, due, frame, next_wake,
+    EngineCommand, Histogram, LATENCY_BUCKETS, LATENESS_BUCKETS, bucket, due, frame, next_wake,
     percentile, sleep_before, update, wait,
 };
 mod snapshot;
+
+use engine_core::{ProjectEffect, ProjectEvent};
 
 pub use outputs::Device;
 use snapshot::{Hand, Reader};
 pub use snapshot::{Lateness, Snapshot};
 use std::hint;
 use std::io;
+use std::panic::{self, AssertUnwindSafe};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread::{self, JoinHandle, Thread};
@@ -72,40 +76,54 @@ pub struct Engine {
     universes: Universes,
 }
 
-/// Sends commands to the engine and opens the outputs' devices, so the tick thread
-/// never does. A `SetOutput` for the kind an output already has keeps its device.
-/// One sender: each queue has one producer and one consumer.
+/// The engine front: owns the [`Project`], checks every client command against it,
+/// sends the tick thread what follows and opens the outputs' devices, so the tick thread
+/// never does. The only sender: each queue has one producer and one consumer, and a
+/// check is never stale.
 pub struct Sender {
-    open: Open,
+    /// `None` while an [`Opening`] has it: one device opens at a time.
+    open: Option<Open>,
     commands: rtrb::Producer<Sent>,
-    /// What each output holds once the tick thread applied every command sent so far.
-    held: [Held; MAX_OUTPUTS],
+    project: Project,
     /// Devices this sender sent the tick thread away from, so far. The free thread
     /// counts the ones it freed in `Shared::freed`.
     retired: u64,
     shared: Arc<Shared>,
     free: Thread,
-    universes: Universes,
     start: Instant,
-}
-
-/// What an output holds, as the sender knows it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Held {
-    Nothing,
-    /// A device from `Sender::attach`: its kind is not known.
-    Attached,
-    /// A device `SetOutput` opened for this kind.
-    Opened(OutputKind),
 }
 
 /// Opens the device for an output kind, off the tick thread. The engine's own is
 /// `outputs::open`; a test brings one that opens fake devices.
 pub type Open = Box<dyn FnMut(OutputKind) -> io::Result<Box<dyn Device>> + Send>;
 
+/// A device to open for `SetOutput`: [`Opening::open`] blocks, so it runs where it may,
+/// then [`Sender::finish`] puts the device on the tick thread.
+pub struct Opening {
+    output: OutputNumber,
+    kind: OutputKind,
+    universes: Run,
+    rate: Rate,
+    open: Open,
+    shared: Arc<Shared>,
+    free: Thread,
+    /// The devices sent away before this one opens: a port they hold must be free.
+    retired: u64,
+}
+
+/// What came of an [`Opening`]. It brings the `open` back.
+pub struct Opened {
+    open: Open,
+    output: OutputNumber,
+    kind: OutputKind,
+    universes: Run,
+    rate: Rate,
+    device: io::Result<Box<dyn Device>>,
+}
+
 /// A command, when it was sent, and the device it brings.
 struct Sent {
-    command: Command,
+    command: EngineCommand,
     at: Duration,
     device: Option<Box<dyn Device>>,
 }
@@ -155,13 +173,12 @@ impl Engine {
         };
         let (tick, priority) = rt_thread::spawn("tick", move |priority| ticker.run(priority))?;
         let sender = Sender {
-            open,
+            open: Some(open),
             commands,
-            held: [Held::Nothing; MAX_OUTPUTS],
+            project: Project::new(universes),
             retired: 0,
             shared: Arc::clone(&shared),
             free: free.thread().clone(),
-            universes,
             start,
         };
         let engine = Self {
@@ -193,41 +210,92 @@ impl Engine {
 
 impl Sender {
     /// Queues a command for the very next wake, or says why not. Nothing changes on a
-    /// refusal. `SetOutput` opens its device here, off the tick thread, then attaches it.
-    pub fn send(
-        &mut self,
-        command: Command<ChannelNumbers, RunNumbers, OutputKind>,
-    ) -> Result<(), Refusal> {
-        match command.check(self.universes)? {
-            // Of these, only `RemoveOutput` changes what an output holds: nothing.
-            Checked::Command(command) => self.push(command, None, Held::Nothing),
-            Checked::SetOutput {
+    /// refusal. `SetOutput` opens its device here and waits for it: a caller that must
+    /// not wait uses [`Sender::begin`], [`Opening::open`] and [`Sender::finish`].
+    pub fn send(&mut self, command: Command) -> Result<(), Refusal> {
+        match self.begin(command)? {
+            None => Ok(()),
+            Some(opening) => self.finish(opening.open()),
+        }
+    }
+
+    /// Checks `command` against the project and sends what follows. `Some` when a device
+    /// must be opened first: until [`Sender::finish`] the output is `Opening`.
+    pub fn begin(&mut self, command: Command) -> Result<Option<Opening>, Refusal> {
+        let (project, effect) = self.project.update(ProjectEvent::Client(command))?;
+        let opening = match effect {
+            None => None,
+            Some(ProjectEffect::Send(command)) => {
+                self.push(command, None)?;
+                None
+            }
+            Some(ProjectEffect::Keep {
                 output,
                 kind,
                 universes,
                 rate,
-            } => {
+            }) => {
                 let rate = rate.unwrap_or(outputs::default_rate(kind));
-                let attach = Command::Attach {
+                let attach = EngineCommand::Attach {
                     output,
                     universes,
                     rate,
                 };
-                if self.held(output) == Held::Opened(kind) {
-                    // The same device: only its run and rate change.
-                    return self.push(attach, None, Held::Opened(kind));
-                }
-                // A device on its way back may hold what this one opens, a port say.
-                self.wait_until_freed();
-                let device = (self.open)(kind).map_err(|_| Refusal::CannotOpen)?;
-                self.push(attach, Some(device), Held::Opened(kind))
+                self.push(attach, None)?;
+                None
             }
-        }
+            Some(ProjectEffect::Open {
+                output,
+                kind,
+                universes,
+                rate,
+            }) => Some(Opening {
+                output,
+                kind,
+                universes,
+                rate: rate.unwrap_or(outputs::default_rate(kind)),
+                open: self.open.take().ok_or(Refusal::Opening)?,
+                shared: Arc::clone(&self.shared),
+                free: self.free.clone(),
+                retired: self.retired,
+            }),
+        };
+        self.project = project;
+        Ok(opening)
     }
 
-    /// Puts an opened device on the tick thread as `output`, in place of the one there.
-    /// Every output gets there this way: `SetOutput` after opening its kind, a test with
-    /// its own device. Its counters start at zero.
+    /// Puts the device of `opened` on the tick thread, or says why not.
+    pub fn finish(&mut self, opened: Opened) -> Result<(), Refusal> {
+        let Opened {
+            open,
+            output,
+            kind,
+            universes,
+            rate,
+            device,
+        } = opened;
+        self.open = Some(open);
+        let attach = EngineCommand::Attach {
+            output,
+            universes,
+            rate,
+        };
+        let sent = device
+            .map_err(|_| Refusal::CannotOpen)
+            .and_then(|device| self.push(attach, Some(device)));
+        let event = match sent {
+            Ok(()) => ProjectEvent::Opened { output, kind },
+            Err(_) => ProjectEvent::OpenFailed { output },
+        };
+        if let Ok((project, _)) = self.project.update(event) {
+            self.project = project;
+        }
+        sent
+    }
+
+    /// Puts an opened device on the tick thread as `output`, in place of the one there:
+    /// a test's own device, whose kind the project does not know. Its counters start at
+    /// zero.
     pub fn attach(
         &mut self,
         output: OutputNumber,
@@ -235,61 +303,43 @@ impl Sender {
         universes: Run,
         rate: Rate,
     ) -> Result<(), Refusal> {
-        let command = Command::Attach {
+        let (project, _) = self.project.update(ProjectEvent::Attached { output })?;
+        let command = EngineCommand::Attach {
             output,
             universes,
             rate,
         };
-        self.push(command, Some(device), Held::Attached)
+        self.push(command, Some(device))?;
+        self.project = project;
+        Ok(())
     }
 
-    /// What `output` holds once every command sent so far is applied.
-    fn held(&self, output: OutputNumber) -> Held {
-        self.held
-            .get(output.slot())
-            .copied()
-            .unwrap_or(Held::Nothing)
+    /// What the engine was asked to be: its outputs and what each sends to.
+    pub fn project(&self) -> Project {
+        self.project
     }
 
-    /// Retired devices not freed yet.
-    fn on_their_way(&self) -> u64 {
-        let freed = self.shared.freed.load(Ordering::Acquire);
-        self.retired.saturating_sub(freed)
-    }
-
-    /// Waits, bounded, until the free thread freed every device sent away so far.
-    fn wait_until_freed(&self) {
-        let started = Instant::now();
-        while self.on_their_way() > 0 && started.elapsed() < FREE_WITHIN {
-            self.free.unpark();
-            thread::sleep(Duration::from_millis(1));
-        }
-    }
-
-    /// Queues `command` with the `device` it brings. `then` is what its output holds
-    /// once it is applied. A device `Attach` brings and `RemoveOutput` send the old one
-    /// back; `Attach` with no device keeps it.
+    /// Queues `command` with the `device` it brings. A device `Attach` brings and
+    /// `RemoveOutput` send the old one back; `Attach` with no device keeps it.
     fn push(
         &mut self,
-        command: Command,
+        command: EngineCommand,
         device: Option<Box<dyn Device>>,
-        then: Held,
     ) -> Result<(), Refusal> {
         // The output this command changes, and whether the device there goes back.
         let (changes, sends_back) = match command {
-            Command::Attach { output, .. } => (Some(output), device.is_some()),
-            Command::RemoveOutput { output } => (Some(output), true),
-            Command::Tick { .. }
-            | Command::Handed { .. }
-            | Command::SetChannel { .. }
-            | Command::ReleaseChannel { .. }
-            | Command::ReleaseAll
-            | Command::Blackout { .. }
-            | Command::SetOutput { .. } => (None, false),
+            EngineCommand::Attach { output, .. } => (Some(output), device.is_some()),
+            EngineCommand::RemoveOutput { output } => (Some(output), true),
+            EngineCommand::Tick { .. }
+            | EngineCommand::Handed { .. }
+            | EngineCommand::SetChannel { .. }
+            | EngineCommand::ReleaseChannel { .. }
+            | EngineCommand::ReleaseAll
+            | EngineCommand::Blackout { .. } => (None, false),
         };
         let retires =
-            sends_back && changes.is_some_and(|output| self.held(output) != Held::Nothing);
-        if retires && self.on_their_way() >= RETIRED as u64 {
+            sends_back && changes.is_some_and(|output| self.project.output(output).is_some());
+        if retires && on_their_way(&self.shared, self.retired) >= RETIRED as u64 {
             self.free.unpark();
             return Err(Refusal::QueueFull);
         }
@@ -304,11 +354,38 @@ impl Sender {
         if retires {
             self.retired += 1;
         }
-        if let Some(held) = changes.and_then(|output| self.held.get_mut(output.slot())) {
-            *held = then;
-        }
         Ok(())
     }
+}
+
+impl Opening {
+    /// Opens the device. Blocks: first, bounded, until the devices sent away before it
+    /// are freed (one may hold the port this opens), then for as long as opening takes.
+    pub fn open(mut self) -> Opened {
+        let started = Instant::now();
+        while on_their_way(&self.shared, self.retired) > 0 && started.elapsed() < FREE_WITHIN {
+            self.free.unpark();
+            thread::sleep(Duration::from_millis(1));
+        }
+        // A panic in `open` is a failed open: the `open` comes back either way.
+        let kind = self.kind;
+        let open = &mut self.open;
+        let device = panic::catch_unwind(AssertUnwindSafe(|| open(kind)))
+            .unwrap_or_else(|_| Err(io::Error::other("opening the device panicked")));
+        Opened {
+            open: self.open,
+            output: self.output,
+            kind: self.kind,
+            universes: self.universes,
+            rate: self.rate,
+            device,
+        }
+    }
+}
+
+/// Of the `retired` devices sent away so far, those not freed yet.
+fn on_their_way(shared: &Shared, retired: u64) -> u64 {
+    retired.saturating_sub(shared.freed.load(Ordering::Acquire))
 }
 
 /// The free thread: frees the devices the tick thread retired, closing their ports and
@@ -430,7 +507,7 @@ impl Ticker {
                 hint::spin_loop();
             }
             let now = self.start.elapsed();
-            self.apply(Command::Tick { now });
+            self.apply(EngineCommand::Tick { now });
             let asked = self.hand.asked();
 
             // Apply the waiting commands right before the frame: a press is in the next one.
@@ -466,14 +543,16 @@ impl Ticker {
     /// For `Attach` and `RemoveOutput`: puts `device` at the output, sends the old one
     /// back to be freed and starts the output's lateness afresh. `Attach` without a
     /// device keeps the one there. Others change nothing.
-    fn swap(&mut self, command: Command, device: Option<Box<dyn Device>>) {
-        let (Command::Attach { output, .. } | Command::RemoveOutput { output }) = command else {
+    fn swap(&mut self, command: EngineCommand, device: Option<Box<dyn Device>>) {
+        let (EngineCommand::Attach { output, .. } | EngineCommand::RemoveOutput { output }) =
+            command
+        else {
             return;
         };
         let Some(slot) = self.devices.get_mut(output.slot()) else {
             return;
         };
-        let keeps = matches!(command, Command::Attach { .. }) && device.is_none();
+        let keeps = matches!(command, EngineCommand::Attach { .. }) && device.is_none();
         if !keeps {
             self.carried.attached(output.slot());
         }
@@ -501,13 +580,13 @@ impl Ticker {
             Some(Some(device)) => device.take(output.universes.of(&self.out)),
             _ => Outcome::Failed,
         };
-        self.apply(Command::Handed {
+        self.apply(EngineCommand::Handed {
             output: number,
             outcome,
         });
     }
 
-    fn apply(&mut self, command: Command) {
+    fn apply(&mut self, command: EngineCommand) {
         if let Some(effect) = self.now.update(command) {
             match effect {}
         }

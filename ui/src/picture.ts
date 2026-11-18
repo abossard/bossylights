@@ -1,8 +1,9 @@
 // What the engine reported last, kept in step with its replies. A calculation.
-import type { ChannelLevel, Levels, Library, Reply, State } from "./engine-api";
+import type { ChannelLevel, Levels, Library, Project, Reply, State } from "./engine-api";
 
 export interface Picture {
   state: State;
+  project: Project;
   library: Library;
   universes: Levels[];
 }
@@ -12,8 +13,8 @@ export function receive(picture: Picture | undefined, reply: Reply): Picture | u
   if (typeof reply === "string") return picture;
   if ("Picture" in reply) return reply.Picture;
   if (!("Changed" in reply) || picture === undefined) return picture;
-  const { state, library, channels } = reply.Changed;
-  return { state, library, universes: merge(picture.universes, channels) };
+  const { state, project, library, channels } = reply.Changed;
+  return { state, project, library, universes: merge(picture.universes, channels) };
 }
 
 /** The universes with these channels at their new levels. Counts from 1, as the engine does. */

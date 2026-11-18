@@ -4,7 +4,7 @@
 //! | Client sends | Engine answers |
 //! |---|---|
 //! | `{"Send": {"command": ...}}` | `"Accepted"`, or `{"Refused": {"reason": ...}}` |
-//! | `"Query"` | `{"Picture": ...}`: the state and every level |
+//! | `"Query"` | `{"Picture": ...}`: the state, the project and every level |
 //! | `"Subscribe"` | `{"Picture": ...}`, then `{"Changed": ...}` for each new frame |
 //! | `"Stop"` | `"Stopping"`, then every connection closes and the engine process ends |
 //! | `{"Search": {"text": ...}}` | `{"Found": ...}`: the best matches of the fixture library |
@@ -13,22 +13,20 @@
 //! | anything else | `{"Refused": {"reason": "NotACommand"}}` |
 
 use crate::library::{Failure, FixtureKind, Library, Match, ModeChannels, Text};
-use crate::{ChannelLevel, ChannelNumbers, Command, Levels, OutputKind, RunNumbers, State};
+use crate::{ChannelLevel, Command, Levels, Project, State};
 use serde::{Deserialize, Serialize};
 
 /// The version of this API. `GET /version` answers it as text. A client that speaks
 /// another version does not talk to the engine. Raise it with every change a client of
 /// the old version would get wrong.
-pub const API_VERSION: u16 = 1;
+pub const API_VERSION: u16 = 2;
 
 /// What a client sends.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub enum Request {
     /// Change the state. Answered at once, before the frame that carries it.
-    Send {
-        command: Command<ChannelNumbers, RunNumbers, OutputKind>,
-    },
+    Send { command: Command },
     /// The whole picture, once.
     Query,
     /// The whole picture, then what changed with every frame.
@@ -61,9 +59,10 @@ pub enum Reply<'a> {
     Stopping,
     /// The command was not taken. Nothing changed.
     Refused { reason: Refusal },
-    /// The state and the held levels of every universe.
+    /// The state, the project and the held levels of every universe.
     Picture {
         state: State,
+        project: Project,
         library: Library,
         universes: &'a [Levels],
     },
@@ -71,6 +70,7 @@ pub enum Reply<'a> {
     /// message.
     Changed {
         state: State,
+        project: Project,
         library: Library,
         channels: &'a [ChannelLevel],
     },
@@ -107,4 +107,6 @@ pub enum Refusal {
     CannotOpen,
     /// The library has no fixture of that maker and model.
     NoSuchFixture,
+    /// The output's device is being opened. Send again once it is open.
+    Opening,
 }

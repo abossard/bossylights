@@ -232,7 +232,7 @@ fn hear(end: &mut TTYPort, level: u8) {
     }
 }
 
-fn set_output(output: u8, rate: Option<Rate>) -> Command<ChannelNumbers, RunNumbers, OutputKind> {
+fn set_output(output: u8, rate: Option<Rate>) -> Command {
     Command::SetOutput {
         output: OutputNumber::try_from(output).unwrap(),
         kind: OutputKind::DmxUsbPro { adapter: 1 },
@@ -241,16 +241,13 @@ fn set_output(output: u8, rate: Option<Rate>) -> Command<ChannelNumbers, RunNumb
     }
 }
 
-fn remove(output: u8) -> Command<ChannelNumbers, RunNumbers, OutputKind> {
+fn remove(output: u8) -> Command {
     Command::RemoveOutput {
         output: OutputNumber::try_from(output).unwrap(),
     }
 }
 
-fn send_all(
-    sender: &mut Sender,
-    commands: &[Command<ChannelNumbers, RunNumbers, OutputKind>],
-) -> Vec<Result<(), Refusal>> {
+fn send_all(sender: &mut Sender, commands: &[Command]) -> Vec<Result<(), Refusal>> {
     commands
         .iter()
         .map(|command| sender.send(*command))

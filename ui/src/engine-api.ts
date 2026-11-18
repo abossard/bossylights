@@ -17,9 +17,9 @@ export type Color = "Rgb" | "Rgbw";
 
 export type Rate = "30" | "44" | "60";
 
-export type Reply = "Accepted" | "Stopping" | { "Refused": { reason: Refusal, } } | { "Picture": { state: State, library: Library, universes: Array<Levels>, } } | { "Changed": { state: State, library: Library, channels: Array<ChannelLevel>, } } | { "Found": { fixtures: Array<Match>, } } | { "Fixture": { maker: string, model: string, kind: FixtureKind, modes: Array<ModeChannels>, } } | { "Failures": { failures: Array<Failure>, } };
+export type Reply = "Accepted" | "Stopping" | { "Refused": { reason: Refusal, } } | { "Picture": { state: State, project: Project, library: Library, universes: Array<Levels>, } } | { "Changed": { state: State, project: Project, library: Library, channels: Array<ChannelLevel>, } } | { "Found": { fixtures: Array<Match>, } } | { "Fixture": { maker: string, model: string, kind: FixtureKind, modes: Array<ModeChannels>, } } | { "Failures": { failures: Array<Failure>, } };
 
-export type Refusal = "NotACommand" | { "NoSuchUniverse": { universes: number, } } | "NoSuchAddress" | "QueueFull" | "CannotOpen" | "NoSuchFixture";
+export type Refusal = "NotACommand" | { "NoSuchUniverse": { universes: number, } } | "NoSuchAddress" | "QueueFull" | "CannotOpen" | "NoSuchFixture" | "Opening";
 
 export type State = { 
 /**
@@ -79,4 +79,12 @@ export type FixtureKind = "ColorChanger" | "Dimmer" | "Effect" | "Fan" | "Flower
 
 export type ChannelFunction = "Dimmer" | "Red" | "Green" | "Blue" | "White" | "Amber" | "Uv" | "Indigo" | "Lime" | "Cyan" | "Magenta" | "Yellow" | "Hue" | "Saturation" | "Lightness" | "Value" | "ColorTemperature" | "Pan" | "Tilt" | "Zoom" | "Focus" | "Iris" | "Frost" | "Gobo" | "ColorWheel" | "Strobe" | "Shutter" | "Prism" | "Speed" | "Effect" | "Control" | "NoFunction" | { "Other": { name: string, } };
 
-export const API_VERSION = 1;
+export type Project = { 
+/**
+ * The outputs, by number. `None` where none is set.
+ */
+outputs: Array<ProjectOutput | null>, };
+
+export type ProjectOutput = { "Kind": { kind: OutputKind, } } | "Attached";
+
+export const API_VERSION = 2;

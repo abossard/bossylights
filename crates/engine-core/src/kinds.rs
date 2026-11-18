@@ -3,10 +3,10 @@
 //! rate. A new kind is a new row here and its code there.
 
 use core::net::SocketAddrV4;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// What kind of output, and where it sends.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub enum OutputKind {
     /// DDP over UDP, as WLED takes it. `address` is `"192.168.1.50:4048"`.
@@ -21,7 +21,7 @@ pub enum OutputKind {
 }
 
 /// Channels per pixel.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub enum Color {
     Rgb,
@@ -34,3 +34,7 @@ pub const EXAMPLE: OutputKind = OutputKind::Ddp {
     address: core::net::SocketAddrV4::new(core::net::Ipv4Addr::LOCALHOST, 4048),
     color: Color::Rgb,
 };
+
+/// Another kind, for tests that need two.
+#[cfg(test)]
+pub const OTHER: OutputKind = OutputKind::DmxUsbPro { adapter: 1 };
