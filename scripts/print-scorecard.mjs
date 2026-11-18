@@ -1,5 +1,5 @@
 // Prints the scorecard as Markdown. With GITHUB_STEP_SUMMARY set, also writes it there.
-// Runs the engine for 60 seconds to measure tick lateness.
+// Runs the engine for 60 seconds to measure tick lateness, then 10 seconds to time sends.
 import { execFileSync } from "node:child_process";
 import { appendFileSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -39,6 +39,15 @@ const lateness = () => {
   }
 };
 
-const markdown = scorecard(crates, escapeHatches(everything), lateness());
+const sendToFrame = () => {
+  try {
+    const out = execFileSync("cargo", ["run", "-q", "-p", "engine-server", "--example", "send_to_frame"], { encoding: "utf8" });
+    return Number(out.trim());
+  } catch {
+    return undefined; // shown as "not measured"
+  }
+};
+
+const markdown = scorecard(crates, escapeHatches(everything), lateness(), sendToFrame());
 console.log(markdown);
 if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, markdown);
