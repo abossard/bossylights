@@ -26,6 +26,20 @@ test("a fader sets channel 1 through the API and shows the engine's level", asyn
   await expect(page.getByTestId("level-1")).toHaveText("200");
 });
 
+test("the debug page lists an output added through the API, with its counters", async ({ page }) => {
+  await page.goto(`/?engine=ws://${ENGINE}/api`);
+  await expect(page.getByTestId("status")).toHaveText("connected");
+  await page.evaluate(async (url) => {
+    const socket = new WebSocket(url);
+    await new Promise((opened) => (socket.onopen = opened));
+    const command = { SetOutput: { output: 16, kind: "Mock", universes: { first: 1, count: 1 }, rate: "30" } };
+    socket.send(JSON.stringify({ Send: { command } }));
+    await new Promise((answered) => (socket.onmessage = answered));
+    socket.close();
+  }, `ws://${ENGINE}/api`);
+  await expect(page.getByTestId("outputs")).toContainText(/16: mock, universes 1 to 1, 30 a second, Running, accepted [1-9]/);
+});
+
 const states = [
   { engine: `ws://${ENGINE}/api`, status: "connected" },
   { engine: "ws://127.0.0.1:9/api", status: "disconnected" },

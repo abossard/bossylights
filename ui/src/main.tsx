@@ -1,7 +1,7 @@
 import { For, onCleanup, Show } from "solid-js";
 import { render } from "solid-js/web";
 import { connectEngine, engineUrl } from "./engine";
-import type { Priority, Refusal } from "./engine-api";
+import type { Output, Priority, Refusal } from "./engine-api";
 import "./style.css";
 
 /** A developer aid: the first channels of universe 1. */
@@ -22,6 +22,15 @@ function refusalText(refusal: Refusal): string {
   return `NoSuchUniverse: this engine has ${refusal.NoSuchUniverse.universes}`;
 }
 
+/** An output in one line: where it sends, what, how often, its state and counters. */
+function outputText(number: number, output: Output): string {
+  const kind = output.kind === "Mock" ? "mock" : `DDP ${output.kind.Ddp.color} to ${output.kind.Ddp.address}`;
+  const { first, count } = output.universes;
+  const status = typeof output.status === "string" ? output.status : `Reconnecting (${output.status.Reconnecting.failures})`;
+  const c = output.counters;
+  return `${number}: ${kind}, universes ${first} to ${first + count - 1}, ${output.rate} a second, ${status}, accepted ${c.accepted}, dropped ${c.dropped}, failed ${c.failed}, off beat ${c.off_beat}`;
+}
+
 function App() {
   const engine = connectEngine(engineUrl());
   onCleanup(engine.close);
@@ -34,7 +43,7 @@ function App() {
       <p class="frame" data-testid="frame">
         {engine.picture()?.state.frame ?? "0"}
       </p>
-      <p class="label">engine frames, 44 a second</p>
+      <p class="label">engine wakes</p>
       <p class="label" data-testid="priority">
         output thread: {priorityText(engine.picture()?.state.priority)}
       </p>
@@ -62,6 +71,13 @@ function App() {
           )}
         </For>
       </div>
+      <ul class="outputs" data-testid="outputs">
+        <For each={engine.picture()?.state.outputs ?? []}>
+          {(output, index) => (
+            <Show when={output}>{(output) => <li class="label">{outputText(index() + 1, output())}</li>}</Show>
+          )}
+        </For>
+      </ul>
       <Show when={engine.refusal()}>
         {(refusal) => (
           <p class="label" data-testid="refusal">

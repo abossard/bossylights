@@ -69,3 +69,8 @@ main {
   font-variant-numeric: tabular-nums;
   text-align: right;
 }
+
+.outputs {
+  list-style: none;
+  padding: 0;
+}
