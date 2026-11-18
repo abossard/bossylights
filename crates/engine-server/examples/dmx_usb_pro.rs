@@ -124,7 +124,7 @@ fn run(port: &str, check: &str) -> Result<bool, String> {
         _ => hands_on(&mut watch, &mut sender, Step::Sleep),
     };
     drop(sender);
-    drop(engine); // stops the output thread; the port is closed with its device
+    drop(engine); // stops the output thread and joins it: the device, and its port, are freed
     println!("port closed.");
     Ok(passed)
 }

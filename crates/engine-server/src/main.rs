@@ -8,7 +8,8 @@
 
 #![forbid(unsafe_code)]
 
-use engine::{Engine, MAX_OUTPUTS, OutputNumber, State, Universes};
+use engine::{Counters, Engine, Lateness, MAX_OUTPUTS, OutputNumber, State, Universes};
+use engine_core::OFF_BEAT;
 use std::fs::{File, TryLockError};
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -40,9 +41,12 @@ async fn main() {
         exit(2);
     });
     let port = settings.listen.port();
-    let _lock = lock(port).unwrap_or_else(|problem| {
-        eprintln!("bossylights-engine: {problem}");
-        exit(1);
+    // Port 0 is any free port: nothing to lock, and the lock would be shared by everybody.
+    let _lock = (port != 0).then(|| {
+        lock(port).unwrap_or_else(|problem| {
+            eprintln!("bossylights-engine: {problem}");
+            exit(1);
+        })
     });
     let listener = tokio::net::TcpListener::bind(settings.listen)
         .await
@@ -76,7 +80,11 @@ async fn main() {
 /// to [`FREED`] while another engine has it: one that is stopping lets go when it ends.
 fn lock(port: u16) -> Result<File, String> {
     let path = std::env::temp_dir().join(format!("bossylights-engine-{port}.lock"));
-    let file = File::create(&path).map_err(|e| format!("cannot open {}: {e}", path.display()))?;
+    // Opened for reading when it exists: the file stays in the temp folder, and another
+    // user cannot write it. A lock does not need write access.
+    let file = File::open(&path)
+        .or_else(|_| File::create(&path))
+        .map_err(|e| format!("cannot open {}: {e}", path.display()))?;
     let until = Instant::now() + FREED;
     loop {
         match file.try_lock() {
@@ -102,17 +110,23 @@ fn report(engine: &mut Engine) -> String {
         let number = OutputNumber::try_from(u8::try_from(n).ok()?).ok()?;
         let output = outputs.get(number.slot()).copied().flatten()?;
         let lateness = picture.lateness(number)?;
-        let c = output.counters;
-        Some(format!(
-            "output {n}: lateness p99 {} us, worst {} us, accepted {}, dropped {}, failed {}\n",
-            lateness.p99.as_micros(),
-            lateness.worst.as_micros(),
-            c.accepted,
-            c.dropped,
-            c.failed
-        ))
+        Some(line(n, output.counters, lateness))
     });
     format!("bossylights-engine stopped at frame {frame}\n") + &lines.collect::<String>()
+}
+
+/// One output's line. The 2 ms is [`OFF_BEAT`], the one the counter uses.
+fn line(n: usize, c: Counters, lateness: Lateness) -> String {
+    format!(
+        "output {n}: accepted {}, dropped {}, failed {}, off beat (> {} ms) {}, lateness p99 {} µs, worst {} µs\n",
+        c.accepted,
+        c.dropped,
+        c.failed,
+        OFF_BEAT.as_millis(),
+        c.off_beat,
+        lateness.p99.as_micros(),
+        lateness.worst.as_micros()
+    )
 }
 
 fn settings(args: &[String]) -> Result<Settings, String> {
@@ -142,4 +156,27 @@ fn settings(args: &[String]) -> Result<Settings, String> {
         }
     }
     Ok(settings)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_output_line_says_off_beat_and_microseconds() {
+        let counters = Counters {
+            accepted: 10,
+            dropped: 2,
+            failed: 3,
+            off_beat: 4,
+        };
+        let lateness = Lateness {
+            p99: Duration::from_micros(120),
+            worst: Duration::from_micros(3500),
+        };
+        assert_eq!(
+            line(1, counters, lateness),
+            "output 1: accepted 10, dropped 2, failed 3, off beat (> 2 ms) 4, lateness p99 120 µs, worst 3500 µs\n"
+        );
+    }
 }

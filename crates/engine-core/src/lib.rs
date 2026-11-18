@@ -837,6 +837,11 @@ mod tests {
             (counts(&[(last, 3)]), late, 50, Some(late)),
             (counts(&[(0, 99), (last, 1)]), late, 99, Some(100)),
             (counts(&[(0, u64::MAX), (1, u64::MAX)]), 150, 99, Some(100)), // saturates
+            // a total that is no multiple of 100: the rank is rounded up
+            (counts(&[(0, 75), (5, 75)]), 550, 50, Some(100)), // rank 75
+            (counts(&[(0, 74), (5, 76)]), 550, 50, Some(550)),
+            (counts(&[(0, 76), (5, 75)]), 550, 50, Some(100)), // rank 76 of 151
+            (counts(&[(0, 76), (5, 75)]), 550, 51, Some(550)), // rank 78
         ];
         for (histogram, worst, percent, expected) in cases {
             let worst = Duration::from_micros(worst);
