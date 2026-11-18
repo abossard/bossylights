@@ -21,8 +21,8 @@ async fn main() {
         eprintln!("bossylights-engine: {problem}\n{USAGE}");
         exit(2);
     });
-    // No output yet: the frames go nowhere until outputs exist (#105).
-    let (engine, sender) = Engine::start(settings.universes, |_| {}).unwrap_or_else(|error| {
+    // No outputs yet: a client adds them with `SetOutput`.
+    let (engine, sender) = Engine::start(settings.universes).unwrap_or_else(|error| {
         eprintln!("bossylights-engine: the tick thread did not start: {error}");
         exit(1);
     });

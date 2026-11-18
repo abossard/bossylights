@@ -1,8 +1,9 @@
-//! Sends "set channel" at uneven times for ten seconds and prints, in microseconds,
-//! how long 95 of 100 commands took from `send` to the frame that carried them.
+//! Sends "set channel" at uneven times for ten seconds to an engine with one mock output
+//! at 44 a second, and prints, in microseconds, how long 95 of 100 commands took from
+//! `send` to the frame that carried them.
 //! The scorecard reads it: `cargo run -q -p engine-server --example send_to_frame`.
 
-use engine::{ChannelNumbers, Command, Engine, Universes};
+use engine::{ChannelNumbers, Command, Engine, OutputKind, OutputNumber, RunNumbers, Universes};
 use std::process::ExitCode;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -10,10 +11,20 @@ use std::time::{Duration, Instant};
 const RUN: Duration = Duration::from_secs(10);
 
 fn main() -> ExitCode {
-    let Ok((engine, mut sender)) = Engine::start(Universes::ONE, |_| {}) else {
+    let Ok((engine, mut sender)) = Engine::start(Universes::ONE) else {
         eprintln!("send_to_frame: the engine did not start");
         return ExitCode::FAILURE;
     };
+    let mock = OutputNumber::try_from(1).map(|output| Command::SetOutput {
+        output,
+        kind: OutputKind::Mock,
+        universes: RunNumbers { first: 1, count: 1 },
+        rate: None,
+    });
+    if !mock.is_ok_and(|mock| sender.send(mock).is_ok()) {
+        eprintln!("send_to_frame: the mock output was not added");
+        return ExitCode::FAILURE;
+    }
     let started = Instant::now();
     let mut seed = 0x2545_f491_4f6c_dd1d_u64;
     let mut value = 0_u8;

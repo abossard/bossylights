@@ -15,7 +15,6 @@ use axum::response::Response;
 use axum::routing::get;
 use engine::{ChannelLevel, Engine, Levels, Refusal, Reply, Request, Sender, changes};
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio::time::MissedTickBehavior;
 
@@ -54,7 +53,7 @@ async fn serve(mut socket: WebSocket, api: Arc<Api>) {
     let count = usize::from(api.engine.universes().count());
     let mut now = vec![Levels::ZERO; count];
     let mut subscription = None;
-    let mut poll = tokio::time::interval(Duration::from_secs(1) / (2 * Engine::RATE_HZ));
+    let mut poll = tokio::time::interval(engine::BEAT / 2);
     poll.set_missed_tick_behavior(MissedTickBehavior::Skip);
     loop {
         let reply = tokio::select! {

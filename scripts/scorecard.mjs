@@ -35,13 +35,14 @@ export function escapeHatches(source) {
 /**
  * The scorecard as Markdown.
  * crates: [{ name, kind, lines, publicItems }]. hatches: from escapeHatches.
- * lateness: { p99, worst } in µs. sendToFrame: p95 in µs. Each undefined when not measured.
+ * lateness: { p99, worst } in µs, the worst of all outputs, and offBeat: intervals off by
+ * more than 2 ms on all outputs. sendToFrame: p95 in µs. Each undefined when not measured.
  */
 export function scorecard(crates, hatches, lateness, sendToFrame) {
   const total = crates.reduce((sum, c) => sum + c.lines, 0);
   const calculation = crates.filter((c) => CALCULATION_KINDS.includes(c.kind)).reduce((sum, c) => sum + c.lines, 0);
   const share = total === 0 ? 0 : Math.round((100 * calculation) / total);
-  const late = lateness === undefined ? "not measured" : `${lateness.p99} µs, worst ${lateness.worst} µs`;
+  const late = lateness === undefined ? "not measured" : `${lateness.p99} µs, worst ${lateness.worst} µs, ${lateness.offBeat} off by > 2 ms`;
   const press = sendToFrame === undefined ? "not measured" : `${sendToFrame} µs`;
   const perItem = (c) => (c.publicItems === 0 ? "-" : `${Math.round((10 * c.lines) / c.publicItems) / 10}`);
   return [
@@ -51,7 +52,7 @@ export function scorecard(crates, hatches, lateness, sendToFrame) {
     "|---|---|---|",
     `| Lines in calculation crates | ${share}% (${calculation} of ${total}) | up |`,
     `| Escape hatches: allow, expect, lint-disable, unsafe | ${hatches.allow}, ${hatches.expect}, ${hatches.lintDisable}, ${hatches.unsafe} | flat |`,
-    `| Tick lateness in 60 s, p99 | ${late} | flat |`,
+    `| Lateness per output in 60 s (60 and 44 a second), worst p99 | ${late} | flat |`,
     `| Send to frame in 10 s, p95 (under one frame + 5 ms) | ${press} | flat |`,
     "",
     "| Crate | Kind | Public items | Lines | Lines per public item |",
