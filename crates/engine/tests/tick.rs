@@ -1,7 +1,6 @@
 mod mock;
 
 use engine::{Engine, OutputNumber, Rate, RunNumbers, Universes};
-use std::time::Duration;
 
 #[test]
 fn with_no_output_the_counter_advances() {
@@ -29,9 +28,5 @@ fn every_frame_counts_how_late_its_output_was_served() {
     mock::attach(&mut sender, Universes::ONE, 1, run, Rate::FortyFour);
     mock::wait_until("no frame was counted", || engine.lateness(output).is_some());
     let lateness = engine.lateness(output).expect("frames were counted");
-    assert!(
-        lateness.p99 > Duration::ZERO,
-        "the p99 is a bucket's upper edge: {lateness:?}"
-    );
     assert!(lateness.worst >= lateness.p99, "{lateness:?}");
 }

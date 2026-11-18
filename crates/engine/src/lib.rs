@@ -38,7 +38,7 @@ pub use engine_core::{
 };
 pub use engine_core::{
     Checked, Histogram, LATENCY_BUCKETS, LATENESS_BUCKETS, OUTPUT_WORDS, bucket, due, frame,
-    from_words, next_wake, percentile, sleep_before, to_words, update, worst,
+    from_words, next_wake, percentile, sleep_before, to_words, update,
 };
 pub use outputs::Device;
 use std::hint;
@@ -117,8 +117,8 @@ struct Shared {
     frame: AtomicU64,
     stop: AtomicBool,
     /// Per output.
-    lateness: [[AtomicU64; LATENESS_BUCKETS]; MAX_OUTPUTS],
-    latency: [AtomicU64; LATENCY_BUCKETS],
+    lateness: [Times<LATENESS_BUCKETS>; MAX_OUTPUTS],
+    latency: Times<LATENCY_BUCKETS>,
     /// A seqlock around `blackout`, `outputs` and `levels`: odd while the tick thread writes.
     version: AtomicU64,
     blackout: AtomicBool,
@@ -142,8 +142,8 @@ impl Engine {
         let shared = Arc::new(Shared {
             frame: AtomicU64::new(0),
             stop: AtomicBool::new(false),
-            lateness: [const { [const { AtomicU64::new(0) }; LATENESS_BUCKETS] }; MAX_OUTPUTS],
-            latency: [const { AtomicU64::new(0) }; LATENCY_BUCKETS],
+            lateness: [const { Times::new() }; MAX_OUTPUTS],
+            latency: Times::new(),
             version: AtomicU64::new(0),
             blackout: AtomicBool::new(false),
             outputs: [const { [const { AtomicU64::new(0) }; OUTPUT_WORDS] }; MAX_OUTPUTS],
@@ -228,10 +228,10 @@ impl Engine {
 
     /// How late this output's frames were handed over, so far. `None` before its first.
     pub fn lateness(&self, output: OutputNumber) -> Option<Lateness> {
-        let counts = load(self.shared.lateness.get(output.slot())?);
+        let (counts, worst) = self.shared.lateness.get(output.slot())?.load();
         Some(Lateness {
-            p99: percentile(&counts, 99)?,
-            worst: worst(&counts)?,
+            p99: percentile(&counts, 99, worst)?,
+            worst,
         })
     }
 
@@ -239,7 +239,8 @@ impl Engine {
     /// far: counted once per output, when that output's next frame is handed over.
     /// `None` before the first frame that carried a command.
     pub fn send_to_frame_p95(&self) -> Option<Duration> {
-        percentile(&load(&self.shared.latency), 95)
+        let (counts, worst) = self.shared.latency.load();
+        percentile(&counts, 95, worst)
     }
 }
 
@@ -391,13 +392,42 @@ impl Drop for Engine {
     }
 }
 
-fn load<const N: usize>(counts: &[AtomicU64; N]) -> Histogram<N> {
-    counts.each_ref().map(|n| n.load(Ordering::Relaxed))
+/// Times counted in a histogram, and the latest one exactly: the histogram's last bucket
+/// holds everything later. Written by the tick thread, read by anyone.
+struct Times<const N: usize> {
+    counts: [AtomicU64; N],
+    /// In nanoseconds.
+    worst: AtomicU64,
 }
 
-fn count<const N: usize>(counts: &[AtomicU64; N], time: Duration) {
-    if let Some(count) = counts.get(bucket::<N>(time)) {
-        count.fetch_add(1, Ordering::Relaxed);
+impl<const N: usize> Times<N> {
+    const fn new() -> Self {
+        Self {
+            counts: [const { AtomicU64::new(0) }; N],
+            worst: AtomicU64::new(0),
+        }
+    }
+
+    fn count(&self, time: Duration) {
+        if let Some(count) = self.counts.get(bucket::<N>(time)) {
+            count.fetch_add(1, Ordering::Relaxed);
+        }
+        let nanos = u64::try_from(time.as_nanos()).unwrap_or(u64::MAX);
+        self.worst.fetch_max(nanos, Ordering::Relaxed);
+    }
+
+    /// Starts afresh. Counts made meanwhile by the tick thread may stay.
+    fn clear(&self) {
+        for count in &self.counts {
+            count.store(0, Ordering::Relaxed);
+        }
+        self.worst.store(0, Ordering::Relaxed);
+    }
+
+    fn load(&self) -> (Histogram<N>, Duration) {
+        let counts = self.counts.each_ref().map(|n| n.load(Ordering::Relaxed));
+        let worst = Duration::from_nanos(self.worst.load(Ordering::Relaxed));
+        (counts, worst)
     }
 }
 
@@ -513,7 +543,7 @@ impl Ticker {
                 state = self.serve(state, number, now);
                 let (handed, latency) = (self.start.elapsed(), &self.shared.latency);
                 self.carried
-                    .handed(number.slot(), handed, |time| count(latency, time));
+                    .handed(number.slot(), handed, |time| latency.count(time));
             }
             self.publish(&state, applied > 0);
         }
@@ -544,9 +574,7 @@ impl Ticker {
             let _ = self.retired.push(old);
         }
         if let Some(lateness) = self.shared.lateness.get(output.slot()) {
-            for count in lateness {
-                count.store(0, Ordering::Relaxed);
-            }
+            lateness.clear();
         }
     }
 
@@ -557,7 +585,7 @@ impl Ticker {
             return state;
         };
         if let Some(lateness) = self.shared.lateness.get(slot) {
-            count(lateness, now.saturating_sub(output.due));
+            lateness.count(now.saturating_sub(output.due));
         }
         let outcome = match self.devices.get_mut(slot) {
             Some(Some(device)) => device.take(output.universes.of(&self.out)),

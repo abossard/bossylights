@@ -345,8 +345,14 @@ pub fn bucket<const N: usize>(time: Duration) -> usize {
 }
 
 /// The time `percent` of 100 counts stay under: the upper edge of the bucket that
-/// holds that percentile. `None` before the first count.
-pub fn percentile<const N: usize>(histogram: &Histogram<N>, percent: u64) -> Option<Duration> {
+/// holds that percentile, never past `worst`, the latest time counted. In the last
+/// bucket, which holds everything later, it is `worst`: the histogram cannot say more.
+/// `None` before the first count.
+pub fn percentile<const N: usize>(
+    histogram: &Histogram<N>,
+    percent: u64,
+    worst: Duration,
+) -> Option<Duration> {
     let total = histogram
         .iter()
         .fold(0_u64, |sum, n| sum.saturating_add(*n));
@@ -357,16 +363,11 @@ pub fn percentile<const N: usize>(histogram: &Histogram<N>, percent: u64) -> Opt
     for (bucket, count) in histogram.iter().enumerate() {
         seen = seen.saturating_add(*count);
         if total > 0 && seen >= rank {
-            return Some(edge(bucket));
+            let last = bucket + 1 == N;
+            return Some(if last { worst } else { edge(bucket).min(worst) });
         }
     }
     None
-}
-
-/// The time no count went past: the upper edge of the latest bucket that holds a
-/// count. `None` before the first count.
-pub fn worst<const N: usize>(histogram: &Histogram<N>) -> Option<Duration> {
-    histogram.iter().rposition(|count| *count > 0).map(edge)
 }
 
 fn edge(bucket: usize) -> Duration {
@@ -853,43 +854,32 @@ mod tests {
     }
 
     #[test]
-    fn percentile_is_the_upper_edge_of_its_bucket() {
-        // (bucket and count, percent, result in µs)
+    fn percentile_is_the_upper_edge_of_its_bucket_and_never_past_the_worst() {
+        let last = LATENESS_BUCKETS - 1;
+        let late = 30_000; // past the last edge, 25 ms
+        // (bucket and count, the worst time counted in µs, percent, result in µs)
         let cases = [
-            (counts(&[]), 99, None),
-            (counts(&[(0, 1)]), 99, Some(100)),
-            (counts(&[(0, 99), (5, 1)]), 99, Some(100)),
-            (counts(&[(0, 98), (5, 2)]), 99, Some(600)),
-            (counts(&[(3, 1000), (100, 11)]), 99, Some(10_100)),
-            (counts(&[(0, 95), (5, 5)]), 95, Some(100)),
-            (counts(&[(0, 94), (5, 6)]), 95, Some(600)),
-            (counts(&[(0, 1), (9, 1)]), 95, Some(1_000)),
-            (counts(&[(0, u64::MAX), (1, u64::MAX)]), 99, Some(100)), // saturates, never panics
+            (counts(&[]), 0, 99, None),
+            (counts(&[(0, 1)]), 99, 99, Some(99)), // the worst is in the bucket
+            (counts(&[(0, 99), (5, 1)]), 550, 99, Some(100)),
+            (counts(&[(0, 98), (5, 2)]), 550, 99, Some(550)),
+            (counts(&[(0, 98), (5, 2)]), 599, 99, Some(599)),
+            (counts(&[(3, 1000), (100, 11)]), 10_050, 99, Some(10_050)),
+            (counts(&[(3, 1000), (100, 11)]), late, 99, Some(10_100)),
+            (counts(&[(0, 95), (5, 5)]), 550, 95, Some(100)),
+            (counts(&[(0, 94), (5, 6)]), 550, 95, Some(550)),
+            (counts(&[(0, 1), (9, 1)]), 950, 95, Some(950)),
+            (counts(&[(0, 1), (last, 1)]), 2_000_000, 95, Some(2_000_000)), // a stall of 2 s
+            (counts(&[(last, 3)]), late, 50, Some(late)),
+            (counts(&[(0, 99), (last, 1)]), late, 99, Some(100)),
+            (counts(&[(0, u64::MAX), (1, u64::MAX)]), 150, 99, Some(100)), // saturates
         ];
-        for (histogram, percent, expected) in cases {
+        for (histogram, worst, percent, expected) in cases {
+            let worst = Duration::from_micros(worst);
             assert_eq!(
-                percentile(&histogram, percent),
+                percentile(&histogram, percent, worst),
                 expected.map(Duration::from_micros),
-                "p{percent} {expected:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn worst_is_the_upper_edge_of_the_latest_bucket_with_a_count() {
-        // (bucket and count, worst in µs)
-        let cases = [
-            (counts(&[]), None),
-            (counts(&[(0, 1)]), Some(100)),
-            (counts(&[(0, 1000), (7, 1)]), Some(800)),
-            (counts(&[(2, 5), (9, 0)]), Some(300)),
-            (counts(&[(LATENESS_BUCKETS - 1, 1)]), Some(25_100)),
-        ];
-        for (histogram, expected) in cases {
-            assert_eq!(
-                worst(&histogram),
-                expected.map(Duration::from_micros),
-                "{expected:?}"
+                "p{percent} worst {worst:?}"
             );
         }
     }

@@ -61,14 +61,15 @@ export function escapeHatches(source) {
 /**
  * The scorecard as Markdown.
  * crates: [{ name, kind, lines, publicItems }]. hatches: from escapeHatches.
- * lateness: { p99, worst } in µs, the worst of all outputs, and offBeat: intervals off by
- * more than 2 ms on all outputs. sendToFrame: p95 in µs. Each undefined when not measured, shown as `missing`.
+ * lateness and limits (the run at the limits the API allows): { p99, worst } in µs, the
+ * worst of all outputs, and offBeat: intervals off by more than 2 ms on all outputs.
+ * sendToFrame: p95 in µs. Each undefined when not measured, shown as `missing`.
  */
-export function scorecard(crates, hatches, lateness, sendToFrame, missing = "not measured") {
+export function scorecard(crates, hatches, lateness, sendToFrame, limits, missing = "not measured") {
   const total = crates.reduce((sum, c) => sum + c.lines, 0);
   const calculation = crates.filter((c) => CALCULATION_KINDS.includes(c.kind)).reduce((sum, c) => sum + c.lines, 0);
   const share = total === 0 ? 0 : Math.round((100 * calculation) / total);
-  const late = lateness === undefined ? missing : `${lateness.p99} µs, worst ${lateness.worst} µs, ${lateness.offBeat} off by > 2 ms`;
+  const timing = (run) => (run === undefined ? missing : `${run.p99} µs, worst ${run.worst} µs, ${run.offBeat} off by > 2 ms`);
   const press = sendToFrame === undefined ? missing : `${sendToFrame} µs`;
   const perItem = (c) => (c.publicItems === 0 ? "-" : `${Math.round((10 * c.lines) / c.publicItems) / 10}`);
   return [
@@ -78,7 +79,8 @@ export function scorecard(crates, hatches, lateness, sendToFrame, missing = "not
     "|---|---|---|",
     `| Lines in calculation crates | ${share}% (${calculation} of ${total}) | up |`,
     `| Escape hatches: allow, expect, lint-disable, unsafe | ${hatches.allow}, ${hatches.expect}, ${hatches.lintDisable}, ${hatches.unsafe} | flat |`,
-    `| Lateness per output in 60 s (60 and 44 a second), worst p99 | ${late} | flat |`,
+    `| Lateness per output in 60 s (60 and 44 a second), worst p99 | ${timing(lateness)} | flat |`,
+    `| At the limits: 16 outputs of 64 universes in 30 s (60 and 44 a second in turn), worst p99 | ${timing(limits)} | flat |`,
     `| Send to frame in 10 s, p95 (under one frame + 5 ms) | ${press} | flat |`,
     "",
     "| Crate | Kind | Public items | Lines | Lines per public item |",

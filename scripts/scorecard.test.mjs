@@ -63,6 +63,7 @@ test("scorecard renders the numbers as tables", () => {
 | Lines in calculation crates | 30% (30 of 100) | up |
 | Escape hatches: allow, expect, lint-disable, unsafe | 0, 1, 0, 2 | flat |
 | Lateness per output in 60 s (60 and 44 a second), worst p99 | 640 µs, worst 900 µs, 0 off by > 2 ms | flat |
+| At the limits: 16 outputs of 64 universes in 30 s (60 and 44 a second in turn), worst p99 | 700 µs, worst 1100 µs, 0 off by > 2 ms | flat |
 | Send to frame in 10 s, p95 (under one frame + 5 ms) | 21700 µs | flat |
 
 | Crate | Kind | Public items | Lines | Lines per public item |
@@ -70,13 +71,28 @@ test("scorecard renders the numbers as tables", () => {
 | core | core | 3 | 30 | 10 |
 | app | action | 0 | 70 | - |
 `;
-  assert.equal(scorecard(crates, hatches, { p99: 640, worst: 900, offBeat: 0 }, 21700), expected);
+  const limits = { p99: 700, worst: 1100, offBeat: 0 };
+  assert.equal(scorecard(crates, hatches, { p99: 640, worst: 900, offBeat: 0 }, 21700, limits), expected);
   assert.match(scorecard(crates, hatches, undefined, undefined), /Lateness per output in 60 s [^|]*\| not measured \|/);
   assert.match(scorecard(crates, hatches, undefined, undefined), /Send to frame in 10 s, p95 [^|]*\| not measured \|/);
-  const onCi = scorecard(crates, hatches, undefined, undefined, "not measured on CI");
+  const onCi = scorecard(crates, hatches, undefined, undefined, undefined, "not measured on CI");
   assert.match(onCi, /Lateness per output in 60 s [^|]*\| not measured on CI \|/);
   assert.match(onCi, /Send to frame in 10 s, p95 [^|]*\| not measured on CI \|/);
 });
+
+// [the run at the limits, or none, what CI sets as missing, the row's cell]
+const limitsCases = [
+  [{ p99: 700, worst: 1100, offBeat: 0 }, undefined, "700 µs, worst 1100 µs, 0 off by > 2 ms"],
+  [{ p99: 1600, worst: 2300, offBeat: 32 }, "not measured on CI", "1600 µs, worst 2300 µs, 32 off by > 2 ms"],
+  [undefined, undefined, "not measured"],
+  [undefined, "not measured on CI", "not measured on CI"],
+];
+for (const [limits, missing, cell] of limitsCases) {
+  test(`the run at the limits reads ${cell}`, () => {
+    const row = `| At the limits: 16 outputs of 64 universes in 30 s (60 and 44 a second in turn), worst p99 | ${cell} | flat |\n`;
+    assert.ok(scorecard([], { allow: 0, expect: 0, lintDisable: 0, unsafe: 0 }, undefined, undefined, limits, missing).includes(row));
+  });
+}
 
 // [outcomes, score cell]
 const mutationCases = [

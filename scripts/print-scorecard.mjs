@@ -1,5 +1,6 @@
 // Prints the scorecard as Markdown. With GITHUB_STEP_SUMMARY set, also writes it there.
-// Runs the engine for 60 seconds with two outputs to measure lateness per output, then 10 seconds to time sends.
+// Runs the engine for 60 seconds with two outputs to measure lateness per output, 30 seconds at the
+// limits the API allows (16 outputs of 64 universes), then 10 seconds to time sends.
 import { execFileSync } from "node:child_process";
 import { appendFileSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -30,11 +31,13 @@ const everything = [
 ].join("\n");
 
 // A measurement that fails fails the script. "Not measured" is only for CI.
-const example = (name) =>
-  execFileSync("cargo", ["run", "-q", "--release", "-p", "engine-server", "--example", name], { encoding: "utf8" });
+const example = (name, ...args) =>
+  execFileSync("cargo", ["run", "-q", "--release", "-p", "engine-server", "--example", name, "--", ...args], {
+    encoding: "utf8",
+  });
 
-const lateness = () => {
-  const [p99, worst, offBeat] = measurement(example("lateness"), 3);
+const lateness = (...args) => {
+  const [p99, worst, offBeat] = measurement(example("lateness", ...args), 3);
   return { p99, worst, offBeat };
 };
 
@@ -47,6 +50,7 @@ const markdown = scorecard(
   escapeHatches(everything),
   measured ? lateness() : undefined,
   measured ? sendToFrame() : undefined,
+  measured ? lateness("limits") : undefined,
   measured ? "not measured" : "not measured on CI",
 );
 console.log(markdown);
