@@ -32,9 +32,9 @@
 )]
 
 pub use engine_core::{
-    ADDRESSES, BEAT, BestEffort, ChannelLevel, ChannelNumbers, Color, Command, Counters, Levels,
-    MAX_OUTPUTS, MAX_UNIVERSES, Outcome, Output, OutputKind, OutputNumber, Priority, Rate, Refusal,
-    Reply, Request, Run, RunNumbers, State, Status, Universes, changes,
+    ADDRESSES, API_VERSION, BEAT, BestEffort, ChannelLevel, ChannelNumbers, Color, Command,
+    Counters, Levels, MAX_OUTPUTS, MAX_UNIVERSES, Outcome, Output, OutputKind, OutputNumber,
+    Priority, Rate, Refusal, Reply, Request, Run, RunNumbers, State, Status, Universes, changes,
 };
 pub use engine_core::{
     Checked, Histogram, LATENCY_BUCKETS, LATENESS_BUCKETS, OUTPUT_WORDS, bucket, due, frame,

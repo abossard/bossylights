@@ -19,7 +19,7 @@ export const CRATES = {
   outputs: { kind: "action", deps: ["engine-core"] }, // opens devices, takes frames: only it knows bytes
   engine: { kind: "action", deps: ["engine-core", "rt-thread", "outputs"] },
   "engine-server": { kind: "action", deps: ["engine"] },
-  shell: { kind: "action", deps: [] },
+  shell: { kind: "action", deps: ["engine-core"] }, // knows the API version it speaks, nothing more
 };
 
 /** Every source file in ui/src and its layer. A new file is added here. A name that ends in "/" is a folder: all of it. */

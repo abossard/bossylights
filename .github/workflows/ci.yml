@@ -29,5 +29,9 @@ jobs:
       - run: npm ci
       - run: npx playwright install --with-deps chromium
       - run: npm test
+        if: runner.os != 'Linux'
+      - name: npm test (with a display, for the shell's window)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a npm test
       - name: Scorecard (written into the run summary, no timing on a runner)
         run: npm run scorecard

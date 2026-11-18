@@ -19,7 +19,7 @@ mod channel;
 mod kinds;
 mod output;
 
-pub use api::{Refusal, Reply, Request};
+pub use api::{API_VERSION, Refusal, Reply, Request};
 pub use channel::{
     ADDRESSES, Channel, ChannelLevel, ChannelNumbers, Levels, MAX_UNIVERSES, Universes, changes,
 };
@@ -879,7 +879,7 @@ mod tests {
             ]
             .map(|declaration| format!("export {declaration}\n"))
             .join("\n"),
-        );
+        ) + &format!("\nexport const API_VERSION = {API_VERSION};\n");
         if std::env::var_os("UPDATE_TS").is_some() {
             std::fs::write(TYPESCRIPT, &generated).expect("write the TypeScript types");
         }

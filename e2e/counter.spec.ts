@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { createSocket } from "node:dgram";
+import { createServer } from "node:http";
 import { ENGINE } from "../playwright.config";
 
 test("the counter from the engine advances", async ({ page }) => {
@@ -69,3 +70,20 @@ for (const { engine, status } of states) {
     await expect(page.getByTestId("status")).toHaveText(status);
   });
 }
+
+test("shows other version for an engine that speaks another API version", async ({ page }) => {
+  const other = createServer((ask, answer) => {
+    answer.setHeader("access-control-allow-origin", "*");
+    if (ask.url === "/version") answer.end("0");
+    else answer.writeHead(404).end();
+  });
+  await new Promise<void>((listening) => other.listen(0, "127.0.0.1", listening));
+  try {
+    const address = other.address();
+    const port = typeof address === "object" && address ? address.port : 0;
+    await page.goto(`/?engine=ws://127.0.0.1:${port}/api`);
+    await expect(page.getByTestId("status")).toHaveText("other version");
+  } finally {
+    await new Promise((closed) => other.close(closed));
+  }
+});

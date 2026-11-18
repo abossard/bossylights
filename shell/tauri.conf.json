@@ -12,7 +12,7 @@
   "app": {
     "windows": [{ "title": "Bossylights", "width": 640, "height": 420 }],
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' ws://127.0.0.1:7744; style-src 'self' 'unsafe-inline'"
+      "csp": "default-src 'self'; connect-src 'self' ws://127.0.0.1:7744 http://127.0.0.1:7744; style-src 'self' 'unsafe-inline'"
     }
   },
   "bundle": { "active": false, "icon": ["icons/icon.png"] }

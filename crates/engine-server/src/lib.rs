@@ -4,37 +4,58 @@
 //! | Route | What |
 //! |---|---|
 //! | `GET /health` | `ok` while the engine runs |
-//! | `GET /api` | WebSocket: `Send`, `Query`, `Subscribe` in, JSON replies out |
+//! | `GET /version` | the API version, as text: a client checks it before it talks |
+//! | `GET /api` | WebSocket: `Send`, `Query`, `Subscribe`, `Stop` in, JSON replies out |
+//!
+//! The plain routes allow any origin, so a web page can read them. The WebSocket does too.
 
 #![forbid(unsafe_code)]
 
 use axum::Router;
 use axum::extract::State;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::http::header::ACCESS_CONTROL_ALLOW_ORIGIN;
 use axum::response::Response;
 use axum::routing::get;
-use engine::{ChannelLevel, Engine, Levels, Refusal, Reply, Request, Sender, changes};
+use engine::{API_VERSION, ChannelLevel, Engine, Levels, Refusal, Reply, Request, Sender, changes};
+use std::io;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::net::TcpListener;
+use tokio::sync::{Mutex, watch};
 use tokio::time::MissedTickBehavior;
 
-/// The routes, around a started engine.
-pub fn api(engine: Engine, sender: Sender) -> Router {
+/// Serves the API on `listener` until a client sends `Stop`. Then every connection is
+/// closed and this returns. The caller still holds the engine: it reports and drops it.
+pub async fn serve(listener: TcpListener, engine: Arc<Engine>, sender: Sender) -> io::Result<()> {
+    let (stop, mut stopped) = watch::channel(false);
     let api = Arc::new(Api {
         engine,
         sender: Mutex::new(sender),
+        stop,
     });
-    Router::new()
-        .route("/health", get(|| async { "ok" }))
+    let any = || [(ACCESS_CONTROL_ALLOW_ORIGIN, "*")];
+    let routes = Router::new()
+        .route("/health", get(move || async move { (any(), "ok") }))
+        .route(
+            "/version",
+            get(move || async move { (any(), API_VERSION.to_string()) }),
+        )
         .route("/api", get(connect))
-        .with_state(api)
+        .with_state(api);
+    axum::serve(listener, routes)
+        .with_graceful_shutdown(async move {
+            let _ = stopped.wait_for(|stop| *stop).await;
+        })
+        .await
 }
 
 struct Api {
-    engine: Engine,
+    engine: Arc<Engine>,
     /// The queue has one producer; connections take turns. The tick thread never sees
     /// this lock.
     sender: Mutex<Sender>,
+    /// Turns true once, on `Stop`. Every connection and the server watch it.
+    stop: watch::Sender<bool>,
 }
 
 /// What a subscribed connection sent last.
@@ -44,19 +65,24 @@ struct Subscription {
 }
 
 async fn connect(socket: WebSocketUpgrade, State(api): State<Arc<Api>>) -> Response {
-    socket.on_upgrade(move |socket| serve(socket, api))
+    socket.on_upgrade(move |socket| talk(socket, api))
 }
 
 /// One connection: answers each request; once subscribed, sends what changed with every
 /// new frame. Reads from outside the tick thread, so it never waits on a client.
-async fn serve(mut socket: WebSocket, api: Arc<Api>) {
+async fn talk(mut socket: WebSocket, api: Arc<Api>) {
     let count = usize::from(api.engine.universes().count());
     let mut now = vec![Levels::ZERO; count];
     let mut subscription = None;
     let mut poll = tokio::time::interval(engine::BEAT / 2);
     poll.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    let mut stopped = api.stop.subscribe();
     loop {
         let reply = tokio::select! {
+            () = async { let _ = stopped.wait_for(|stop| *stop).await; } => {
+                let _ = socket.send(Message::Close(None)).await;
+                return;
+            }
             message = socket.recv() => match message {
                 Some(Ok(Message::Text(text))) => answer(&api, &text, &mut subscription, &mut now).await,
                 Some(Ok(Message::Binary(_))) => json(&Reply::Refused { reason: Refusal::NotACommand }),
@@ -95,6 +121,10 @@ async fn answer(
                 state,
                 universes: now,
             })
+        }
+        Request::Stop => {
+            api.stop.send_replace(true);
+            json(&Reply::Stopping)
         }
         Request::Subscribe => {
             let state = api.engine.read(now);

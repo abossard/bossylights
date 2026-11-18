@@ -8,7 +8,7 @@ export interface Picture {
 
 /** The picture after a reply. `undefined` until the first `Picture`. */
 export function receive(picture: Picture | undefined, reply: Reply): Picture | undefined {
-  if (reply === "Accepted" || "Refused" in reply) return picture;
+  if (typeof reply === "string" || "Refused" in reply) return picture;
   if ("Picture" in reply) return reply.Picture;
   if (picture === undefined) return undefined;
   return { state: reply.Changed.state, universes: merge(picture.universes, reply.Changed.channels) };

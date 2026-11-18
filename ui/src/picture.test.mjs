@@ -9,6 +9,7 @@ const picture = { state: state(1), universes: [[0, 0, 0], [0, 0, 0]] };
 const table = [
   [undefined, "Accepted", undefined],
   [picture, "Accepted", picture],
+  [picture, "Stopping", picture],
   [picture, { Refused: { reason: "QueueFull" } }, picture],
   [undefined, { Picture: picture }, picture],
   [undefined, { Changed: { state: state(2), channels: [] } }, undefined],

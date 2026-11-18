@@ -1,7 +1,7 @@
 // Generated from crates/engine-core. Do not edit.
 // Update: UPDATE_TS=1 cargo test -p engine-core
 
-export type Request = { "Send": { command: Command, } } | "Query" | "Subscribe";
+export type Request = { "Send": { command: Command, } } | "Query" | "Subscribe" | "Stop";
 
 export type Command = { "SetChannel": { channel: ChannelNumbers, value: number, } } | { "ReleaseChannel": { channel: ChannelNumbers, } } | "ReleaseAll" | { "Blackout": { on: boolean, } } | { "SetOutput": { output: OutputNumber, kind: OutputKind, universes: RunNumbers, rate: Rate | null, } } | { "RemoveOutput": { output: OutputNumber, } };
 
@@ -17,7 +17,7 @@ export type Color = "Rgb" | "Rgbw";
 
 export type Rate = "30" | "44" | "60";
 
-export type Reply = "Accepted" | { "Refused": { reason: Refusal, } } | { "Picture": { state: State, universes: Array<Levels>, } } | { "Changed": { state: State, channels: Array<ChannelLevel>, } };
+export type Reply = "Accepted" | "Stopping" | { "Refused": { reason: Refusal, } } | { "Picture": { state: State, universes: Array<Levels>, } } | { "Changed": { state: State, channels: Array<ChannelLevel>, } };
 
 export type Refusal = "NotACommand" | { "NoSuchUniverse": { universes: number, } } | "NoSuchAddress" | "QueueFull" | "CannotOpen";
 
@@ -62,3 +62,5 @@ export type Counters = { accepted: number, dropped: number, failed: number,
  * Intervals more than [`OFF_BEAT`] away from the period.
  */
 off_beat: number, };
+
+export const API_VERSION = 1;

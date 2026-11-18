@@ -2,8 +2,8 @@
 // What happens next is decided by the state machine in connection.ts; what the
 // engine reported is kept by picture.ts.
 import { createSignal, type Accessor } from "solid-js";
-import { START, transition, type Connection, type ConnectionEvent, type Effect } from "./connection";
-import type { Command, Refusal, Reply, Request } from "./engine-api";
+import { START, transition, versionEvent, type Connection, type ConnectionEvent, type Effect } from "./connection";
+import { API_VERSION, type Command, type Refusal, type Reply, type Request } from "./engine-api";
 import { receive, type Picture } from "./picture";
 
 export interface Engine {
@@ -44,6 +44,14 @@ export function connectEngine(url: string): Engine {
 
   const perform = (effect: Effect) => {
     switch (effect) {
+      case "check": {
+        const version = new URL("/version", url.replace(/^ws/, "http"));
+        void fetch(version).then(
+          (response) => (response.ok ? response.text() : `not ok: ${response.status}`),
+          () => undefined,
+        ).then((answer) => send(versionEvent(answer, API_VERSION)));
+        return;
+      }
       case "open":
         socket = new WebSocket(url);
         socket.onopen = () => {
@@ -55,7 +63,7 @@ export function connectEngine(url: string): Engine {
           const reply = JSON.parse(message.data) as Reply;
           setPicture((before) => receive(before, reply));
           if (reply === "Accepted") setRefusal(undefined);
-          else if ("Refused" in reply) setRefusal(reply.Refused.reason);
+          else if (typeof reply === "object" && "Refused" in reply) setRefusal(reply.Refused.reason);
         };
         return;
       case "wait":

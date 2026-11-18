@@ -4,18 +4,32 @@
 use engine::{Engine, Universes};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
+use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Duration;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
+use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
 type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
 async fn connect() -> Socket {
+    let (_, socket, _) = start().await;
+    socket
+}
+
+/// A served engine: its address, a connection, and the server's task.
+async fn start() -> (SocketAddr, Socket, JoinHandle<std::io::Result<()>>) {
     let (engine, sender) = Engine::start(Universes::new(2).unwrap()).unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(listener, engine_server::api(engine, sender)).await });
+    let served = tokio::spawn(engine_server::serve(listener, Arc::new(engine), sender));
+    (address, open(address).await, served)
+}
+
+async fn open(address: SocketAddr) -> Socket {
     let (socket, _) = tokio_tungstenite::connect_async(format!("ws://{address}/api"))
         .await
         .unwrap();
@@ -242,4 +256,56 @@ fn output(kind: Value, universes: Value, rate: Value) -> Value {
     json!({"Send": {"command": {"SetOutput": {
         "output": 2, "kind": kind, "universes": universes, "rate": rate,
     }}}})
+}
+
+#[tokio::test]
+async fn the_plain_routes_answer_in_text() {
+    let (address, _socket, _served) = start().await;
+    let version = engine::API_VERSION.to_string();
+    // (route, body)
+    let cases = [("/health", "ok"), ("/version", version.as_str())];
+    for (route, body) in cases {
+        let mut stream = TcpStream::connect(address).await.unwrap();
+        let request = format!("GET {route} HTTP/1.0\r\nHost: {address}\r\n\r\n");
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).await.unwrap();
+        let lower = response.to_lowercase();
+        assert!(lower.starts_with("http/1.0 200"), "{route}: {response}");
+        assert!(
+            lower.contains("access-control-allow-origin: *"),
+            "{route}: {response}"
+        );
+        assert!(
+            response.ends_with(&format!("\r\n\r\n{body}")),
+            "{route}: {response}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn stop_answers_stopping_closes_every_connection_and_ends_the_server() {
+    let (address, mut socket, served) = start().await;
+    let mut subscribed = open(address).await;
+    send(&mut subscribed, &json!("Subscribe")).await;
+    assert!(next(&mut subscribed).await.get("Picture").is_some());
+
+    send(&mut socket, &json!("Stop")).await;
+    assert_eq!(answer(&mut socket).await, json!("Stopping"));
+    for connection in [&mut socket, &mut subscribed] {
+        loop {
+            let message = tokio::time::timeout(Duration::from_secs(2), connection.next())
+                .await
+                .expect("closed within 2 s");
+            match message {
+                Some(Ok(Message::Close(_)) | Err(_)) | None => break,
+                Some(Ok(_)) => {}
+            }
+        }
+    }
+    let ended = tokio::time::timeout(Duration::from_secs(2), served)
+        .await
+        .expect("the server ends within 2 s");
+    assert!(matches!(ended, Ok(Ok(()))), "{ended:?}");
+    assert!(TcpStream::connect(address).await.is_err(), "nobody listens");
 }

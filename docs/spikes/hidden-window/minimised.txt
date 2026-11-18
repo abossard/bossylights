@@ -1,0 +1,19 @@
+# driver (crates/engine-server/examples/hidden_window.rs)
+state: minimised
+Wed Nov 18 20:18:25 CET 2026
+window before (frontmost, minimised, front app): true, true, bossylights
+hidden_window: two outputs set, waiting 600 s
+frame 62906
+output 1: {"accepted":36000,"dropped":0,"failed":0,"off_beat":0}
+output 2: {"accepted":26400,"dropped":0,"failed":0,"off_beat":0}
+stop: "Stopping"
+window after (frontmost, minimised, front app): true, true, bossylights
+Wed Nov 18 20:28:27 CET 2026
+done
+
+# shell and engine (stderr of target/release/bossylights)
+bossylights: started the engine on 127.0.0.1:7744
+bossylights-engine listening on http://127.0.0.1:7744, 4 universes
+bossylights-engine stopped at frame 62906
+output 1: lateness p99 100 us, worst 100 us, accepted 36000, dropped 0, failed 0
+output 2: lateness p99 300 us, worst 300 us, accepted 26400, dropped 0, failed 0

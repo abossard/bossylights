@@ -1,0 +1,20 @@
+# driver (crates/engine-server/examples/hidden_window.rs)
+state: fullscreen
+Wed Nov 18 20:28:48 CET 2026
+window before (frontmost, minimised, front app): false, 40:45: execution error: System Events got an error: Can’t get window 1 of process 1 whose unix id = 61178. Invalid index. (-1719), Finder
+hidden_window: two outputs set, waiting 600 s
+frame 62984
+output 1: {"accepted":35999,"dropped":0,"failed":0,"off_beat":0}
+output 2: {"accepted":26400,"dropped":0,"failed":0,"off_beat":0}
+stop: "Stopping"
+window after (frontmost, minimised, front app): false, 40:45: execution error: System Events got an error: Can’t get window 1 of process 1 whose unix id = 61178. Invalid index. (-1719), Finder
+Wed Nov 18 20:38:51 CET 2026
+done
+true
+
+# shell and engine (stderr of target/release/bossylights)
+bossylights: started the engine on 127.0.0.1:7744
+bossylights-engine listening on http://127.0.0.1:7744, 4 universes
+bossylights-engine stopped at frame 62984
+output 1: lateness p99 100 us, worst 200 us, accepted 35999, dropped 0, failed 0
+output 2: lateness p99 300 us, worst 300 us, accepted 26400, dropped 0, failed 0

@@ -1,0 +1,19 @@
+# driver (crates/engine-server/examples/hidden_window.rs)
+state: minimised-background
+Wed Nov 18 20:39:14 CET 2026
+window before (frontmost, minimised, front app): false, true, Finder
+hidden_window: two outputs set, waiting 600 s
+frame 62927
+output 1: {"accepted":36001,"dropped":0,"failed":0,"off_beat":0}
+output 2: {"accepted":26401,"dropped":0,"failed":0,"off_beat":0}
+stop: "Stopping"
+window after (frontmost, minimised, front app): false, true, Finder
+Wed Nov 18 20:49:18 CET 2026
+done
+
+# shell and engine (stderr of target/release/bossylights)
+bossylights: started the engine on 127.0.0.1:7744
+bossylights-engine listening on http://127.0.0.1:7744, 4 universes
+bossylights-engine stopped at frame 62927
+output 1: lateness p99 100 us, worst 100 us, accepted 36001, dropped 0, failed 0
+output 2: lateness p99 300 us, worst 400 us, accepted 26401, dropped 0, failed 0
