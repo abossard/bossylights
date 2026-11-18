@@ -30,8 +30,8 @@ pub use library::{
     Text,
 };
 pub use output::{
-    Counters, GIVE_UP, MAX_OUTPUTS, OFF_BEAT, Outcome, Output, OutputNumber, Rate, Run,
-    RunNumbers, Status,
+    Counters, GIVE_UP, MAX_OUTPUTS, OFF_BEAT, Outcome, Output, OutputNumber, Rate, Run, RunNumbers,
+    Status,
 };
 
 use core::convert::Infallible;
