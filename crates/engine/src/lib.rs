@@ -7,8 +7,8 @@
 //!
 //! ```text
 //! Sender::send ---- command (+ device: opened, then attach) --> queue --> tick thread --> outputs
-//!      ^                                                                |
-//!      +--------- retired devices, freed here <------ return queue -----+
+//!                                                                       |
+//! free thread: retired devices freed here <------------ return queue ---+
 //!                                                                       |
 //! Engine::read, query <------------------- seqlock (atomics) <----------+
 //! ```
@@ -18,7 +18,7 @@
 //! | No | Check |
 //! |---|---|
 //! | locks | `clippy.toml` bans every std type that locks, here and in `outputs`. Commands and devices come and go through `rtrb`, wait-free; the state leaves through atomics |
-//! | allocation | `engine-core` has no `alloc`; buffers are made in `start`; devices are opened and freed by the `Sender`; `tests/no_alloc.rs` counts every allocation while it ticks, serves outputs and takes commands |
+//! | allocation | `engine-core` has no `alloc`; buffers are made in `start`; devices are opened by the `Sender` and freed by the free thread; `tests/no_alloc.rs` counts every allocation while it ticks, serves outputs and takes commands |
 //! | blocking calls, files, network | `engine-core` has no `std`; `clippy.toml` bans files, sockets, processes, stdin here and in `rt-thread`. The only send is an output's non-blocking `take`. The only wait is `thread::sleep`, then a spin, until the next output is due |
 //! | logging | `clippy.toml` bans print macros and stdout/stderr; no logger dependency |
 //! | calls outward | `clippy.toml` bans channels and condvars; the tick thread only writes atomics in `Shared`, which others read |
@@ -45,28 +45,58 @@ use std::hint;
 use std::io;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering, fence};
-use std::thread::{self, JoinHandle};
+use std::thread::{self, JoinHandle, Thread};
 use std::time::{Duration, Instant};
 
 /// Commands the engine takes in one wake. More are refused with [`Refusal::QueueFull`].
 pub const QUEUE: usize = 256;
+/// Devices on their way back from the tick thread. Each applied command retires at most
+/// one; the sender sends no more while this many are not freed yet: it cannot fill up.
+const RETIRED: usize = QUEUE + MAX_OUTPUTS;
+/// How often the free thread frees retired devices when nobody wakes it.
+const FREE_EVERY: Duration = Duration::from_millis(100);
+/// How long `SetOutput` waits for the devices on their way back before it opens.
+const FREE_WITHIN: Duration = Duration::from_secs(1);
 
 /// The running engine: reads its state. Dropping it stops the tick thread.
 pub struct Engine {
     shared: Arc<Shared>,
     tick: Option<JoinHandle<Ticker>>,
+    free: Option<JoinHandle<()>>,
     priority: Priority,
     universes: Universes,
 }
 
-/// Sends commands to the engine, and opens and frees the outputs' devices, so the tick
-/// thread never does. One sender: each queue has one producer and one consumer.
+/// Sends commands to the engine and opens the outputs' devices, so the tick thread
+/// never does. A `SetOutput` for the kind an output already has keeps its device.
+/// One sender: each queue has one producer and one consumer.
 pub struct Sender {
+    open: Open,
     commands: rtrb::Producer<Sent>,
-    retired: rtrb::Consumer<Box<dyn Device>>,
+    /// What each output holds once the tick thread applied every command sent so far.
+    held: [Held; MAX_OUTPUTS],
+    /// Devices this sender sent the tick thread away from, so far. The free thread
+    /// counts the ones it freed in `Shared::freed`.
+    retired: u64,
+    shared: Arc<Shared>,
+    free: Thread,
     universes: Universes,
     start: Instant,
 }
+
+/// What an output holds, as the sender knows it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Held {
+    Nothing,
+    /// A device from `Sender::attach`: its kind is not known.
+    Attached,
+    /// A device `SetOutput` opened for this kind.
+    Opened(OutputKind),
+}
+
+/// Opens the device for an output kind, off the tick thread. The engine's own is
+/// `outputs::open`; a test brings one that opens fake devices.
+pub type Open = Box<dyn FnMut(OutputKind) -> io::Result<Box<dyn Device>> + Send>;
 
 /// A command, when it was sent, and the device it brings.
 struct Sent {
@@ -95,12 +125,19 @@ struct Shared {
     outputs: [[AtomicU64; OUTPUT_WORDS]; MAX_OUTPUTS],
     /// The held levels, universe after universe.
     levels: Box<[AtomicU8]>,
+    /// Devices the free thread freed, so far.
+    freed: AtomicU64,
 }
 
 impl Engine {
     /// Starts the tick thread with the best priority the system gives. No outputs yet:
     /// send `SetOutput`. Fails only when the OS refuses a thread.
     pub fn start(universes: Universes) -> io::Result<(Self, Sender)> {
+        Self::start_with(universes, Box::new(outputs::open))
+    }
+
+    /// [`Engine::start`], with `open` making the devices `SetOutput` asks for.
+    pub fn start_with(universes: Universes, open: Open) -> io::Result<(Self, Sender)> {
         let count = usize::from(universes.count());
         let shared = Arc::new(Shared {
             frame: AtomicU64::new(0),
@@ -111,11 +148,16 @@ impl Engine {
             blackout: AtomicBool::new(false),
             outputs: [const { [const { AtomicU64::new(0) }; OUTPUT_WORDS] }; MAX_OUTPUTS],
             levels: (0..count * ADDRESSES).map(|_| AtomicU8::new(0)).collect(),
+            freed: AtomicU64::new(0),
         });
         let (commands, incoming) = rtrb::RingBuffer::new(QUEUE);
-        // Each applied command retires at most one device, and the sender empties this
-        // queue before it sends: it cannot fill up.
-        let (outgoing, retired) = rtrb::RingBuffer::new(QUEUE + MAX_OUTPUTS);
+        let (outgoing, retired) = rtrb::RingBuffer::new(RETIRED);
+        let free = {
+            let shared = Arc::clone(&shared);
+            thread::Builder::new()
+                .name("free devices".into())
+                .spawn(move || free(retired, &shared))?
+        };
         let start = Instant::now();
         let ticker = Ticker {
             shared: Arc::clone(&shared),
@@ -130,17 +172,22 @@ impl Engine {
         let (tick, priority) = rt_thread::spawn("tick", engine_core::BEAT, move |priority| {
             ticker.run(priority)
         })?;
+        let sender = Sender {
+            open,
+            commands,
+            held: [Held::Nothing; MAX_OUTPUTS],
+            retired: 0,
+            shared: Arc::clone(&shared),
+            free: free.thread().clone(),
+            universes,
+            start,
+        };
         let engine = Self {
             shared,
             tick: Some(tick),
+            free: Some(free),
             priority,
             universes,
-        };
-        let sender = Sender {
-            commands,
-            retired,
-            universes,
-            start,
         };
         Ok((engine, sender))
     }
@@ -203,16 +250,28 @@ impl Sender {
         command: Command<ChannelNumbers, RunNumbers, OutputKind>,
     ) -> Result<(), Refusal> {
         match command.check(self.universes)? {
-            Checked::Command(command) => self.push(command, None),
+            // Of these, only `RemoveOutput` changes what an output holds: nothing.
+            Checked::Command(command) => self.push(command, None, Held::Nothing),
             Checked::SetOutput {
                 output,
                 kind,
                 universes,
                 rate,
             } => {
-                let device = outputs::open(kind).map_err(|_| Refusal::CannotOpen)?;
                 let rate = rate.unwrap_or(outputs::default_rate(kind));
-                self.attach(output, device, universes, rate)
+                let attach = Command::Attach {
+                    output,
+                    universes,
+                    rate,
+                };
+                if self.held(output) == Held::Opened(kind) {
+                    // The same device: only its run and rate change.
+                    return self.push(attach, None, Held::Opened(kind));
+                }
+                // A device on its way back may hold what this one opens, a port say.
+                self.wait_until_freed();
+                let device = (self.open)(kind).map_err(|_| Refusal::CannotOpen)?;
+                self.push(attach, Some(device), Held::Opened(kind))
             }
         }
     }
@@ -232,12 +291,58 @@ impl Sender {
             universes,
             rate,
         };
-        self.push(command, Some(device))
+        self.push(command, Some(device), Held::Attached)
     }
 
-    fn push(&mut self, command: Command, device: Option<Box<dyn Device>>) -> Result<(), Refusal> {
-        while let Ok(device) = self.retired.pop() {
-            drop(device); // closed and freed here, never on the tick thread
+    /// What `output` holds once every command sent so far is applied.
+    fn held(&self, output: OutputNumber) -> Held {
+        self.held
+            .get(output.slot())
+            .copied()
+            .unwrap_or(Held::Nothing)
+    }
+
+    /// Retired devices not freed yet.
+    fn on_their_way(&self) -> u64 {
+        let freed = self.shared.freed.load(Ordering::Acquire);
+        self.retired.saturating_sub(freed)
+    }
+
+    /// Waits, bounded, until the free thread freed every device sent away so far.
+    fn wait_until_freed(&self) {
+        let started = Instant::now();
+        while self.on_their_way() > 0 && started.elapsed() < FREE_WITHIN {
+            self.free.unpark();
+            thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    /// Queues `command` with the `device` it brings. `then` is what its output holds
+    /// once it is applied. A device `Attach` brings and `RemoveOutput` send the old one
+    /// back; `Attach` with no device keeps it.
+    fn push(
+        &mut self,
+        command: Command,
+        device: Option<Box<dyn Device>>,
+        then: Held,
+    ) -> Result<(), Refusal> {
+        // The output this command changes, and whether the device there goes back.
+        let (changes, sends_back) = match command {
+            Command::Attach { output, .. } => (Some(output), device.is_some()),
+            Command::RemoveOutput { output } => (Some(output), true),
+            Command::Tick { .. }
+            | Command::Handed { .. }
+            | Command::SetChannel { .. }
+            | Command::ReleaseChannel { .. }
+            | Command::ReleaseAll
+            | Command::Blackout { .. }
+            | Command::SetOutput { .. } => (None, false),
+        };
+        let retires =
+            sends_back && changes.is_some_and(|output| self.held(output) != Held::Nothing);
+        if retires && self.on_their_way() >= RETIRED as u64 {
+            self.free.unpark();
+            return Err(Refusal::QueueFull);
         }
         let at = self.start.elapsed();
         self.commands
@@ -246,7 +351,29 @@ impl Sender {
                 at,
                 device,
             })
-            .map_err(|_| Refusal::QueueFull)
+            .map_err(|_| Refusal::QueueFull)?;
+        if retires {
+            self.retired += 1;
+        }
+        if let Some(held) = changes.and_then(|output| self.held.get_mut(output.slot())) {
+            *held = then;
+        }
+        Ok(())
+    }
+}
+
+/// The free thread: frees the devices the tick thread retired, closing their ports and
+/// sockets, on a steady beat or when the sender wakes it. Until the engine stops.
+fn free(mut retired: rtrb::Consumer<Box<dyn Device>>, shared: &Shared) {
+    loop {
+        while let Ok(device) = retired.pop() {
+            drop(device);
+            shared.freed.fetch_add(1, Ordering::Release);
+        }
+        if shared.stop.load(Ordering::Relaxed) {
+            return; // what comes back later is freed with the tick thread's queue end
+        }
+        thread::park_timeout(FREE_EVERY);
     }
 }
 
@@ -255,6 +382,10 @@ impl Drop for Engine {
         self.shared.stop.store(true, Ordering::Relaxed);
         if let Some(tick) = self.tick.take() {
             drop(tick.join()); // the devices are freed here, not on the tick thread
+        }
+        if let Some(free) = self.free.take() {
+            free.thread().unpark();
+            drop(free.join());
         }
     }
 }
@@ -334,7 +465,8 @@ impl Ticker {
     }
 
     /// For `Attach` and `RemoveOutput`: puts `device` at the output, sends the old one
-    /// back to the sender and starts the output's lateness afresh. Others change nothing.
+    /// back to be freed and starts the output's lateness afresh. `Attach` without a
+    /// device keeps the one there. Others change nothing.
     fn swap(&mut self, command: Command, device: Option<Box<dyn Device>>) {
         let (Command::Attach { output, .. } | Command::RemoveOutput { output }) = command else {
             return;
@@ -342,7 +474,13 @@ impl Ticker {
         let Some(slot) = self.devices.get_mut(output.slot()) else {
             return;
         };
-        if let Some(old) = std::mem::replace(slot, device) {
+        let keeps = matches!(command, Command::Attach { .. }) && device.is_none();
+        let old = if keeps {
+            None
+        } else {
+            std::mem::replace(slot, device)
+        };
+        if let Some(old) = old {
             // The queue has room for every device a wake can retire (see `start`).
             let _ = self.retired.push(old);
         }

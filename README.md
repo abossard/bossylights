@@ -51,7 +51,7 @@ How an output gets on and off the tick thread:
 | 2 | `Sender::attach` | the one door for every device, also a test's own: sends `Attach` with the device |
 | 3 | tick thread | puts it in the output's slot; the old device goes to the return queue |
 | 4 | tick thread | when the output is due: `take(frame)` sends or drops, never waits |
-| 5 | `Sender::send` | `RemoveOutput` or a replaced output: the next send frees the old device |
+| 5 | free thread | `RemoveOutput` or a replaced output: the old device is freed within a beat of its own (its port closed), and `SetOutput` waits for that before it opens. `SetOutput` for the kind the output already has keeps its device: only the run and the rate change |
 
 Engine API: `GET /health` (`ok` while the engine runs) and the WebSocket `GET /api`. Types: `ui/src/engine-api.ts`, generated from `crates/engine-core/src/api.rs`.
 

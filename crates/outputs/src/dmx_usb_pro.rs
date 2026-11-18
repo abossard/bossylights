@@ -26,7 +26,7 @@ use std::io::{self, ErrorKind};
 use std::os::fd::AsRawFd;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
-use std::thread::{self, Thread};
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 /// The adapter's USB identity: an FTDI chip that calls itself "DMX USB PRO".
@@ -66,7 +66,7 @@ pub type Find = Box<dyn FnMut() -> io::Result<TTYPort> + Send>;
 pub struct DmxUsbPro {
     message: [u8; MESSAGE],
     to_port: rtrb::Producer<[u8; MESSAGE]>,
-    port_thread: Thread,
+    port_thread: Option<JoinHandle<()>>,
     shared: Arc<Shared>,
 }
 
@@ -112,7 +112,7 @@ impl DmxUsbPro {
         Ok(Self {
             message: [0; MESSAGE],
             to_port,
-            port_thread: handle.thread().clone(),
+            port_thread: Some(handle),
             shared,
         })
     }
@@ -136,7 +136,9 @@ impl Device for DmxUsbPro {
         message(frame, &mut self.message);
         match self.to_port.push(self.message) {
             Ok(()) => {
-                self.port_thread.unpark();
+                if let Some(port_thread) = &self.port_thread {
+                    port_thread.thread().unpark();
+                }
                 Outcome::Accepted
             }
             Err(_) => Outcome::Dropped,
@@ -145,9 +147,16 @@ impl Device for DmxUsbPro {
 }
 
 impl Drop for DmxUsbPro {
+    /// Stops the port thread and waits until it closed the port, so the port is free
+    /// for the next opener. Never on the output thread: the engine frees devices off it.
+    /// Each wait of the port thread watches `stop`, so this takes at most a link time
+    /// or a look for the adapter.
     fn drop(&mut self) {
         self.shared.stop.store(true, Ordering::Relaxed);
-        self.port_thread.unpark(); // it ends and closes the port on its own thread
+        if let Some(port_thread) = self.port_thread.take() {
+            port_thread.thread().unpark();
+            drop(port_thread.join());
+        }
     }
 }
 
@@ -167,8 +176,11 @@ impl PortThread {
     fn run(mut self) {
         while !self.shared.stop.load(Ordering::Relaxed) {
             let Some(port) = &self.port else {
-                // A lost adapter is gone for a while; then look again.
-                thread::sleep(LOOK_EVERY);
+                // A lost adapter is gone for a while; then look again. `drop` wakes it.
+                thread::park_timeout(LOOK_EVERY);
+                if self.shared.stop.load(Ordering::Relaxed) {
+                    break;
+                }
                 if let Ok(port) = (self.find)() {
                     while self.messages.pop().is_ok() {} // from before the loss
                     self.port = Some(port);
