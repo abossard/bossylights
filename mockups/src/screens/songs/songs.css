@@ -451,8 +451,25 @@
   color: var(--danger);
 }
 
-.songs-take.is-recording .songs-rec-block {
+.songs-rec-block.is-writing {
   border-color: var(--danger);
+}
+
+.songs-passes {
+  margin-left: 6px;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--mute);
+}
+
+.songs-rec-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  padding-left: var(--sp-2);
+  font-size: var(--text-sm);
+  color: var(--mute);
 }
 
 .songs-rec-dot {

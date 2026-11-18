@@ -6,12 +6,10 @@ import {
   mmss,
   SONGS,
   store,
-  type AutopilotStyle,
   type LookKind,
-  type PlacedSection,
   type Song,
 } from "../../fake/store";
-import { Button, EnergyCurve, Fader, List, Region, Segmented } from "../../kit";
+import { Button, EnergyCurve, List, Region, Segmented } from "../../kit";
 import type { Issue } from "../../shell/registry";
 import "./songs.css";
 
@@ -28,8 +26,6 @@ export const issues: Issue[] = [
   { number: 95, title: "Follow timecode" },
   { number: 99, title: "DJ set shows" },
   { number: 70, title: "Cue lists" },
-  { number: 87, title: "Autopilot: the show follows the music" },
-  { number: 86, title: "Never-dark fallback" },
   { number: 68, title: "Looks generated from your rig" },
 ];
 
@@ -47,16 +43,9 @@ const ANALYSIS: Record<Song["analysis"], string> = { analysed: "Analysed", queue
 type Filter = "show" | "auto" | "today" | "review";
 const FILTERS: { id: Filter; name: string }[] = [
   { id: "show", name: "Has a show" },
-  { id: "auto", name: "Auto only" },
-  { id: "today", name: "Recorded today" },
+  { id: "auto", name: "No show yet" },
+  { id: "today", name: "Has recordings" },
   { id: "review", name: "Needs review" },
-];
-
-const STYLES: { value: AutopilotStyle; label: string }[] = [
-  { value: "chill", label: "Chill" },
-  { value: "club", label: "Club" },
-  { value: "peak", label: "Peak" },
-  { value: "no-strobe", label: "No strobe" },
 ];
 
 /** A tiny seeded random, so a song's waveform looks the same every time. */
@@ -67,7 +56,9 @@ function seeded(seed: string) {
 
 export function Screen() {
   const playing = () => store.currentSong();
-  const [songId, setSongId] = createSignal(playing()?.song.id ?? SONGS[0].id);
+  // a jump from the Looks screen ("used by: Glass Hours, Drop") lands on its song and section
+  const jump = store.state.jump;
+  const [songId, setSongId] = createSignal(jump.song ?? playing()?.song.id ?? SONGS[0].id);
   const song = () => LIBRARY.find((s) => s.id === songId())!;
   const secs = () => store.sectionsOf(song());
   const len = () => store.songLength(song());
@@ -89,13 +80,13 @@ export function Screen() {
       const f = filter();
       if (f === "show") return hasShow(s);
       if (f === "auto") return !hasShow(s);
-      if (f === "today") return store.takesOf(s).length > 0;
+      if (f === "today") return store.recordedOf(s).passes.length > 0;
       if (f === "review") return store.analysisOf(s) === "needs-review";
       return true;
     });
 
   // ---- the selected section
-  const [chosen, setChosen] = createSignal<Record<string, number>>({});
+  const [chosen, setChosen] = createSignal<Record<string, number>>(jump.song && jump.section !== undefined ? { [jump.song]: jump.section } : {});
   const playingIndex = () => {
     if (!isPlaying()) return -1;
     const pos = store.songPos();
@@ -161,26 +152,9 @@ export function Screen() {
     el.addEventListener("pointercancel", up);
   };
 
-  // ---- the autopilot's picks for this song
-  const placed = (i: number): PlacedSection => ({
-    key: `0:${song().id}:${i}`,
-    song: song(),
-    songIndex: Math.max(0, SONGS.indexOf(song())),
-    section: secs()[i],
-    index: i,
-    start: offsets()[i].start,
-    end: offsets()[i].end,
-    songStart: 0,
-  });
-  const [pickChosen, setPickChosen] = createSignal<number | null>(null);
-  const pickIndex = () => {
-    const open = secs()
-      .map((_, i) => i)
-      .filter((i) => !store.covered(placed(i)));
-    if (pickChosen() !== null && open.includes(pickChosen()!)) return pickChosen();
-    const pos = nowPos() ?? 0;
-    return open.find((i) => offsets()[i].end > pos) ?? open[0] ?? null;
-  };
+  const rec = () => store.recordedOf(song());
+  /** Passes that are done: "Undo last pass" takes the newest of them. */
+  const donePasses = () => (rec().writing ? rec().passes.length - 1 : rec().passes.length);
 
   const wave = createMemo(() => {
     const s = song();
@@ -240,7 +214,7 @@ export function Screen() {
                 meta: (
                   <span class="songs-metas">
                     <span class={`songs-state is-${a}`}>{ANALYSIS[a]}</span>
-                    <span class="songs-has">{hasShow(s) ? "Show" : "Auto only"}</span>
+                    <span class="songs-has">{hasShow(s) ? "Show" : "No show yet"}</span>
                   </span>
                 ),
               };
@@ -365,54 +339,65 @@ export function Screen() {
                 </div>
               </div>
 
-              {/* takes on top, the show below */}
-              <For each={store.takesOf(song())}>
-                {(l) => (
-                  <div class="songs-tl-row songs-take" classList={{ "is-recording": l.recording, "is-muted": l.muted }}>
-                    <div class="songs-tl-label">
-                      <b>
-                        <Show when={l.recording}>
-                          <i class="songs-rec-dot" aria-hidden="true" />
-                        </Show>
-                        {l.name}
-                      </b>
-                      <span class="songs-take-actions">
-                        <button type="button" aria-pressed={l.muted} onClick={() => store.setTakeMuted(song(), l.id, !l.muted)}>
-                          {l.muted ? "Muted" : "Mute"}
-                        </button>
-                        <button type="button" disabled={l.recording} onClick={() => store.mergeTake(song(), l.id)}>
-                          Merge into show
-                        </button>
-                        <button type="button" disabled={l.recording} aria-label={`Delete ${l.name}`} onClick={() => store.deleteTake(song(), l.id)}>
-                          Delete
-                        </button>
-                      </span>
-                    </div>
-                    <div class="songs-track">
-                      <For each={store.recBlocks(l, len(), store.songPos())}>
-                        {(b) => (
-                          <span class="songs-rec-block" style={{ left: `${pct(b.start)}%`, width: `max(6px, ${pct(b.end - b.start)}%)` }} title={lookById(b.lookId).name}>
-                            <i style={{ background: lookById(b.lookId).colors[0] }} />
-                            {lookById(b.lookId).name}
-                          </span>
-                        )}
-                      </For>
-                      <For each={l.events.filter((ev) => ev.kind === "fader")}>
-                        {(ev) => (
-                          <span class="songs-fader-mark" style={{ left: `${pct(ev.at)}%` }}>
-                            {ev.fader} {ev.value}
-                          </span>
-                        )}
-                      </For>
-                    </div>
-                  </div>
-                )}
-              </For>
+              {/* what was recorded: one row, every pass adds to it, red while it writes */}
+              <div class="songs-tl-row songs-take" classList={{ "is-recording": rec().writing, "is-muted": rec().muted }}>
+                <div class="songs-tl-label">
+                  <b>
+                    <Show when={rec().writing}>
+                      <i class="songs-rec-dot" aria-hidden="true" />
+                    </Show>
+                    Recorded
+                    <span class="songs-passes">{rec().passes.length ? `${rec().passes.length} ${rec().passes.length === 1 ? "pass" : "passes"}${rec().writing ? ", writing" : ""}` : "nothing yet"}</span>
+                  </b>
+                  <span class="songs-take-actions">
+                    <button type="button" aria-pressed={rec().muted} disabled={!rec().passes.length} onClick={() => store.setRecordedMuted(song(), !rec().muted)}>
+                      {rec().muted ? "Muted" : "Mute"}
+                    </button>
+                    <button type="button" disabled={!donePasses()} onClick={() => store.undoLastPass(song())}>
+                      Undo last pass
+                    </button>
+                    <button type="button" disabled={!rec().passes.length} onClick={() => store.clearRecorded(song())}>
+                      Clear
+                    </button>
+                  </span>
+                </div>
+                <div class="songs-track">
+                  <For each={rec().passes}>
+                    {(pass, pi) => (
+                      <>
+                        <For each={store.recBlocks(pass.events, len(), rec().writing && pi() === rec().passes.length - 1, store.songPos())}>
+                          {(b) => (
+                            <span
+                              class="songs-rec-block"
+                              classList={{ "is-writing": rec().writing && pi() === rec().passes.length - 1 }}
+                              style={{ left: `${pct(b.start)}%`, width: `max(6px, ${pct(b.end - b.start)}%)` }}
+                              title={lookById(b.lookId).name}
+                            >
+                              <i style={{ background: lookById(b.lookId).colors[0] }} />
+                              {lookById(b.lookId).name}
+                            </span>
+                          )}
+                        </For>
+                        <For each={pass.events.filter((ev) => ev.kind === "fader")}>
+                          {(ev) => (
+                            <span class="songs-fader-mark" style={{ left: `${pct(ev.at)}%` }}>
+                              {ev.fader} {ev.value}
+                            </span>
+                          )}
+                        </For>
+                      </>
+                    )}
+                  </For>
+                  <Show when={!rec().passes.length}>
+                    <span class="songs-rec-empty">Turn Recording on and play this song: what you do on the Console lands here.</span>
+                  </Show>
+                </div>
+              </div>
               <div class="songs-tl-row songs-take" classList={{ "is-muted": !!store.state.showMuted[song().id] }}>
                 <div class="songs-tl-label">
                   <b>Show</b>
                   <span class="songs-take-actions">
-                    <button type="button" aria-pressed={!!store.state.showMuted[song().id]} onClick={() => store.setTakeMuted(song(), "show", !store.state.showMuted[song().id])}>
+                    <button type="button" aria-pressed={!!store.state.showMuted[song().id]} onClick={() => store.setShowMuted(song(), !store.state.showMuted[song().id])}>
                       {store.state.showMuted[song().id] ? "Muted" : "Mute"}
                     </button>
                   </span>
@@ -439,71 +424,12 @@ export function Screen() {
                 </div>
               </div>
 
-              {/* the Auto lane: the autopilot's picks where the show has nothing */}
-              <div class="songs-tl-row songs-auto layer-autopilot">
-                <div class="songs-tl-label">
-                  <b>Auto</b>
-                  <span class="songs-take-actions">
-                    <button type="button" class="songs-auto-toggle" aria-pressed={store.state.autopilot.on} onClick={() => store.setAutopilot("on", !store.state.autopilot.on)}>
-                      {store.state.autopilot.on ? "On" : "Off"}
-                    </button>
-                    <select aria-label="Autopilot style" value={store.state.autopilot.style} onChange={(e) => store.setAutopilot("style", e.currentTarget.value as AutopilotStyle)}>
-                      <For each={STYLES}>{(s) => <option value={s.value}>{s.label}</option>}</For>
-                    </select>
-                  </span>
-                </div>
-                <div class="songs-track">
-                  <For each={secs()}>
-                    {(sec, i) => (
-                      <Show when={!store.covered(placed(i()))}>
-                        <button
-                          type="button"
-                          class="songs-pick"
-                          classList={{ "is-selected": pickIndex() === i(), "is-off": !store.state.autopilot.on }}
-                          style={{ left: `${pct(offsets()[i()].start)}%`, width: `calc(${pct(sec.length)}% - 2px)` }}
-                          onClick={() => setPickChosen(i())}
-                        >
-                          <b>{store.autopilotLooks(placed(i())).map((l) => l.name).join(", ") || "nothing fits"}</b>
-                          <span>{store.pickReason(placed(i()))}</span>
-                        </button>
-                      </Show>
-                    )}
-                  </For>
-                </div>
-              </div>
               <Show when={nowPos() !== null}>
                 <span class="songs-now" style={{ left: `calc(var(--tl-label) + (100% - var(--tl-label)) * ${nowPos()! / len()})` }} aria-hidden="true" />
                 <span class="now-flag songs-now-flag" style={{ left: `calc(var(--tl-label) + (100% - var(--tl-label)) * ${nowPos()! / len()})` }}>
                   {listenPos() !== null ? "Listening" : "Now"} {mmss(nowPos()!)}
                 </span>
               </Show>
-            </div>
-
-            {/* what the autopilot is told, and its selected pick */}
-            <div class="songs-auto-bar layer-autopilot" role="group" aria-label="Autopilot">
-              <Show when={pickIndex() !== null} fallback={<span class="mute">The show covers every section of this song.</span>}>
-                <span class="songs-auto-pick">
-                  <b>Auto in {secs()[pickIndex()!].title}:</b> {store.autopilotLooks(placed(pickIndex()!)).map((l) => l.name).join(", ")}
-                </span>
-                <Button onClick={() => store.skipPick(placed(pickIndex()!))}>Skip</Button>
-                <Button onClick={() => store.morePick(placed(pickIndex()!))}>More like this</Button>
-                <Button variant="layer" layer="autopilot" pressed onClick={() => store.keepPick(placed(pickIndex()!))}>
-                  Keep
-                </Button>
-              </Show>
-              <span class="songs-wild">
-                <span class="mute">How wild</span>
-                <Fader orientation="horizontal" bare layer="autopilot" label="How wild" value={store.state.autopilot.wild} onChange={(v) => store.setAutopilot("wild", v)} />
-              </span>
-              <span class="songs-groups" role="group" aria-label="Groups the autopilot may use">
-                <For each={store.groups}>
-                  {(g) => (
-                    <button type="button" class="songs-filter" aria-pressed={store.state.autopilot.groups[g.id]} onClick={() => store.toggleGroup(g.id)}>
-                      {g.name}
-                    </button>
-                  )}
-                </For>
-              </span>
             </div>
 
             {/* the selected section: its looks, and how to change the section */}
@@ -542,18 +468,18 @@ export function Screen() {
                     disabled={secs().every((_, i) => store.sectionLooksOf(song(), i).length)}
                     reason="Every section has looks"
                     onClick={() => {
-                      const n = store.fillFromStyle(song());
-                      setMessage(`Filled ${n} empty ${n === 1 ? "section" : "sections"} from the ${store.state.autopilot.style} style.`);
+                      store.fillEmptySections(song());
+                      setMessage("Filled the empty sections: the autopilot picked once, with its settings from Looks.");
                     }}
                   >
-                    Fill from style
+                    Fill empty sections
                   </Button>
                 </span>
               </header>
               <ul class="songs-looks-in">
                 <For
                   each={store.sectionLooksOf(song(), selected())}
-                  fallback={<li class="songs-empty">No looks: the autopilot fills this section. Tap a look on the right to add one.</li>}
+                  fallback={<li class="songs-empty">No looks in this section. Tap a look on the right to add one, or press Fill empty sections.</li>}
                 >
                   {(lookId) => (
                     <li class="songs-look">
