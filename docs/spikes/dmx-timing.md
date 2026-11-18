@@ -12,7 +12,7 @@ Can this stack send full DMX frames at 44 Hz from a Mac without glitches? Measur
 | Without a vendor driver | ✅ The FTDI serial driver built into macOS, `libc` only |
 | Open DMX (host makes break and timing) | ⏳ written and compiled, not run: no adapter |
 | A hidden Tauri window (App Nap) | ⏳ not measured: the spike has no window |
-| Sleep and wake, unplug and replug | ⏳ commands ready, need hands |
+| Sleep and wake, unplug and replug | ⏳ moved to the real output ticket (#106). The commands below are ready |
 | Timing on the DMX wire | ⏳ not measured: needs a DMX analyser |
 
 - **For the product tick:** give the output thread the time-constraint policy. The plain sleep loop is what #101 and #24 saw wake late.
@@ -100,7 +100,7 @@ Not asked for in the issue. It does not replace the DDP output feature (#44).
 
 - One packet per frame: header `0x41`, sequence 1 to 15, `0x1B` (RGBW, 8 bit), device 1, offset 0, length 1280, then 320 pixels. A rainbow moves one column per frame on a 4 × 80 matrix, so a dropped or repeated frame shows.
 - The socket is non-blocking. A send that would block drops the frame and counts it: the thread never waits on the network.
-- CI checks every packet over loopback (`tests/ddp_loopback.rs`).
+- CI checks every packet over loopback (`tests/ddp_loopback.rs`): what is sent, not how fast. Runners wake late; timing is judged by the measured runs only.
 
 ## Open DMX: written, not run
 
@@ -108,18 +108,18 @@ Not asked for in the issue. It does not replace the DDP output feature (#44).
 - 513 bytes × 11 bits at 250 000 baud = 22.6 ms. With break and mark, a full universe does not quite fit into 22.7 ms: expect about 43 Hz.
 - It blocks the output thread for most of each frame, by design. Open: whether `tcdrain` waits for the wire, given the hidden driver queue the Pro run showed.
 
-## Open for the owner
+## Open
 
-| Run | Command (in `spikes/dmx-timing/`) |
-|---|---|
-| Unplug and replug | `cargo run --release -- --sink pro=$(ls /dev/cu.usbserial-* \| head -1) --priority realtime --wait spin --hands unplug --json results/unplug-pro.json` |
-| Sleep and wake | the same with `--hands sleep --json results/sleep-pro.json` |
-| Open DMX | needs an Open DMX adapter: `--sink open-dmx=PORT` |
-| Wire timing | needs a DMX analyser on the Pro's output |
-| Hidden window | the engine under the Tauri shell with its window hidden, frame intervals logged |
+| Run | Where | Command (in `spikes/dmx-timing/`) |
+|---|---|---|
+| Unplug and replug | #106 | `cargo run --release -- --sink pro=$(ls /dev/cu.usbserial-* \| head -1) --priority realtime --wait spin --hands unplug --json results/unplug-pro.json` |
+| Sleep and wake | #106 | the same with `--hands sleep --json results/sleep-pro.json` |
+| Open DMX | #23, needs an Open DMX adapter | `--sink open-dmx=PORT` |
+| Wire timing | needs a DMX analyser on the Pro's output | |
+| Hidden window | the engine under the Tauri shell with its window hidden, frame intervals logged | |
 
 `--hands` prints, with a bell, what to do and when.
 
 ## Runs
 
-All commands: `spikes/dmx-timing/README.md`. Results as JSON: `spikes/dmx-timing/results/`. CI runs the tests and a 20-second mock run on Linux and macOS (job `dmx-timing-spike`).
+All commands: `spikes/dmx-timing/README.md`. Results as JSON: `spikes/dmx-timing/results/`. CI runs the tests and a 20-second mock run on Linux and macOS (job `dmx-timing-spike`), for the record only: the macOS runner (a virtual machine, time-constraint) had 13 of 879 intervals off, p99 24.6 ms; Linux 0.
