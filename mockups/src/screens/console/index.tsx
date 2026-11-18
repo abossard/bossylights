@@ -5,6 +5,7 @@ import type { Issue } from "../../shell/registry";
 import { ConsoleGrid, createConsole, WidgetDrawer } from "./Console";
 import { AutoLaneControls } from "./AutoLaneControls";
 import "./console.css";
+import { PageSetup, WidgetSetup } from "./Setup";
 
 export const id = "console";
 export const title = "Console";
@@ -194,7 +195,9 @@ export function Screen() {
         </div>
       </Region>
       <Show when={c.editing()}>
+        <PageSetup model={c} />
         <WidgetDrawer model={c} />
+        <WidgetSetup model={c} />
       </Show>
       <ConsoleGrid model={c} />
     </div>

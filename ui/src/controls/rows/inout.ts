@@ -10,6 +10,27 @@ const MAPPING: Partial<Record<SituationId, Cell>> = { lock: LOCKED, empty: works
 const mapping = (row: Omit<Row, "screen" | "kind" | "part">): Control =>
   control({ learn: ROW, ...row, screen: "In/Out", part: "Mappings", kind: "edit", in: { ...MAPPING, ...row.in } });
 
+const ON_SCREEN = no("Outputs and inputs are set up on screen");
+/** A control that sets up an output: not while LIVE is on, the lights hang on it. */
+const output = (row: Omit<Row, "screen" | "kind" | "part">): Control =>
+  control({
+    learn: ON_SCREEN,
+    ...row,
+    screen: "In/Out",
+    part: "Out",
+    kind: "setting",
+    in: {
+      "live-on": LIVE_IS_ON,
+      lock: LIVE_IS_ON,
+      recording: LIVE_IS_ON,
+      empty: works("Works. An output is set up before any light is patched"),
+      "output-lost": works("Works. This is how a lost output gets another device"),
+      ...row.in,
+    },
+  });
+/** A control of the In column. */
+const input = (row: Omit<Row, "screen" | "kind">): Control => control({ learn: ON_SCREEN, ...row, screen: "In/Out", kind: "setting" });
+
 export const INOUT: Control[] = [
   control({
     id: "inout.tempo.feed",
@@ -149,5 +170,103 @@ export const INOUT: Control[] = [
     does: "Removes the mapping. The control on screen loses its paper square",
     sends: ["RemoveMapping"],
     gestures: button("Removes the mapping"),
+  }),
+  // ---- in the mockups since review 4 (decision 29)
+  control({
+    id: "inout.out.setup",
+    name: "Set up an output",
+    screen: "In/Out",
+    part: "Out",
+    from: ["inout/OutputSetup/set-up-the-output"],
+    kit: "Button.toggle",
+    kind: "view",
+    does: "Opens one output to set up: its kind, universes, rate, and Remove. Pressed again as 'Done', they are text again",
+    ui: "which output is being set up",
+    gestures: toggle("Opens the output to set up", "it is text again"),
+    learn: ON_SCREEN,
+    states: ["Set up", "Done"],
+  }),
+  output({
+    id: "inout.out.kind",
+    name: "Kind of an output",
+    from: ["inout/OutputSetup/kind-of-the-output"],
+    kit: "Picker.list",
+    does: "What the output is: DMX USB Pro, DDP, Art-Net or sACN. There while the output is set up",
+    sends: ["SetOutput"],
+    gestures: select("the output sends as that kind"),
+    learn: NOT_A_LIST,
+  }),
+  output({
+    id: "inout.out.universes",
+    name: "Universes of an output",
+    from: ["inout/OutputSetup/universes-of-the-output"],
+    kit: "Field.text",
+    does: "Which universes the output carries: '1', or '2 to 9'. A universe another output carries is refused and the field says which",
+    sends: ["SetOutput"],
+    gestures: field("one universe or a range", "Enter or leaving the field saves, Escape puts the old one back"),
+    learn: NOT_A_BUTTON,
+  }),
+  output({
+    id: "inout.out.rate",
+    name: "Frames a second",
+    from: ["inout/OutputSetup/frames-a-second"],
+    kit: "Picker.segments",
+    does: "How often the output sends: 30, 40 or 44 frames a second. Each output has its own rate",
+    sends: ["SetOutput"],
+    gestures: choice("The output sends at that rate"),
+    states: ["30", "40", "44"],
+  }),
+  output({
+    id: "inout.out.remove",
+    name: "Remove output",
+    from: ["inout/OutputSetup/remove-the-output"],
+    kit: "Button.action",
+    does: "Removes the output. Its universes send nowhere until another output carries them",
+    sends: ["RemoveOutput"],
+    gestures: button("Removes the output"),
+  }),
+  output({
+    id: "inout.out.add",
+    name: "Add output",
+    from: ["inout/AddOutput/add-an-output"],
+    kit: "Button.action",
+    does: "Adds an output that is not set up yet and opens it. It sends nothing until it has a universe",
+    sends: ["SetOutput"],
+    gestures: button("Adds an output"),
+    in: { "live-on": works("Works mid-show: a new output takes nothing from the ones that run"), lock: works("Works the same"), recording: works("Works the same") },
+  }),
+  input({
+    id: "inout.audio.input",
+    name: "Audio input",
+    part: "In, Audio input",
+    from: ["inout/AudioInput/audio-input"],
+    kit: "Picker.list",
+    does: "Which input the beat is heard on. The meter beside it shows what arrives",
+    sends: ["SetAudioInput"],
+    gestures: select("the beat is heard on that input"),
+    in: { "live-on": works("Works mid-show. With Audio as the tempo feed the beat is found again within a few bars") },
+    learn: NOT_A_LIST,
+  }),
+  input({
+    id: "inout.osc.on",
+    name: "OSC on or off",
+    part: "In, OSC",
+    from: ["inout/Osc/osc-on-or-off"],
+    kit: "Button.toggle",
+    does: "Other software may send commands to this machine over OSC, or not. Off from the start",
+    sends: ["SetOsc"],
+    gestures: toggle("OSC listens", "it is off"),
+    states: ["Off", "Listening"],
+  }),
+  input({
+    id: "inout.osc.port",
+    name: "OSC port",
+    part: "In, OSC",
+    from: ["inout/Osc/osc-port"],
+    kit: "Field.text",
+    does: "The port OSC listens on. A port that is taken is refused and the field says so",
+    sends: ["SetOsc"],
+    gestures: field("a port number", "Enter or leaving the field saves, Escape puts the old one back"),
+    learn: NOT_A_BUTTON,
   }),
 ];

@@ -3,6 +3,7 @@ import { store, type ClockFeed, type Mapping, type Output } from "../../fake/sto
 import { Button, Decks, Meter, Region, Table } from "../../kit";
 import type { Issue } from "../../shell/registry";
 import "./inout.css";
+import { AddOutput, AudioInput, Osc, OutputSetup } from "./Setup";
 
 export const id = "inout";
 export const title = "In/Out";
@@ -99,7 +100,9 @@ export function Screen() {
             </span>
             <Meter value={level()} label="Audio level" class="io-meter" />
           </div>
+          <AudioInput />
         </section>
+        <Osc />
 
         <section class="io-sec">
           <h3 class="io-h">VirtualDJ</h3>
@@ -192,10 +195,12 @@ export function Screen() {
                 >
                   {testing() === o.id ? "Testing" : "Test"}
                 </Button>
+                <OutputSetup name={o.device} live={store.state.night.live} />
               </li>
             )}
           </For>
         </ul>
+        <AddOutput />
       </Region>
 
       <Region

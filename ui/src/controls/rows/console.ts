@@ -1,9 +1,16 @@
 // The Console: Running on top, then the pages of widgets.
 import { gone, off, works, type Cell } from "../situations.ts";
-import { button, change, choice, control, draggable, everywhere, fader, keep, liveButton, liveChoice, no, remove, select, toggle, LOCKED, NOT_A_LIST, ONLY_DRAGGED, type Control } from "../spec.ts";
+import { button, change, choice, control, draggable, everywhere, fader, field, keep, liveButton, liveChoice, no, remove, select, toggle, LOCKED, NOT_A_BUTTON, NOT_A_LIST, ONLY_DRAGGED, type Control, type Row } from "../spec.ts";
 
 const ARRANGED = off("Being arranged: its edit frame covers it");
 const whileEditing = (cell: Cell) => ({ ...everywhere(gone("It appears with Edit surface")), "edit-surface": cell });
+
+const EDITING = no("It is there only while editing");
+/** A control that sets up a page or a widget. There while the surface is edited, so the lock holds it (decision 21). */
+const setup = (row: Omit<Row, "screen" | "kind" | "in"> & { says: string }): Control => {
+  const { says, ...rest } = row;
+  return control({ learn: EDITING, ...rest, screen: "Console", kind: "edit", in: whileEditing(works(says)) });
+};
 
 export const CONSOLE: Control[] = [
   control({
@@ -394,5 +401,114 @@ export const CONSOLE: Control[] = [
     gestures: button("Adds that widget at the first free place"),
     in: whileEditing(works("Adds the widget. On a full page it adds nothing and says to make one smaller first")),
     learn: no("It is there only while editing"),
+  }),
+  // ---- set up while editing: in the mockups since review 4 (decision 29)
+  setup({
+    id: "console.page.name",
+    name: "Name of the page",
+    part: "Pages, while editing",
+    from: ["console/PageSetup/name-of-the-page"],
+    kit: "Field.text",
+    does: "The name on the tab of the open page",
+    sends: ["RenamePage"],
+    gestures: field("the name"),
+    says: "Renames the open page. Its tab follows",
+    learn: NOT_A_BUTTON,
+  }),
+  setup({
+    id: "console.page.move",
+    name: "Page earlier or later",
+    part: "Pages, while editing",
+    from: ["console/PageSetup/move-the-page-earlier", "console/PageSetup/move-the-page-later"],
+    kit: "Field.steps",
+    does: "Moves the open page one tab to the left or to the right. Its place shows between the two buttons",
+    sends: ["MovePage"],
+    gestures: button("Moves the page by one tab"),
+    says: "Moves the tab. A pad controller follows the new order",
+    states: ["both", "first: no 'earlier'", "last: no 'later'"],
+  }),
+  setup({
+    id: "console.page.delete",
+    name: "Delete page",
+    part: "Pages, while editing",
+    from: ["console/PageSetup/delete-the-page"],
+    kit: "Button.action",
+    does: "Removes the open page and its widgets. Looks and faders stay in the show file. The last page stays",
+    sends: ["DeletePage"],
+    gestures: button("Deletes the page"),
+    says: "Deletes the page. Undo puts it back with its widgets",
+    states: ["there", "off: the last page stays"],
+  }),
+  setup({
+    id: "console.widget.plays",
+    name: "Look of a pad",
+    part: "Widget setup, while editing",
+    from: ["console/WidgetSetup/look-this-pad-plays"],
+    kit: "Picker.list",
+    does: "Says which look a pad plays. The pad takes the name and the colours of the look",
+    sends: ["SetWidgetTarget"],
+    gestures: select("the pad plays that look"),
+    says: "The pad plays the picked look from now on",
+    learn: NOT_A_LIST,
+  }),
+  setup({
+    id: "console.widget.moves",
+    name: "Target of a slider",
+    part: "Widget setup, while editing",
+    from: ["console/WidgetSetup/what-this-slider-moves"],
+    kit: "Picker.list",
+    does: "Says what a slider moves: the master, a group of lights, or the speed",
+    sends: ["SetWidgetTarget"],
+    gestures: select("the slider moves that"),
+    says: "The slider moves the picked thing from now on",
+    learn: NOT_A_LIST,
+  }),
+  setup({
+    id: "console.widget.words",
+    name: "Words of a label or frame",
+    part: "Widget setup, while editing",
+    from: ["console/WidgetSetup/words-of-the-label-or"],
+    kit: "Field.text",
+    does: "The words a label shows, or the title of a frame",
+    sends: ["SetWidgetWords"],
+    gestures: field("the words"),
+    says: "The label or frame shows the new words",
+    learn: NOT_A_BUTTON,
+  }),
+  setup({
+    id: "console.cue.add",
+    name: "Add a look to the cue list",
+    part: "Cue list setup, while editing",
+    from: ["console/WidgetSetup/add-a-look-to-the"],
+    kit: "Picker.list",
+    does: "Puts one more look at the end of the cue list. Go steps through them in order",
+    sends: ["SetCueList"],
+    gestures: select("the look joins the end of the list"),
+    says: "Adds the look as the last cue",
+    learn: NOT_A_LIST,
+    first: keep("The least a cue list needs: its looks and their order (#70)"),
+  }),
+  setup({
+    id: "console.cue.move",
+    name: "Cue earlier or later",
+    part: "Cue list setup, while editing",
+    from: ["console/WidgetSetup/move-the-cue-earlier", "console/WidgetSetup/move-the-cue-later"],
+    kit: "Field.steps",
+    does: "Moves one look of the cue list one place up or down",
+    sends: ["SetCueList"],
+    gestures: button("Moves the cue by one place"),
+    says: "Moves the cue. A list that is running keeps its place",
+    states: ["both", "first: no 'earlier'", "last: no 'later'"],
+  }),
+  setup({
+    id: "console.cue.take-out",
+    name: "Take a cue out",
+    part: "Cue list setup, while editing",
+    from: ["console/WidgetSetup/take-the-cue-out"],
+    kit: "Button.action",
+    does: "Takes one look out of the cue list. The look stays in the show file",
+    sends: ["SetCueList"],
+    gestures: button("Takes the look out of the list"),
+    says: "Takes the cue out. Undo puts it back",
   }),
 ];

@@ -5,12 +5,12 @@ This is the paper form of the storyboard catalog of issue #102. The catalog show
 
 ```mermaid
 flowchart LR
-  M["8 mockups<br/>235 elements in the code"] --> I["Inventory<br/>by script"]
-  I --> R["173 controls<br/>one row each"]
-  I --> N["35 not controls<br/>each with a reason"]
-  R --> C["79 commands"]
+  M["8 mockups<br/>281 elements in the code"] --> I["Inventory<br/>by script"]
+  I --> R["212 controls<br/>one row each"]
+  I --> N["37 not controls<br/>each with a reason"]
+  R --> C["103 commands"]
   R --> S["9 state machines"]
-  R --> F["Function first<br/>127 keep, 40 change, 6 remove"]
+  R --> F["Function first<br/>166 keep, 40 change, 6 remove"]
 ```
 
 | Where | What |
@@ -188,28 +188,14 @@ A number is a question on the owner's decisions page. The last column is what th
 | 'Every action can be undone' is a principle. A pad press, a release and a blackout are not steps of Undo | `top.undo` `console.pad` | Undo takes back changes to the show file, checked on every row. What is played is taken back by its own opposite: stop, Release | 31 | Undo takes back changes to the project only |
 | 'Surprise me' is not in the Console brief, and what it starts stays held | `console.surprise` | It goes, and its command with it. The autopilot is the surprise | 24 | Remove it |
 
-## Missing: 14 things with no control in any mockup
+## Missing: 0 things with no control in any mockup
 
-Found while writing the rows. Each needs a control before the screen it belongs to can be built, or a 'not in version 1'.
+A thing the product needs and no mockup shows. The owner's decision 29: it goes into the mockups first, then it gets a row. The 14 found in phase 1 are there since review 4.
 
 | Screen | What cannot be done | Engine command that waits |
 | --- | --- | --- |
-| Top bar | Redo |  |
-| Top bar | The show file: new, open, save as, and the name of the show |  |
-| Looks | Make a new step, sequence or pattern |  |
-| Looks | Rename, copy and delete a look |  |
-| Looks | Add an item to a sequence, and take one out |  |
-| Looks | A colour outside the twelve swatches (the brief says 'chips and picker') |  |
-| Console | Rename, reorder and delete a page |  |
-| Console | Say which look a pad plays, and which fader a slider moves |  |
-| Console | The words of a label and a frame |  |
-| Patch | Remove a light, rename it, change its mode or its group |  |
-| Patch | Change or remove a pixel panel |  |
-| In/Out | Add, set up and remove an output | SetOutput, RemoveOutput |
-| In/Out | Pick the audio input, and set up OSC |  |
-| Console | The cue list itself: its looks and their order (#70) |  |
 
-## Commands: 79
+## Commands: 103
 
 The union of what the controls send: the first list of engine commands. A proposal for the engine, not a design of it.
 
@@ -223,6 +209,11 @@ The union of what the controls send: the first list of engine commands. A propos
 | `SetLock` | Lock what a press does while LIVE is on, or not: the Console layout, pads, pages, Learn and the mappings | on |  | `top.indicator.lock` |
 | `Blackout` | Every channel goes out at zero. What is held stays held | on | yes | `top.blackout` |
 | `Undo` | Take back the last change to the show file |  |  | `top.undo` |
+| `Redo` | Put back the last change Undo took away |  |  | `top.redo` |
+| `RenameShow` | Another name for the show and its file | name |  | `top.show.name` |
+| `NewShow` | An empty show file. The open one is saved first |  |  | `top.show.new` |
+| `OpenShow` | Open another show file. The open one is saved first | file |  | `top.show.open` |
+| `SaveShowAs` | Write a copy of the show file. The copy becomes the open one | file |  | `top.show.save-as` |
 | `TapTempo` | One tap. After two taps the beat follows the taps, until ReleaseTempo |  |  | `top.tap` `inout.tempo.tap` |
 | `ReleaseTempo` | The taps let go: the beat follows the picked feed again |  |  | `top.tempo.source` |
 | `SetTempoFeed` | Which source drives the beat | feed: tap, audio, midi clock, virtualdj, timecode |  | `inout.tempo.feed` |
@@ -240,6 +231,12 @@ The union of what the controls send: the first list of engine commands. A propos
 | `GoCue` | The cue list steps forward: its look starts, the one before stops | list |  | `console.cue.go` |
 | `BackCue` | The cue list steps back | list |  | `console.cue.back` |
 | `AddPage` | A new, empty Console page |  |  | `console.pages.add` |
+| `RenamePage` | Another name for a page | page, name |  | `console.page.name` |
+| `MovePage` | Move a page among the tabs | page, by |  | `console.page.move` |
+| `DeletePage` | Remove a page and its widgets. The last page stays | page |  | `console.page.delete` |
+| `SetWidgetTarget` | What a widget acts on: the look of a pad, the target of a slider | page, widget, target |  | `console.widget.plays` `console.widget.moves` |
+| `SetWidgetWords` | The words of a label or a frame | page, widget, words |  | `console.widget.words` |
+| `SetCueList` | The looks of a cue list and their order | list, looks |  | `console.cue.add` `console.cue.move` `console.cue.take-out` |
 | `AddWidget` | A widget on a page, at the first free place | page, kind |  | `console.drawer.add` |
 | `PlaceWidget` | Move or resize a widget, in whole cells | page, widget, x, y, w, h |  | `console.widget.frame` `console.widget.resize` |
 | `RemoveWidget` | Take a widget off a page | page, widget |  | `console.widget.frame` `console.widget.remove` |
@@ -259,9 +256,15 @@ The union of what the controls send: the first list of engine commands. A propos
 | `UndoLastPass` | Remove the newest finished pass from the Recorded row | song |  | `songs.recorded.undo-last-pass` |
 | `ClearRecorded` | Empty the Recorded row | song |  | `songs.recorded.clear` |
 | `SetStepFixtures` | Which groups of lights a step sets | step, groups |  | `looks.step.fixtures` |
-| `SetStepProperty` | Set one property of a step, or leave it alone | step, property, value or not set |  | `looks.step.set` `looks.step.clear` `looks.step.colour.remove` `looks.step.colour.add` `looks.step.position` `looks.step.gobo` `looks.step.dimmer` `looks.step.spin` |
+| `SetStepProperty` | Set one property of a step, or leave it alone | step, property, value or not set |  | `looks.step.set` `looks.step.clear` `looks.step.colour.remove` `looks.step.colour.add` `looks.step.position` `looks.step.gobo` `looks.step.dimmer` `looks.step.spin` `looks.step.colour.add-other` |
 | `SetSequenceEntry` | Change one item of a sequence: start, width, speed, loop, spread, transition | sequence, entry, change |  | `looks.seq.bar` `looks.seq.bar.edge` `looks.seq.width` `looks.seq.speed` `looks.seq.repeat` `looks.seq.spread` `looks.seq.transition` |
 | `SetPattern` | Change a pattern: shape, measure, colours from, runs on | pattern, change |  | `looks.pattern.shape` `looks.pattern.measure` `looks.pattern.colours` `looks.pattern.runs-on` |
+| `AddLook` | A new step, sequence or pattern | kind |  | `looks.library.new-look` |
+| `RenameLook` | Another name for a look, everywhere it is used | look, name |  | `looks.name` |
+| `CopyLook` | A copy of a look, in the same groups | look |  | `looks.copy` |
+| `DeleteLook` | Remove a look from the library, its pads and its sections. Refused while a sequence uses it | look |  | `looks.delete` |
+| `AddSequenceEntry` | One more item at the end of a sequence | sequence, look |  | `looks.seq.add` |
+| `RemoveSequenceEntry` | Take one item out of a sequence | sequence, entry |  | `looks.seq.take-out` |
 | `AddGroup` | A new, empty group |  |  | `looks.library.new-group` |
 | `RenameGroup` | Another name for a group, in the autopilot rules too | group, name |  | `looks.library.group.name` |
 | `DeleteGroup` | Remove a group. Its looks stay | group |  | `looks.library.group.delete` |
@@ -280,6 +283,11 @@ The union of what the controls send: the first list of engine commands. A propos
 | `SetAddress` | Another address for a light | fixture, universe, address |  | `patch.grid.light` `patch.details.address` `patch.details.move-to-free` |
 | `ReorderFixture` | Move a light inside its group: the order is left to right | fixture, by |  | `patch.fixtures.order` `patch.fixtures.move` |
 | `Identify` | One light flashes so it can be found in the room, or stops | fixture or none |  | `patch.details.flash` `patch.add.next` `patch.add.confirm` `patch.add.nothing-flashed` |
+| `RenameFixture` | Another name for a light | fixture, name |  | `patch.details.name` |
+| `SetFixtureMode` | Another mode of the same model. Refused where its channels do not fit | fixture, mode |  | `patch.details.mode` |
+| `SetFixtureGroup` | A light joins another group, as its last | fixture, group |  | `patch.details.group` |
+| `RemoveFixture` | A light leaves the patch | fixture |  | `patch.details.remove` |
+| `RemovePanel` | A pixel panel leaves the patch | panel |  | `patch.panel.remove` |
 | `AddPanel` | A pixel panel, spread over as many universes as it needs | name, columns, rows, wiring, pixel, order, start universe |  | `patch.panel.add` |
 | `SetChannel` | Hold one channel by hand at a value | channel, value | yes | `dmx.channel.fader` `dmx.channel.zero` `dmx.channel.full` |
 | `ReleaseChannel` | Give one channel back | channel | yes | `dmx.channel.release` `dmx.held.release` |
@@ -291,9 +299,11 @@ The union of what the controls send: the first list of engine commands. A propos
 | `UpdateMapping` | Change a mapping: device, note or controller number, feedback | mapping, change |  | `inout.mapping.device` `inout.mapping.message` `inout.mapping.feedback` |
 | `TestMapping` | Show that a mapping is alive: the hardware control lights. Nothing fires | mapping |  | `inout.mapping.test` |
 | `RemoveMapping` | Remove a mapping | mapping |  | `inout.mapping.remove` |
+| `SetOutput` | Set up an output: its kind, universes and rate | output, kind, universes, rate | yes | `inout.out.kind` `inout.out.universes` `inout.out.rate` `inout.out.add` |
+| `RemoveOutput` | Remove an output | output | yes | `inout.out.remove` |
+| `SetAudioInput` | Which input the beat is heard on | input |  | `inout.audio.input` |
+| `SetOsc` | Listen for commands over OSC, or not, and on which port | on, port |  | `inout.osc.on` `inout.osc.port` |
 | `StopEngine` | The engine ends in an orderly way: it answers, closes every connection and sends no more frames. The request Stop of the API (#107) |  | yes | `menubar.stop-engine` |
-| `SetOutput` | Set up an output: its kind, universes and rate | output, kind, universes, rate | yes | no control: see Missing |
-| `RemoveOutput` | Remove an output | output | yes | no control: see Missing |
 
 ## State machines: 9
 
@@ -737,7 +747,7 @@ stateDiagram-v2
 
 ## Top bar
 
-14 controls.
+20 controls.
 
 | Control | Name | Does | Sends | Kind |
 | --- | --- | --- | --- | --- |
@@ -755,6 +765,12 @@ stateDiagram-v2
 | Learn | `top.learn` | Maps a control on screen to a control on the hardware: pick one here, then move one there | `StartLearn` `CancelLearn` | view |
 | Cancel Learn | `top.learn.cancel` | In the mockup: ends Learn. Nothing is mapped | `CancelLearn` | view |
 | Now strip | `top.now-strip` | Shows what runs in the three rows, and opens the Console. Not on the Console and on Songs: they have their own time line | nothing: the open workspace | view |
+| Redo | `top.redo` | Puts back the last change Undo took away. A new change empties it | `Redo` | edit |
+| Show file | `top.show` | Says the name of the show, beside 'Bossylights'. A press opens its menu: the name, New, Open, Save as | nothing: the show file menu, open or not | view |
+| Name of the show | `top.show.name` | The name of the show. It is the name of its file too | `RenameShow` | edit |
+| New show file | `top.show.new` | Starts an empty show file. The one that was open is saved as it is and can be opened again | `NewShow` | edit |
+| Open a show file | `top.show.open` | The system asks which file. The show that was open is saved as it is, then the picked one opens | `OpenShow` | edit |
+| Save as | `top.show.save-as` | The system asks where. A copy is written there and becomes the open show. There is no Save: every change is saved by itself | `SaveShowAs` | edit |
 
 ### Top bar: in each situation
 
@@ -774,6 +790,12 @@ stateDiagram-v2
 | Learn | ● | ◆ | ○ | ◆ | ● | ● | ○ | ◆ | ● | ◆ | ● | ● | ● | – |
 | Cancel Learn | – | – | – | – | – | – | – | – | – | ◆ | – | – | – | – |
 | Now strip | ● | ● | ● | ● | ● | ◆ | ◆ | ◆ | ● | ◆ | ● | ● | ● | – |
+| Redo | ○ | ○ | ○ | ○ | ○ | ○ | ○ | ○ | ○ | ○ | ○ | ○ | ○ | – |
+| Show file | ● | ● | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ● | ● | – |
+| Name of the show | ● | ● | ● | ● | ● | ● | ○ | ● | ● | ◆ | ● | ● | ● | – |
+| New show file | ● | ○ | ○ | ○ | ● | ○ | ○ | ● | ● | ◆ | ● | ● | ● | – |
+| Open a show file | ● | ○ | ○ | ○ | ● | ○ | ○ | ● | ● | ◆ | ● | ● | ● | – |
+| Save as | ● | ◆ | ● | ● | ● | ● | ○ | ● | ● | ◆ | ● | ● | ● | – |
 
 ### Top bar: where a cell is not the usual of its kind
 
@@ -871,6 +893,32 @@ stateDiagram-v2
 | Now strip | Engine not connected | works | Works. The lanes show the last the engine sent and stand still |
 | Now strip | Nothing patched | works | Works. Three empty lanes |
 | Now strip | Learn mode | works | Not picked: the Console tab is the control to map. It works as usual and Learn keeps waiting |
+| Redo | LIVE off | off | Nothing to redo |
+| Redo | LIVE on | off | Nothing to redo |
+| Redo | Lock on | off | Nothing to redo |
+| Redo | Recording on | off | Nothing to redo |
+| Redo | Autopilot on | off | Nothing to redo |
+| Redo | Something held | off | Nothing to redo |
+| Redo | Nothing patched | off | Nothing to redo |
+| Redo | Edit surface | off | Nothing to redo |
+| Redo | Learn mode | off | Nothing to redo |
+| Redo | A song plays | off | Nothing to redo |
+| Redo | No song plays | off | Nothing to redo |
+| Redo | An output lost | off | Nothing to redo |
+| Show file | Learn mode | works | Not picked: a show file is chosen on screen, with the system's own window. It works as usual and Learn keeps waiting |
+| Name of the show | Learn mode | works | Not picked: text cannot come from a pad or a fader. It works as usual and Learn keeps waiting |
+| New show file | LIVE on | off | LIVE is on |
+| New show file | Lock on | off | LIVE is on |
+| New show file | Recording on | off | LIVE is on |
+| New show file | Something held | off | Release what you hold first |
+| New show file | Learn mode | works | Not picked: a show file is chosen on screen, with the system's own window. It works as usual and Learn keeps waiting |
+| Open a show file | LIVE on | off | LIVE is on |
+| Open a show file | Lock on | off | LIVE is on |
+| Open a show file | Recording on | off | LIVE is on |
+| Open a show file | Something held | off | Release what you hold first |
+| Open a show file | Learn mode | works | Not picked: a show file is chosen on screen, with the system's own window. It works as usual and Learn keeps waiting |
+| Save as | LIVE on | works | Works mid-show. The lights do not notice |
+| Save as | Learn mode | works | Not picked: a show file is chosen on screen, with the system's own window. It works as usual and Learn keeps waiting |
 
 ### Top bar: gestures
 
@@ -890,6 +938,12 @@ stateDiagram-v2
 | Learn | Starts Learn. Pressed again: Learn ends, nothing is mapped. Fires on the way up | Held for more than 350 ms: Learn picks itself. Then move the hardware control that should start and end Learn | Two presses | Sliding off before lifting cancels the press | Tab to it, Enter or Space. Escape ends Learn from anywhere | As a press. 44 px |
 | Cancel Learn | Ends Learn. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Escape from anywhere. On the button, Enter | As a press. 44 px |
 | Now strip | Opens the Console. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
+| Redo | Puts back one step. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Cmd or Ctrl, Shift and Z, outside a text field. On the button, Enter | As a press. 44 px |
+| Show file | Opens the menu. Pressed again: it closes. Escape and a press outside close it too. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
+| Name of the show | Puts the cursor in the field | Selects a word, as the system does | Selects a word | Selects text | Type the name. Enter saves, Escape puts the old text back | Opens the on-screen keyboard. 44 px high |
+| New show file | Starts an empty show file. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
+| Open a show file | Asks which file to open. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
+| Save as | Asks where to save a copy. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
 
 ### Top bar: feedback, undo, Learn, Function first
 
@@ -904,15 +958,21 @@ stateDiagram-v2
 | Tap | The beat dots restart on the tap, at once. The tempo changes after the second tap, and the words beside it turn to 'from Tap' | The mapped pad blinks on the beat | no. Playing is not a change to the show file. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **keep**. Asked for in review 1: always visible beside the tempo |
 | Tempo source | The words turn to the name of the feed and are plain again, when the engine reports it | The mapped control is lit while taps hold the beat | no. Tap again | yes. A button or a value: one mapping | **keep**. The owner's decision 23: taps hold until you press the words 'from Tap'. The way back is where the eye already is, not on In/Out |
 | Blackout | Red fill and 'Blackout on' on the way down. The whole app dims its row colours while dark | The mapped control is lit red while dark | no. Playing is not a change to the show file. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **change**. In the mockup the button only latches and Space only holds. The owner's decision 30: the button works like a pad. A short press latches, a hold is dark while held |
-| Undo | What was changed goes back, when the engine reports it. The button names the next step to take back | None | no. There is no redo in the mockups. See the list of missing controls | yes. A button or a value: one mapping | **change**. It has to say what it takes back ('Undo: move widget'), and 'Nothing to undo' when off. Both are only in its accessible name today |
+| Undo | What was changed goes back, when the engine reports it. The button names the next step to take back | None | no. Redo puts it back | yes. A button or a value: one mapping | **change**. It has to say what it takes back ('Undo: move widget'), and 'Nothing to undo' when off. Both are only in its accessible name today |
 | Workspace tabs | At once: the screen owns this state | None | no. Nothing in the show file changes | yes. A button or a value: one mapping | **change**. The tab 'All reviews' is review tooling and goes with the review layer |
 | Learn | Paper while Learn is on. The Learn bar under the tabs says the step, at once | The mapped control is lit while Learn is on | no. Nothing in the show file changes | yes. The owner's review: 'Learn itself should be learnable'. A press ends Learn, so it is picked by holding it | **change**. In the mockup Learn cannot be mapped, and the Learn bar has a Cancel. Learn is picked by a hold, and pressed again it ends Learn |
 | Cancel Learn | At once: the screen owns this state | None | no. Nothing in the show file changes | no. It belongs to Learn itself | **remove**. The owner's review: 'just pressing learn again disabled learn'. Two controls for one thing: Learn pressed again ends Learn, and so does Escape. The Learn bar only says the step |
 | Now strip | At once: the screen owns this state | None | no. Nothing in the show file changes | no. The Console tab is the control to map | **keep**. It says what it is and what a press does |
+| Redo | What Undo took away is back, when the engine reports it. The button names the step it puts back | None | no. Undo takes it away again | yes. A button or a value: one mapping | **keep**. Undo without a way back is a trap: one wrong Undo would lose an edit. It names its step, as Undo does |
+| Show file | At once: the screen owns this state | None | no. Nothing in the show file changes | no. A show file is chosen on screen, with the system's own window | **keep**. The name was plain words in the mockup. The show file needs one home, and the name is where the eye looks for it |
+| Name of the show | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | no. Text cannot come from a pad or a fader | **keep**. It says what it is and what a press does |
+| New show file | The change shows when the engine reports it, in the same screen frame | None | no. The show before is saved: Open brings it back | no. A show file is chosen on screen, with the system's own window | **keep**. It says what it is and what a press does |
+| Open a show file | The change shows when the engine reports it, in the same screen frame | None | no. The show before is saved: Open brings it back | no. A show file is chosen on screen, with the system's own window | **keep**. It says what it is and what a press does |
+| Save as | The change shows when the engine reports it, in the same screen frame | None | no. The copy is a file: delete it in the system | no. A show file is chosen on screen, with the system's own window | **keep**. It says what it is and what a press does |
 
 ## Console
 
-21 controls.
+30 controls.
 
 | Control | Name | Does | Sends | Kind |
 | --- | --- | --- | --- | --- |
@@ -937,6 +997,15 @@ stateDiagram-v2
 | Widget resize handle | `console.widget.resize` | Resizes a widget from its bottom right corner, not below its smallest size | `PlaceWidget` | edit |
 | Remove widget | `console.widget.remove` | Takes the widget off the page. Its looks and faders stay in the show file | `RemoveWidget` | edit |
 | Add a widget | `console.drawer.add` | Puts a widget of that kind on the page: button, slider, XY pad, cue list, speed dial, label, frame | `AddWidget` | edit |
+| Name of the page | `console.page.name` | The name on the tab of the open page | `RenamePage` | edit |
+| Page earlier or later | `console.page.move` | Moves the open page one tab to the left or to the right. Its place shows between the two buttons | `MovePage` | edit |
+| Delete page | `console.page.delete` | Removes the open page and its widgets. Looks and faders stay in the show file. The last page stays | `DeletePage` | edit |
+| Look of a pad | `console.widget.plays` | Says which look a pad plays. The pad takes the name and the colours of the look | `SetWidgetTarget` | edit |
+| Target of a slider | `console.widget.moves` | Says what a slider moves: the master, a group of lights, or the speed | `SetWidgetTarget` | edit |
+| Words of a label or frame | `console.widget.words` | The words a label shows, or the title of a frame | `SetWidgetWords` | edit |
+| Add a look to the cue list | `console.cue.add` | Puts one more look at the end of the cue list. Go steps through them in order | `SetCueList` | edit |
+| Cue earlier or later | `console.cue.move` | Moves one look of the cue list one place up or down | `SetCueList` | edit |
+| Take a cue out | `console.cue.take-out` | Takes one look out of the cue list. The look stays in the show file | `SetCueList` | edit |
 
 ### Console: in each situation
 
@@ -963,6 +1032,15 @@ stateDiagram-v2
 | Widget resize handle | – | – | – | – | – | – | – | – | ◆ | – | – | – | – | – |
 | Remove widget | – | – | – | – | – | – | – | – | ◆ | – | – | – | – | – |
 | Add a widget | – | – | – | – | – | – | – | – | ◆ | – | – | – | – | – |
+| Name of the page | – | – | – | – | – | – | – | – | ◆ | – | – | – | – | – |
+| Page earlier or later | – | – | – | – | – | – | – | – | ◆ | – | – | – | – | – |
+| Delete page | – | – | – | – | – | – | – | – | ◆ | – | – | – | – | – |
+| Look of a pad | – | – | – | – | – | – | – | – | ◆ | – | – | – | – | – |
+| Target of a slider | – | – | – | – | – | – | – | – | ◆ | – | – | – | – | – |
+| Words of a label or frame | – | – | – | – | – | – | – | – | ◆ | – | – | – | – | – |
+| Add a look to the cue list | – | – | – | – | – | – | – | – | ◆ | – | – | – | – | – |
+| Cue earlier or later | – | – | – | – | – | – | – | – | ◆ | – | – | – | – | – |
+| Take a cue out | – | – | – | – | – | – | – | – | ◆ | – | – | – | – | – |
 
 ### Console: where a cell is not the usual of its kind
 
@@ -1108,6 +1186,123 @@ stateDiagram-v2
 | Add a widget | A song plays | not there | It appears with Edit surface |
 | Add a widget | No song plays | not there | It appears with Edit surface |
 | Add a widget | An output lost | not there | It appears with Edit surface |
+| Name of the page | LIVE off | not there | It appears with Edit surface |
+| Name of the page | LIVE on | not there | It appears with Edit surface |
+| Name of the page | Lock on | not there | It appears with Edit surface |
+| Name of the page | Recording on | not there | It appears with Edit surface |
+| Name of the page | Autopilot on | not there | It appears with Edit surface |
+| Name of the page | Something held | not there | It appears with Edit surface |
+| Name of the page | Engine not connected | not there | It appears with Edit surface |
+| Name of the page | Nothing patched | not there | It appears with Edit surface |
+| Name of the page | Edit surface | works | Renames the open page. Its tab follows |
+| Name of the page | Learn mode | not there | It appears with Edit surface |
+| Name of the page | A song plays | not there | It appears with Edit surface |
+| Name of the page | No song plays | not there | It appears with Edit surface |
+| Name of the page | An output lost | not there | It appears with Edit surface |
+| Page earlier or later | LIVE off | not there | It appears with Edit surface |
+| Page earlier or later | LIVE on | not there | It appears with Edit surface |
+| Page earlier or later | Lock on | not there | It appears with Edit surface |
+| Page earlier or later | Recording on | not there | It appears with Edit surface |
+| Page earlier or later | Autopilot on | not there | It appears with Edit surface |
+| Page earlier or later | Something held | not there | It appears with Edit surface |
+| Page earlier or later | Engine not connected | not there | It appears with Edit surface |
+| Page earlier or later | Nothing patched | not there | It appears with Edit surface |
+| Page earlier or later | Edit surface | works | Moves the tab. A pad controller follows the new order |
+| Page earlier or later | Learn mode | not there | It appears with Edit surface |
+| Page earlier or later | A song plays | not there | It appears with Edit surface |
+| Page earlier or later | No song plays | not there | It appears with Edit surface |
+| Page earlier or later | An output lost | not there | It appears with Edit surface |
+| Delete page | LIVE off | not there | It appears with Edit surface |
+| Delete page | LIVE on | not there | It appears with Edit surface |
+| Delete page | Lock on | not there | It appears with Edit surface |
+| Delete page | Recording on | not there | It appears with Edit surface |
+| Delete page | Autopilot on | not there | It appears with Edit surface |
+| Delete page | Something held | not there | It appears with Edit surface |
+| Delete page | Engine not connected | not there | It appears with Edit surface |
+| Delete page | Nothing patched | not there | It appears with Edit surface |
+| Delete page | Edit surface | works | Deletes the page. Undo puts it back with its widgets |
+| Delete page | Learn mode | not there | It appears with Edit surface |
+| Delete page | A song plays | not there | It appears with Edit surface |
+| Delete page | No song plays | not there | It appears with Edit surface |
+| Delete page | An output lost | not there | It appears with Edit surface |
+| Look of a pad | LIVE off | not there | It appears with Edit surface |
+| Look of a pad | LIVE on | not there | It appears with Edit surface |
+| Look of a pad | Lock on | not there | It appears with Edit surface |
+| Look of a pad | Recording on | not there | It appears with Edit surface |
+| Look of a pad | Autopilot on | not there | It appears with Edit surface |
+| Look of a pad | Something held | not there | It appears with Edit surface |
+| Look of a pad | Engine not connected | not there | It appears with Edit surface |
+| Look of a pad | Nothing patched | not there | It appears with Edit surface |
+| Look of a pad | Edit surface | works | The pad plays the picked look from now on |
+| Look of a pad | Learn mode | not there | It appears with Edit surface |
+| Look of a pad | A song plays | not there | It appears with Edit surface |
+| Look of a pad | No song plays | not there | It appears with Edit surface |
+| Look of a pad | An output lost | not there | It appears with Edit surface |
+| Target of a slider | LIVE off | not there | It appears with Edit surface |
+| Target of a slider | LIVE on | not there | It appears with Edit surface |
+| Target of a slider | Lock on | not there | It appears with Edit surface |
+| Target of a slider | Recording on | not there | It appears with Edit surface |
+| Target of a slider | Autopilot on | not there | It appears with Edit surface |
+| Target of a slider | Something held | not there | It appears with Edit surface |
+| Target of a slider | Engine not connected | not there | It appears with Edit surface |
+| Target of a slider | Nothing patched | not there | It appears with Edit surface |
+| Target of a slider | Edit surface | works | The slider moves the picked thing from now on |
+| Target of a slider | Learn mode | not there | It appears with Edit surface |
+| Target of a slider | A song plays | not there | It appears with Edit surface |
+| Target of a slider | No song plays | not there | It appears with Edit surface |
+| Target of a slider | An output lost | not there | It appears with Edit surface |
+| Words of a label or frame | LIVE off | not there | It appears with Edit surface |
+| Words of a label or frame | LIVE on | not there | It appears with Edit surface |
+| Words of a label or frame | Lock on | not there | It appears with Edit surface |
+| Words of a label or frame | Recording on | not there | It appears with Edit surface |
+| Words of a label or frame | Autopilot on | not there | It appears with Edit surface |
+| Words of a label or frame | Something held | not there | It appears with Edit surface |
+| Words of a label or frame | Engine not connected | not there | It appears with Edit surface |
+| Words of a label or frame | Nothing patched | not there | It appears with Edit surface |
+| Words of a label or frame | Edit surface | works | The label or frame shows the new words |
+| Words of a label or frame | Learn mode | not there | It appears with Edit surface |
+| Words of a label or frame | A song plays | not there | It appears with Edit surface |
+| Words of a label or frame | No song plays | not there | It appears with Edit surface |
+| Words of a label or frame | An output lost | not there | It appears with Edit surface |
+| Add a look to the cue list | LIVE off | not there | It appears with Edit surface |
+| Add a look to the cue list | LIVE on | not there | It appears with Edit surface |
+| Add a look to the cue list | Lock on | not there | It appears with Edit surface |
+| Add a look to the cue list | Recording on | not there | It appears with Edit surface |
+| Add a look to the cue list | Autopilot on | not there | It appears with Edit surface |
+| Add a look to the cue list | Something held | not there | It appears with Edit surface |
+| Add a look to the cue list | Engine not connected | not there | It appears with Edit surface |
+| Add a look to the cue list | Nothing patched | not there | It appears with Edit surface |
+| Add a look to the cue list | Edit surface | works | Adds the look as the last cue |
+| Add a look to the cue list | Learn mode | not there | It appears with Edit surface |
+| Add a look to the cue list | A song plays | not there | It appears with Edit surface |
+| Add a look to the cue list | No song plays | not there | It appears with Edit surface |
+| Add a look to the cue list | An output lost | not there | It appears with Edit surface |
+| Cue earlier or later | LIVE off | not there | It appears with Edit surface |
+| Cue earlier or later | LIVE on | not there | It appears with Edit surface |
+| Cue earlier or later | Lock on | not there | It appears with Edit surface |
+| Cue earlier or later | Recording on | not there | It appears with Edit surface |
+| Cue earlier or later | Autopilot on | not there | It appears with Edit surface |
+| Cue earlier or later | Something held | not there | It appears with Edit surface |
+| Cue earlier or later | Engine not connected | not there | It appears with Edit surface |
+| Cue earlier or later | Nothing patched | not there | It appears with Edit surface |
+| Cue earlier or later | Edit surface | works | Moves the cue. A list that is running keeps its place |
+| Cue earlier or later | Learn mode | not there | It appears with Edit surface |
+| Cue earlier or later | A song plays | not there | It appears with Edit surface |
+| Cue earlier or later | No song plays | not there | It appears with Edit surface |
+| Cue earlier or later | An output lost | not there | It appears with Edit surface |
+| Take a cue out | LIVE off | not there | It appears with Edit surface |
+| Take a cue out | LIVE on | not there | It appears with Edit surface |
+| Take a cue out | Lock on | not there | It appears with Edit surface |
+| Take a cue out | Recording on | not there | It appears with Edit surface |
+| Take a cue out | Autopilot on | not there | It appears with Edit surface |
+| Take a cue out | Something held | not there | It appears with Edit surface |
+| Take a cue out | Engine not connected | not there | It appears with Edit surface |
+| Take a cue out | Nothing patched | not there | It appears with Edit surface |
+| Take a cue out | Edit surface | works | Takes the cue out. Undo puts it back |
+| Take a cue out | Learn mode | not there | It appears with Edit surface |
+| Take a cue out | A song plays | not there | It appears with Edit surface |
+| Take a cue out | No song plays | not there | It appears with Edit surface |
+| Take a cue out | An output lost | not there | It appears with Edit surface |
 
 ### Console: gestures
 
@@ -1134,6 +1329,15 @@ stateDiagram-v2
 | Widget resize handle | Nothing | Nothing more. A drag needs 8 px of movement, not a wait | Two presses | Resizes by whole cells. Escape puts it back | On the widget: Shift and arrows | As press and drag. 44 px |
 | Remove widget | Removes the widget. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | On the widget: Delete. On the button: Enter | As a press. 44 px |
 | Add a widget | Adds that widget at the first free place. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
+| Name of the page | Puts the cursor in the field | Selects a word, as the system does | Selects a word | Selects text | Type the name. Enter saves, Escape puts the old text back | Opens the on-screen keyboard. 44 px high |
+| Page earlier or later | Moves the page by one tab. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
+| Delete page | Deletes the page. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
+| Look of a pad | Opens the list. A press on an entry: the pad plays that look | Nothing more | Opens and closes the list | Nothing | Tab to it, arrows change the choice, Enter opens the list | Opens the system's picker. 44 px high |
+| Target of a slider | Opens the list. A press on an entry: the slider moves that | Nothing more | Opens and closes the list | Nothing | Tab to it, arrows change the choice, Enter opens the list | Opens the system's picker. 44 px high |
+| Words of a label or frame | Puts the cursor in the field | Selects a word, as the system does | Selects a word | Selects text | Type the words. Enter saves, Escape puts the old text back | Opens the on-screen keyboard. 44 px high |
+| Add a look to the cue list | Opens the list. A press on an entry: the look joins the end of the list | Nothing more | Opens and closes the list | Nothing | Tab to it, arrows change the choice, Enter opens the list | Opens the system's picker. 44 px high |
+| Cue earlier or later | Moves the cue by one place. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
+| Take a cue out | Takes the look out of the list. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
 
 ### Console: feedback, undo, Learn, Function first
 
@@ -1160,6 +1364,15 @@ stateDiagram-v2
 | Widget resize handle | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | no. Arranging is done on screen, not from a controller | **keep**. It says what it is and what a press does |
 | Remove widget | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | no. It is there only while editing | **keep**. It says what it is and what a press does |
 | Add a widget | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | no. It is there only while editing | **keep**. It says what it is and what a press does |
+| Name of the page | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | no. Text cannot come from a pad or a fader | **keep**. It says what it is and what a press does |
+| Page earlier or later | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | no. It is there only while editing | **keep**. It says what it is and what a press does |
+| Delete page | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | no. It is there only while editing | **keep**. It says what it is and what a press does |
+| Look of a pad | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | no. A list that opens has no pad or fader to stand for it | **keep**. It says what it is and what a press does |
+| Target of a slider | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | no. A list that opens has no pad or fader to stand for it | **keep**. It says what it is and what a press does |
+| Words of a label or frame | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | no. Text cannot come from a pad or a fader | **keep**. It says what it is and what a press does |
+| Add a look to the cue list | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | no. A list that opens has no pad or fader to stand for it | **keep**. The least a cue list needs: its looks and their order (#70) |
+| Cue earlier or later | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | no. It is there only while editing | **keep**. It says what it is and what a press does |
+| Take a cue out | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | no. It is there only while editing | **keep**. It says what it is and what a press does |
 
 ## Songs
 
@@ -1297,7 +1510,7 @@ stateDiagram-v2
 
 ## Looks
 
-52 controls.
+61 controls.
 
 | Control | Name | Does | Sends | Kind |
 | --- | --- | --- | --- | --- |
@@ -1353,6 +1566,15 @@ stateDiagram-v2
 | Lights it may use | `looks.autopilot.lights` | The autopilot may use a group of lights, or not. One button per group | `SetAutopilotLights` | setting |
 | How wild | `looks.autopilot.wild` | How often the autopilot changes its pick inside a section: calm, lively, wild | `SetWildness` | setting |
 | Never dark | `looks.autopilot.never-dark` | The look that plays when nothing else does. Or nothing: the room may go dark | `SetNeverDark` | setting |
+| New look | `looks.library.new-look` | Makes a new step, sequence or pattern and opens it in the editor, its name ready to type. Three buttons, one per kind | `AddLook` | edit |
+| Name of the look | `looks.name` | The name of the open look. Pads, sequences, sections and rules that use it follow | `RenameLook` | edit |
+| Copy the look | `looks.copy` | Makes a copy with 'copy' after its name, in the same groups, and opens it. To try a change without losing the look | `CopyLook` | edit |
+| Delete look | `looks.delete` | Removes the open look from the library, from its pads and from its sections. Off while a sequence uses it, and it says in how many | `DeleteLook` | edit |
+| Add an item | `looks.seq.add` | Puts one more look at the end of the sequence, one beat wide. A sequence cannot hold itself | `AddSequenceEntry` | edit |
+| Take an item out | `looks.seq.take-out` | Takes the selected item out of the sequence. The look stays in the library | `RemoveSequenceEntry` | edit |
+| Other colour | `looks.step.colour.other` | Opens the colour wheel under the twelve swatches, for a colour that is not one of them | nothing: the colour wheel, open or not | view |
+| Colour wheel | `looks.step.colour.wheel` | Picks any colour: around is the hue, outward is how strong it is. Nothing is on the lights until 'Add this colour' | nothing: the colour being picked | view |
+| Add this colour | `looks.step.colour.add-other` | Adds the colour of the wheel to the step. Four colours at most | `SetStepProperty` | edit |
 
 ### Looks: in each situation
 
@@ -1410,6 +1632,15 @@ stateDiagram-v2
 | Lights it may use | ● | ● | ● | ● | ◆ | ● | ○ | – | ● | ● | ● | ● | ● | – |
 | How wild | ● | ● | ● | ● | ◆ | ● | ○ | ● | ● | ● | ● | ● | ● | – |
 | Never dark | ● | ● | ● | ● | ◆ | ● | ○ | ◆ | ● | ◆ | ● | ● | ● | – |
+| New look | ● | ● | ● | ● | ● | ◆ | ○ | ◆ | ● | ● | ● | ● | ● | – |
+| Name of the look | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ◆ | ● | ● | ● | – |
+| Copy the look | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ● | ● | ● | ● | – |
+| Delete look | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ● | ◆ | ● | ● | – |
+| Add an item | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ◆ | ● | ● | ● | – |
+| Take an item out | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ● | ● | ● | ● | – |
+| Other colour | ● | ● | ● | ● | ● | ● | ● | – | ● | ● | ● | ● | ● | – |
+| Colour wheel | ● | ● | ● | ● | ● | ● | ● | – | ● | ◆ | ● | ● | ● | – |
+| Add this colour | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ● | ● | ● | ● | – |
 
 ### Looks: where a cell is not the usual of its kind
 
@@ -1425,73 +1656,73 @@ stateDiagram-v2
 | Delete group | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
 | Delete group | Nothing patched | works | Works on a group you just added |
 | Look in the library | Engine not connected | works | Opening works. Dragging onto a group is refused: 'Engine not connected' |
-| Look in the library | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
+| Look in the library | Nothing patched | not there | No look is open. An empty show file has none: 'New step' in the library makes the first |
 | Look in the library | Learn mode | works | Not picked: opening a look to edit it is done on screen. It works as usual and Learn keeps waiting |
-| Breadcrumb | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
+| Breadcrumb | Nothing patched | not there | No look is open. An empty show file has none: 'New step' in the library makes the first |
 | Breadcrumb | Learn mode | works | Not picked: finding your way in the editor is done on screen. It works as usual and Learn keeps waiting |
-| Back to the outer sequence | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
+| Back to the outer sequence | Nothing patched | not there | No look is open. An empty show file has none: 'New step' in the library makes the first |
 | Remove from group | Autopilot on | works | Works. The autopilot no longer picks this look from that group |
 | Remove from group | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
-| Remove from group | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
+| Remove from group | Nothing patched | not there | No look is open. An empty show file has none: 'New step' in the library makes the first |
 | Add to a group | Autopilot on | works | Works. The autopilot may pick this look from that group from now on |
 | Add to a group | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
-| Add to a group | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
+| Add to a group | Nothing patched | not there | No look is open. An empty show file has none: 'New step' in the library makes the first |
 | Add to a group | Learn mode | works | Not picked: a list that opens has no pad or fader to stand for it. It works as usual and Learn keeps waiting |
 | Play on lights | Recording on | works | Works. It is not recorded: only the Console is |
 | Play on lights | Something held | works | Works. It never adds to what you hold |
-| Play on lights | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
+| Play on lights | Nothing patched | not there | No look is open. An empty show file has none: 'New step' in the library makes the first |
 | Put on Console | Lock on | off | Locked while LIVE is on |
 | Put on Console | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
-| Put on Console | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
-| Connection box | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
+| Put on Console | Nothing patched | not there | No look is open. An empty show file has none: 'New step' in the library makes the first |
+| Connection box | Nothing patched | not there | No look is open. An empty show file has none: 'New step' in the library makes the first |
 | Connection box | Learn mode | works | Not picked: a jump is there only for the open look. It works as usual and Learn keeps waiting |
 | Which fixtures | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
-| Which fixtures | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
+| Which fixtures | Nothing patched | not there | No look is open. An empty show file has none: 'New step' in the library makes the first |
 | Set a property | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
-| Set a property | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
+| Set a property | Nothing patched | not there | No look is open. An empty show file has none: 'New step' in the library makes the first |
 | Clear a property | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
-| Clear a property | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
+| Clear a property | Nothing patched | not there | No look is open. An empty show file has none: 'New step' in the library makes the first |
 | Remove a colour | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
-| Remove a colour | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
+| Remove a colour | Nothing patched | not there | No look is open. An empty show file has none: 'New step' in the library makes the first |
 | Add a colour | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
-| Add a colour | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
+| Add a colour | Nothing patched | not there | No look is open. An empty show file has none: 'New step' in the library makes the first |
 | Step position | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
-| Step position | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
+| Step position | Nothing patched | not there | No look is open. An empty show file has none: 'New step' in the library makes the first |
 | Gobo | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
-| Gobo | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
+| Gobo | Nothing patched | not there | No look is open. An empty show file has none: 'New step' in the library makes the first |
 | Step dimmer | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
-| Step dimmer | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
+| Step dimmer | Nothing patched | not there | No look is open. An empty show file has none: 'New step' in the library makes the first |
 | Step spin | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
-| Step spin | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
-| Sequence item | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
+| Step spin | Nothing patched | not there | No look is open. An empty show file has none: 'New step' in the library makes the first |
+| Sequence item | Nothing patched | not there | No look is open. An empty show file has none: 'New step' in the library makes the first |
 | Sequence item | Learn mode | works | Not picked: selecting in the editor is done on screen. It works as usual and Learn keeps waiting |
-| Open an item | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
+| Open an item | Nothing patched | not there | No look is open. An empty show file has none: 'New step' in the library makes the first |
 | Open an item | Learn mode | works | Not picked: finding your way in the editor is done on screen. It works as usual and Learn keeps waiting |
 | Item bar | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
-| Item bar | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
+| Item bar | Nothing patched | not there | No look is open. An empty show file has none: 'New step' in the library makes the first |
 | Item bar | Learn mode | works | Not picked: arranging is done on screen, not from a controller. It works as usual and Learn keeps waiting |
 | Item width handle | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
-| Item width handle | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
+| Item width handle | Nothing patched | not there | No look is open. An empty show file has none: 'New step' in the library makes the first |
 | Item width handle | Learn mode | works | Not picked: arranging is done on screen, not from a controller. It works as usual and Learn keeps waiting |
 | Item width | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
-| Item width | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
+| Item width | Nothing patched | not there | No look is open. An empty show file has none: 'New step' in the library makes the first |
 | Item speed | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
-| Item speed | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
+| Item speed | Nothing patched | not there | No look is open. An empty show file has none: 'New step' in the library makes the first |
 | Loop or once | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
-| Loop or once | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
+| Loop or once | Nothing patched | not there | No look is open. An empty show file has none: 'New step' in the library makes the first |
 | Spread | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
-| Spread | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
+| Spread | Nothing patched | not there | No look is open. An empty show file has none: 'New step' in the library makes the first |
 | Transition | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
-| Transition | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
+| Transition | Nothing patched | not there | No look is open. An empty show file has none: 'New step' in the library makes the first |
 | Pattern shape | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
-| Pattern shape | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
+| Pattern shape | Nothing patched | not there | No look is open. An empty show file has none: 'New step' in the library makes the first |
 | Pattern measure | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
-| Pattern measure | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
+| Pattern measure | Nothing patched | not there | No look is open. An empty show file has none: 'New step' in the library makes the first |
 | Colours from | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
-| Colours from | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
+| Colours from | Nothing patched | not there | No look is open. An empty show file has none: 'New step' in the library makes the first |
 | Colours from | Learn mode | works | Not picked: a list that opens has no pad or fader to stand for it. It works as usual and Learn keeps waiting |
 | Runs on | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
-| Runs on | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
+| Runs on | Nothing patched | not there | No look is open. An empty show file has none: 'New step' in the library makes the first |
 | Style in the list | Learn mode | works | Not picked: opening a style to edit it is done on screen. It works as usual and Learn keeps waiting |
 | New style | Autopilot on | works | Works. The autopilot follows it from its next pick on |
 | Style name | Autopilot on | works | Works. The autopilot follows it from its next pick on |
@@ -1513,6 +1744,26 @@ stateDiagram-v2
 | Never dark | Autopilot on | works | Works. The autopilot follows it from its next pick on |
 | Never dark | Nothing patched | works | Works. The only entry is 'Nothing: the room may go dark' |
 | Never dark | Learn mode | works | Not picked: a list that opens has no pad or fader to stand for it. It works as usual and Learn keeps waiting |
+| New look | Something held | works | Works the same |
+| New look | Nothing patched | works | Works. This is how the first look is made |
+| Name of the look | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
+| Name of the look | Nothing patched | not there | No look is open. An empty show file has none: 'New step' in the library makes the first |
+| Name of the look | Learn mode | works | Not picked: text cannot come from a pad or a fader. It works as usual and Learn keeps waiting |
+| Copy the look | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
+| Copy the look | Nothing patched | not there | No look is open. An empty show file has none: 'New step' in the library makes the first |
+| Delete look | Something held | works | Works. If you hold this look, it is released first |
+| Delete look | Nothing patched | not there | No look is open. An empty show file has none: 'New step' in the library makes the first |
+| Delete look | A song plays | works | Works. If the show plays it, it ends in the next frame |
+| Add an item | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
+| Add an item | Nothing patched | not there | No look is open. An empty show file has none: 'New step' in the library makes the first |
+| Add an item | Learn mode | works | Not picked: a list that opens has no pad or fader to stand for it. It works as usual and Learn keeps waiting |
+| Take an item out | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
+| Take an item out | Nothing patched | not there | No look is open. An empty show file has none: 'New step' in the library makes the first |
+| Other colour | Nothing patched | not there | No look is open. An empty show file has none: 'New step' in the library makes the first |
+| Colour wheel | Nothing patched | not there | No look is open. An empty show file has none: 'New step' in the library makes the first |
+| Colour wheel | Learn mode | works | Not picked: a colour is picked on screen, looking at it. It works as usual and Learn keeps waiting |
+| Add this colour | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
+| Add this colour | Nothing patched | not there | No look is open. An empty show file has none: 'New step' in the library makes the first |
 
 ### Looks: gestures
 
@@ -1570,6 +1821,15 @@ stateDiagram-v2
 | Lights it may use | The autopilot leaves that group alone. Pressed again: it may use it again. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
 | How wild | A press on the track jumps the wildness to that place | Nothing more | Two jumps to the same place | the wildness follows the finger, also when it leaves the track | Arrows change it by 1, with Shift by 10. Page up and down by 10, Home and End to the ends | As a drag. The track is 44 px wide |
 | Never dark | Opens the list. A press on an entry: that look plays when nothing else does | Nothing more | Opens and closes the list | Nothing | Tab to it, arrows change the choice, Enter opens the list | Opens the system's picker. 44 px high |
+| New look | Makes a new look of that kind. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
+| Name of the look | Puts the cursor in the field | Selects a word, as the system does | Selects a word | Selects text | Type the name. Enter saves, Escape puts the old text back | Opens the on-screen keyboard. 44 px high |
+| Copy the look | Copies the look. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
+| Delete look | Deletes the look. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
+| Add an item | Opens the list. A press on an entry: the look joins the end of the sequence | Nothing more | Opens and closes the list | Nothing | Tab to it, arrows change the choice, Enter opens the list | Opens the system's picker. 44 px high |
+| Take an item out | Takes the selected item out. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
+| Other colour | Opens the colour wheel. Pressed again: it closes. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
+| Colour wheel | A press jumps the colour to that point | Nothing more | Two jumps to the same point | The colour follows the finger, also when it leaves the wheel | Left and right turn the hue, up and down change the strength. By 1, with Shift by 10 | As a drag. One finger. 160 px across |
+| Add this colour | Adds the picked colour. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
 
 ### Looks: feedback, undo, Learn, Function first
 
@@ -1627,10 +1887,19 @@ stateDiagram-v2
 | Lights it may use | The new setting shows when the engine reports it, in the same screen frame | The mapped control shows on or off | yes. One step in Undo | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
 | How wild | The new setting shows when the engine reports it, in the same screen frame | The mapped control shows on or off | yes. One step in Undo | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
 | Never dark | The new setting shows when the engine reports it, in the same screen frame | The mapped control shows on or off | yes. One step in Undo | no. A list that opens has no pad or fader to stand for it | **keep**. It says what it is and what a press does |
+| New look | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
+| Name of the look | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | no. Text cannot come from a pad or a fader | **keep**. It says what it is and what a press does |
+| Copy the look | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
+| Delete look | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
+| Add an item | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | no. A list that opens has no pad or fader to stand for it | **keep**. It says what it is and what a press does |
+| Take an item out | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
+| Other colour | At once: the screen owns this state | None | no. Nothing in the show file changes | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
+| Colour wheel | At once: the screen owns this state | None | no. Nothing in the show file changes | no. A colour is picked on screen, looking at it | **keep**. It says what it is and what a press does |
+| Add this colour | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
 
 ## Patch
 
-30 controls.
+36 controls.
 
 | Control | Name | Does | Sends | Kind |
 | --- | --- | --- | --- | --- |
@@ -1664,6 +1933,12 @@ stateDiagram-v2
 | Colour order | `patch.panel.order` | The order the panel wants its colours in: RGB, BGR, BRG, GBR, GRB, RBG, with W last for RGBW | nothing: the draft of the panel | view |
 | Start universe | `patch.panel.start` | The first universe of the panel. The first free one is proposed | nothing: the draft of the panel | view |
 | Add the panel | `patch.panel.add` | Adds the panel, spread over as many universes as it needs, and selects it | `AddPanel` | edit |
+| Name of the light | `patch.details.name` | The name of the selected light, as the grid, the list and DMX show it | `RenameFixture` | edit |
+| Mode of the light | `patch.details.mode` | Another mode of the same model: it needs other channels. A mode that does not fit at this address is off and says so | `SetFixtureMode` | edit |
+| Group of the light | `patch.details.group` | Moves the selected light into another group, as its last. Looks that set the group set this light too | `SetFixtureGroup` | edit |
+| Remove light | `patch.details.remove` | Takes the selected light out of the patch. Its channels are free. Looks keep what they set for it, in case it comes back | `RemoveFixture` | edit |
+| Change panel | `patch.panel.change` | Opens the form the panel was made with, filled with its values. 'Add the panel' says 'Save' then | nothing: the panel form, filled with the selected panel | view |
+| Remove panel | `patch.panel.remove` | Takes the selected pixel panel out of the patch and frees its universes | `RemovePanel` | edit |
 
 ### Patch: in each situation
 
@@ -1699,6 +1974,12 @@ stateDiagram-v2
 | Colour order | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ◆ | ● | ● | ● | – |
 | Start universe | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ◆ | ● | ● | ● | – |
 | Add the panel | ● | ● | ● | ● | ● | ● | ○ | ◆ | ● | ◆ | ● | ● | ● | – |
+| Name of the light | ● | ◆ | ● | ● | ● | ● | ○ | – | ● | ◆ | ● | ● | ● | – |
+| Mode of the light | ● | ◆ | ● | ● | ● | ● | ○ | – | ● | ◆ | ● | ● | ● | – |
+| Group of the light | ● | ◆ | ● | ● | ● | ● | ○ | – | ● | ◆ | ● | ● | ● | – |
+| Remove light | ● | ◆ | ● | ● | ● | ● | ○ | – | ● | ◆ | ● | ● | ● | – |
+| Change panel | ● | ● | ● | ● | ● | ● | ● | – | ● | ◆ | ● | ● | ● | – |
+| Remove panel | ● | ◆ | ● | ● | ● | ● | ○ | – | ● | ◆ | ● | ● | ● | – |
 
 ### Patch: where a cell is not the usual of its kind
 
@@ -1786,6 +2067,23 @@ stateDiagram-v2
 | Start universe | Learn mode | works | Not picked: text cannot come from a pad or a fader. It works as usual and Learn keeps waiting |
 | Add the panel | Nothing patched | works | Works. A panel can be the first thing patched |
 | Add the panel | Learn mode | works | Not picked: patching is done on screen. It works as usual and Learn keeps waiting |
+| Name of the light | LIVE on | works | Works. A name changes nothing on the lights |
+| Name of the light | Nothing patched | not there | No lights yet. 'Add lights' is the one thing to do |
+| Name of the light | Learn mode | works | Not picked: text cannot come from a pad or a fader. It works as usual and Learn keeps waiting |
+| Mode of the light | LIVE on | works | Works mid-show. The light answers at its new place at once: it will jump |
+| Mode of the light | Nothing patched | not there | No lights yet. 'Add lights' is the one thing to do |
+| Mode of the light | Learn mode | works | Not picked: a list that opens has no pad or fader to stand for it. It works as usual and Learn keeps waiting |
+| Group of the light | LIVE on | works | Works mid-show. Looks that play on the new group take the light at once |
+| Group of the light | Nothing patched | not there | No lights yet. 'Add lights' is the one thing to do |
+| Group of the light | Learn mode | works | Not picked: a list that opens has no pad or fader to stand for it. It works as usual and Learn keeps waiting |
+| Remove light | LIVE on | works | Works mid-show. Its channels go to zero in the next frame |
+| Remove light | Nothing patched | not there | No lights yet. 'Add lights' is the one thing to do |
+| Remove light | Learn mode | works | Not picked: patching is done on screen. It works as usual and Learn keeps waiting |
+| Change panel | Nothing patched | not there | No panel yet |
+| Change panel | Learn mode | works | Not picked: patching is done on screen. It works as usual and Learn keeps waiting |
+| Remove panel | LIVE on | works | Works mid-show. Its pixels go dark in the next frame |
+| Remove panel | Nothing patched | not there | No panel yet |
+| Remove panel | Learn mode | works | Not picked: patching is done on screen. It works as usual and Learn keeps waiting |
 
 ### Patch: gestures
 
@@ -1821,6 +2119,12 @@ stateDiagram-v2
 | Colour order | Opens the list. A press on an entry: the panel uses that order | Nothing more | Opens and closes the list | Nothing | Tab to it, arrows change the choice, Enter opens the list | Opens the system's picker. 44 px high |
 | Start universe | Puts the cursor in the field | Selects a word, as the system does | Selects a word | Selects text | Type a number, 1 or more. Enter adds the panel | Opens the on-screen keyboard. 44 px high |
 | Add the panel | Adds the panel. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
+| Name of the light | Puts the cursor in the field | Selects a word, as the system does | Selects a word | Selects text | Type the name. Enter saves, Escape puts the old text back | Opens the on-screen keyboard. 44 px high |
+| Mode of the light | Opens the list. A press on an entry: the light is patched in that mode | Nothing more | Opens and closes the list | Nothing | Tab to it, arrows change the choice, Enter opens the list | Opens the system's picker. 44 px high |
+| Group of the light | Opens the list. A press on an entry: the light joins that group | Nothing more | Opens and closes the list | Nothing | Tab to it, arrows change the choice, Enter opens the list | Opens the system's picker. 44 px high |
+| Remove light | Removes the light. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
+| Change panel | Opens the panel form. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
+| Remove panel | Removes the panel. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
 
 ### Patch: feedback, undo, Learn, Function first
 
@@ -1856,6 +2160,12 @@ stateDiagram-v2
 | Colour order | At once: the screen owns this state | None | no. Nothing in the show file changes | no. A list that opens has no pad or fader to stand for it | **keep**. It says what it is and what a press does |
 | Start universe | At once: the screen owns this state | None | no. Nothing in the show file changes | no. Text cannot come from a pad or a fader | **keep**. It says what it is and what a press does |
 | Add the panel | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | no. Patching is done on screen | **change**. It lets a panel land on universes that are already used, and nothing says so. It is off then and says which universe is taken |
+| Name of the light | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | no. Text cannot come from a pad or a fader | **keep**. It says what it is and what a press does |
+| Mode of the light | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | no. A list that opens has no pad or fader to stand for it | **keep**. It says what it is and what a press does |
+| Group of the light | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | no. A list that opens has no pad or fader to stand for it | **keep**. It says what it is and what a press does |
+| Remove light | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | no. Patching is done on screen | **keep**. It says what it is and what a press does |
+| Change panel | At once: the screen owns this state | None | no. Nothing in the show file changes | no. Patching is done on screen | **keep**. It says what it is and what a press does |
+| Remove panel | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | no. Patching is done on screen | **keep**. It says what it is and what a press does |
 
 ## DMX
 
@@ -1992,7 +2302,7 @@ stateDiagram-v2
 
 ## In/Out
 
-10 controls.
+19 controls.
 
 | Control | Name | Does | Sends | Kind |
 | --- | --- | --- | --- | --- |
@@ -2006,6 +2316,15 @@ stateDiagram-v2
 | Mapping feedback | `inout.mapping.feedback` | The hardware control lights up with the state of the control on screen, or not. There while the row is edited | `UpdateMapping` | edit |
 | Test a mapping | `inout.mapping.test` | Shows that the mapping is alive: the hardware control lights and the line under the table says what was sent. The control on screen does not fire | `TestMapping` | edit |
 | Remove a mapping | `inout.mapping.remove` | Removes the mapping. The control on screen loses its paper square | `RemoveMapping` | edit |
+| Set up an output | `inout.out.setup` | Opens one output to set up: its kind, universes, rate, and Remove. Pressed again as 'Done', they are text again | nothing: which output is being set up | view |
+| Kind of an output | `inout.out.kind` | What the output is: DMX USB Pro, DDP, Art-Net or sACN. There while the output is set up | `SetOutput` | setting |
+| Universes of an output | `inout.out.universes` | Which universes the output carries: '1', or '2 to 9'. A universe another output carries is refused and the field says which | `SetOutput` | setting |
+| Frames a second | `inout.out.rate` | How often the output sends: 30, 40 or 44 frames a second. Each output has its own rate | `SetOutput` | setting |
+| Remove output | `inout.out.remove` | Removes the output. Its universes send nowhere until another output carries them | `RemoveOutput` | setting |
+| Add output | `inout.out.add` | Adds an output that is not set up yet and opens it. It sends nothing until it has a universe | `SetOutput` | setting |
+| Audio input | `inout.audio.input` | Which input the beat is heard on. The meter beside it shows what arrives | `SetAudioInput` | setting |
+| OSC on or off | `inout.osc.on` | Other software may send commands to this machine over OSC, or not. Off from the start | `SetOsc` | setting |
+| OSC port | `inout.osc.port` | The port OSC listens on. A port that is taken is refused and the field says so | `SetOsc` | setting |
 
 ### In/Out: in each situation
 
@@ -2021,6 +2340,15 @@ stateDiagram-v2
 | Mapping feedback | ● | ● | ○ | ● | ● | ● | ○ | ◆ | ● | ◆ | ● | ● | ● | – |
 | Test a mapping | ● | ● | ◆ | ● | ● | ● | ○ | ◆ | ● | ◆ | ● | ● | ● | – |
 | Remove a mapping | ● | ● | ○ | ● | ● | ● | ○ | ◆ | ● | ◆ | ● | ● | ● | – |
+| Set up an output | ● | ● | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ● | ● | – |
+| Kind of an output | ● | ○ | ○ | ○ | ● | ● | ○ | ◆ | ● | ◆ | ● | ● | ◆ | – |
+| Universes of an output | ● | ○ | ○ | ○ | ● | ● | ○ | ◆ | ● | ◆ | ● | ● | ◆ | – |
+| Frames a second | ● | ○ | ○ | ○ | ● | ● | ○ | ◆ | ● | ◆ | ● | ● | ◆ | – |
+| Remove output | ● | ○ | ○ | ○ | ● | ● | ○ | ◆ | ● | ◆ | ● | ● | ◆ | – |
+| Add output | ● | ◆ | ◆ | ◆ | ● | ● | ○ | ◆ | ● | ◆ | ● | ● | ◆ | – |
+| Audio input | ● | ◆ | ● | ● | ● | ● | ○ | ● | ● | ◆ | ● | ● | ● | – |
+| OSC on or off | ● | ● | ● | ● | ● | ● | ○ | ● | ● | ◆ | ● | ● | ● | – |
+| OSC port | ● | ● | ● | ● | ● | ● | ○ | ● | ● | ◆ | ● | ● | ● | – |
 
 ### In/Out: where a cell is not the usual of its kind
 
@@ -2058,6 +2386,41 @@ stateDiagram-v2
 | Remove a mapping | Lock on | off | Locked while LIVE is on |
 | Remove a mapping | Nothing patched | works | Works. Top bar controls can be mapped before any light is patched |
 | Remove a mapping | Learn mode | works | Not picked: it belongs to one row of a list that changes. It works as usual and Learn keeps waiting |
+| Set up an output | Learn mode | works | Not picked: outputs and inputs are set up on screen. It works as usual and Learn keeps waiting |
+| Kind of an output | LIVE on | off | LIVE is on |
+| Kind of an output | Lock on | off | LIVE is on |
+| Kind of an output | Recording on | off | LIVE is on |
+| Kind of an output | Nothing patched | works | Works. An output is set up before any light is patched |
+| Kind of an output | Learn mode | works | Not picked: a list that opens has no pad or fader to stand for it. It works as usual and Learn keeps waiting |
+| Kind of an output | An output lost | works | Works. This is how a lost output gets another device |
+| Universes of an output | LIVE on | off | LIVE is on |
+| Universes of an output | Lock on | off | LIVE is on |
+| Universes of an output | Recording on | off | LIVE is on |
+| Universes of an output | Nothing patched | works | Works. An output is set up before any light is patched |
+| Universes of an output | Learn mode | works | Not picked: text cannot come from a pad or a fader. It works as usual and Learn keeps waiting |
+| Universes of an output | An output lost | works | Works. This is how a lost output gets another device |
+| Frames a second | LIVE on | off | LIVE is on |
+| Frames a second | Lock on | off | LIVE is on |
+| Frames a second | Recording on | off | LIVE is on |
+| Frames a second | Nothing patched | works | Works. An output is set up before any light is patched |
+| Frames a second | Learn mode | works | Not picked: outputs and inputs are set up on screen. It works as usual and Learn keeps waiting |
+| Frames a second | An output lost | works | Works. This is how a lost output gets another device |
+| Remove output | LIVE on | off | LIVE is on |
+| Remove output | Lock on | off | LIVE is on |
+| Remove output | Recording on | off | LIVE is on |
+| Remove output | Nothing patched | works | Works. An output is set up before any light is patched |
+| Remove output | Learn mode | works | Not picked: outputs and inputs are set up on screen. It works as usual and Learn keeps waiting |
+| Remove output | An output lost | works | Works. This is how a lost output gets another device |
+| Add output | LIVE on | works | Works mid-show: a new output takes nothing from the ones that run |
+| Add output | Lock on | works | Works the same |
+| Add output | Recording on | works | Works the same |
+| Add output | Nothing patched | works | Works. An output is set up before any light is patched |
+| Add output | Learn mode | works | Not picked: outputs and inputs are set up on screen. It works as usual and Learn keeps waiting |
+| Add output | An output lost | works | Works. This is how a lost output gets another device |
+| Audio input | LIVE on | works | Works mid-show. With Audio as the tempo feed the beat is found again within a few bars |
+| Audio input | Learn mode | works | Not picked: a list that opens has no pad or fader to stand for it. It works as usual and Learn keeps waiting |
+| OSC on or off | Learn mode | works | Not picked: outputs and inputs are set up on screen. It works as usual and Learn keeps waiting |
+| OSC port | Learn mode | works | Not picked: text cannot come from a pad or a fader. It works as usual and Learn keeps waiting |
 
 ### In/Out: gestures
 
@@ -2073,6 +2436,15 @@ stateDiagram-v2
 | Mapping feedback | The hardware control lights up. Pressed again: it stays dark. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
 | Test a mapping | Tests the mapping. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
 | Remove a mapping | Removes the mapping. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
+| Set up an output | Opens the output to set up. Pressed again: it is text again. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
+| Kind of an output | Opens the list. A press on an entry: the output sends as that kind | Nothing more | Opens and closes the list | Nothing | Tab to it, arrows change the choice, Enter opens the list | Opens the system's picker. 44 px high |
+| Universes of an output | Puts the cursor in the field | Selects a word, as the system does | Selects a word | Selects text | Type one universe or a range. Enter or leaving the field saves, Escape puts the old one back | Opens the on-screen keyboard. 44 px high |
+| Frames a second | The output sends at that rate. Fires on the way up | Nothing more | As one press: the choice is already made | Nothing. Sliding to another option picks nothing | Tab to the group, arrows move and pick | As a press. 44 px |
+| Remove output | Removes the output. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
+| Add output | Adds an output. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
+| Audio input | Opens the list. A press on an entry: the beat is heard on that input | Nothing more | Opens and closes the list | Nothing | Tab to it, arrows change the choice, Enter opens the list | Opens the system's picker. 44 px high |
+| OSC on or off | OSC listens. Pressed again: it is off. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
+| OSC port | Puts the cursor in the field | Selects a word, as the system does | Selects a word | Selects text | Type a port number. Enter or leaving the field saves, Escape puts the old one back | Opens the on-screen keyboard. 44 px high |
 
 ### In/Out: feedback, undo, Learn, Function first
 
@@ -2088,6 +2460,15 @@ stateDiagram-v2
 | Mapping feedback | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | no. It belongs to one row of a list that changes | **keep**. It says what it is and what a press does |
 | Test a mapping | The change shows when the engine reports it, in the same screen frame | None | no. A test changes nothing | no. It belongs to one row of a list that changes | **keep**. It says what it is and what a press does |
 | Remove a mapping | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | no. It belongs to one row of a list that changes | **keep**. It says what it is and what a press does |
+| Set up an output | At once: the screen owns this state | None | no. Nothing in the show file changes | no. Outputs and inputs are set up on screen | **keep**. It says what it is and what a press does |
+| Kind of an output | The new setting shows when the engine reports it, in the same screen frame | The mapped control shows on or off | yes. One step in Undo | no. A list that opens has no pad or fader to stand for it | **keep**. It says what it is and what a press does |
+| Universes of an output | The new setting shows when the engine reports it, in the same screen frame | The mapped control shows on or off | yes. One step in Undo | no. Text cannot come from a pad or a fader | **keep**. It says what it is and what a press does |
+| Frames a second | The new setting shows when the engine reports it, in the same screen frame | The mapped control shows on or off | yes. One step in Undo | no. Outputs and inputs are set up on screen | **keep**. It says what it is and what a press does |
+| Remove output | The new setting shows when the engine reports it, in the same screen frame | The mapped control shows on or off | yes. One step in Undo | no. Outputs and inputs are set up on screen | **keep**. It says what it is and what a press does |
+| Add output | The new setting shows when the engine reports it, in the same screen frame | The mapped control shows on or off | yes. One step in Undo | no. Outputs and inputs are set up on screen | **keep**. It says what it is and what a press does |
+| Audio input | The new setting shows when the engine reports it, in the same screen frame | The mapped control shows on or off | yes. One step in Undo | no. A list that opens has no pad or fader to stand for it | **keep**. It says what it is and what a press does |
+| OSC on or off | The new setting shows when the engine reports it, in the same screen frame | The mapped control shows on or off | yes. One step in Undo | no. Outputs and inputs are set up on screen | **keep**. It says what it is and what a press does |
+| OSC port | The new setting shows when the engine reports it, in the same screen frame | The mapped control shows on or off | yes. One step in Undo | no. Text cannot come from a pad or a fader | **keep**. It says what it is and what a press does |
 
 ## How it works
 
@@ -2253,17 +2634,17 @@ stateDiagram-v2
 | Open window | The window is in front, at once | None | no. Nothing in the show file changes | no. It is outside the window, drawn by the system | **keep**. It says what it is and what a press does |
 | Stop engine | The item leaves the menu bar when the engine has ended | None | no. Start the app again. The show file was saved by itself | no. It is outside the window, drawn by the system | **keep**. It says what it is and what a press does |
 
-## Not controls: 35 elements of the mockups
+## Not controls: 37 elements of the mockups
 
 | Why | How many | Elements |
 | --- | --- | --- |
 | The inside of a component, counted where the component is used | 11 | `kit/Button/button` `kit/Fader/div` `kit/List/button` `kit/Pad/running` `kit/RigView/g` `kit/Segmented/div` `kit/Segmented/button` `kit/Table/button` `kit/Tabs/div` `kit/Tabs/button` `kit/XYPad/div` |
-| A component that only hands callbacks on | 4 | `looks/Screen/library` `looks/Screen/sequenceeditor` `looks/Screen/connections` `patch/Screen/addflow` |
+| A component that only hands callbacks on | 6 | `looks/Screen/library` `looks/Screen/sequenceeditor` `looks/Screen/connections` `patch/Screen/addflow` `patch/Screen/panelsetup` `looks/StepEditor/othercolour` |
 | Tooling of the mockups, not of the product | 20 | `kit/Region/note-on` `review/ReviewPanel/close` `review/ReviewPanel/a` `review/ReviewPanel/button` `review/ReviewPanel/of-5` `review/ReviewPanel/what-works-what-does-not` `review/ReviewPanel/input-checkbox` `review/ReviewPanel/input-checkbox#2` `review/ReviewPanel/comment-mode` `review/ReviewPanel/no-note-yet` `review/ReviewPanel/what-should-change-in-this` `review/ReviewPanel/back-to-regions` `review/ReviewScreen/copy-as-markdown` `review/ReviewScreen/export` `review/ReviewScreen/table` `shell/TopBar/review-this-screen` `shell/TopBar/done` `shell/LearnBar/button` `modules/Screen/the-author-s-lean` `modules/Screen/your-words-on` |
 
 ## The inventory
 
-235 elements. The key is the stable name of an element: where it is, its component, what it says.
+281 elements. The key is the stable name of an element: where it is, its component, what it says.
 
 <details><summary>Every element and the row that stands for it</summary>
 
@@ -2299,18 +2680,29 @@ stateDiagram-v2
 | `review/ReviewScreen/table` | review/ReviewScreen.tsx:36 |  | not a control: tooling |
 | `console/AutoLaneControls/autopilot` | screens/console/AutoLaneControls.tsx:8 | Autopilot … | `console.autopilot.on` |
 | `console/AutoLaneControls/autopilot-style` | screens/console/AutoLaneControls.tsx:17 | Autopilot style | `console.autopilot.style` |
-| `console/ConsoleGrid/by-arrow-keys-move-shift` | screens/console/Console.tsx:226 | …, … by …. Arrow keys move, Shift and arrows resize, Delete removes. | `console.widget.frame` |
-| `console/ConsoleGrid/remove` | screens/console/Console.tsx:237 | Remove … | `console.widget.remove` |
-| `console/ConsoleGrid/span` | screens/console/Console.tsx:248 |  | `console.widget.resize` |
-| `console/ConsoleGrid/edit-surface` | screens/console/Console.tsx:263 | Edit surface | `console.edit-surface` |
-| `console/WidgetDrawer/button` | screens/console/Console.tsx:285 | … | `console.drawer.add` |
-| `console/Items/button` | screens/console/index.tsx:63 | … | `console.running.release` `console.running.stop` |
-| `console/Running/unfold-running` | screens/console/index.tsx:79 | Unfold Running \| Fold Running | `console.running.fold` |
-| `console/Running/release-all` | screens/console/index.tsx:100 | Release all | `console.running.release-all` |
-| `console/Screen/console-pages` | screens/console/index.tsx:168 | Console pages | `console.pages` `console.pages.add` |
-| `console/Screen/surprise-me` | screens/console/index.tsx:179 | Surprise me | `console.surprise` |
-| `console/Screen/edit-surface` | screens/console/index.tsx:180 | Edit surface | `console.edit-surface` |
-| `console/Screen/done-editing` | screens/console/index.tsx:190 | Done editing | `console.done-editing` |
+| `console/ConsoleGrid/by-arrow-keys-move-shift` | screens/console/Console.tsx:227 | …, … by …. Arrow keys move, Shift and arrows resize, Delete removes. | `console.widget.frame` |
+| `console/ConsoleGrid/remove` | screens/console/Console.tsx:238 | Remove … | `console.widget.remove` |
+| `console/ConsoleGrid/span` | screens/console/Console.tsx:249 |  | `console.widget.resize` |
+| `console/ConsoleGrid/edit-surface` | screens/console/Console.tsx:264 | Edit surface | `console.edit-surface` |
+| `console/WidgetDrawer/button` | screens/console/Console.tsx:286 | … | `console.drawer.add` |
+| `console/PageSetup/name-of-the-page` | screens/console/Setup.tsx:19 | Name of the page | `console.page.name` |
+| `console/PageSetup/move-the-page-earlier` | screens/console/Setup.tsx:21 | Move the page earlier | `console.page.move` |
+| `console/PageSetup/move-the-page-later` | screens/console/Setup.tsx:24 | Move the page later | `console.page.move` |
+| `console/PageSetup/delete-the-page` | screens/console/Setup.tsx:27 | Delete the page | `console.page.delete` |
+| `console/WidgetSetup/look-this-pad-plays` | screens/console/Setup.tsx:57 | Look this pad plays | `console.widget.plays` |
+| `console/WidgetSetup/what-this-slider-moves` | screens/console/Setup.tsx:65 | What this slider moves | `console.widget.moves` |
+| `console/WidgetSetup/words-of-the-label-or` | screens/console/Setup.tsx:73 | Words of the label or frame | `console.widget.words` |
+| `console/WidgetSetup/move-the-cue-earlier` | screens/console/Setup.tsx:83 | Move the cue earlier | `console.cue.move` |
+| `console/WidgetSetup/move-the-cue-later` | screens/console/Setup.tsx:88 | Move the cue later | `console.cue.move` |
+| `console/WidgetSetup/take-the-cue-out` | screens/console/Setup.tsx:92 | Take the cue out | `console.cue.take-out` |
+| `console/WidgetSetup/add-a-look-to-the` | screens/console/Setup.tsx:101 | Add a look to the cue list | `console.cue.add` |
+| `console/Items/button` | screens/console/index.tsx:64 | … | `console.running.release` `console.running.stop` |
+| `console/Running/unfold-running` | screens/console/index.tsx:80 | Unfold Running \| Fold Running | `console.running.fold` |
+| `console/Running/release-all` | screens/console/index.tsx:101 | Release all | `console.running.release-all` |
+| `console/Screen/console-pages` | screens/console/index.tsx:169 | Console pages | `console.pages` `console.pages.add` |
+| `console/Screen/surprise-me` | screens/console/index.tsx:180 | Surprise me | `console.surprise` |
+| `console/Screen/edit-surface` | screens/console/index.tsx:181 | Edit surface | `console.edit-surface` |
+| `console/Screen/done-editing` | screens/console/index.tsx:191 | Done editing | `console.done-editing` |
 | `console/LookPad/pad` | screens/console/widgets.tsx:78 | … | `console.pad` |
 | `console/CueList/back` | screens/console/widgets.tsx:120 | Back | `console.cue.back` |
 | `console/CueList/go` | screens/console/widgets.tsx:123 | Go | `console.cue.go` |
@@ -2342,15 +2734,24 @@ stateDiagram-v2
 | `how/Screen/back` | screens/how/index.tsx:289 | Back | `how.walk.step` |
 | `how/Screen/again` | screens/how/index.tsx:295 | Again | `how.walk.step` |
 | `how/Screen/start` | screens/how/index.tsx:300 | Start \| Next | `how.walk.step` |
-| `inout/Screen/button` | screens/inout/index.tsx:138 | … \| none … % sure | `inout.tempo.feed` |
-| `inout/Screen/tap` | screens/inout/index.tsx:167 | Tap | `inout.tempo.tap` |
-| `inout/Screen/testing` | screens/inout/index.tsx:187 | Testing \| Test | `inout.out.test` |
-| `inout/Screen/device-for` | screens/inout/index.tsx:222 | Device for … | `inout.mapping.device` |
-| `inout/Screen/note-or-controller-number-for` | screens/inout/index.tsx:233 | Note or controller number for … | `inout.mapping.message` |
-| `inout/Screen/lights-up` | screens/inout/index.tsx:248 | Lights up \| None | `inout.mapping.feedback` |
-| `inout/Screen/button#2` | screens/inout/index.tsx:260 | … | `inout.mapping.edit` |
-| `inout/Screen/test` | screens/inout/index.tsx:263 | Test … | `inout.mapping.test` |
-| `inout/Screen/remove` | screens/inout/index.tsx:266 | Remove … | `inout.mapping.remove` |
+| `inout/OutputSetup/set-up-the-output` | screens/inout/Setup.tsx:15 | Set up the output | `inout.out.setup` |
+| `inout/OutputSetup/kind-of-the-output` | screens/inout/Setup.tsx:21 | Kind of the output | `inout.out.kind` |
+| `inout/OutputSetup/universes-of-the-output` | screens/inout/Setup.tsx:27 | Universes of the output | `inout.out.universes` |
+| `inout/OutputSetup/frames-a-second` | screens/inout/Setup.tsx:29 | Frames a second | `inout.out.rate` |
+| `inout/OutputSetup/remove-the-output` | screens/inout/Setup.tsx:39 | Remove the output | `inout.out.remove` |
+| `inout/AddOutput/add-an-output` | screens/inout/Setup.tsx:57 | Add an output | `inout.out.add` |
+| `inout/AudioInput/audio-input` | screens/inout/Setup.tsx:74 | Audio input | `inout.audio.input` |
+| `inout/Osc/osc-on-or-off` | screens/inout/Setup.tsx:88 | OSC on or off | `inout.osc.on` |
+| `inout/Osc/osc-port` | screens/inout/Setup.tsx:93 | OSC port | `inout.osc.port` |
+| `inout/Screen/button` | screens/inout/index.tsx:141 | … \| none … % sure | `inout.tempo.feed` |
+| `inout/Screen/tap` | screens/inout/index.tsx:170 | Tap | `inout.tempo.tap` |
+| `inout/Screen/testing` | screens/inout/index.tsx:190 | Testing \| Test | `inout.out.test` |
+| `inout/Screen/device-for` | screens/inout/index.tsx:227 | Device for … | `inout.mapping.device` |
+| `inout/Screen/note-or-controller-number-for` | screens/inout/index.tsx:238 | Note or controller number for … | `inout.mapping.message` |
+| `inout/Screen/lights-up` | screens/inout/index.tsx:253 | Lights up \| None | `inout.mapping.feedback` |
+| `inout/Screen/button#2` | screens/inout/index.tsx:265 | … | `inout.mapping.edit` |
+| `inout/Screen/test` | screens/inout/index.tsx:268 | Test … | `inout.mapping.test` |
+| `inout/Screen/remove` | screens/inout/index.tsx:271 | Remove … | `inout.mapping.remove` |
 | `looks/Autopilot/rules-in-use` | screens/looks/Autopilot.tsx:23 | … rules In use | `looks.autopilot.style` |
 | `looks/Autopilot/new-style` | screens/looks/Autopilot.tsx:34 | New style | `looks.autopilot.new-style` |
 | `looks/Autopilot/input-text` | screens/looks/Autopilot.tsx:42 |  | `looks.autopilot.style-name` |
@@ -2367,58 +2768,70 @@ stateDiagram-v2
 | `looks/Connections/button` | screens/looks/Connections.tsx:55 | … | `looks.connection` |
 | `looks/Connections/button#2` | screens/looks/Connections.tsx:69 | …: … | `looks.connection` |
 | `looks/Connections/button#3` | screens/looks/Connections.tsx:81 | …: … | `looks.connection` |
-| `looks/Library/pointermove` | screens/looks/Library.tsx:63 | pointermove | `looks.library.look` |
-| `looks/Library/pointerup` | screens/looks/Library.tsx:64 | pointerup | `looks.library.look` |
-| `looks/Library/fold-back` | screens/looks/Library.tsx:77 | Fold back \| Widen | `looks.library.widen` |
-| `looks/Library/search-the-library` | screens/looks/Library.tsx:84 | Search the library | `looks.library.search` |
-| `looks/Library/type` | screens/looks/Library.tsx:85 | Type | `looks.library.type` |
-| `looks/Library/new-group` | screens/looks/Library.tsx:97 | New group | `looks.library.new-group` |
-| `looks/Library/button` | screens/looks/Library.tsx:116 | … | `looks.library.group.fold` |
-| `looks/Library/save` | screens/looks/Library.tsx:125 | Save | `looks.library.group.name` |
-| `looks/Library/new-name-for` | screens/looks/Library.tsx:133 | New name for … | `looks.library.group.name` |
-| `looks/Library/save#2` | screens/looks/Library.tsx:134 | Save | `looks.library.group.name` |
-| `looks/Library/rename` | screens/looks/Library.tsx:140 | Rename … | `looks.library.group.rename` |
-| `looks/Library/delete-its-looks-stay-in` | screens/looks/Library.tsx:145 | Delete …. Its looks stay in the library. | `looks.library.group.delete` |
-| `looks/Library/b` | screens/looks/Library.tsx:157 | … b | `looks.library.look` |
+| `looks/Library/pointermove` | screens/looks/Library.tsx:64 | pointermove | `looks.library.look` |
+| `looks/Library/pointerup` | screens/looks/Library.tsx:65 | pointerup | `looks.library.look` |
+| `looks/Library/fold-back` | screens/looks/Library.tsx:78 | Fold back \| Widen | `looks.library.widen` |
+| `looks/Library/search-the-library` | screens/looks/Library.tsx:85 | Search the library | `looks.library.search` |
+| `looks/Library/type` | screens/looks/Library.tsx:86 | Type | `looks.library.type` |
+| `looks/Library/new-group` | screens/looks/Library.tsx:98 | New group | `looks.library.new-group` |
+| `looks/Library/button` | screens/looks/Library.tsx:118 | … | `looks.library.group.fold` |
+| `looks/Library/save` | screens/looks/Library.tsx:127 | Save | `looks.library.group.name` |
+| `looks/Library/new-name-for` | screens/looks/Library.tsx:135 | New name for … | `looks.library.group.name` |
+| `looks/Library/save#2` | screens/looks/Library.tsx:136 | Save | `looks.library.group.name` |
+| `looks/Library/rename` | screens/looks/Library.tsx:142 | Rename … | `looks.library.group.rename` |
+| `looks/Library/delete-its-looks-stay-in` | screens/looks/Library.tsx:147 | Delete …. Its looks stay in the library. | `looks.library.group.delete` |
+| `looks/Library/b` | screens/looks/Library.tsx:159 | … b | `looks.library.look` |
+| `looks/NewLook/new-step` | screens/looks/Manage.tsx:14 | New step | `looks.library.new-look` |
+| `looks/NewLook/new-sequence` | screens/looks/Manage.tsx:17 | New sequence | `looks.library.new-look` |
+| `looks/NewLook/new-pattern` | screens/looks/Manage.tsx:20 | New pattern | `looks.library.new-look` |
+| `looks/LookTools/name-of-the-look` | screens/looks/Manage.tsx:41 | Name of the look | `looks.name` |
+| `looks/LookTools/copy-the-look` | screens/looks/Manage.tsx:43 | Copy the look | `looks.copy` |
+| `looks/LookTools/delete-the-look` | screens/looks/Manage.tsx:46 | Delete the look | `looks.delete` |
+| `looks/SequenceItems/add-an-item-to-the` | screens/looks/Manage.tsx:65 | Add an item to the sequence | `looks.seq.add` |
+| `looks/SequenceItems/take-the-item-out-of` | screens/looks/Manage.tsx:70 | Take the item out of the sequence | `looks.seq.take-out` |
+| `looks/OtherColour/other-colour` | screens/looks/Manage.tsx:112 | Other colour | `looks.step.colour.other` |
+| `looks/OtherColour/colour-wheel-hue-around-strength` | screens/looks/Manage.tsx:116 | Colour wheel: hue around, strength outward | `looks.step.colour.wheel` |
+| `looks/OtherColour/add-this-colour` | screens/looks/Manage.tsx:128 | Add this colour | `looks.step.colour.add-other` |
 | `looks/PatternEditor/button` | screens/looks/PatternEditor.tsx:24 | … | `looks.pattern.shape` |
 | `looks/PatternEditor/shorter` | screens/looks/PatternEditor.tsx:35 | Shorter | `looks.pattern.measure` |
 | `looks/PatternEditor/longer` | screens/looks/PatternEditor.tsx:40 | Longer | `looks.pattern.measure` |
 | `looks/PatternEditor/its-own-colours` | screens/looks/PatternEditor.tsx:50 | Its own colours … | `looks.pattern.colours` |
 | `looks/PatternEditor/runs-on` | screens/looks/PatternEditor.tsx:66 | Runs on | `looks.pattern.runs-on` |
-| `looks/SequenceEditor/button` | screens/looks/SequenceEditor.tsx:88 | … | `looks.seq.item` |
-| `looks/SequenceEditor/open` | screens/looks/SequenceEditor.tsx:92 | Open … | `looks.seq.open` |
-| `looks/SequenceEditor/starts-at-beat-arrows-move` | screens/looks/SequenceEditor.tsx:101 | …: starts at beat …, …. Arrows move it, Shift and arrows change the width. | `looks.seq.bar` |
-| `looks/SequenceEditor/span` | screens/looks/SequenceEditor.tsx:120 |  | `looks.seq.bar.edge` |
-| `looks/SequenceEditor/narrower` | screens/looks/SequenceEditor.tsx:146 | Narrower | `looks.seq.width` |
-| `looks/SequenceEditor/wider` | screens/looks/SequenceEditor.tsx:150 | Wider | `looks.seq.width` |
-| `looks/SequenceEditor/speed` | screens/looks/SequenceEditor.tsx:157 | Speed | `looks.seq.speed` |
-| `looks/SequenceEditor/loop-or-once` | screens/looks/SequenceEditor.tsx:170 | Loop or once | `looks.seq.repeat` |
-| `looks/SequenceEditor/spread-across-fixtures` | screens/looks/SequenceEditor.tsx:184 | Spread across fixtures | `looks.seq.spread` |
-| `looks/SequenceEditor/transition` | screens/looks/SequenceEditor.tsx:190 | Transition | `looks.seq.transition` |
-| `looks/Card/clear` | screens/looks/StepEditor.tsx:14 | Clear | `looks.step.clear` |
-| `looks/Card/set` | screens/looks/StepEditor.tsx:24 | Set … | `looks.step.set` |
-| `looks/StepEditor/button` | screens/looks/StepEditor.tsx:47 | … | `looks.step.fixtures` |
-| `looks/StepEditor/colour` | screens/looks/StepEditor.tsx:54 | Colour | `looks.step.set` |
-| `looks/StepEditor/remove-colour` | screens/looks/StepEditor.tsx:58 | Remove colour … | `looks.step.colour.remove` |
-| `looks/StepEditor/add` | screens/looks/StepEditor.tsx:75 | Add … | `looks.step.colour.add` |
-| `looks/StepEditor/position` | screens/looks/StepEditor.tsx:88 | Position | `looks.step.set` |
-| `looks/StepEditor/position#2` | screens/looks/StepEditor.tsx:89 | Position | `looks.step.position` |
-| `looks/StepEditor/gobo` | screens/looks/StepEditor.tsx:95 | Gobo | `looks.step.set` |
-| `looks/StepEditor/button#2` | screens/looks/StepEditor.tsx:99 | … | `looks.step.gobo` |
-| `looks/StepEditor/dimmer` | screens/looks/StepEditor.tsx:107 | Dimmer | `looks.step.set` |
-| `looks/StepEditor/dimmer#2` | screens/looks/StepEditor.tsx:108 | Dimmer | `looks.step.dimmer` |
-| `looks/StepEditor/spin` | screens/looks/StepEditor.tsx:112 | Spin | `looks.step.set` |
-| `looks/StepEditor/spin#2` | screens/looks/StepEditor.tsx:113 | Spin | `looks.step.spin` |
-| `looks/Screen/part-of-the-looks-screen` | screens/looks/index.tsx:71 | Part of the Looks screen | `looks.part` |
-| `looks/Screen/library` | screens/looks/index.tsx:84 |  | not a control: wiring |
-| `looks/Screen/button` | screens/looks/index.tsx:98 | … | `looks.crumb` |
-| `looks/Screen/back-to` | screens/looks/index.tsx:114 | Back to … | `looks.back` |
-| `looks/Screen/remove-from` | screens/looks/index.tsx:125 | Remove from … | `looks.groups.remove` |
-| `looks/Screen/add-to-a-group` | screens/looks/index.tsx:133 | Add to a group | `looks.groups.add` |
-| `looks/Screen/sequenceeditor` | screens/looks/index.tsx:149 |  | not a control: wiring |
-| `looks/Screen/try-on-lights` | screens/looks/index.tsx:168 | Try on lights | `looks.try` |
-| `looks/Screen/put-on-console` | screens/looks/index.tsx:172 | Put on Console | `looks.put-on-console` |
-| `looks/Screen/connections` | screens/looks/index.tsx:186 |  | not a control: wiring |
+| `looks/SequenceEditor/button` | screens/looks/SequenceEditor.tsx:89 | … | `looks.seq.item` |
+| `looks/SequenceEditor/open` | screens/looks/SequenceEditor.tsx:93 | Open … | `looks.seq.open` |
+| `looks/SequenceEditor/starts-at-beat-arrows-move` | screens/looks/SequenceEditor.tsx:102 | …: starts at beat …, …. Arrows move it, Shift and arrows change the width. | `looks.seq.bar` |
+| `looks/SequenceEditor/span` | screens/looks/SequenceEditor.tsx:121 |  | `looks.seq.bar.edge` |
+| `looks/SequenceEditor/narrower` | screens/looks/SequenceEditor.tsx:148 | Narrower | `looks.seq.width` |
+| `looks/SequenceEditor/wider` | screens/looks/SequenceEditor.tsx:152 | Wider | `looks.seq.width` |
+| `looks/SequenceEditor/speed` | screens/looks/SequenceEditor.tsx:159 | Speed | `looks.seq.speed` |
+| `looks/SequenceEditor/loop-or-once` | screens/looks/SequenceEditor.tsx:172 | Loop or once | `looks.seq.repeat` |
+| `looks/SequenceEditor/spread-across-fixtures` | screens/looks/SequenceEditor.tsx:186 | Spread across fixtures | `looks.seq.spread` |
+| `looks/SequenceEditor/transition` | screens/looks/SequenceEditor.tsx:192 | Transition | `looks.seq.transition` |
+| `looks/Card/clear` | screens/looks/StepEditor.tsx:15 | Clear | `looks.step.clear` |
+| `looks/Card/set` | screens/looks/StepEditor.tsx:25 | Set … | `looks.step.set` |
+| `looks/StepEditor/button` | screens/looks/StepEditor.tsx:48 | … | `looks.step.fixtures` |
+| `looks/StepEditor/colour` | screens/looks/StepEditor.tsx:55 | Colour | `looks.step.set` |
+| `looks/StepEditor/remove-colour` | screens/looks/StepEditor.tsx:59 | Remove colour … | `looks.step.colour.remove` |
+| `looks/StepEditor/add` | screens/looks/StepEditor.tsx:76 | Add … | `looks.step.colour.add` |
+| `looks/StepEditor/othercolour` | screens/looks/StepEditor.tsx:87 |  | not a control: wiring |
+| `looks/StepEditor/position` | screens/looks/StepEditor.tsx:90 | Position | `looks.step.set` |
+| `looks/StepEditor/position#2` | screens/looks/StepEditor.tsx:91 | Position | `looks.step.position` |
+| `looks/StepEditor/gobo` | screens/looks/StepEditor.tsx:97 | Gobo | `looks.step.set` |
+| `looks/StepEditor/button#2` | screens/looks/StepEditor.tsx:101 | … | `looks.step.gobo` |
+| `looks/StepEditor/dimmer` | screens/looks/StepEditor.tsx:109 | Dimmer | `looks.step.set` |
+| `looks/StepEditor/dimmer#2` | screens/looks/StepEditor.tsx:110 | Dimmer | `looks.step.dimmer` |
+| `looks/StepEditor/spin` | screens/looks/StepEditor.tsx:114 | Spin | `looks.step.set` |
+| `looks/StepEditor/spin#2` | screens/looks/StepEditor.tsx:115 | Spin | `looks.step.spin` |
+| `looks/Screen/part-of-the-looks-screen` | screens/looks/index.tsx:72 | Part of the Looks screen | `looks.part` |
+| `looks/Screen/library` | screens/looks/index.tsx:85 |  | not a control: wiring |
+| `looks/Screen/button` | screens/looks/index.tsx:99 | … | `looks.crumb` |
+| `looks/Screen/back-to` | screens/looks/index.tsx:115 | Back to … | `looks.back` |
+| `looks/Screen/remove-from` | screens/looks/index.tsx:127 | Remove from … | `looks.groups.remove` |
+| `looks/Screen/add-to-a-group` | screens/looks/index.tsx:135 | Add to a group | `looks.groups.add` |
+| `looks/Screen/sequenceeditor` | screens/looks/index.tsx:151 |  | not a control: wiring |
+| `looks/Screen/try-on-lights` | screens/looks/index.tsx:170 | Try on lights | `looks.try` |
+| `looks/Screen/put-on-console` | screens/looks/index.tsx:174 | Put on Console | `looks.put-on-console` |
+| `looks/Screen/connections` | screens/looks/index.tsx:188 |  | not a control: wiring |
 | `modules/Node/g` | screens/modules/index.tsx:79 | … | `modules.node` |
 | `modules/Screen/trace-a-press` | screens/modules/index.tsx:114 | Trace a press | `modules.trace` |
 | `modules/Screen/button` | screens/modules/index.tsx:209 | … | `modules.jump` |
@@ -2436,34 +2849,41 @@ stateDiagram-v2
 | `patch/AddFlow/start-over` | screens/patch/AddFlow.tsx:261 | Start over | `patch.add.start-over` |
 | `patch/AddFlow/next-address` | screens/patch/AddFlow.tsx:265 | Next: address | `patch.add.next` |
 | `patch/AddFlow/next-flash-it` | screens/patch/AddFlow.tsx:270 | Next: flash it | `patch.add.next` |
-| `patch/Screen/pointermove` | screens/patch/index.tsx:134 | pointermove | `patch.fixtures.order` |
-| `patch/Screen/pointerup` | screens/patch/index.tsx:135 | pointerup | `patch.fixtures.order` |
-| `patch/Screen/search-universes` | screens/patch/index.tsx:154 | Search universes | `patch.universes.search` |
-| `patch/Screen/universes-to-x` | screens/patch/index.tsx:160 | Universes … to …, … x … | `patch.universes.panel` |
-| `patch/Screen/universe-pixels` | screens/patch/index.tsx:185 | Universe … pixels \| … lights · … of 512 | `patch.universe` |
-| `patch/Screen/continue-adding-step-of-4` | screens/patch/index.tsx:213 | Continue adding (step … of 4) \| Add lights | `patch.add-lights` |
-| `patch/Screen/add-a-pixel-panel` | screens/patch/index.tsx:217 | Add a pixel panel | `patch.add-panel` |
-| `patch/Screen/pixels-to` | screens/patch/index.tsx:234 | …, pixels … to … | `patch.grid.panel` |
-| `patch/Screen/drag-or-use-arrow-keys` | screens/patch/index.tsx:256 | …, …. Drag or use arrow keys to give it another address. | `patch.grid.light` |
-| `patch/Screen/drag-to-change-the-order` | screens/patch/index.tsx:310 | Drag to change the order | `patch.fixtures.order` |
-| `patch/Screen/button` | screens/patch/index.tsx:316 | … · … | `patch.fixtures.light` |
-| `patch/Screen/move-earlier` | screens/patch/index.tsx:329 | Move … earlier | `patch.fixtures.move` |
-| `patch/Screen/move-later` | screens/patch/index.tsx:334 | Move … later | `patch.fixtures.move` |
-| `patch/Screen/addflow` | screens/patch/index.tsx:352 |  | not a control: wiring |
-| `patch/Screen/address-down` | screens/patch/index.tsx:385 | Address down | `patch.details.address` |
-| `patch/Screen/address-up` | screens/patch/index.tsx:394 | Address up | `patch.details.address` |
-| `patch/Screen/move-to-no-free` | screens/patch/index.tsx:407 | Move to no free | `patch.details.move-to-free` |
-| `patch/Screen/stop-flashing` | screens/patch/index.tsx:418 | Stop flashing \| Flash it, to find it in the room | `patch.details.flash` |
-| `patch/Screen/universe-pixels-to-channels` | screens/patch/index.tsx:438 | Universe … pixels … to …, … channels | `patch.universe` |
-| `patch/Screen/add-a-pixel-panel-name` | screens/patch/index.tsx:453 | Add a pixel panel Name Columns Rows Wiring Pixel type Colour order … Start universe … pixels, … per universe, need … universe \| universes: … to … \|. Add the panel | `patch.panel.add` |
-| `patch/Screen/input-text` | screens/patch/index.tsx:467 |  | `patch.panel.name` |
-| `patch/Screen/input-text#2` | screens/patch/index.tsx:472 |  | `patch.panel.size` |
-| `patch/Screen/input-text#3` | screens/patch/index.tsx:476 |  | `patch.panel.size` |
-| `patch/Screen/wiring` | screens/patch/index.tsx:480 | Wiring | `patch.panel.wiring` |
-| `patch/Screen/pixel-type` | screens/patch/index.tsx:495 | Pixel type | `patch.panel.pixel` |
-| `patch/Screen/select` | screens/patch/index.tsx:507 | … | `patch.panel.order` |
-| `patch/Screen/input-text#4` | screens/patch/index.tsx:514 |  | `patch.panel.start` |
-| `patch/Screen/add-the-panel` | screens/patch/index.tsx:520 | Add the panel | `patch.panel.add` |
+| `patch/LightSetup/name-of-the-light` | screens/patch/Manage.tsx:16 | Name of the light | `patch.details.name` |
+| `patch/LightSetup/mode-of-the-light` | screens/patch/Manage.tsx:20 | Mode of the light | `patch.details.mode` |
+| `patch/LightSetup/group-of-the-light` | screens/patch/Manage.tsx:26 | Group of the light | `patch.details.group` |
+| `patch/LightSetup/remove-the-light` | screens/patch/Manage.tsx:30 | Remove the light | `patch.details.remove` |
+| `patch/PanelSetup/change-the-panel` | screens/patch/Manage.tsx:47 | Change the panel | `patch.panel.change` |
+| `patch/PanelSetup/remove-the-panel` | screens/patch/Manage.tsx:50 | Remove the panel | `patch.panel.remove` |
+| `patch/Screen/pointermove` | screens/patch/index.tsx:135 | pointermove | `patch.fixtures.order` |
+| `patch/Screen/pointerup` | screens/patch/index.tsx:136 | pointerup | `patch.fixtures.order` |
+| `patch/Screen/search-universes` | screens/patch/index.tsx:155 | Search universes | `patch.universes.search` |
+| `patch/Screen/universes-to-x` | screens/patch/index.tsx:161 | Universes … to …, … x … | `patch.universes.panel` |
+| `patch/Screen/universe-pixels` | screens/patch/index.tsx:186 | Universe … pixels \| … lights · … of 512 | `patch.universe` |
+| `patch/Screen/continue-adding-step-of-4` | screens/patch/index.tsx:214 | Continue adding (step … of 4) \| Add lights | `patch.add-lights` |
+| `patch/Screen/add-a-pixel-panel` | screens/patch/index.tsx:218 | Add a pixel panel | `patch.add-panel` |
+| `patch/Screen/pixels-to` | screens/patch/index.tsx:235 | …, pixels … to … | `patch.grid.panel` |
+| `patch/Screen/drag-or-use-arrow-keys` | screens/patch/index.tsx:257 | …, …. Drag or use arrow keys to give it another address. | `patch.grid.light` |
+| `patch/Screen/drag-to-change-the-order` | screens/patch/index.tsx:311 | Drag to change the order | `patch.fixtures.order` |
+| `patch/Screen/button` | screens/patch/index.tsx:317 | … · … | `patch.fixtures.light` |
+| `patch/Screen/move-earlier` | screens/patch/index.tsx:330 | Move … earlier | `patch.fixtures.move` |
+| `patch/Screen/move-later` | screens/patch/index.tsx:335 | Move … later | `patch.fixtures.move` |
+| `patch/Screen/addflow` | screens/patch/index.tsx:353 |  | not a control: wiring |
+| `patch/Screen/address-down` | screens/patch/index.tsx:386 | Address down | `patch.details.address` |
+| `patch/Screen/address-up` | screens/patch/index.tsx:395 | Address up | `patch.details.address` |
+| `patch/Screen/move-to-no-free` | screens/patch/index.tsx:408 | Move to no free | `patch.details.move-to-free` |
+| `patch/Screen/stop-flashing` | screens/patch/index.tsx:419 | Stop flashing \| Flash it, to find it in the room | `patch.details.flash` |
+| `patch/Screen/universe-pixels-to-channels` | screens/patch/index.tsx:440 | Universe … pixels … to …, … channels | `patch.universe` |
+| `patch/Screen/panelsetup` | screens/patch/index.tsx:450 |  | not a control: wiring |
+| `patch/Screen/add-a-pixel-panel-name` | screens/patch/index.tsx:456 | Add a pixel panel Name Columns Rows Wiring Pixel type Colour order … Start universe … pixels, … per universe, need … universe \| universes: … to … \|. Add the panel | `patch.panel.add` |
+| `patch/Screen/input-text` | screens/patch/index.tsx:470 |  | `patch.panel.name` |
+| `patch/Screen/input-text#2` | screens/patch/index.tsx:475 |  | `patch.panel.size` |
+| `patch/Screen/input-text#3` | screens/patch/index.tsx:479 |  | `patch.panel.size` |
+| `patch/Screen/wiring` | screens/patch/index.tsx:483 | Wiring | `patch.panel.wiring` |
+| `patch/Screen/pixel-type` | screens/patch/index.tsx:498 | Pixel type | `patch.panel.pixel` |
+| `patch/Screen/select` | screens/patch/index.tsx:510 | … | `patch.panel.order` |
+| `patch/Screen/input-text#4` | screens/patch/index.tsx:517 |  | `patch.panel.start` |
+| `patch/Screen/add-the-panel` | screens/patch/index.tsx:523 | Add the panel | `patch.panel.add` |
 | `songs/Screen/search-songs` | screens/songs/index.tsx:180 | Search songs | `songs.search` |
 | `songs/Screen/button` | screens/songs/index.tsx:184 | … | `songs.filter` |
 | `songs/Screen/song-library` | screens/songs/index.tsx:191 | Song library | `songs.song` |
@@ -2490,12 +2910,19 @@ stateDiagram-v2
 | `shell/LiveSwitch/live-is-on-the-night` | shell/LiveSwitch.tsx:29 | LIVE is on: the night is running \| LIVE is off: preparing | `top.live` |
 | `shell/LiveSwitch/button` | shell/LiveSwitch.tsx:46 | …: … | `top.indicator.dj` `top.indicator.recording` `top.indicator.autopilot` `top.indicator.lock` |
 | `shell/LiveSwitch/no-lights-connected` | shell/LiveSwitch.tsx:61 | No lights connected | `top.trouble` |
-| `shell/Status/tap-the-tempo` | shell/TopBar.tsx:18 | Tap the tempo | `top.tap` |
-| `shell/Status/blackout-on` | shell/TopBar.tsx:30 | Blackout on \| Blackout | `top.blackout` |
-| `shell/Status/undo` | shell/TopBar.tsx:38 | Undo … \| Nothing to undo | `top.undo` |
-| `shell/TopBar/workspaces` | shell/TopBar.tsx:67 | Workspaces | `top.workspaces` |
-| `shell/TopBar/review-this-screen` | shell/TopBar.tsx:73 | Review this screen … | not a control: tooling |
-| `shell/TopBar/done` | shell/TopBar.tsx:89 | Done | not a control: tooling |
+| `shell/ShowFile/show-file` | shell/ShowFile.tsx:13 | Show file | `top.show` |
+| `shell/ShowFile/name-of-the-show` | shell/ShowFile.tsx:25 | Name of the show | `top.show.name` |
+| `shell/ShowFile/new-show-file` | shell/ShowFile.tsx:27 | New show file | `top.show.new` |
+| `shell/ShowFile/open-a-show-file` | shell/ShowFile.tsx:30 | Open a show file | `top.show.open` |
+| `shell/ShowFile/save-the-show-file-as` | shell/ShowFile.tsx:33 | Save the show file as | `top.show.save-as` |
+| `shell/TempoSource/from-tap-give-the-beat` | shell/ShowFile.tsx:56 | From Tap: give the beat back to the feed | `top.tempo.source` |
+| `shell/Status/tap-the-tempo` | shell/TopBar.tsx:20 | Tap the tempo | `top.tap` |
+| `shell/Status/blackout-on` | shell/TopBar.tsx:32 | Blackout on \| Blackout | `top.blackout` |
+| `shell/Status/undo` | shell/TopBar.tsx:40 | Undo … \| Nothing to undo | `top.undo` |
+| `shell/Status/redo` | shell/TopBar.tsx:48 | Redo \| Nothing to redo | `top.redo` |
+| `shell/TopBar/workspaces` | shell/TopBar.tsx:72 | Workspaces | `top.workspaces` |
+| `shell/TopBar/review-this-screen` | shell/TopBar.tsx:78 | Review this screen … | not a control: tooling |
+| `shell/TopBar/done` | shell/TopBar.tsx:94 | Done | not a control: tooling |
 | `shell/LearnBar/document` | shell/learn.tsx:69 | … | `top.learn` |
 | `shell/LearnBar/cancel` | shell/learn.tsx:104 | Cancel | `top.learn.cancel` |
 | `shell/LearnBar/button` | shell/learn.tsx:112 | …: … | not a control: tooling |

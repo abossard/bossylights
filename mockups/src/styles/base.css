@@ -166,3 +166,82 @@ input::placeholder {
   padding: 3px 6px;
   white-space: nowrap;
 }
+
+/* ---- tools: the controls no mockup had before review 4 (issue #102, decision 29) ---- */
+.tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--sp-2);
+  padding: var(--sp-2) 0;
+}
+.tools-col {
+  flex-direction: column;
+  align-items: stretch;
+}
+.tools-field {
+  display: grid;
+  gap: 2px;
+  min-width: 140px;
+  color: var(--mute);
+  font-size: var(--text-sm);
+}
+.tools-list {
+  display: grid;
+  gap: var(--sp-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.tools-list li {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.tools-list li > span {
+  flex: 1;
+}
+.tools-pop {
+  position: absolute;
+  z-index: 20;
+  top: 100%;
+  left: 0;
+  min-width: 260px;
+  padding: var(--sp-3);
+  background: var(--s1);
+  border: var(--rule) solid var(--paper);
+}
+.tools-anchor {
+  position: relative;
+}
+.from-tap {
+  min-height: 28px;
+  padding: 0 var(--sp-2);
+  background: var(--layer-manual);
+  color: var(--bg);
+  border: 0;
+  font: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+.colour-wheel {
+  position: relative;
+  width: 160px;
+  height: 160px;
+  border-radius: 50%;
+  border: var(--rule) solid var(--line);
+  background:
+    radial-gradient(circle, #fff 0%, transparent 70%),
+    conic-gradient(#f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00);
+  touch-action: none;
+  cursor: crosshair;
+}
+.colour-wheel i {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  margin: -7px;
+  border-radius: 50%;
+  border: 2px solid var(--bg);
+  outline: 2px solid var(--paper);
+}

@@ -4,6 +4,7 @@ import { For, Show } from "solid-js";
 import { store, type Entry, type Sequence, type Speed } from "../../fake/store";
 import { Button, Fader, Segmented } from "../../kit";
 import { KindSymbol } from "./Symbol";
+import { SequenceItems } from "./Manage";
 
 const SNAP = 0.25;
 const snap = (v: number) => Math.round(v / SNAP) * SNAP;
@@ -133,6 +134,7 @@ export function SequenceEditor(props: {
         Measure <b>{beats(measure())}</b>, then it loops. Drag an item to move it, drag its right edge to change its width.
       </p>
 
+      <SequenceItems seqName={props.seq.name} selected={entry() ? store.item(entry()!.ref)?.name : undefined} />
       <Show when={entry()} fallback={<p class="mute">Pick an item to see its use settings.</p>}>
         {(en) => (
           <section class="lk-use" aria-label="Use settings">

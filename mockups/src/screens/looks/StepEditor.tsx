@@ -2,6 +2,7 @@ import { For, Show, type JSX } from "solid-js";
 import { store, type Step } from "../../fake/store";
 import { Button, Fader, XYPad } from "../../kit";
 import { GoboPicture } from "./Symbol";
+import { OtherColour } from "./Manage";
 
 const PALETTE = ["#ff2a2a", "#ffa000", "#f2b705", "#b6ff2e", "#3ddc97", "#12c2a8", "#8fe8ff", "#2a4bff", "#7b2cff", "#ff2fd0", "#ffb46b", "#ffffff"];
 
@@ -83,6 +84,7 @@ export function StepEditor(props: { step: Step }) {
               )}
             </For>
           </div>
+          <OtherColour full={(s().colour ?? []).length >= 4} onAdd={(c) => store.setStep(s().id, "colour", [...(s().colour ?? []), c])} />
         </Card>
 
         <Card title="Position" what="position" set={!!s().position} onClear={() => store.setStep(s().id, "position", undefined)} onSet={() => store.setStep(s().id, "position", { x: 50, y: 50 })}>

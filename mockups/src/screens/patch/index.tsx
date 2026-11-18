@@ -4,6 +4,7 @@ import { Button, Region, Segmented } from "../../kit";
 import type { Issue } from "../../shell/registry";
 import { AddFlow, flow, flowInProgress, ghost, openFlow, STEPS } from "./AddFlow";
 import "./patch.css";
+import { LightSetup, PanelSetup } from "./Manage";
 
 export const id = "patch";
 export const title = "Patch";
@@ -418,6 +419,7 @@ export function Screen() {
                         <Button pressed={store.state.identify === f().id} onClick={() => store.setIdentify(store.state.identify === f().id ? null : f().id)}>
                           {store.state.identify === f().id ? "Stop flashing" : "Flash it, to find it in the room"}
                         </Button>
+                        <LightSetup name={f().name} mode={f().mode} group={f().group} />
                       </div>
                     )}
                   </Show>
@@ -445,6 +447,7 @@ export function Screen() {
                         )}
                       </For>
                     </ul>
+                    <PanelSetup name={p().name} onChange={() => setSide("panel")} />
                   </div>
                 )}
               </Show>

@@ -49,6 +49,8 @@ export const NOT_CONTROLS: Record<string, NotAControl> = {
   "looks/Screen/sequenceeditor": wiring("The sequence editor as a whole"),
   "looks/Screen/connections": wiring("The Connections part as a whole"),
   "patch/Screen/addflow": wiring("The Add lights flow as a whole"),
+  "patch/Screen/panelsetup": wiring("The tools of a panel as a whole: 'Change panel' opens the form"),
+  "looks/StepEditor/othercolour": wiring("The colour wheel as a whole: 'Add this colour' hands the colour on"),
   "review/ReviewPanel/close": REVIEW,
   "review/ReviewPanel/a": REVIEW,
   "review/ReviewPanel/button": REVIEW,

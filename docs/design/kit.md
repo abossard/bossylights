@@ -5,7 +5,7 @@ The catalog shows the same as live pages, primitives first: `npm run catalog`.
 
 ```mermaid
 flowchart LR
-  R["173 controls<br/>one row each"] --> K["10 primitives<br/>named by what they are for"]
+  R["212 controls<br/>one row each"] --> K["10 primitives<br/>named by what they are for"]
   K --> V["22 kinds in use"]
   K --> C["colour<br/>one prop on all of them"]
   R -. "where it lives" .-> T["a tag:<br/>the screen"]
@@ -22,13 +22,13 @@ flowchart LR
 
 | Primitive | Is for | Kinds | Controls | Carried inside |
 | --- | --- | --- | --- | --- |
-| **Button** | Do it, or switch it | action, toggle | 86 | 7 |
+| **Button** | Do it, or switch it | action, toggle | 106 | 9 |
 | **Pad** | Play a look | one | 3 | – |
 | **Fader** | Set one value | one | 8 | – |
-| **XY** | Set two values at once | one | 2 | – |
-| **Picker** | Choose one of a few | tabs, segments, cards, list | 30 | – |
-| **Field** | Give a value in words or in steps | text, search, steps | 16 | – |
-| **Status** | Read a state. Never pressed: no control is one, many carry one | lamp, pill, flag, value | – | 29 |
+| **XY** | Set two values at once | one | 3 | – |
+| **Picker** | Choose one of a few | tabs, segments, cards, list | 39 | – |
+| **Field** | Give a value in words or in steps | text, search, steps | 25 | – |
+| **Status** | Read a state. Never pressed: no control is one, many carry one | lamp, pill, flag, value | – | 31 |
 | **Item** | A thing where it lives: pick it, open it, take it out | row, tile, cell, entry, chip, strip | 19 | – |
 | **Block** | A thing placed in time or on a grid: arrange it | bar, frame | 5 | – |
 | **Handle** | The edge of a thing: only dragged | edge, corner | 4 | – |
@@ -49,7 +49,7 @@ flowchart LR
 
 Fixed props are the ones that never change for the control. Its words, its state and its value come from the row.
 
-### Button, action (60)
+### Button, action (76)
 
 | Control | Name | Where | Colour | Fixed props | Carries |
 | --- | --- | --- | --- | --- | --- |
@@ -59,6 +59,10 @@ Fixed props are the ones that never change for the control. Its words, its state
 | Blackout | `top.blackout` | Top bar | danger | fires: down, held: short press and hold, holds: 3 lines |  |
 | Undo | `top.undo` | Top bar | plain | holds: 2 lines |  |
 | Cancel Learn | `top.learn.cancel` | Top bar | plain |  |  |
+| Redo | `top.redo` | Top bar | plain | holds: 2 lines |  |
+| New show file | `top.show.new` | Top bar | plain |  |  |
+| Open a show file | `top.show.open` | Top bar | plain |  |  |
+| Save as | `top.show.save-as` | Top bar | plain |  |  |
 | Release one | `console.running.release` | Console | manual | fires: down, holds: 3 lines |  |
 | Stop one | `console.running.stop` | Console | show | fires: down, holds: 2 lines |  |
 | Release all | `console.running.release-all` | Console | manual | fires: down |  |
@@ -69,6 +73,8 @@ Fixed props are the ones that never change for the control. Its words, its state
 | Go | `console.cue.go` | Console | plain | fires: down, holds: 3 lines |  |
 | Back | `console.cue.back` | Console | plain | fires: down, holds: 2 lines |  |
 | Remove widget | `console.widget.remove` | Console | plain |  |  |
+| Delete page | `console.page.delete` | Console | plain |  |  |
+| Take a cue out | `console.cue.take-out` | Console | plain | holds: 2 lines |  |
 | Sections look right | `songs.sections-look-right` | Songs | plain |  |  |
 | Undo last pass | `songs.recorded.undo-last-pass` | Songs | plain |  |  |
 | Clear recorded | `songs.recorded.clear` | Songs | plain |  |  |
@@ -92,6 +98,11 @@ Fixed props are the ones that never change for the control. Its words, its state
 | Delete style | `looks.autopilot.delete-style` | Looks | plain |  |  |
 | Remove rule | `looks.autopilot.rule.remove` | Looks | plain |  |  |
 | Add a rule | `looks.autopilot.add-rule` | Looks | plain |  |  |
+| New look | `looks.library.new-look` | Looks | plain | holds: 4 lines |  |
+| Copy the look | `looks.copy` | Looks | plain |  |  |
+| Delete look | `looks.delete` | Looks | plain |  |  |
+| Take an item out | `looks.seq.take-out` | Looks | plain | holds: 2 lines |  |
+| Add this colour | `looks.step.colour.add-other` | Looks | plain |  |  |
 | Add lights | `patch.add-lights` | Patch | plain | holds: 2 lines |  |
 | Move to a free address | `patch.details.move-to-free` | Patch | plain |  |  |
 | Leave for now | `patch.add.leave` | Patch | plain |  |  |
@@ -101,6 +112,9 @@ Fixed props are the ones that never change for the control. Its words, its state
 | Back | `patch.add.back` | Patch | plain |  |  |
 | Start over | `patch.add.start-over` | Patch | plain |  |  |
 | Add the panel | `patch.panel.add` | Patch | plain |  |  |
+| Remove light | `patch.details.remove` | Patch | plain |  |  |
+| Change panel | `patch.panel.change` | Patch | plain |  |  |
+| Remove panel | `patch.panel.remove` | Patch | plain |  |  |
 | Zero | `dmx.channel.zero` | DMX | plain | fires: down |  |
 | Full | `dmx.channel.full` | DMX | plain | fires: down |  |
 | Release the channel | `dmx.channel.release` | DMX | plain | fires: down |  |
@@ -109,12 +123,14 @@ Fixed props are the ones that never change for the control. Its words, its state
 | Tap, on In/Out | `inout.tempo.tap` | In/Out | plain |  |  |
 | Test a mapping | `inout.mapping.test` | In/Out | plain | holds: 3 lines |  |
 | Remove a mapping | `inout.mapping.remove` | In/Out | plain |  |  |
+| Remove output | `inout.out.remove` | In/Out | plain |  |  |
+| Add output | `inout.out.add` | In/Out | plain |  |  |
 | Release | `how.release` | How it works | plain |  |  |
 | Walk: Back, Next, Again | `how.walk.step` | How it works | plain | holds: 4 lines |  |
 | Trace a press | `modules.trace` | Modules | plain |  |  |
 | Screen that uses a module | `modules.jump` | Modules | plain |  |  |
 
-### Button, toggle (26)
+### Button, toggle (30)
 
 | Control | Name | Where | Colour | Fixed props | Carries |
 | --- | --- | --- | --- | --- | --- |
@@ -124,6 +140,7 @@ Fixed props are the ones that never change for the control. Its words, its state
 | Autopilot indicator | `top.indicator.autopilot` | Top bar | autopilot | mark: lamp |  |
 | Lock indicator | `top.indicator.lock` | Top bar | plain | mark: lamp, quiet |  |
 | Learn | `top.learn` | Top bar | plain | held: short press and hold, holds: 3 lines |  |
+| Show file | `top.show` | Top bar | plain | holds: 2 lines |  |
 | Fold Running | `console.running.fold` | Console | plain | mark: chevron, quiet |  |
 | Autopilot on or off | `console.autopilot.on` | Console | autopilot | holds: 2 lines |  |
 | Library filter | `songs.filter` | Songs | plain |  |  |
@@ -134,6 +151,7 @@ Fixed props are the ones that never change for the control. Its words, its state
 | Fold a group | `looks.library.group.fold` | Looks | plain | mark: chevron, quiet |  |
 | Which fixtures | `looks.step.fixtures` | Looks | plain |  |  |
 | Lights it may use | `looks.autopilot.lights` | Looks | plain |  |  |
+| Other colour | `looks.step.colour.other` | Looks | plain | holds: 2 lines |  |
 | Pixel panel in the list | `patch.universes.panel` | Patch | plain | mark: chevron, quiet |  |
 | Add a pixel panel | `patch.add-panel` | Patch | plain |  |  |
 | Flash it | `patch.details.flash` | Patch | plain | fires: down |  |
@@ -142,6 +160,8 @@ Fixed props are the ones that never change for the control. Its words, its state
 | Test an output | `inout.out.test` | In/Out | plain | fires: down, holds: 3 lines |  |
 | Edit a mapping | `inout.mapping.edit` | In/Out | plain | holds: 3 lines |  |
 | Mapping feedback | `inout.mapping.feedback` | In/Out | plain | holds: 3 lines |  |
+| Set up an output | `inout.out.setup` | In/Out | plain | holds: 3 lines |  |
+| OSC on or off | `inout.osc.on` | In/Out | plain | holds: 2 lines |  |
 | Record | `how.record` | How it works | plain | holds: 2 lines |  |
 | Replay on Show | `how.replay` | How it works | plain | holds: 2 lines |  |
 
@@ -166,12 +186,13 @@ Fixed props are the ones that never change for the control. Its words, its state
 | Channel fader | `dmx.channel.fader` | DMX | plain |  | Status.value |
 | Master to try | `how.master` | How it works | plain |  | Status.value |
 
-### XY (2)
+### XY (3)
 
 | Control | Name | Where | Colour | Fixed props | Carries |
 | --- | --- | --- | --- | --- | --- |
 | Movers position | `console.xy` | Console | plain |  |  |
 | Step position | `looks.step.position` | Looks | plain |  |  |
+| Colour wheel | `looks.step.colour.wheel` | Looks | plain |  |  |
 
 ### Picker, tabs (3)
 
@@ -181,7 +202,7 @@ Fixed props are the ones that never change for the control. Its words, its state
 | Console pages | `console.pages` | Console | plain |  |  |
 | Universe tabs | `dmx.universe` | DMX | plain |  |  |
 
-### Picker, segments (13)
+### Picker, segments (14)
 
 | Control | Name | Where | Colour | Fixed props | Carries |
 | --- | --- | --- | --- | --- | --- |
@@ -197,6 +218,7 @@ Fixed props are the ones that never change for the control. Its words, its state
 | Manual control ends | `dmx.who-wins.manual-ends` | DMX | plain | size: small |  |
 | When a look ends | `dmx.who-wins.look-ends` | DMX | plain | size: small |  |
 | Follows | `inout.follows` | In/Out | plain |  |  |
+| Frames a second | `inout.out.rate` | In/Out | plain |  |  |
 | Pick a walk | `how.walk` | How it works | plain |  |  |
 
 ### Picker, cards (5)
@@ -209,31 +231,46 @@ Fixed props are the ones that never change for the control. Its words, its state
 | Pick a mode | `patch.add.mode` | Patch | plain |  |  |
 | Tempo feed | `inout.tempo.feed` | In/Out | plain |  |  |
 
-### Picker, list (9)
+### Picker, list (17)
 
 | Control | Name | Where | Colour | Fixed props | Carries |
 | --- | --- | --- | --- | --- | --- |
 | Autopilot style | `console.autopilot.style` | Console | plain |  |  |
+| Look of a pad | `console.widget.plays` | Console | plain |  |  |
+| Target of a slider | `console.widget.moves` | Console | plain |  |  |
+| Add a look to the cue list | `console.cue.add` | Console | plain |  |  |
 | Add to a group | `looks.groups.add` | Looks | plain |  |  |
 | Colours from | `looks.pattern.colours` | Looks | plain |  |  |
 | Rule: when | `looks.autopilot.rule.when` | Looks | plain |  |  |
 | Rule: pick one from | `looks.autopilot.rule.pick` | Looks | plain |  |  |
 | Rule: fit | `looks.autopilot.rule.fit` | Looks | plain |  |  |
 | Never dark | `looks.autopilot.never-dark` | Looks | plain |  |  |
+| Add an item | `looks.seq.add` | Looks | plain |  |  |
 | Colour order | `patch.panel.order` | Patch | plain |  |  |
+| Mode of the light | `patch.details.mode` | Patch | plain |  |  |
+| Group of the light | `patch.details.group` | Patch | plain |  |  |
 | Mapping device | `inout.mapping.device` | In/Out | plain |  |  |
+| Kind of an output | `inout.out.kind` | In/Out | plain |  |  |
+| Audio input | `inout.audio.input` | In/Out | plain |  |  |
 
-### Field, text (7)
+### Field, text (14)
 
 | Control | Name | Where | Colour | Fixed props | Carries |
 | --- | --- | --- | --- | --- | --- |
+| Name of the show | `top.show.name` | Top bar | plain |  |  |
+| Name of the page | `console.page.name` | Console | plain |  |  |
+| Words of a label or frame | `console.widget.words` | Console | plain |  |  |
 | Section name | `songs.section.name` | Songs | plain |  |  |
 | Group name | `looks.library.group.name` | Looks | plain |  |  |
 | Style name | `looks.autopilot.style-name` | Looks | plain |  |  |
+| Name of the look | `looks.name` | Looks | plain |  |  |
 | Panel name | `patch.panel.name` | Patch | plain |  |  |
 | Columns and rows | `patch.panel.size` | Patch | plain |  |  |
 | Start universe | `patch.panel.start` | Patch | plain |  |  |
+| Name of the light | `patch.details.name` | Patch | plain |  |  |
 | Note or controller number | `inout.mapping.message` | In/Out | plain |  |  |
+| Universes of an output | `inout.out.universes` | In/Out | plain |  |  |
+| OSC port | `inout.osc.port` | In/Out | plain |  |  |
 
 ### Field, search (4)
 
@@ -244,10 +281,12 @@ Fixed props are the ones that never change for the control. Its words, its state
 | Search universes | `patch.universes.search` | Patch | plain |  |  |
 | Search the fixture library | `patch.add.search` | Patch | plain |  |  |
 
-### Field, steps (5)
+### Field, steps (7)
 
 | Control | Name | Where | Colour | Fixed props | Carries |
 | --- | --- | --- | --- | --- | --- |
+| Page earlier or later | `console.page.move` | Console | plain |  | Button.action + Status.value + Button.action |
+| Cue earlier or later | `console.cue.move` | Console | plain |  | Button.action + Status.value + Button.action |
 | Item width | `looks.seq.width` | Looks | plain |  | Button.action + Status.value + Button.action |
 | Pattern measure | `looks.pattern.measure` | Looks | plain |  | Button.action + Status.value + Button.action |
 | Move earlier or later | `patch.fixtures.move` | Patch | plain |  | Button.action + Status.value + Button.action |

@@ -4,6 +4,7 @@ import { createSignal, For, onCleanup, Show } from "solid-js";
 import { store, type Item } from "../../fake/store";
 import { Button, Region, Segmented } from "../../kit";
 import { KindSymbol } from "./Symbol";
+import { NewLook } from "./Manage";
 
 type Kind = "all" | Item["kind"];
 const NO_GROUP = "In no group";
@@ -104,6 +105,7 @@ export function Library(props: { currentId: string; onOpen: (id: string) => void
           New group
         </Button>
       </div>
+      <NewLook />
 
       <div class="lk-sections" classList={{ "is-dragging": !!drag() }}>
         <For each={sections()}>

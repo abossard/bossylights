@@ -210,7 +210,7 @@ export function controlsDoc(inventory) {
     ]),
     `## Missing: ${MISSING.length} things with no control in any mockup`,
     "",
-    "Found while writing the rows. Each needs a control before the screen it belongs to can be built, or a 'not in version 1'.",
+    "A thing the product needs and no mockup shows. The owner's decision 29: it goes into the mockups first, then it gets a row. The 14 found in phase 1 are there since review 4.",
     "",
     table(["Screen", "What cannot be done", "Engine command that waits"], MISSING.map((m) => [m.screen, m.what, m.command ?? ""])),
     "",

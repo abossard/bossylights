@@ -10,6 +10,7 @@ import { SequenceEditor } from "./SequenceEditor";
 import { StepEditor } from "./StepEditor";
 import { KIND_NAME, KindSymbol } from "./Symbol";
 import "./looks.css";
+import { LookTools } from "./Manage";
 
 export const id = "looks";
 export const title = "Looks";
@@ -116,6 +117,7 @@ export function Screen() {
             </Button>
           </Show>
         </header>
+        <LookTools id={current().id} />
         <div class="lk-tags" role="group" aria-label="Groups this look is in">
           <span class="lk-label">In groups</span>
           <For each={current().groups} fallback={<span class="mute">none</span>}>

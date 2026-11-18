@@ -126,6 +126,7 @@ export function createConsole() {
     page,
     pageId,
     setPageId,
+    pageIndex,
     editing,
     setEditing,
     message,

@@ -23,6 +23,13 @@ export const COMMANDS = {
   SetLock: command("Lock what a press does while LIVE is on, or not: the Console layout, pads, pages, Learn and the mappings", "on"),
   Blackout: command("Every channel goes out at zero. What is held stays held", "on", true),
   Undo: command("Take back the last change to the show file"),
+  Redo: command("Put back the last change Undo took away"),
+
+  // ---- the show file
+  RenameShow: command("Another name for the show and its file", "name"),
+  NewShow: command("An empty show file. The open one is saved first"),
+  OpenShow: command("Open another show file. The open one is saved first", "file"),
+  SaveShowAs: command("Write a copy of the show file. The copy becomes the open one", "file"),
 
   // ---- tempo
   TapTempo: command("One tap. After two taps the beat follows the taps, until ReleaseTempo"),
@@ -46,6 +53,12 @@ export const COMMANDS = {
 
   // ---- the Console layout
   AddPage: command("A new, empty Console page"),
+  RenamePage: command("Another name for a page", "page, name"),
+  MovePage: command("Move a page among the tabs", "page, by"),
+  DeletePage: command("Remove a page and its widgets. The last page stays", "page"),
+  SetWidgetTarget: command("What a widget acts on: the look of a pad, the target of a slider", "page, widget, target"),
+  SetWidgetWords: command("The words of a label or a frame", "page, widget, words"),
+  SetCueList: command("The looks of a cue list and their order", "list, looks"),
   AddWidget: command("A widget on a page, at the first free place", "page, kind"),
   PlaceWidget: command("Move or resize a widget, in whole cells", "page, widget, x, y, w, h"),
   RemoveWidget: command("Take a widget off a page", "page, widget"),
@@ -72,6 +85,12 @@ export const COMMANDS = {
   SetStepProperty: command("Set one property of a step, or leave it alone", "step, property, value or not set"),
   SetSequenceEntry: command("Change one item of a sequence: start, width, speed, loop, spread, transition", "sequence, entry, change"),
   SetPattern: command("Change a pattern: shape, measure, colours from, runs on", "pattern, change"),
+  AddLook: command("A new step, sequence or pattern", "kind"),
+  RenameLook: command("Another name for a look, everywhere it is used", "look, name"),
+  CopyLook: command("A copy of a look, in the same groups", "look"),
+  DeleteLook: command("Remove a look from the library, its pads and its sections. Refused while a sequence uses it", "look"),
+  AddSequenceEntry: command("One more item at the end of a sequence", "sequence, look"),
+  RemoveSequenceEntry: command("Take one item out of a sequence", "sequence, entry"),
   AddGroup: command("A new, empty group"),
   RenameGroup: command("Another name for a group, in the autopilot rules too", "group, name"),
   DeleteGroup: command("Remove a group. Its looks stay", "group"),
@@ -94,6 +113,11 @@ export const COMMANDS = {
   SetAddress: command("Another address for a light", "fixture, universe, address"),
   ReorderFixture: command("Move a light inside its group: the order is left to right", "fixture, by"),
   Identify: command("One light flashes so it can be found in the room, or stops", "fixture or none"),
+  RenameFixture: command("Another name for a light", "fixture, name"),
+  SetFixtureMode: command("Another mode of the same model. Refused where its channels do not fit", "fixture, mode"),
+  SetFixtureGroup: command("A light joins another group, as its last", "fixture, group"),
+  RemoveFixture: command("A light leaves the patch", "fixture"),
+  RemovePanel: command("A pixel panel leaves the patch", "panel"),
   AddPanel: command("A pixel panel, spread over as many universes as it needs", "name, columns, rows, wiring, pixel, order, start universe"),
 
   // ---- raw channels
@@ -110,12 +134,14 @@ export const COMMANDS = {
   TestMapping: command("Show that a mapping is alive: the hardware control lights. Nothing fires", "mapping"),
   RemoveMapping: command("Remove a mapping", "mapping"),
 
+  SetOutput: command("Set up an output: its kind, universes and rate", "output, kind, universes, rate", true),
+  RemoveOutput: command("Remove an output", "output", true),
+  SetAudioInput: command("Which input the beat is heard on", "input"),
+  SetOsc: command("Listen for commands over OSC, or not, and on which port", "on, port"),
+
   // ---- the engine itself
   StopEngine: command("The engine ends in an orderly way: it answers, closes every connection and sends no more frames. The request Stop of the API (#107)", "", true),
 
-  // ---- in the engine today, with no control in any mockup
-  SetOutput: command("Set up an output: its kind, universes and rate", "output, kind, universes, rate", true),
-  RemoveOutput: command("Remove an output", "output", true),
 } as const satisfies Record<string, CommandSpec>;
 
 export type CommandName = keyof typeof COMMANDS;

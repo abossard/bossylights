@@ -178,7 +178,7 @@ const searches = [
   ["", CONTROLS.length],
   ["blackout", ["top.blackout"]],
   ["BLACKOUT", ["top.blackout"]],
-  ["menu bar", ["menubar.item", "menubar.open-window", "menubar.stop-engine"]],
+  ["menu bar", ["top.show", "menubar.item", "menubar.open-window", "menubar.stop-engine"]],
   ["SetLive", ["top.live"]],
   ["top bar indicator lock", ["top.indicator.lock"]],
   ["no such thing", []],

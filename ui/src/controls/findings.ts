@@ -88,19 +88,8 @@ export interface Missing {
   command?: string;
 }
 
-export const MISSING: readonly Missing[] = [
-  { screen: "Top bar", what: "Redo" },
-  { screen: "Top bar", what: "The show file: new, open, save as, and the name of the show" },
-  { screen: "Looks", what: "Make a new step, sequence or pattern" },
-  { screen: "Looks", what: "Rename, copy and delete a look" },
-  { screen: "Looks", what: "Add an item to a sequence, and take one out" },
-  { screen: "Looks", what: "A colour outside the twelve swatches (the brief says 'chips and picker')" },
-  { screen: "Console", what: "Rename, reorder and delete a page" },
-  { screen: "Console", what: "Say which look a pad plays, and which fader a slider moves" },
-  { screen: "Console", what: "The words of a label and a frame" },
-  { screen: "Patch", what: "Remove a light, rename it, change its mode or its group" },
-  { screen: "Patch", what: "Change or remove a pixel panel" },
-  { screen: "In/Out", what: "Add, set up and remove an output", command: "SetOutput, RemoveOutput" },
-  { screen: "In/Out", what: "Pick the audio input, and set up OSC" },
-  { screen: "Console", what: "The cue list itself: its looks and their order (#70)" },
-];
+/**
+ * Empty since review 4: the owner's decision 29 was "back to the mockups first". The 14 things found in phase 1
+ * are in `mockups/` now and have rows. A new gap goes here until the mockups show it.
+ */
+export const MISSING: readonly Missing[] = [];

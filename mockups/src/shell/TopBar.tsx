@@ -6,6 +6,7 @@ import { review } from "../review/store";
 import { LearnBar, LearnButton } from "./learn";
 import { LiveSwitch } from "./LiveSwitch";
 import { screens } from "./registry";
+import { ShowFile, TempoSource } from "./ShowFile";
 import { go, route } from "./router";
 
 function Status() {
@@ -15,6 +16,7 @@ function Status() {
       <div class="status-tempo" aria-label={`Tempo ${store.state.tempo} BPM, beat ${store.beat() + 1}`}>
         <b class="display">{store.state.tempo}</b>
         <span class="mute">BPM</span>
+        <TempoSource />
         <Button class="status-tap" onClick={() => store.tap()} aria-label="Tap the tempo">
           Tap
         </Button>
@@ -43,6 +45,9 @@ function Status() {
       >
         Undo
       </Button>
+      <Button disabled reason="Nothing to redo" aria-label="Redo | Nothing to redo" aria-keyshortcuts="Meta+Shift+Z Control+Shift+Z" onClick={() => undefined}>
+        Redo
+      </Button>
     </div>
   );
 }
@@ -59,7 +64,7 @@ export function TopBar() {
       <div class="topbar">
         <div class="brand">
           <b class="display">Bossylights</b>
-          <span class="mute">{store.state.showName}</span>
+          <ShowFile />
         </div>
         <Status />
       </div>

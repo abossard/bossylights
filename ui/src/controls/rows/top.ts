@@ -1,7 +1,20 @@
 // The top bar: on every screen, always in the same place.
 import type { CommandName } from "../commands.ts";
 import { gone, off, works } from "../situations.ts";
-import { button, change, choice, control, everywhere, keep, liveButton, no, remove, toggle, yes, LOCKED, type Control } from "../spec.ts";
+import { button, change, choice, control, everywhere, field, keep, liveButton, no, remove, toggle, yes, LOCKED, NOT_A_BUTTON, type Control, type Row } from "../spec.ts";
+
+const LIVE_IS_ON = off("LIVE is on");
+const ON_SCREEN = no("A show file is chosen on screen, with the system's own window");
+/** An entry of the show file menu. Checked with the menu open. New and Open swap the whole show: not while LIVE is on. */
+const show = (row: Omit<Row, "screen" | "part" | "kind">, swaps: boolean): Control =>
+  control({
+    learn: ON_SCREEN,
+    ...row,
+    screen: "Top bar",
+    part: "Show file",
+    kind: "edit",
+    in: { ...(swaps ? { "live-on": LIVE_IS_ON, lock: LIVE_IS_ON, recording: LIVE_IS_ON } : {}), "no-engine": off("Engine not connected"), ...row.in },
+  });
 
 const indicator = (
   id: string,
@@ -134,8 +147,7 @@ export const TOP: Control[] = [
     name: "Tempo source",
     screen: "Top bar",
     part: "Tempo",
-    from: [],
-    decided: "#102",
+    from: ["shell/TempoSource/from-tap-give-the-beat"],
     kit: "Button.action",
     kind: "play",
     does: "Says who drives the beat. While taps hold it, the words 'from Tap' are a button: a press gives the beat back to the picked feed. Checked with taps holding the beat",
@@ -209,7 +221,7 @@ export const TOP: Control[] = [
       empty: off("Nothing to undo"),
     },
     feedback: { screen: "What was changed goes back, when the engine reports it. The button names the next step to take back" },
-    undo: no("There is no redo in the mockups. See the list of missing controls"),
+    undo: no("Redo puts it back"),
     first: change("It has to say what it takes back ('Undo: move widget'), and 'Nothing to undo' when off. Both are only in its accessible name today"),
     states: ["has a step", "nothing to undo"],
   }),
@@ -296,4 +308,104 @@ export const TOP: Control[] = [
     learn: no("The Console tab is the control to map"),
     states: ["something runs", "nothing runs"],
   }),
+  control({
+    id: "top.redo",
+    name: "Redo",
+    screen: "Top bar",
+    part: "Status",
+    from: ["shell/Status/redo"],
+    kit: "Button.action",
+    kind: "edit",
+    does: "Puts back the last change Undo took away. A new change empties it",
+    sends: ["Redo"],
+    gestures: { ...button("Puts back one step"), keyboard: "Cmd or Ctrl, Shift and Z, outside a text field. On the button, Enter" },
+    in: {
+      "live-off": off("Nothing to redo"),
+      "live-on": off("Nothing to redo"),
+      lock: off("Nothing to redo"),
+      recording: off("Nothing to redo"),
+      autopilot: off("Nothing to redo"),
+      holding: off("Nothing to redo"),
+      empty: off("Nothing to redo"),
+      "edit-surface": off("Nothing to redo"),
+      learn: off("Nothing to redo"),
+      song: off("Nothing to redo"),
+      "no-song": off("Nothing to redo"),
+      "output-lost": off("Nothing to redo"),
+    },
+    feedback: { screen: "What Undo took away is back, when the engine reports it. The button names the step it puts back" },
+    undo: no("Undo takes it away again"),
+    first: keep("Undo without a way back is a trap: one wrong Undo would lose an edit. It names its step, as Undo does"),
+    states: ["nothing to redo", "has a step"],
+  }),
+  control({
+    id: "top.show",
+    name: "Show file",
+    screen: "Top bar",
+    part: "Show file",
+    from: ["shell/ShowFile/show-file"],
+    kit: "Button.toggle",
+    kind: "view",
+    does: "Says the name of the show, beside 'Bossylights'. A press opens its menu: the name, New, Open, Save as",
+    ui: "the show file menu, open or not",
+    gestures: toggle("Opens the menu", "it closes. Escape and a press outside close it too"),
+    learn: ON_SCREEN,
+    first: keep("The name was plain words in the mockup. The show file needs one home, and the name is where the eye looks for it"),
+    states: ["closed", "open"],
+  }),
+  show(
+    {
+      id: "top.show.name",
+      name: "Name of the show",
+      from: ["shell/ShowFile/name-of-the-show"],
+      kit: "Field.text",
+      does: "The name of the show. It is the name of its file too",
+      sends: ["RenameShow"],
+      gestures: field("the name"),
+      learn: NOT_A_BUTTON,
+    },
+    false,
+  ),
+  show(
+    {
+      id: "top.show.new",
+      name: "New show file",
+      from: ["shell/ShowFile/new-show-file"],
+      kit: "Button.action",
+      does: "Starts an empty show file. The one that was open is saved as it is and can be opened again",
+      sends: ["NewShow"],
+      gestures: button("Starts an empty show file"),
+      in: { holding: off("Release what you hold first") },
+      undo: no("The show before is saved: Open brings it back"),
+    },
+    true,
+  ),
+  show(
+    {
+      id: "top.show.open",
+      name: "Open a show file",
+      from: ["shell/ShowFile/open-a-show-file"],
+      kit: "Button.action",
+      does: "The system asks which file. The show that was open is saved as it is, then the picked one opens",
+      sends: ["OpenShow"],
+      gestures: button("Asks which file to open"),
+      in: { holding: off("Release what you hold first") },
+      undo: no("The show before is saved: Open brings it back"),
+    },
+    true,
+  ),
+  show(
+    {
+      id: "top.show.save-as",
+      name: "Save as",
+      from: ["shell/ShowFile/save-the-show-file-as"],
+      kit: "Button.action",
+      does: "The system asks where. A copy is written there and becomes the open show. There is no Save: every change is saved by itself",
+      sends: ["SaveShowAs"],
+      gestures: button("Asks where to save a copy"),
+      in: { "live-on": works("Works mid-show. The lights do not notice") },
+      undo: no("The copy is a file: delete it in the system"),
+    },
+    false,
+  ),
 ];
