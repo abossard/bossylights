@@ -1,0 +1,16 @@
+[package]
+name = "engine-core"
+description = "The real-time core: state, commands, update and the frame schedule. No std, no alloc."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { version = "1.0.229", default-features = false, features = ["derive"] }
+
+[dev-dependencies]
+ts-rs = "12.0.1"

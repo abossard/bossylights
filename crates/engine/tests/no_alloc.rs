@@ -2,6 +2,11 @@
 //! A counting allocator sees every allocation in this process. While the
 //! engine ticks, the main thread only sleeps, so any allocation is the tick's.
 
+#![expect(
+    unsafe_code,
+    reason = "a global allocator can only be written with unsafe"
+)]
+
 use engine::Engine;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -27,7 +32,7 @@ unsafe impl GlobalAlloc for Counting {
 static ALLOCATOR: Counting = Counting;
 
 fn main() {
-    let engine = Engine::start();
+    let engine = Engine::start().expect("the tick thread starts");
     thread::sleep(Duration::from_millis(100)); // thread start-up may allocate
 
     let allocations = ALLOCATIONS.load(Ordering::SeqCst);

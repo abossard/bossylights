@@ -3,7 +3,9 @@
 //! | Route         | What                                                 |
 //! |---------------|------------------------------------------------------|
 //! | `GET /health` | `ok` while the engine runs                           |
-//! | `GET /state`  | WebSocket, one JSON message per new frame: `{"frame":123}` |
+//! | `GET /state`  | WebSocket, one JSON `State` per new frame: `{"frame":123}` |
+
+#![forbid(unsafe_code)]
 
 use axum::Router;
 use axum::extract::State;
@@ -23,7 +25,13 @@ const USAGE: &str = "usage: bossylights-engine [--listen 127.0.0.1:7744]";
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     let listen = listen_address();
-    let engine = Arc::new(Engine::start());
+    let engine = match Engine::start() {
+        Ok(engine) => Arc::new(engine),
+        Err(error) => {
+            eprintln!("bossylights-engine: the tick thread did not start: {error}");
+            exit(1);
+        }
+    };
     let api = Router::new()
         .route("/health", get(|| async { "ok" }))
         .route("/state", get(stream_state))
@@ -76,8 +84,10 @@ async fn send_frames(mut socket: WebSocket, engine: Arc<Engine>) {
             continue;
         }
         last = Some(state.frame);
-        let message = Message::text(format!("{{\"frame\":{}}}", state.frame));
-        if socket.send(message).await.is_err() {
+        let Ok(json) = serde_json::to_string(&state) else {
+            return; // a State is plain numbers: this cannot happen
+        };
+        if socket.send(Message::text(json)).await.is_err() {
             return; // client gone
         }
     }

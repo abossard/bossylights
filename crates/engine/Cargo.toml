@@ -1,10 +1,16 @@
 [package]
 name = "engine"
-description = "The Bossylights engine: takes commands, runs the real-time core."
+description = "The Bossylights engine: takes commands, runs the tick thread around the real-time core."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+engine-core = { path = "../engine-core" }
 
 [[test]]
 name = "no_alloc"

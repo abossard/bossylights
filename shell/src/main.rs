@@ -2,6 +2,7 @@
 //! The UI reaches the engine only through its API, exactly as in a browser.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![forbid(unsafe_code)]
 
 use std::process::{Child, Command};
 

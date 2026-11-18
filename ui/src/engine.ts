@@ -2,6 +2,7 @@
 // What happens next is decided by the state machine in connection.ts.
 import { createSignal, type Accessor } from "solid-js";
 import { START, transition, type Connection, type ConnectionEvent, type Effect } from "./connection";
+import type { State } from "./engine-api";
 
 export interface Engine {
   frame: Accessor<number | undefined>;
@@ -37,7 +38,10 @@ export function connectEngine(url: string): Engine {
         socket = new WebSocket(url);
         socket.onopen = () => send("opened");
         socket.onclose = () => send("lost");
-        socket.onmessage = (message) => setFrame(JSON.parse(message.data).frame);
+        socket.onmessage = (message: MessageEvent<string>) => {
+          const state = JSON.parse(message.data) as State;
+          setFrame(state.frame);
+        };
         return;
       case "wait":
         retry = setTimeout(() => send("retry"), RETRY_MS);
