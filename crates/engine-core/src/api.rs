@@ -21,8 +21,10 @@ use serde::{Deserialize, Serialize};
 /// the old version would get wrong.
 pub const API_VERSION: u16 = 2;
 
-/// What a client sends.
+/// What a client sends. A key it does not know, here or in any type it carries, refuses
+/// the request: a misspelled field would otherwise be ignored without a word.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub enum Request {
     /// Change the state. Answered at once, before the frame that carries it.

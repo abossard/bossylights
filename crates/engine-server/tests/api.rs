@@ -248,6 +248,79 @@ async fn a_request_that_cannot_be_right_is_refused_and_changes_nothing() {
             json!({"Blackout": {"on": true}}),
             refused(json!("NotACommand")),
         ),
+        // A key nobody knows, or a known one misspelled, at every level a client writes.
+        (
+            json!({"Send": {"command": {"SetChannel": {
+                "channel": {"universe": 1, "address": 1}, "value": 200, "vlaue": 200,
+            }}}}),
+            refused(json!("NotACommand")),
+        ),
+        (
+            json!({"Send": {"command": {"SetChannel": {
+                "channel": {"universe": 1, "address": 1, "adress": 2}, "value": 200,
+            }}}}),
+            refused(json!("NotACommand")),
+        ),
+        (
+            json!({"Send": {"command": {"Blackout": {"on": true, "off": true}}}}),
+            refused(json!("NotACommand")),
+        ),
+        (
+            json!({"Send": {"command": {"ReleaseChannel": {
+                "channel": {"universe": 1, "address": 1}, "all": true,
+            }}}}),
+            refused(json!("NotACommand")),
+        ),
+        (
+            json!({"Send": {"command": {"RemoveOutput": {"output": 1, "outputs": 2}}}}),
+            refused(json!("NotACommand")),
+        ),
+        (
+            json!({"Send": {"command": {"SetOutput": {
+                "output": 2, "kind": here.clone(), "universes": {"first": 1, "count": 1}, "Rate": "30",
+            }}}}),
+            refused(json!("NotACommand")),
+        ),
+        (
+            output(
+                here.clone(),
+                json!({"first": 1, "count": 1, "last": 1}),
+                json!(null),
+            ),
+            refused(json!("NotACommand")),
+        ),
+        (
+            output(
+                json!({"Ddp": {"address": address, "color": "Rgb", "colour": "Rgbw"}}),
+                json!({"first": 1, "count": 1}),
+                json!(null),
+            ),
+            refused(json!("NotACommand")),
+        ),
+        (
+            output(
+                json!({"DmxUsbPro": {"adapter": 1, "adaptor": 2}}),
+                json!({"first": 1, "count": 1}),
+                json!(null),
+            ),
+            refused(json!("NotACommand")),
+        ),
+        (
+            json!({"Send": {"command": {"Blackout": {"on": true}}, "now": true}}),
+            refused(json!("NotACommand")),
+        ),
+        (
+            json!({"Send": {"command": {"Blackout": {"on": true}}}, "Query": null}),
+            refused(json!("NotACommand")),
+        ),
+        (
+            json!({"Search": {"text": "dimmer", "limit": 1}}),
+            refused(json!("NotACommand")),
+        ),
+        (
+            json!({"Fixture": {"maker": "Generic", "model": "Dimmer", "mode": "1"}}),
+            refused(json!("NotACommand")),
+        ),
     ];
     for (request, reply) in cases {
         send(&mut socket, &request).await;

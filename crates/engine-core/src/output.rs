@@ -74,6 +74,7 @@ impl Rate {
 
 /// A run of universes as a client sends it: `count` universes from `first`, counted from 1.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub struct RunNumbers {
     pub first: u16,

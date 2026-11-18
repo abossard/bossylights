@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 /// What kind of output, and where it sends.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub enum OutputKind {
     /// DDP over UDP, as WLED takes it. `address` is `"192.168.1.50:4048"`.

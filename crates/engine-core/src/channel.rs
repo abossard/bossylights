@@ -54,6 +54,7 @@ impl Channel {
 
 /// A channel as a client sends it, counted from 1. Not checked yet.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub struct ChannelNumbers {
     pub universe: u16,

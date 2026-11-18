@@ -106,6 +106,7 @@ pub enum BestEffort {
 /// What a client may send: the closed list, numbers as sent. The engine front checks it
 /// against the project ([`Project::update`]); only that makes an [`EngineCommand`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub enum Command {
     /// Hold a channel at a level.
