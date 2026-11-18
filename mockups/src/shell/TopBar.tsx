@@ -45,7 +45,7 @@ function Status() {
       >
         Undo
       </Button>
-      <Button disabled reason="Nothing to redo" aria-label="Redo | Nothing to redo" aria-keyshortcuts="Meta+Shift+Z Control+Shift+Z" onClick={() => undefined}>
+      <Button disabled aria-label="Redo | Nothing to redo" aria-keyshortcuts="Meta+Shift+Z Control+Shift+Z" onClick={() => undefined}>
         Redo
       </Button>
     </div>
