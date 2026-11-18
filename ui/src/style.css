@@ -1,0 +1,53 @@
+:root {
+  --ground: #1c1a17;
+  --paper: #f4efe6;
+  --mute: #c4bbad;
+  --connected: #20b2c9;
+  --waiting: #f2b705;
+  --danger: #ff4a3d;
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  background: var(--ground);
+  color: var(--paper);
+  font-family: "Archivo", system-ui, sans-serif;
+}
+
+main {
+  text-align: center;
+}
+
+.status {
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--waiting);
+}
+
+.status[data-status="connected"] {
+  color: var(--connected);
+}
+
+.status[data-status="disconnected"] {
+  color: var(--danger);
+}
+
+.frame {
+  margin: 8px 0;
+  font-family: "Big Shoulders Display", "Archivo Narrow", system-ui, sans-serif;
+  font-size: 96px;
+  font-weight: 900;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.label {
+  font-size: 14px;
+  color: var(--mute);
+}

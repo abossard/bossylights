@@ -1,0 +1,27 @@
+{
+  "name": "bossylights",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "dev": "cargo build -p engine-server && tauri dev",
+    "engine": "cargo run -p engine-server",
+    "ui": "vite ui",
+    "build": "tsc -p ui && vite build ui && cargo build --workspace",
+    "test": "npm run test:licences && npm run test:rust && npm run test:ui && npm run test:e2e",
+    "test:licences": "node scripts/check-licences.mjs",
+    "test:rust": "cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace",
+    "test:ui": "tsc -p ui",
+    "test:e2e": "playwright install chromium && playwright test"
+  },
+  "dependencies": {
+    "solid-js": "1.9.18"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.65.0",
+    "@tauri-apps/cli": "2.12.4",
+    "typescript": "7.0.2",
+    "vite": "8.3.5",
+    "vite-plugin-solid": "2.11.15"
+  }
+}
