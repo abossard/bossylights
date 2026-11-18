@@ -76,7 +76,9 @@ pub type Lateness = [u64; LATENESS_BUCKETS];
 /// The bucket for a tick that woke `late` after it was due.
 pub fn lateness_bucket(late: Duration) -> usize {
     let bucket = late.as_micros() / LATENESS_STEP.as_micros();
-    usize::try_from(bucket).map_or(LATENESS_BUCKETS - 1, |b| b.min(LATENESS_BUCKETS - 1))
+    usize::try_from(bucket)
+        .unwrap_or(usize::MAX)
+        .min(LATENESS_BUCKETS - 1)
 }
 
 /// The lateness 99 of 100 ticks stay under: the upper edge of the bucket that holds
@@ -124,10 +126,11 @@ mod tests {
         let due = Duration::from_secs(5);
         // (frames late, when the next frame is due)
         let cases = [
-            (0, due + period),          // on time
-            (3, due + period),          // oversleep: make it up at once
-            (MAX_BEHIND, due + period), // still catching up
-            (20, due + period * 21),    // machine slept: start over from now
+            (0, due + period),              // on time
+            (3, due + period),              // oversleep: make it up at once
+            (MAX_BEHIND, due + period),     // still catching up
+            (MAX_BEHIND + 1, due + period), // the last frame it still makes up
+            (20, due + period * 21),        // machine slept: start over from now
         ];
         for (late, expected) in cases {
             let now = due + period * late;
