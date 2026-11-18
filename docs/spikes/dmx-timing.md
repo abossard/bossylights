@@ -11,12 +11,12 @@ Can this stack send full DMX frames at 44 Hz from a Mac without glitches? Measur
 | The same in the background (`taskpolicy -b`) | ❌ about 8 Hz on every sink, p99 about 230 ms, max up to 1.4 s: background policy overrides the time-constraint thread |
 | Without a vendor driver | ✅ The FTDI serial driver built into macOS, `libc` only |
 | Open DMX (host makes break and timing) | ⏳ written and compiled, not run: no adapter |
-| A hidden Tauri window (App Nap) | ⏳ not measured: the spike has no window |
+| A hidden Tauri window (App Nap) | ✅ measured with the real shell: no window state slows the engine, p99 under 1 ms ([hidden-window.md](hidden-window.md)) |
 | Sleep and wake, unplug and replug | ⏳ moved to the real output ticket (#106). The commands below are ready |
 | Timing on the DMX wire | ⏳ not measured: needs a DMX analyser |
 
 - **For the product tick:** give the output thread the time-constraint policy. The plain sleep loop is what #101 and #24 saw wake late.
-- **Keep the engine process out of the background band.** Under Darwin background policy even the time-constraint thread runs at 8 Hz. Open: whether a hidden Tauri window (App Nap) puts the engine process there; measure it with the shell.
+- **Keep the engine process out of the background band.** Under Darwin background policy even the time-constraint thread runs at 8 Hz. Measured in [hidden-window.md](hidden-window.md): a hidden, minimised or covered window does not put the engine there, so nothing more is needed.
 - **For the DMX USB Pro:** its USB to widget link is a real serial line. Set it fast enough (500 000 baud) and never write faster than it drains: the first run did not, and frames fell minutes behind while every host number looked perfect (see "What failed").
 
 ## The output thread
@@ -100,7 +100,7 @@ Not asked for in the issue. It does not replace the DDP output feature (#44).
 
 - One packet per frame: header `0x41`, sequence 1 to 15, `0x1B` (RGBW, 8 bit), device 1, offset 0, length 1280, then 320 pixels. A rainbow moves one column per frame on a 4 × 80 matrix, so a dropped or repeated frame shows.
 - The socket is non-blocking. A send that would block drops the frame and counts it: the thread never waits on the network.
-- CI checks every packet over loopback (`tests/ddp_loopback.rs`): what is sent, not how fast. Runners wake late; timing is judged by the measured runs only.
+- The spike's loopback test (`tests/ddp_loopback.rs`) checks every packet: what is sent, not how fast. CI no longer builds the spike (#110). The product's DDP output is tested in `crates/outputs`.
 
 ## Open DMX: written, not run
 
@@ -116,10 +116,9 @@ Not asked for in the issue. It does not replace the DDP output feature (#44).
 | Sleep and wake | #106 | the same with `--hands sleep --json results/sleep-pro.json` |
 | Open DMX | #23, needs an Open DMX adapter | `--sink open-dmx=PORT` |
 | Wire timing | needs a DMX analyser on the Pro's output | |
-| Hidden window | the engine under the Tauri shell with its window hidden, frame intervals logged | |
 
 `--hands` prints, with a bell, what to do and when.
 
 ## Runs
 
-All commands: `spikes/dmx-timing/README.md`. Results as JSON: `spikes/dmx-timing/results/`. CI runs the tests and a 20-second mock run on Linux and macOS (job `dmx-timing-spike`), for the record only: the macOS runner (a virtual machine, time-constraint) had 13 of 879 intervals off, p99 24.6 ms; Linux 0.
+All commands: `spikes/dmx-timing/README.md`. Results as JSON: `spikes/dmx-timing/results/`. Nothing builds the spike in CI: the job `dmx-timing-spike` was removed in #110. Its last run, for the record only: 20 seconds with a mock sink on Linux and macOS. The macOS runner (a virtual machine, time-constraint) had 13 of 879 intervals off, p99 24.6 ms; Linux 0.

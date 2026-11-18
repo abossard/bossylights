@@ -18,7 +18,7 @@ Rust engine, web UI in a Tauri shell, Apache-2.0. Status: skeleton (engine count
 |---|---|
 | `crates/engine-core` | the real-time core: `update`, state, commands. No `std`, no `alloc` |
 | `crates/engine` | the `Engine` and its tick thread around the core |
-| `crates/rt-thread` | starts the tick thread with real-time priority. The only `unsafe` |
+| `crates/rt-thread` | starts the tick thread with real-time priority. The only `unsafe` in the product. Three tests carry a counting allocator, which needs `unsafe` too |
 | `crates/outputs` | every output kind (DDP, DMX USB Pro) and its bytes. Opened off the tick thread, `take` a frame without waiting |
 | `crates/fixture-library` | fixture definitions as a model: QLC+ `.qxf` bytes in, maker, model, modes, channels out. Reads no files. `cargo run -p fixture-library --example read_folder -- <folder>` reads a folder and prints how many were read and why any failed |
 | `crates/engine-server` | `bossylights-engine`, the headless process serving the API |
@@ -44,7 +44,7 @@ Rust engine, web UI in a Tauri shell, Apache-2.0. Status: skeleton (engine count
 - First engine slice: `docs/design/engine-slice-1.md`.
 - Every feature has an end-to-end test that checks DMX output.
 - Apache-2.0 only: no GPL or AGPL code or dependencies. Ideas from BlinderKitten, Chataigne and Mizer are fine, their code is not.
-- Plain words in the default view: looks, pads.
+- Plain words in the default view: looks, pads. Desk words: Playback, Patch, Show file, Looks, Tempo. A song has one show.
 - All who-wins rules live in one place (one table in the Mixer, one panel in the app). No other code decides between two values for the same light. See `docs/design/who-wins.md`.
 
 ## How to write: visual first, few words

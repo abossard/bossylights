@@ -1,6 +1,6 @@
 # The theory of Bossylights
 
-Draft for review. Nothing is built. Questions are at the end.
+Written before M1. M1 is built (a command lights two outputs, each at its own rate); the rest is design. Questions are at the end.
 
 > A program is the theory in its builders' heads (Peter Naur). This page is that theory, as pictures.
 
@@ -278,5 +278,7 @@ flowchart LR
 | 5 | DJ software and audio disagree on the beat | the feed you picked wins |
 | 6 | What is Song Director? | the editor of a song's show. Song = show, one screen |
 | 7 | Missing from QLC+? | nothing named |
+| 8 | Words on the desk | Playback, Patch, Show file, Looks, Tempo |
+| 9 | Songs and shows | a song has one show |
 
 Details: [review-1.md](review-1.md).

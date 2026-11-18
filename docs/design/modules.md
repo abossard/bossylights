@@ -1,6 +1,6 @@
 # Module boundary map
 
-Draft for review. Nothing is built. Read [theory.md](theory.md) first. Questions are at the end.
+Written before M1. M1 is built (a command lights two outputs, each at its own rate); the rest is design. Read [theory.md](theory.md) first. Questions are at the end.
 
 ## The rule: deep modules
 
@@ -150,6 +150,8 @@ flowchart LR
 | 2 | Can you play something that is not saved? | no. Everything playable lives in Project, and what you try is saved by itself |
 | 3 | Where does controller mapping live? | review 2: in In/Out, like QLC+ profiles. So mapping leaves Surface and becomes the Controllers module. Learn still works on every control in the app |
 | 4 | Music and Autopilot | two modules: knowing and deciding |
-| 5 | Hardest module to keep narrow | open |
+| 5 | Hardest module to keep narrow | the **Mixer**: every who-wins rule lives in it ([who-wins.md](who-wins.md)) |
+| 6 | Words on the desk | Playback, Patch, Show file, Looks, Tempo |
+| 7 | Songs and shows | a song has one show |
 
 Details: [review-1.md](review-1.md), [review-2.md](review-2.md).

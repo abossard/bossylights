@@ -145,7 +145,7 @@ The DMX USB Pro checks print a timed line for every state change (with the syste
 | `tsc`, oxlint, `node --test` | the UI type-checks; exhaustive switches, no `any`, only `engine.ts` talks to the engine; its connection state machine, every state and event; how replies change its picture |
 | Playwright | engine + UI in a browser: the counter advances, the thread's priority shows, a fader sets a channel, an output and its counters show |
 
-`npm run scorecard` prints numbers to watch (lateness per output with two outputs at 60 and 44 a second, intervals off by more than 2 ms, send to frame); CI writes them into each run's summary. A nightly workflow runs `npm run mutants`.
+`npm run scorecard` prints numbers to watch (lateness per output with two outputs at 60 and 44 a second, intervals off by more than 2 ms, send to frame); CI writes the line counts, public items and escape hatches into each run's summary. The timing numbers read "not measured on CI": run `npm run scorecard` on a real machine. A nightly workflow runs `npm run mutants`.
 
 ## Plan
 
