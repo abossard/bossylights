@@ -854,7 +854,9 @@ dependencies = [
  "engine",
  "futures-util",
  "outputs",
+ "rtrb",
  "serde_json",
+ "serialport",
  "tokio",
  "tokio-tungstenite",
 ]
