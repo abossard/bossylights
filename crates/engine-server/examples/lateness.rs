@@ -1,10 +1,17 @@
-//! Runs the engine for 60 seconds with two DDP outputs at different rates (60 and 44 a
-//! second) that send to a receiver on this machine. Prints, in microseconds, the worst
-//! p99 lateness of the two, the worst lateness of the two, then the intervals off by
-//! more than 2 ms on both together. Each output's numbers go to stderr. The scorecard
-//! reads it: `cargo run -q -p engine-server --example lateness`.
+//! Runs the engine with DDP outputs that send to a receiver on this machine, at 60 and 44
+//! a second in turn. Prints, in microseconds, the worst p99 lateness of the outputs, the
+//! worst lateness of the outputs, then the intervals off by more than 2 ms on all of them
+//! together. Each output's numbers go to stderr. The scorecard reads it.
+//!
+//! | Run | Outputs, universes each | For | Command |
+//! |---|---|---|---|
+//! | normal | 2, 1 | 60 s | `cargo run -q --release -p engine-server --example lateness` |
+//! | at the limits the API allows | 16, 64 | 30 s | `cargo run -q --release -p engine-server --example lateness -- limits` |
 
-use engine::{Color, Command, Engine, OutputKind, OutputNumber, Rate, RunNumbers, Universes};
+use engine::{
+    Color, Command, Engine, MAX_OUTPUTS, MAX_UNIVERSES, OutputKind, OutputNumber, Rate,
+    RunNumbers, Universes,
+};
 use std::net::{SocketAddr, UdpSocket};
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -12,10 +19,35 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 
-const RUN: Duration = Duration::from_secs(60);
+/// How many outputs, how many universes each, for how long.
+struct Setup {
+    outputs: u8,
+    universes: u16,
+    run: Duration,
+}
+
+const NORMAL: Setup = Setup {
+    outputs: 2,
+    universes: 1,
+    run: Duration::from_secs(60),
+};
+
+const LIMITS: Setup = Setup {
+    outputs: MAX_OUTPUTS as u8,
+    universes: MAX_UNIVERSES,
+    run: Duration::from_secs(30),
+};
 
 fn main() -> ExitCode {
-    match run() {
+    let setup = match std::env::args().nth(1).as_deref() {
+        None => NORMAL,
+        Some("limits") => LIMITS,
+        Some(other) => {
+            eprintln!("lateness: unknown run {other:?}; none or \"limits\"");
+            return ExitCode::FAILURE;
+        }
+    };
+    match run(&setup) {
         Ok(line) => {
             println!("{line}");
             ExitCode::SUCCESS
@@ -27,11 +59,14 @@ fn main() -> ExitCode {
     }
 }
 
-fn run() -> Result<String, String> {
-    let (engine, mut sender) = Engine::start(Universes::ONE).map_err(|e| e.to_string())?;
+fn run(setup: &Setup) -> Result<String, String> {
+    let universes = Universes::new(setup.universes).ok_or("universes")?;
+    let (engine, mut sender) = Engine::start(universes).map_err(|e| e.to_string())?;
     let (address, stop) = drain().map_err(|e| e.to_string())?;
-    let rates = [Rate::Sixty, Rate::FortyFour];
-    let numbers = [1, 2].map(|n| OutputNumber::try_from(n).map_err(|_| "output number"));
+    let rates = [Rate::Sixty, Rate::FortyFour].into_iter().cycle();
+    let numbers: Vec<_> = (1..=setup.outputs)
+        .map(|n| OutputNumber::try_from(n).map_err(|_| "output number"))
+        .collect();
     for (number, rate) in numbers.iter().zip(rates) {
         let command = Command::SetOutput {
             output: (*number)?,
@@ -39,14 +74,17 @@ fn run() -> Result<String, String> {
                 address,
                 color: Color::Rgbw,
             },
-            universes: RunNumbers { first: 1, count: 1 },
+            universes: RunNumbers {
+                first: 1,
+                count: setup.universes,
+            },
             rate: Some(rate),
         };
         sender
             .send(command)
             .map_err(|r| format!("refused: {r:?}"))?;
     }
-    thread::sleep(RUN);
+    thread::sleep(setup.run);
     let state = engine.query();
     stop.store(true, Ordering::Relaxed);
     let (mut p99, mut worst, mut off) = (Duration::ZERO, Duration::ZERO, 0);
