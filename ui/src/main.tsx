@@ -8,8 +8,8 @@ function App() {
   onCleanup(engine.close);
   return (
     <main>
-      <p class="status" data-status={engine.status()} data-testid="status">
-        {engine.status()}
+      <p class="status" data-status={engine.connection()} data-testid="status">
+        {engine.connection()}
       </p>
       <p class="frame" data-testid="frame">
         {engine.frame() ?? "0"}

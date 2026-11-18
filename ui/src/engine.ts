@@ -1,11 +1,11 @@
-// The only file that talks to the engine. Everything else reads these signals.
+// The only file that talks to the engine: sockets and timers live here.
+// What happens next is decided by the state machine in connection.ts.
 import { createSignal, type Accessor } from "solid-js";
-
-export type Status = "connecting" | "connected" | "disconnected";
+import { START, transition, type Connection, type ConnectionEvent, type Effect } from "./connection";
 
 export interface Engine {
   frame: Accessor<number | undefined>;
-  status: Accessor<Status>;
+  connection: Accessor<Connection>;
   close: () => void;
 }
 
@@ -19,30 +19,36 @@ export function engineUrl(): string {
 
 /** Connects to the engine's state stream and keeps reconnecting until closed. */
 export function connectEngine(url: string): Engine {
+  const [start, startEffects] = START;
   const [frame, setFrame] = createSignal<number>();
-  const [status, setStatus] = createSignal<Status>("connecting");
+  const [connection, setConnection] = createSignal<Connection>(start);
   let socket: WebSocket | undefined;
   let retry: ReturnType<typeof setTimeout> | undefined;
-  let closed = false;
 
-  const open = () => {
-    socket = new WebSocket(url);
-    socket.onopen = () => setStatus("connected");
-    socket.onmessage = (event) => setFrame(JSON.parse(event.data).frame);
-    socket.onclose = () => {
-      setStatus("disconnected");
-      if (!closed) retry = setTimeout(open, RETRY_MS);
-    };
+  const send = (event: ConnectionEvent) => {
+    const [next, effects] = transition(connection(), event);
+    setConnection(next);
+    effects.forEach(perform);
   };
-  open();
 
-  return {
-    frame,
-    status,
-    close: () => {
-      closed = true;
-      clearTimeout(retry);
-      socket?.close();
-    },
+  const perform = (effect: Effect) => {
+    switch (effect) {
+      case "open":
+        socket = new WebSocket(url);
+        socket.onopen = () => send("opened");
+        socket.onclose = () => send("lost");
+        socket.onmessage = (message) => setFrame(JSON.parse(message.data).frame);
+        return;
+      case "wait":
+        retry = setTimeout(() => send("retry"), RETRY_MS);
+        return;
+      case "shut":
+        clearTimeout(retry);
+        socket?.close();
+        return;
+    }
   };
+
+  startEffects.forEach(perform);
+  return { frame, connection, close: () => send("close") };
 }
