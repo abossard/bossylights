@@ -250,8 +250,8 @@
 .k-swatch:disabled { opacity: 0.4; outline-style: dashed; cursor: default; }
 
 /* ---- Now strip */
-.k-now { min-height: 56px; width: 100%; max-width: 760px; padding: 0 var(--sp-3) 0 0; display: flex; align-items: stretch; gap: var(--sp-3); text-align: left; background: var(--s1); color: var(--paper); border: 0; border-left: 6px solid var(--paper); cursor: pointer; }
-.k-now:hover { background: var(--s2); }
+.k-now { min-height: 56px; width: 100%; max-width: 760px; padding: 0 var(--sp-3) 0 0; display: flex; align-items: stretch; gap: var(--sp-3); text-align: left; background: none; color: var(--paper); border: 0; border-bottom: var(--rule) solid var(--line); cursor: pointer; }
+.k-now:hover { background: var(--s1); }
 .k-now > .k-now-flag { align-self: flex-start; }
 .k-now-lane { flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--sp-2); overflow: hidden; }
 .k-now-name { font: 800 var(--display-sm) / 1 var(--font-display); letter-spacing: 0.02em; color: var(--tone); }
