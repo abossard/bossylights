@@ -18,6 +18,7 @@ Rust engine, web UI in a Tauri shell, Apache-2.0. Status: skeleton (engine count
 |---|---|
 | `crates/engine-core` | the real-time core: `update`, state, commands. No `std`, no `alloc` |
 | `crates/engine` | the `Engine` and its tick thread around the core |
+| `crates/rt-thread` | starts the tick thread with real-time priority. The only `unsafe` |
 | `crates/engine-server` | `bossylights-engine`, the headless process serving the API |
 | `ui/` | the product web UI (SolidJS). `mockups/` is design reference only |
 | `shell/` | Tauri window: starts the engine, hosts `ui/` |

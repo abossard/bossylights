@@ -9,8 +9,8 @@ Eight rules. Each has one picture. They apply to Rust and TypeScript alike.
 | 3 | State machines are written down, never implied | statecharts | clippy: `struct_excessive_bools`, `fn_params_excessive_bools`, `wildcard_enum_match_arm`. oxlint: exhaustive switches |
 | 4 | Deep modules, tiny interfaces | A Philosophy of Software Design | test: allowed edges in `scripts/layers.mjs`. Scorecard: public items per crate |
 | 5 | Wrong values cannot be built | "parse, don't validate" | test: `ui/src/engine-api.ts` is generated from Rust. oxlint: no `any` |
-| 6 | Errors become states, or cannot happen | A Philosophy of Software Design | clippy in core crates: no `unwrap`, `expect`, `panic`, indexing. `forbid(unsafe_code)`. Every `allow` or `expect` has a reason |
-| 7 | The real-time core does five things less | this project | compiler: `engine-core` has no `std`, no `alloc`. `crates/engine/clippy.toml`. Test: `no_alloc.rs`. Scorecard: lateness p99 |
+| 6 | Errors become states, or cannot happen | A Philosophy of Software Design | clippy in core crates: no `unwrap`, `expect`, `panic`, indexing. `forbid(unsafe_code)`, except `rt-thread`: each block says why it is sound. Every `allow` or `expect` has a reason |
+| 7 | The real-time core does five things less | this project | compiler: `engine-core` has no `std`, no `alloc`. `crates/engine/clippy.toml`. Test: `no_alloc.rs`. Scorecard: lateness p99 over 60 s |
 | 8 | Tests are tables | this project | nightly mutation testing on the calculation crates |
 
 `npm test` runs every check. `npm run scorecard` prints the numbers, `npm run mutants` the mutation score.
