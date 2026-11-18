@@ -17,8 +17,10 @@ export function rowFaults(controls: readonly Control[]): string[] {
     if (seen.has(c.id)) faults.push(`${c.id}: the id is used twice`);
     seen.add(c.id);
     if (!/^[a-z]+(\.[a-z-]+)+$/.test(c.id)) faults.push(`${c.id}: not a stable name (screen.part.control)`);
-    if (!c.from.length) faults.push(`${c.id}: stands for no element of the mockups`);
+    if (!c.from.length && !c.decided) faults.push(`${c.id}: stands for no element of the mockups, and names no issue that decided it`);
     if (!c.sends.length && !c.ui) faults.push(`${c.id}: sends no command and names no state of the screen`);
+    // Playback decides what plays and who wins. A control that plays or sets only sends: it keeps no state of its own.
+    if ((c.kind === "play" || c.kind === "setting") && c.ui) faults.push(`${c.id}: plays or sets, and keeps a state of the screen (${c.ui}). It sends a command, the engine decides`);
     for (const text of [c.name, c.does, c.part, c.feedback.screen, c.feedback.controller, c.undo.why, c.learn.why, c.first.why]) {
       if (!text.trim()) faults.push(`${c.id}: an answer is empty`);
     }

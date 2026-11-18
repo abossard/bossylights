@@ -166,7 +166,7 @@ export const TOP: Control[] = [
     from: ["shell/Status/undo", "shell/installShortcuts/keydown"],
     kit: "Button",
     kind: "edit",
-    does: "Takes back the last change to the project. Not what was played",
+    does: "Takes back the last change to the show file. Not what was played",
     sends: ["Undo"],
     gestures: { ...button("Takes back one step"), keyboard: "Cmd or Ctrl and Z, outside a text field. On the button, Enter" },
     in: {

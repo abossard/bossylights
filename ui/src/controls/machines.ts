@@ -266,7 +266,7 @@ export const addLights: Machine<AddState, AddEvent> = {
       pick: stay("flash"),
       next: stay("flash"),
       back: go("address", ["Identify"], "the flashing stops"),
-      yes: go("find", ["AddFixture", "Identify"], "the light joins the rig and is selected. The flow closes"),
+      yes: go("find", ["AddFixture", "Identify"], "the light joins the patch and is selected. The flow closes"),
       no: go("address", ["Identify"], "with a hint: check the cable, the mode and the switches"),
       startOver: go("find", ["Identify"]),
     },

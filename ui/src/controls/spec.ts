@@ -2,9 +2,9 @@
 // A row is data. `control()` fills in what a kind always answers, a row states only where it differs.
 import type { CommandName } from "./commands.ts";
 import type { MachineName } from "./machines.ts";
-import { works, off, type Cell, type Gesture, type SituationId } from "./situations.ts";
+import { works, off, gone, type Cell, type Gesture, type SituationId } from "./situations.ts";
 
-export type Screen = "Top bar" | "Console" | "Songs" | "Looks" | "Patch" | "DMX" | "In/Out" | "How it works" | "Modules";
+export type Screen = "Top bar" | "Console" | "Songs" | "Looks" | "Patch" | "DMX" | "In/Out" | "How it works" | "Modules" | "Menu bar";
 
 /** The component that draws it. One name per component of `ui/src/kit`. */
 export type Kit =
@@ -30,15 +30,16 @@ export type Kit =
   | "NowStrip"
   | "Fold"
   | "WidgetFrame"
-  | "Node";
+  | "Node"
+  | "MenuItem";
 
 /**
- * | kind    | acts on                                             |
- * |---------|-----------------------------------------------------|
- * | play    | the lights, now, by hand                            |
- * | edit    | the project: looks, songs, patch, layout, mappings  |
- * | setting | how the engine behaves from now on                  |
- * | view    | what this screen shows, nothing else                |
+ * | kind    | acts on                                               |
+ * |---------|-------------------------------------------------------|
+ * | play    | the lights, now, by hand                              |
+ * | edit    | the show file: looks, songs, patch, layout, mappings  |
+ * | setting | how the engine behaves from now on                    |
+ * | view    | what this screen shows, nothing else                  |
  */
 export type Kind = "play" | "edit" | "setting" | "view";
 
@@ -70,6 +71,8 @@ export interface Control {
   part: string;
   /** The elements of the mockups it stands for: keys of `inventory.json`. */
   from: readonly string[];
+  /** Where it was decided, when no mockup shows it: an issue. */
+  decided: string;
   kit: Kit;
   kind: Kind;
   /** What it does, in one line. */
@@ -179,6 +182,8 @@ export const draggable = (pressDoes: string, dragDoes: string, keys: string): Ge
 // ---- cells: the usual answers
 
 const LEARNED = works("It is picked for Learn. The press maps it and does not fire it");
+/** No control of a screen is there without the window. Only the rows of the menu bar say otherwise. */
+const CLOSED = gone("The window is closed");
 
 /** What a control of each kind does in each situation, unless its row says otherwise. */
 export const USUAL: Record<Kind, Record<SituationId, Cell>> = {
@@ -196,6 +201,7 @@ export const USUAL: Record<Kind, Record<SituationId, Cell>> = {
     song: works("Works the same"),
     "no-song": works("Works the same"),
     "output-lost": works("Works. The lost output shows it when it is back, the others at once"),
+    "window-closed": CLOSED,
   },
   edit: {
     "live-off": works("Works. It is saved by itself, and on the lights at once if it plays"),
@@ -210,7 +216,8 @@ export const USUAL: Record<Kind, Record<SituationId, Cell>> = {
     learn: LEARNED,
     song: works("Works the same"),
     "no-song": works("Works the same"),
-    "output-lost": works("Works. The project does not depend on the outputs"),
+    "output-lost": works("Works. The show file does not depend on the outputs"),
+    "window-closed": CLOSED,
   },
   setting: {
     "live-off": works("Works. It takes effect at once"),
@@ -226,6 +233,7 @@ export const USUAL: Record<Kind, Record<SituationId, Cell>> = {
     song: works("Works the same"),
     "no-song": works("Works the same"),
     "output-lost": works("Works the same"),
+    "window-closed": CLOSED,
   },
   view: {
     "live-off": works("Works. It changes only what this screen shows"),
@@ -241,6 +249,7 @@ export const USUAL: Record<Kind, Record<SituationId, Cell>> = {
     song: works("Works the same"),
     "no-song": works("Works the same"),
     "output-lost": works("Works the same"),
+    "window-closed": CLOSED,
   },
 };
 
@@ -255,10 +264,10 @@ const FEEDBACK: Record<Kind, Feedback> = {
 };
 
 const UNDO: Record<Kind, Answer> = {
-  play: no("Playing is not a change to the project. Its opposite is at hand: stop, Release"),
+  play: no("Playing is not a change to the show file. Its opposite is at hand: stop, Release"),
   edit: yes("One step in Undo"),
   setting: yes("One step in Undo"),
-  view: no("Nothing in the project changes"),
+  view: no("Nothing in the show file changes"),
 };
 
 /** What a row may state. Everything else comes from its kind. */
@@ -268,6 +277,8 @@ export interface Row {
   screen: Screen;
   part: string;
   from: readonly string[];
+  /** Instead of `from`, for a control no mockup shows: the issue that decided it. */
+  decided?: string;
   kit: Kit;
   kind: Kind;
   does: string;
@@ -293,6 +304,7 @@ export function control(row: Row): Control {
     ...usual,
     learn: learn.yes ? usual.learn : works(`Not picked: ${lowerFirst(learn.why)}. It works as usual and Learn keeps waiting`),
     ...row.in,
+    ...(row.screen === "Menu bar" ? {} : { "window-closed": CLOSED }),
   };
   return {
     id: row.id,
@@ -300,6 +312,7 @@ export function control(row: Row): Control {
     screen: row.screen,
     part: row.part,
     from: row.from,
+    decided: row.decided ?? "",
     kit: row.kit,
     kind: row.kind,
     does: row.does,
@@ -338,4 +351,5 @@ export const everywhere = (cell: Cell): Record<SituationId, Cell> => ({
   song: cell,
   "no-song": cell,
   "output-lost": cell,
+  "window-closed": cell,
 });

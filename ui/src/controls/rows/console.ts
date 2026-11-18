@@ -225,7 +225,7 @@ export const CONSOLE: Control[] = [
     },
     in: {
       autopilot: works("Works. Its look covers the autopilot on the lights it sets. The rest stays with the autopilot"),
-      holding: works("Works. A look that sets the same lights takes them over: started last wins"),
+      holding: works("Works. Where it sets a light you already hold, Playback decides by the who-wins rules: as set, started last wins"),
       empty: gone("No looks yet, so no pads. The page says so"),
       "edit-surface": ARRANGED,
       song: works("Works. Its look covers the show on the lights it sets"),
@@ -376,7 +376,7 @@ export const CONSOLE: Control[] = [
     from: ["console/ConsoleGrid/remove"],
     kit: "Button",
     kind: "edit",
-    does: "Takes the widget off the page. Its looks and faders stay in the project",
+    does: "Takes the widget off the page. Its looks and faders stay in the show file",
     sends: ["RemoveWidget"],
     gestures: { ...button("Removes the widget"), keyboard: "On the widget: Delete. On the button: Enter" },
     in: whileEditing(works("Removes the widget. Undo puts it back")),

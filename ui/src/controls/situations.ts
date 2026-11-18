@@ -10,12 +10,13 @@ export const SITUATIONS = [
   { id: "autopilot", name: "Autopilot on", fact: "The autopilot plays its picks." },
   { id: "holding", name: "Something held", fact: "You hold at least one thing by hand, until Release." },
   { id: "no-engine", name: "Engine not connected", fact: "The window has lost the engine. The lights keep their last frame." },
-  { id: "empty", name: "Nothing patched", fact: "An empty project: no lights, no looks, no songs." },
+  { id: "empty", name: "Nothing patched", fact: "An empty show file: no lights, no looks, no songs." },
   { id: "edit-surface", name: "Edit surface", fact: "The Console layout is being arranged." },
   { id: "learn", name: "Learn mode", fact: "Learn waits for you to pick a control on screen." },
   { id: "song", name: "A song plays", fact: "A deck plays an analysed song." },
   { id: "no-song", name: "No song plays", fact: "Both decks are stopped or empty." },
   { id: "output-lost", name: "An output lost", fact: "One output device is gone and reconnecting. The others run." },
+  { id: "window-closed", name: "Window closed", fact: "The window is closed, the engine runs. Only the menu bar item is there." },
 ] as const;
 
 export type SituationId = (typeof SITUATIONS)[number]["id"];

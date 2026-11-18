@@ -1,4 +1,4 @@
-// The behaviour table: every control of the eight mockups, one row each (issue #102).
+// The behaviour table: every control of the eight mockups and of the menu bar, one row each (issue #102).
 // And every element of the mockups that is not a control of the product, with the reason.
 import type { Control } from "./spec.ts";
 import { CONSOLE } from "./rows/console.ts";
@@ -6,11 +6,12 @@ import { DMX } from "./rows/dmx.ts";
 import { EXPLAINERS } from "./rows/explainers.ts";
 import { INOUT } from "./rows/inout.ts";
 import { LOOKS } from "./rows/looks.ts";
+import { MENUBAR } from "./rows/menubar.ts";
 import { PATCH } from "./rows/patch.ts";
 import { SONGS } from "./rows/songs.ts";
 import { TOP } from "./rows/top.ts";
 
-export const CONTROLS: readonly Control[] = [...TOP, ...CONSOLE, ...SONGS, ...LOOKS, ...PATCH, ...DMX, ...INOUT, ...EXPLAINERS];
+export const CONTROLS: readonly Control[] = [...TOP, ...CONSOLE, ...SONGS, ...LOOKS, ...PATCH, ...DMX, ...INOUT, ...EXPLAINERS, ...MENUBAR];
 
 /**
  * | is      | means                                                                            |
@@ -36,7 +37,7 @@ export const NOT_CONTROLS: Record<string, NotAControl> = {
   "kit/Fader/div": kit("The inside of Fader"),
   "kit/List/button": kit("The inside of List: a row that can be picked"),
   "kit/Pad/running": kit("The inside of Pad"),
-  "kit/RigView/g": kit("The rig view. No screen uses it since review 1: no map anywhere"),
+  "kit/RigView/g": kit("The map of the lights. No screen uses it since review 1: no map anywhere"),
   "kit/Segmented/div": kit("The inside of Segmented: its arrow keys"),
   "kit/Segmented/button": kit("The inside of Segmented: one option"),
   "kit/Table/button": kit("The inside of Table: a row that can be picked"),

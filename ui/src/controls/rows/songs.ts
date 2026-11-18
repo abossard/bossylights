@@ -66,7 +66,7 @@ export const SONGS: Control[] = [
       song: works("Works. The Show row jumps to the song of that source, at once"),
       "no-song": works("Works. It counts from the next song on"),
     },
-    first: change("It sits in the header of one song but is a setting of the whole app, and it overlaps the DJ link indicator and the clock feed. Its place is In/Out, beside the clock"),
+    first: change("It sits in the header of one song but is a setting of the whole app, and it overlaps the DJ link indicator and the tempo feed. Its place is In/Out, beside the tempo feed"),
     states: ["deck 1", "deck 2", "timecode"],
   }),
   control({

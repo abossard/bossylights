@@ -1,5 +1,5 @@
 // Patch: universes, the universe grid, the fixtures, and the two flows that add things.
-// Rows are checked with the sample rig: 15 lights on universe 1, one address clash, a pixel panel on 2 to 4.
+// Rows are checked with the sample patch: 15 lights on universe 1, one address clash, a pixel panel on 2 to 4.
 import { gone, off, works, type Cell, type SituationId } from "../situations.ts";
 import { button, change, choice, control, draggable, field, keep, no, remove, select, toggle, NOT_A_BUTTON, NOT_A_LIST, ONLY_DRAGGED, type Control, type Row } from "../spec.ts";
 
@@ -75,7 +75,7 @@ export const PATCH: Control[] = [
     gestures: button("Opens the flow"),
     in: {
       "no-engine": off("Engine not connected"),
-      empty: works("Works. It is the paper button: the one thing to do in an empty project"),
+      empty: works("Works. It is the paper button: the one thing to do in an empty show file"),
     },
     states: ["Add lights", "Continue adding"],
   }),
@@ -272,7 +272,7 @@ export const PATCH: Control[] = [
     from: ["patch/AddFlow/yes-that-is-this-one"],
     kit: "Button",
     kind: "edit",
-    does: "Step 4: the light that flashed joins the rig and is selected. The flow closes",
+    does: "Step 4: the light that flashed joins the patch and is selected. The flow closes",
     sends: ["AddFixture", "Identify"],
     gestures: button("Adds the light"),
     in: { ...FLOW, "live-on": works("Works mid-show. The new light is dark until something plays on it") },

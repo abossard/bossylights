@@ -21,7 +21,7 @@ export interface Contradiction {
 
 export const CONTRADICTIONS: readonly Contradiction[] = [
   // ---- two controls for one thing
-  { kind: "two-one", what: "Tap in the top bar and Tap on In/Out", where: ["top.tap", "inout.clock.tap"], resolved: "The one on In/Out goes. The top bar is on every screen" },
+  { kind: "two-one", what: "Tap in the top bar and Tap on In/Out", where: ["top.tap", "inout.tempo.tap"], resolved: "The one on In/Out goes. The top bar is on every screen" },
   { kind: "two-one", what: "The breadcrumb and 'Back to' in the Looks editor", where: ["looks.crumb", "looks.back"], resolved: "'Back to' goes. The breadcrumb says where it leads" },
   { kind: "two-one", what: "The universe tabs and the rows of the Output table on DMX", where: ["dmx.universe", "dmx.output.row"], resolved: "The rows stop being buttons. A status table shows status" },
   { kind: "two-one", what: "The order grip and the two arrows on a light in Patch", where: ["patch.fixtures.order", "patch.fixtures.move"], resolved: "The grip goes. The arrows work by touch and by keyboard" },
@@ -30,7 +30,7 @@ export const CONTRADICTIONS: readonly Contradiction[] = [
   { kind: "two-one", what: "The Autopilot indicator at the LIVE switch and the Autopilot button in Running", where: ["top.indicator.autopilot", "console.autopilot.on"], resolved: "Kept: one state and one command, shown in two places. They always agree" },
   { kind: "two-one", what: "The style list on the Console and 'Use this style' on Looks", where: ["console.autopilot.style", "looks.autopilot.use-style"], resolved: "Kept: one command from two places, each where you are when you want it" },
   { kind: "two-one", what: "A section can be picked in the Sections row and in the Show row", where: ["songs.section"], resolved: "Kept as one control in two rows: the same section, the same selection" },
-  { kind: "two-one", what: "Three controls say what is followed: the DJ link indicator, 'Follows' on Songs, the clock feed on In/Out", where: ["top.indicator.dj", "songs.follows", "inout.clock.feed"], resolved: "DJ link is on or off. 'Follows' picks the deck and moves to In/Out, beside the clock feed that picks the beat", asks: 26 },
+  { kind: "two-one", what: "Three controls say what is followed: the DJ link indicator, 'Follows' on Songs, the tempo feed on In/Out", where: ["top.indicator.dj", "songs.follows", "inout.tempo.feed"], resolved: "DJ link is on or off. 'Follows' picks the deck and moves to In/Out, beside the tempo feed that picks the beat", asks: 26 },
 
   // ---- one control or one word, two meanings
   { kind: "one-two", what: "The '+' in the Console pages is a tab that is an action", where: ["console.pages.add"], resolved: "A button after the tabs, there only while editing" },
@@ -69,12 +69,12 @@ export const CONTRADICTIONS: readonly Contradiction[] = [
   // ---- against a rule
   { kind: "rule", what: "The lock holds 'Edit surface', but 'Add page', 'Put on Console', Learn and the mappings still change the surface while it is on", where: ["console.pages.add", "looks.put-on-console", "top.learn", "inout.mapping.edit", "inout.mapping.remove"], resolved: "The lock holds everything that changes what a press does: layout, pads, Learn, mappings", asks: 21 },
   { kind: "rule", what: "'Test' on an output puts the whole room at half, also while LIVE is on", where: ["inout.out.test"], resolved: "Off while LIVE is on, and says so" },
-  { kind: "rule", what: "A clock feed with no signal can be picked: then nothing drives the beat", where: ["inout.clock.feed"], resolved: "Off, with 'No signal'" },
-  { kind: "rule", what: "One press of Tap takes the beat away from the DJ software, and the way back is on In/Out", where: ["top.tap", "inout.clock.feed"], resolved: "The tempo says where it comes from. Taps hold until the next song starts, then the picked feed is back", asks: 23 },
+  { kind: "rule", what: "A tempo feed with no signal can be picked: then nothing drives the beat", where: ["inout.tempo.feed"], resolved: "Off, with 'No signal'" },
+  { kind: "rule", what: "One press of Tap takes the beat away from the DJ software, and the way back is on In/Out", where: ["top.tap", "inout.tempo.feed"], resolved: "The tempo says where it comes from. Taps hold until the next song starts, then the picked feed is back", asks: 23 },
   { kind: "rule", what: "An output that is lost, or an engine that is not connected, has no mark in the top bar", where: ["top.trouble"], resolved: "The chip that says 'No lights connected' says these two as well" },
   { kind: "rule", what: "The pads of 'How it works' play the real lights", where: ["how.pad", "how.master", "how.release", "how.record", "how.replay"], resolved: "An explainer plays on its own small model", asks: 25 },
   { kind: "rule", what: "The speed dial changes its own label and nothing else", where: ["console.speed"], resolved: "It sends SetSpeed" },
-  { kind: "rule", what: "'Every action can be undone' is a principle. A pad press, a release and a blackout are not steps of Undo", where: ["top.undo", "console.pad"], resolved: "Undo takes back changes to the project. What is played is taken back by its own opposite: stop, Release", asks: 31 },
+  { kind: "rule", what: "'Every action can be undone' is a principle. A pad press, a release and a blackout are not steps of Undo", where: ["top.undo", "console.pad"], resolved: "Undo takes back changes to the show file. What is played is taken back by its own opposite: stop, Release", asks: 31 },
   { kind: "rule", what: "'Surprise me' is not in the Console brief, and what it starts stays held", where: ["console.surprise"], resolved: "It goes. The autopilot is the surprise", asks: 24 },
 ];
 
@@ -101,5 +101,4 @@ export const MISSING: readonly Missing[] = [
   { screen: "In/Out", what: "Add, set up and remove an output", command: "SetOutput, RemoveOutput" },
   { screen: "In/Out", what: "Pick the audio input, and set up OSC" },
   { screen: "Console", what: "The cue list itself: its looks and their order (#70)" },
-  { screen: "Outside the window", what: "The menu bar item while the window is closed: engine state, frame counter, Open window, Stop engine. Decided on #107, drawn in the catalog" },
 ];

@@ -1,16 +1,16 @@
 # Every control, in every situation
 
 Written by `node scripts/write-controls-doc.mjs` from `ui/src/controls`. Change the data there, never this file.
-This is the paper form of the storyboard catalog of issue #102. The catalog shows the same rows as live frames.
+This is the paper form of the storyboard catalog of issue #102. The catalog shows the same rows as live frames: `npm run catalog`.
 
 ```mermaid
 flowchart LR
   M["8 mockups<br/>235 elements in the code"] --> I["Inventory<br/>by script"]
-  I --> R["169 controls<br/>one row each"]
+  I --> R["172 controls<br/>one row each"]
   I --> N["35 not controls<br/>each with a reason"]
-  R --> C["78 commands"]
+  R --> C["79 commands"]
   R --> S["8 state machines"]
-  R --> F["Function first<br/>126 keep, 38 change, 5 remove"]
+  R --> F["Function first<br/>129 keep, 38 change, 5 remove"]
 ```
 
 | Where | What |
@@ -22,6 +22,8 @@ flowchart LR
 | `ui/src/controls/machines.ts` | the state machines |
 | `ui/src/controls/findings.ts` | contradictions and missing controls |
 | `ui/src/controls.test.mjs` | no empty cell, every element has a row, every command is sent, every state is reached |
+| `ui/src/kit/` | the components the controls are drawn with: props in, a gesture out, no engine |
+| `ui/src/catalog/` | the catalog: one page per control, a live frame per situation and state, the command as it fires, rating and comment |
 
 ## How to read a row
 
@@ -29,7 +31,7 @@ flowchart LR
 | --- | --- |
 | A column is one fact | Each situation is the usual state plus one fact. The usual state: LIVE off, engine connected, lights patched, nothing held, no song, autopilot off, every output running |
 | A control is checked where it exists | 'Release' on one look is checked with a look held. A control is 'not there' only when the fact of the column removes it |
-| Four kinds | **play** plays the lights, now, by hand. **edit** changes the project. **setting** changes how the engine behaves. **view** changes only what the screen shows |
+| Four kinds | **play** plays the lights, now, by hand. **edit** changes the show file. **setting** changes how the engine behaves. **view** changes only what the screen shows |
 | A row says only where it differs | Each kind has a usual answer per situation, in the next table. A row states the cells that differ |
 | Off means: with its reason | A control that is off shows the reason under its label. The reason is the text of the cell, 40 letters at most |
 | Marks | ● the usual answer of its kind. ◆ works, with its own answer. ○ off, with the reason. – not there |
@@ -45,12 +47,13 @@ flowchart LR
 | Autopilot on | The autopilot plays its picks. |
 | Something held | You hold at least one thing by hand, until Release. |
 | Engine not connected | The window has lost the engine. The lights keep their last frame. |
-| Nothing patched | An empty project: no lights, no looks, no songs. |
+| Nothing patched | An empty show file: no lights, no looks, no songs. |
 | Edit surface | The Console layout is being arranged. |
 | Learn mode | Learn waits for you to pick a control on screen. |
 | A song plays | A deck plays an analysed song. |
 | No song plays | Both decks are stopped or empty. |
 | An output lost | One output device is gone and reconnecting. The others run. |
+| Window closed | The window is closed, the engine runs. Only the menu bar item is there. |
 
 ## The usual answer of each kind
 
@@ -68,7 +71,8 @@ flowchart LR
 | Learn mode | It is picked for Learn. The press maps it and does not fire it | It is picked for Learn. The press maps it and does not fire it | It is picked for Learn. The press maps it and does not fire it | It is picked for Learn. The press maps it and does not fire it |
 | A song plays | Works the same | Works the same | Works the same | Works the same |
 | No song plays | Works the same | Works the same | Works the same | Works the same |
-| An output lost | Works. The lost output shows it when it is back, the others at once | Works. The project does not depend on the outputs | Works the same | Works the same |
+| An output lost | Works. The lost output shows it when it is back, the others at once | Works. The show file does not depend on the outputs | Works the same | Works the same |
+| Window closed | **not there**: The window is closed | **not there**: The window is closed | **not there**: The window is closed | **not there**: The window is closed |
 
 ## Function first
 
@@ -82,7 +86,7 @@ The test of `DESIGN.md`, run on every control. Proposals until the owner rates t
 | Back to the outer sequence `looks.back` | Looks | Two controls for one thing: the breadcrumb above it already goes back, and says where to |
 | Order grip `patch.fixtures.order` | Patch | Two controls for one thing, and a grip that is always there. The two arrows on the same row move a light one place, by touch and by keyboard. The number stays: it says the place |
 | Output row `dmx.output.row` | DMX | Two controls for one thing: the universe tabs open a universe. A status table whose rows are also buttons says two things |
-| Tap, on In/Out `inout.clock.tap` | In/Out | Two controls for one thing. Tap is in the top bar on every screen, right above this one. The Tap feed says 'Tap in the top bar' |
+| Tap, on In/Out `inout.tempo.tap` | In/Out | Two controls for one thing. Tap is in the top bar on every screen, right above this one. The Tap feed says 'Tap in the top bar' |
 
 ### Changed: 38
 
@@ -97,7 +101,7 @@ The test of `DESIGN.md`, run on every control. Proposals until the owner rates t
 | Edit surface `console.edit-surface` | Console | An empty page shows it twice. One stays, in the page bar, paper while the page is empty |
 | Back `console.cue.back` | Console | Off with no reason before the first Go. It says 'Not started' |
 | Speed `console.speed` | Console | In the mockup it changes nothing but its own label. It needs the SetSpeed command |
-| Follows `songs.follows` | Songs | It sits in the header of one song but is a setting of the whole app, and it overlaps the DJ link indicator and the clock feed. Its place is In/Out, beside the clock |
+| Follows `songs.follows` | Songs | It sits in the header of one song but is a setting of the whole app, and it overlaps the DJ link indicator and the tempo feed. Its place is In/Out, beside the tempo feed |
 | Play from a section `songs.play-from` | Songs | Three words for one thing: 'Play from', 'Stop listening', 'Listening'. And no music plays. One word, the one Looks uses: 'Try from Drop', 'Stop'. A song that is not analysed says 'Not analysed yet' |
 | Mute recorded `songs.recorded.mute` | Songs | Off with no reason while nothing is recorded. It says 'Nothing recorded' |
 | Undo last pass `songs.recorded.undo-last-pass` | Songs | Off with no reason while there is no finished pass. It says 'No pass yet' |
@@ -118,7 +122,7 @@ The test of `DESIGN.md`, run on every control. Proposals until the owner rates t
 | Back `patch.add.back` | Patch | Off with no reason in step 1. It is gone there |
 | Add the panel `patch.panel.add` | Patch | It lets a panel land on universes that are already used, and nothing says so. It is off then and says which universe is taken |
 | Release channels `dmx.held.release-all` | DMX | It says 'Release all', the words of the Console button that gives back everything. This one gives back raw channels only, so it says 'Release channels' |
-| Clock feed `inout.clock.feed` | In/Out | A feed with no signal can be picked, and then nothing drives the beat. It is off and says 'No signal' |
+| Tempo feed `inout.tempo.feed` | In/Out | A feed with no signal can be picked, and then nothing drives the beat. It is off and says 'No signal' |
 | Test an output `inout.out.test` | In/Out | It works while LIVE is on: one press and the whole room is at half, mid-show. It is off then and says 'LIVE is on' |
 | Note or controller number `inout.mapping.message` | In/Out | Free text for something that has a shape: 'Note 36', 'CC 48'. Text that is not one of the two is refused and the field says so |
 | Pad to try `how.pad` | How it works | In the mockup it plays on the same lights as the Console. An explainer plays on its own small model and never touches the lights. Whether the explainers ship is the owner's call |
@@ -135,7 +139,7 @@ A number in the last column is a question on the owner's decisions page.
 
 | What | Rows | Resolved | Asked |
 | --- | --- | --- | --- |
-| Tap in the top bar and Tap on In/Out | `top.tap` `inout.clock.tap` | The one on In/Out goes. The top bar is on every screen |  |
+| Tap in the top bar and Tap on In/Out | `top.tap` `inout.tempo.tap` | The one on In/Out goes. The top bar is on every screen |  |
 | The breadcrumb and 'Back to' in the Looks editor | `looks.crumb` `looks.back` | 'Back to' goes. The breadcrumb says where it leads |  |
 | The universe tabs and the rows of the Output table on DMX | `dmx.universe` `dmx.output.row` | The rows stop being buttons. A status table shows status |  |
 | The order grip and the two arrows on a light in Patch | `patch.fixtures.order` `patch.fixtures.move` | The grip goes. The arrows work by touch and by keyboard |  |
@@ -144,7 +148,7 @@ A number in the last column is a question on the owner's decisions page.
 | The Autopilot indicator at the LIVE switch and the Autopilot button in Running | `top.indicator.autopilot` `console.autopilot.on` | Kept: one state and one command, shown in two places. They always agree |  |
 | The style list on the Console and 'Use this style' on Looks | `console.autopilot.style` `looks.autopilot.use-style` | Kept: one command from two places, each where you are when you want it |  |
 | A section can be picked in the Sections row and in the Show row | `songs.section` | Kept as one control in two rows: the same section, the same selection |  |
-| Three controls say what is followed: the DJ link indicator, 'Follows' on Songs, the clock feed on In/Out | `top.indicator.dj` `songs.follows` `inout.clock.feed` | DJ link is on or off. 'Follows' picks the deck and moves to In/Out, beside the clock feed that picks the beat | 26 |
+| Three controls say what is followed: the DJ link indicator, 'Follows' on Songs, the tempo feed on In/Out | `top.indicator.dj` `songs.follows` `inout.tempo.feed` | DJ link is on or off. 'Follows' picks the deck and moves to In/Out, beside the tempo feed that picks the beat | 26 |
 
 ### One control or one word, two meanings
 
@@ -173,15 +177,15 @@ A number in the last column is a question on the owner's decisions page.
 | --- | --- | --- | --- |
 | The lock holds 'Edit surface', but 'Add page', 'Put on Console', Learn and the mappings still change the surface while it is on | `console.pages.add` `looks.put-on-console` `top.learn` `inout.mapping.edit` `inout.mapping.remove` | The lock holds everything that changes what a press does: layout, pads, Learn, mappings | 21 |
 | 'Test' on an output puts the whole room at half, also while LIVE is on | `inout.out.test` | Off while LIVE is on, and says so |  |
-| A clock feed with no signal can be picked: then nothing drives the beat | `inout.clock.feed` | Off, with 'No signal' |  |
-| One press of Tap takes the beat away from the DJ software, and the way back is on In/Out | `top.tap` `inout.clock.feed` | The tempo says where it comes from. Taps hold until the next song starts, then the picked feed is back | 23 |
+| A tempo feed with no signal can be picked: then nothing drives the beat | `inout.tempo.feed` | Off, with 'No signal' |  |
+| One press of Tap takes the beat away from the DJ software, and the way back is on In/Out | `top.tap` `inout.tempo.feed` | The tempo says where it comes from. Taps hold until the next song starts, then the picked feed is back | 23 |
 | An output that is lost, or an engine that is not connected, has no mark in the top bar | `top.trouble` | The chip that says 'No lights connected' says these two as well |  |
 | The pads of 'How it works' play the real lights | `how.pad` `how.master` `how.release` `how.record` `how.replay` | An explainer plays on its own small model | 25 |
 | The speed dial changes its own label and nothing else | `console.speed` | It sends SetSpeed |  |
-| 'Every action can be undone' is a principle. A pad press, a release and a blackout are not steps of Undo | `top.undo` `console.pad` | Undo takes back changes to the project. What is played is taken back by its own opposite: stop, Release | 31 |
+| 'Every action can be undone' is a principle. A pad press, a release and a blackout are not steps of Undo | `top.undo` `console.pad` | Undo takes back changes to the show file. What is played is taken back by its own opposite: stop, Release | 31 |
 | 'Surprise me' is not in the Console brief, and what it starts stays held | `console.surprise` | It goes. The autopilot is the surprise | 24 |
 
-## Missing: 15 things with no control in any mockup
+## Missing: 14 things with no control in any mockup
 
 Found while writing the rows. Each needs a control before the screen it belongs to can be built, or a 'not in version 1'.
 
@@ -201,9 +205,8 @@ Found while writing the rows. Each needs a control before the screen it belongs 
 | In/Out | Add, set up and remove an output | SetOutput, RemoveOutput |
 | In/Out | Pick the audio input, and set up OSC |  |
 | Console | The cue list itself: its looks and their order (#70) |  |
-| Outside the window | The menu bar item while the window is closed: engine state, frame counter, Open window, Stop engine. Decided on #107, drawn in the catalog |  |
 
-## Commands: 78
+## Commands: 79
 
 The union of what the controls send: the first list of engine commands. A proposal for the engine, not a design of it.
 
@@ -216,9 +219,9 @@ The union of what the controls send: the first list of engine commands. A propos
 | `SetAutopilotStyle` | Which style the autopilot uses | style |  | `console.autopilot.style` `looks.autopilot.use-style` |
 | `SetLock` | Lock the Console layout while LIVE is on, or not | on |  | `top.indicator.lock` |
 | `Blackout` | Every channel goes out at zero. What is held stays held | on | yes | `top.blackout` |
-| `Undo` | Take back the last change to the project |  |  | `top.undo` |
-| `TapTempo` | One tap. After two taps the beat follows the taps |  |  | `top.tap` `inout.clock.tap` |
-| `SetClockFeed` | Which source drives the beat | feed: tap, audio, midi clock, virtualdj, timecode |  | `inout.clock.feed` |
+| `Undo` | Take back the last change to the show file |  |  | `top.undo` |
+| `TapTempo` | One tap. After two taps the beat follows the taps |  |  | `top.tap` `inout.tempo.tap` |
+| `SetTempoFeed` | Which source drives the beat | feed: tap, audio, midi clock, virtualdj, timecode |  | `inout.tempo.feed` |
 | `SetSpeed` | Sequences and patterns run at half, normal or double speed | factor |  | `console.speed` |
 | `StartLook` | A look runs by hand, in the next frame | look |  | `console.pad` `looks.try` |
 | `StopLook` | A look that runs by hand is switched off. What it touched stays held until Release | look |  | `console.pad` |
@@ -270,7 +273,7 @@ The union of what the controls send: the first list of engine commands. A propos
 | `SetAutopilotLights` | A group of lights the autopilot may use, or not | group, on |  | `looks.autopilot.lights` |
 | `SetWildness` | How often the autopilot changes its pick | level |  | `looks.autopilot.wild` |
 | `SetNeverDark` | What plays when nothing else does | look or none |  | `looks.autopilot.never-dark` |
-| `AddFixture` | A light joins the rig | model, mode, universe, address |  | `patch.add.confirm` |
+| `AddFixture` | A light joins the patch | model, mode, universe, address |  | `patch.add.confirm` |
 | `SetAddress` | Another address for a light | fixture, universe, address |  | `patch.grid.light` `patch.details.address` `patch.details.move-to-free` |
 | `ReorderFixture` | Move a light inside its group: the order is left to right | fixture, by |  | `patch.fixtures.order` `patch.fixtures.move` |
 | `Identify` | One light flashes so it can be found in the room, or stops | fixture or none |  | `patch.details.flash` `patch.add.next` `patch.add.confirm` `patch.add.nothing-flashed` |
@@ -285,6 +288,7 @@ The union of what the controls send: the first list of engine commands. A propos
 | `UpdateMapping` | Change a mapping: device, note or controller number, feedback | mapping, change |  | `inout.mapping.device` `inout.mapping.message` `inout.mapping.feedback` |
 | `TestMapping` | Show that a mapping is alive: the hardware control lights. Nothing fires | mapping |  | `inout.mapping.test` |
 | `RemoveMapping` | Remove a mapping | mapping |  | `inout.mapping.remove` |
+| `StopEngine` | The engine ends in an orderly way: it answers, closes every connection and sends no more frames. The request Stop of the API (#107) |  | yes | `menubar.stop-engine` |
 | `SetOutput` | Set up an output: its kind, universes and rate | output, kind, universes, rate | yes | no control: see Missing |
 | `RemoveOutput` | Remove an output | output | yes | no control: see Missing |
 
@@ -605,7 +609,7 @@ stateDiagram-v2
 | --- | --- | --- | --- |
 | address | next | flash | off while the address clashes |
 | flash | back | address | the flashing stops |
-| flash | yes | find | the light joins the rig and is selected. The flow closes |
+| flash | yes | find | the light joins the patch and is selected. The flow closes |
 | flash | no | address | with a hint: check the cable, the mode and the switches |
 
 <details><summary>Every pair of state and event</summary>
@@ -676,7 +680,7 @@ stateDiagram-v2
 | Trouble chip | `top.trouble` | Says what is wrong with the way to the lights, and opens In/Out | nothing: the open workspace | view |
 | Tap | `top.tap` | Sets the tempo by tapping along. After two taps the beat follows the taps | `TapTempo` | play |
 | Blackout | `top.blackout` | Every light goes dark. The only way to go dark | `Blackout` | play |
-| Undo | `top.undo` | Takes back the last change to the project. Not what was played | `Undo` | edit |
+| Undo | `top.undo` | Takes back the last change to the show file. Not what was played | `Undo` | edit |
 | Workspace tabs | `top.workspaces` | Opens one of the six workspaces: Console, Songs, Looks, Patch, DMX, In/Out | nothing: the open workspace | view |
 | Learn | `top.learn` | Maps a control on screen to a control on the hardware: pick one here, then move one there | `StartLearn` `CancelLearn` | view |
 | Cancel Learn | `top.learn.cancel` | Ends Learn. Nothing is mapped | `CancelLearn` | view |
@@ -684,21 +688,21 @@ stateDiagram-v2
 
 ### Top bar: in each situation
 
-| Control | LIVE off | LIVE on | Lock on | Recording on | Autopilot on | Something held | Engine not connected | Nothing patched | Edit surface | Learn mode | A song plays | No song plays | An output lost |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| LIVE switch | ◆ | ◆ | ◆ | ◆ | ◆ | ◆ | ○ | ◆ | ◆ | ● | ◆ | ◆ | ◆ |
-| DJ link indicator | ◆ | ◆ | ● | ● | ● | ● | ○ | ◆ | ● | ● | ◆ | ◆ | ● |
-| Recording indicator | ◆ | ◆ | ● | ◆ | ● | ● | ○ | ◆ | ● | ● | ● | ◆ | ● |
-| Autopilot indicator | ◆ | ◆ | ● | ● | ◆ | ● | ○ | ◆ | ● | ● | ● | ◆ | ● |
-| Lock indicator | ◆ | ◆ | ◆ | ● | ● | ● | ○ | ● | ◆ | ● | ● | ● | ● |
-| Trouble chip | – | – | – | – | – | – | ◆ | ◆ | – | – | – | – | ◆ |
-| Tap | ● | ● | ● | ◆ | ◆ | ◆ | ○ | ◆ | ● | ● | ◆ | ● | ◆ |
-| Blackout | ● | ● | ◆ | ◆ | ◆ | ◆ | ○ | ◆ | ● | ● | ● | ● | ◆ |
-| Undo | ● | ◆ | ● | ◆ | ● | ◆ | ○ | ○ | ● | ● | ● | ● | ● |
-| Workspace tabs | ● | ● | ● | ● | ● | ◆ | ● | ● | ◆ | ● | ● | ● | ● |
-| Learn | ● | ◆ | ○ | ◆ | ● | ● | ○ | ◆ | ● | ◆ | ● | ● | ● |
-| Cancel Learn | – | – | – | – | – | – | – | – | – | ◆ | – | – | – |
-| Now strip | ● | ● | ● | ● | ● | ◆ | ◆ | ◆ | ● | ◆ | ● | ● | ● |
+| Control | LIVE off | LIVE on | Lock on | Recording on | Autopilot on | Something held | Engine not connected | Nothing patched | Edit surface | Learn mode | A song plays | No song plays | An output lost | Window closed |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| LIVE switch | ◆ | ◆ | ◆ | ◆ | ◆ | ◆ | ○ | ◆ | ◆ | ● | ◆ | ◆ | ◆ | – |
+| DJ link indicator | ◆ | ◆ | ● | ● | ● | ● | ○ | ◆ | ● | ● | ◆ | ◆ | ● | – |
+| Recording indicator | ◆ | ◆ | ● | ◆ | ● | ● | ○ | ◆ | ● | ● | ● | ◆ | ● | – |
+| Autopilot indicator | ◆ | ◆ | ● | ● | ◆ | ● | ○ | ◆ | ● | ● | ● | ◆ | ● | – |
+| Lock indicator | ◆ | ◆ | ◆ | ● | ● | ● | ○ | ● | ◆ | ● | ● | ● | ● | – |
+| Trouble chip | – | – | – | – | – | – | ◆ | ◆ | – | – | – | – | ◆ | – |
+| Tap | ● | ● | ● | ◆ | ◆ | ◆ | ○ | ◆ | ● | ● | ◆ | ● | ◆ | – |
+| Blackout | ● | ● | ◆ | ◆ | ◆ | ◆ | ○ | ◆ | ● | ● | ● | ● | ◆ | – |
+| Undo | ● | ◆ | ● | ◆ | ● | ◆ | ○ | ○ | ● | ● | ● | ● | ● | – |
+| Workspace tabs | ● | ● | ● | ● | ● | ◆ | ● | ● | ◆ | ● | ● | ● | ● | – |
+| Learn | ● | ◆ | ○ | ◆ | ● | ● | ○ | ◆ | ● | ◆ | ● | ● | ● | – |
+| Cancel Learn | – | – | – | – | – | – | – | – | – | ◆ | – | – | – | – |
+| Now strip | ● | ● | ● | ● | ● | ◆ | ◆ | ◆ | ● | ◆ | ● | ● | ● | – |
 
 ### Top bar: where a cell is not the usual of its kind
 
@@ -816,14 +820,14 @@ stateDiagram-v2
 | Recording indicator | The lamp changes when the engine reports it: paper on, mute ready, empty and struck through off | The mapped control shows on or off | no. Press it again | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
 | Autopilot indicator | The lamp changes when the engine reports it: paper on, mute ready, empty and struck through off | The mapped control shows on or off | no. Press it again | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
 | Lock indicator | The lamp changes when the engine reports it: paper on, mute ready, empty and struck through off | The mapped control shows on or off | no. Press it again | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
-| Trouble chip | It appears with the trouble and goes with it. Red outline, red lamp | None | no. Nothing in the project changes | no. It is a notice, there only while something is wrong | **change**. Today it shows only when no light is connected. It also has to say 'Output lost' and 'Engine not connected': mid-show these have no mark outside In/Out |
-| Tap | The beat dots restart on the tap, at once. The tempo changes after the second tap | The mapped pad blinks on the beat | no. Playing is not a change to the project. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **keep**. Asked for in review 1: always visible beside the tempo |
-| Blackout | Red fill and 'Blackout on' on the way down. The whole app dims its row colours while dark | The mapped control is lit red while dark | no. Playing is not a change to the project. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
+| Trouble chip | It appears with the trouble and goes with it. Red outline, red lamp | None | no. Nothing in the show file changes | no. It is a notice, there only while something is wrong | **change**. Today it shows only when no light is connected. It also has to say 'Output lost' and 'Engine not connected': mid-show these have no mark outside In/Out |
+| Tap | The beat dots restart on the tap, at once. The tempo changes after the second tap | The mapped pad blinks on the beat | no. Playing is not a change to the show file. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **keep**. Asked for in review 1: always visible beside the tempo |
+| Blackout | Red fill and 'Blackout on' on the way down. The whole app dims its row colours while dark | The mapped control is lit red while dark | no. Playing is not a change to the show file. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
 | Undo | What was changed goes back, when the engine reports it. The button names the next step to take back | None | no. There is no redo in the mockups. See the list of missing controls | yes. A button or a value: one mapping | **change**. It has to say what it takes back ('Undo: move widget'), and 'Nothing to undo' when off. Both are only in its accessible name today |
-| Workspace tabs | At once: the screen owns this state | None | no. Nothing in the project changes | yes. A button or a value: one mapping | **change**. The tab 'All reviews' is review tooling and goes with the review layer |
-| Learn | Paper while Learn is on. The Learn bar under the tabs says the step, at once | None | no. Nothing in the project changes | no. It starts Learn, so it cannot be its target | **keep**. It says what it is and what a press does |
-| Cancel Learn | At once: the screen owns this state | None | no. Nothing in the project changes | no. It belongs to Learn itself | **change**. One Cancel, the same in both steps. The quiet second variant goes |
-| Now strip | At once: the screen owns this state | None | no. Nothing in the project changes | no. The Console tab is the control to map | **keep**. It says what it is and what a press does |
+| Workspace tabs | At once: the screen owns this state | None | no. Nothing in the show file changes | yes. A button or a value: one mapping | **change**. The tab 'All reviews' is review tooling and goes with the review layer |
+| Learn | Paper while Learn is on. The Learn bar under the tabs says the step, at once | None | no. Nothing in the show file changes | no. It starts Learn, so it cannot be its target | **keep**. It says what it is and what a press does |
+| Cancel Learn | At once: the screen owns this state | None | no. Nothing in the show file changes | no. It belongs to Learn itself | **change**. One Cancel, the same in both steps. The quiet second variant goes |
+| Now strip | At once: the screen owns this state | None | no. Nothing in the show file changes | no. The Console tab is the control to map | **keep**. It says what it is and what a press does |
 
 ## Console
 
@@ -850,34 +854,34 @@ stateDiagram-v2
 | Speed | `console.speed` | Sequences and patterns run at half, normal or double speed | `SetSpeed` | play |
 | Widget edit frame | `console.widget.frame` | Moves a widget on the 12 by 12 grid, only where it fits. Says its name and size | `PlaceWidget` `RemoveWidget` | edit |
 | Widget resize handle | `console.widget.resize` | Resizes a widget from its bottom right corner, not below its smallest size | `PlaceWidget` | edit |
-| Remove widget | `console.widget.remove` | Takes the widget off the page. Its looks and faders stay in the project | `RemoveWidget` | edit |
+| Remove widget | `console.widget.remove` | Takes the widget off the page. Its looks and faders stay in the show file | `RemoveWidget` | edit |
 | Add a widget | `console.drawer.add` | Puts a widget of that kind on the page: button, slider, XY pad, cue list, speed dial, label, frame | `AddWidget` | edit |
 
 ### Console: in each situation
 
-| Control | LIVE off | LIVE on | Lock on | Recording on | Autopilot on | Something held | Engine not connected | Nothing patched | Edit surface | Learn mode | A song plays | No song plays | An output lost |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Fold Running | ● | ● | ● | ● | ● | ◆ | ● | ● | ● | ● | ● | ● | ● |
-| Release one | ● | ● | ● | ◆ | ◆ | ◆ | ○ | – | ◆ | ● | ● | ● | ● |
-| Stop one | ● | ● | ● | ◆ | ◆ | ◆ | ○ | – | ◆ | ● | ◆ | ◆ | ● |
-| Release all | ○ | ○ | ○ | ○ | ○ | ◆ | ○ | ○ | ○ | ○ | ○ | ○ | ○ |
-| Autopilot on or off | ◆ | ◆ | ● | ● | ◆ | ● | ○ | ◆ | ● | ● | ● | ● | ● |
-| Autopilot style | ● | ● | ● | ● | ◆ | ● | ○ | ◆ | ● | ◆ | ● | ● | ● |
-| Console pages | ● | ● | ● | ● | ● | ◆ | ● | ● | ◆ | ● | ● | ● | ● |
-| Add page | – | – | – | – | – | – | – | – | ◆ | – | – | – | – |
-| Surprise me | ● | ● | ● | ● | ● | ● | ○ | ○ | – | ● | ● | ● | ● |
-| Edit surface | ● | ◆ | ○ | ● | ● | ● | ○ | ◆ | – | ● | ● | ● | ● |
-| Done editing | – | – | – | – | – | – | – | – | ◆ | – | – | – | – |
-| Look pad | ● | ● | ● | ● | ◆ | ◆ | ○ | – | ○ | ● | ◆ | ● | ● |
-| Fader | ● | ● | ● | ◆ | ◆ | ◆ | ○ | ◆ | ○ | ● | ● | ● | ● |
-| Movers position | ● | ● | ● | ● | ◆ | ◆ | ○ | ◆ | ○ | ● | ● | ● | ● |
-| Go | ● | ● | ● | ● | ● | ● | ○ | – | ○ | ● | ● | ● | ● |
-| Back | ○ | ● | ● | ● | ● | ● | ○ | – | ○ | ● | ● | ● | ● |
-| Speed | ● | ● | ● | ● | ◆ | ● | ○ | ● | ○ | ● | ● | ● | ● |
-| Widget edit frame | – | – | – | – | – | – | – | – | ◆ | – | – | – | – |
-| Widget resize handle | – | – | – | – | – | – | – | – | ◆ | – | – | – | – |
-| Remove widget | – | – | – | – | – | – | – | – | ◆ | – | – | – | – |
-| Add a widget | – | – | – | – | – | – | – | – | ◆ | – | – | – | – |
+| Control | LIVE off | LIVE on | Lock on | Recording on | Autopilot on | Something held | Engine not connected | Nothing patched | Edit surface | Learn mode | A song plays | No song plays | An output lost | Window closed |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Fold Running | ● | ● | ● | ● | ● | ◆ | ● | ● | ● | ● | ● | ● | ● | – |
+| Release one | ● | ● | ● | ◆ | ◆ | ◆ | ○ | – | ◆ | ● | ● | ● | ● | – |
+| Stop one | ● | ● | ● | ◆ | ◆ | ◆ | ○ | – | ◆ | ● | ◆ | ◆ | ● | – |
+| Release all | ○ | ○ | ○ | ○ | ○ | ◆ | ○ | ○ | ○ | ○ | ○ | ○ | ○ | – |
+| Autopilot on or off | ◆ | ◆ | ● | ● | ◆ | ● | ○ | ◆ | ● | ● | ● | ● | ● | – |
+| Autopilot style | ● | ● | ● | ● | ◆ | ● | ○ | ◆ | ● | ◆ | ● | ● | ● | – |
+| Console pages | ● | ● | ● | ● | ● | ◆ | ● | ● | ◆ | ● | ● | ● | ● | – |
+| Add page | – | – | – | – | – | – | – | – | ◆ | – | – | – | – | – |
+| Surprise me | ● | ● | ● | ● | ● | ● | ○ | ○ | – | ● | ● | ● | ● | – |
+| Edit surface | ● | ◆ | ○ | ● | ● | ● | ○ | ◆ | – | ● | ● | ● | ● | – |
+| Done editing | – | – | – | – | – | – | – | – | ◆ | – | – | – | – | – |
+| Look pad | ● | ● | ● | ● | ◆ | ◆ | ○ | – | ○ | ● | ◆ | ● | ● | – |
+| Fader | ● | ● | ● | ◆ | ◆ | ◆ | ○ | ◆ | ○ | ● | ● | ● | ● | – |
+| Movers position | ● | ● | ● | ● | ◆ | ◆ | ○ | ◆ | ○ | ● | ● | ● | ● | – |
+| Go | ● | ● | ● | ● | ● | ● | ○ | – | ○ | ● | ● | ● | ● | – |
+| Back | ○ | ● | ● | ● | ● | ● | ○ | – | ○ | ● | ● | ● | ● | – |
+| Speed | ● | ● | ● | ● | ◆ | ● | ○ | ● | ○ | ● | ● | ● | ● | – |
+| Widget edit frame | – | – | – | – | – | – | – | – | ◆ | – | – | – | – | – |
+| Widget resize handle | – | – | – | – | – | – | – | – | ◆ | – | – | – | – | – |
+| Remove widget | – | – | – | – | – | – | – | – | ◆ | – | – | – | – | – |
+| Add a widget | – | – | – | – | – | – | – | – | ◆ | – | – | – | – | – |
 
 ### Console: where a cell is not the usual of its kind
 
@@ -951,7 +955,7 @@ stateDiagram-v2
 | Done editing | No song plays | not there | Not editing |
 | Done editing | An output lost | not there | Not editing |
 | Look pad | Autopilot on | works | Works. Its look covers the autopilot on the lights it sets. The rest stays with the autopilot |
-| Look pad | Something held | works | Works. A look that sets the same lights takes them over: started last wins |
+| Look pad | Something held | works | Works. Where it sets a light you already hold, Playback decides by the who-wins rules: as set, started last wins |
 | Look pad | Nothing patched | not there | No looks yet, so no pads. The page says so |
 | Look pad | Edit surface | off | Being arranged: its edit frame covers it |
 | Look pad | A song plays | works | Works. Its look covers the show on the lights it sets |
@@ -1054,23 +1058,23 @@ stateDiagram-v2
 
 | Control | On screen | On a mapped controller | Undo | Learn | Function first |
 | --- | --- | --- | --- | --- | --- |
-| Fold Running | At once: the screen owns this state | None | no. Nothing in the project changes | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
-| Release one | Its chip leaves the Manual row and the hold count drops, when the engine reports it | The pad of the look goes back to idle | no. Playing is not a change to the project. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
-| Stop one | Its chip leaves the row when the engine reports it | None | no. Playing is not a change to the project. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
-| Release all | The Manual row empties and the count says 0, when the engine reports it | The mapped control is lit while something is held | no. Playing is not a change to the project. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **change**. Off with no reason today. It says 'Nothing held' under its label |
+| Fold Running | At once: the screen owns this state | None | no. Nothing in the show file changes | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
+| Release one | Its chip leaves the Manual row and the hold count drops, when the engine reports it | The pad of the look goes back to idle | no. Playing is not a change to the show file. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
+| Stop one | Its chip leaves the row when the engine reports it | None | no. Playing is not a change to the show file. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
+| Release all | The Manual row empties and the count says 0, when the engine reports it | The mapped control is lit while something is held | no. Playing is not a change to the show file. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **change**. Off with no reason today. It says 'Nothing held' under its label |
 | Autopilot on or off | Its word and the indicator's lamp change together, when the engine reports it | The mapped control shows on or off | no. Press it again | yes. A button or a value: one mapping | **keep**. Two places, one state: this button and the indicator always agree |
 | Autopilot style | The new setting shows when the engine reports it, in the same screen frame | The mapped control shows on or off | yes. One step in Undo | no. A list that opens has no pad or fader to stand for it | **keep**. It says what it is and what a press does |
-| Console pages | At once: the screen owns this state | A pad controller shows the pads of the open page | no. Nothing in the project changes | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
+| Console pages | At once: the screen owns this state | A pad controller shows the pads of the open page | no. Nothing in the show file changes | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
 | Add page | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | yes. A button or a value: one mapping | **change**. Today it is a tab that is really an action, and it works while the layout is locked. It becomes a button after the tabs, there only while editing |
-| Surprise me | Pressed look on the way down, before the engine answers. Its state when the engine reports it, in the same screen frame | The mapped control shows the same state | no. Playing is not a change to the project. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **remove**. It does not say what a press will do, and what it starts is held until Release. The autopilot is the surprise. Not in the Console brief |
-| Edit surface | At once: the screen owns this state | None | no. Nothing in the project changes | yes. A button or a value: one mapping | **change**. An empty page shows it twice. One stays, in the page bar, paper while the page is empty |
-| Done editing | At once: the screen owns this state | None | no. Nothing in the project changes | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
-| Look pad | A 4 px paper frame on the way down, drawn by the screen. Pink body and the NOW flag when the engine reports it runs, in the same screen frame | The mapped pad shows the look's colour, bright while it runs, and pink while held with the pad off | no. Playing is not a change to the project. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **keep**. The primary control. Its colour field, its name and who runs it each say one thing |
-| Fader | The thumb follows the finger at once. The number above is the value the engine reports | A motor fader follows. A plain fader takes over when it crosses the value | no. Playing is not a change to the project. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
-| Movers position | The crosshair follows the finger at once. Pan and tilt beside the title are the values the engine reports | Two faders or knobs, one for pan and one for tilt | no. Playing is not a change to the project. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
-| Go | Pressed look on the way down, before the engine answers. Its state when the engine reports it, in the same screen frame | The mapped control shows the same state | no. Playing is not a change to the project. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **keep**. It stays as the widget. The cue list itself is not designed yet (#70) |
-| Back | Pressed look on the way down, before the engine answers. Its state when the engine reports it, in the same screen frame | The mapped control shows the same state | no. Playing is not a change to the project. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **change**. Off with no reason before the first Go. It says 'Not started' |
-| Speed | The chosen segment fills when the engine reports it. The line under it says the tempo that results | Three pads, the chosen one lit | no. Playing is not a change to the project. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **change**. In the mockup it changes nothing but its own label. It needs the SetSpeed command |
+| Surprise me | Pressed look on the way down, before the engine answers. Its state when the engine reports it, in the same screen frame | The mapped control shows the same state | no. Playing is not a change to the show file. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **remove**. It does not say what a press will do, and what it starts is held until Release. The autopilot is the surprise. Not in the Console brief |
+| Edit surface | At once: the screen owns this state | None | no. Nothing in the show file changes | yes. A button or a value: one mapping | **change**. An empty page shows it twice. One stays, in the page bar, paper while the page is empty |
+| Done editing | At once: the screen owns this state | None | no. Nothing in the show file changes | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
+| Look pad | A 4 px paper frame on the way down, drawn by the screen. Pink body and the NOW flag when the engine reports it runs, in the same screen frame | The mapped pad shows the look's colour, bright while it runs, and pink while held with the pad off | no. Playing is not a change to the show file. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **keep**. The primary control. Its colour field, its name and who runs it each say one thing |
+| Fader | The thumb follows the finger at once. The number above is the value the engine reports | A motor fader follows. A plain fader takes over when it crosses the value | no. Playing is not a change to the show file. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
+| Movers position | The crosshair follows the finger at once. Pan and tilt beside the title are the values the engine reports | Two faders or knobs, one for pan and one for tilt | no. Playing is not a change to the show file. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
+| Go | Pressed look on the way down, before the engine answers. Its state when the engine reports it, in the same screen frame | The mapped control shows the same state | no. Playing is not a change to the show file. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **keep**. It stays as the widget. The cue list itself is not designed yet (#70) |
+| Back | Pressed look on the way down, before the engine answers. Its state when the engine reports it, in the same screen frame | The mapped control shows the same state | no. Playing is not a change to the show file. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **change**. Off with no reason before the first Go. It says 'Not started' |
+| Speed | The chosen segment fills when the engine reports it. The line under it says the tempo that results | Three pads, the chosen one lit | no. Playing is not a change to the show file. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **change**. In the mockup it changes nothing but its own label. It needs the SetSpeed command |
 | Widget edit frame | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | no. Arranging is done on screen, not from a controller | **keep**. It says what it is and what a press does |
 | Widget resize handle | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | no. Arranging is done on screen, not from a controller | **keep**. It says what it is and what a press does |
 | Remove widget | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | no. It is there only while editing | **keep**. It says what it is and what a press does |
@@ -1104,27 +1108,27 @@ stateDiagram-v2
 
 ### Songs: in each situation
 
-| Control | LIVE off | LIVE on | Lock on | Recording on | Autopilot on | Something held | Engine not connected | Nothing patched | Edit surface | Learn mode | A song plays | No song plays | An output lost |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Search songs | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ◆ | ● | ● | ● |
-| Library filter | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ● | ● | ● | ● |
-| Song in the library | ● | ● | ● | ● | ● | ● | ● | – | ● | ● | ◆ | ● | ● |
-| Follows | ● | ● | ● | ● | ● | ● | ○ | – | ● | ● | ◆ | ◆ | ● |
-| Play from a section | ● | ● | ● | ○ | ● | ◆ | ○ | – | ● | ● | ○ | ◆ | ● |
-| Sections look right | ● | ● | ● | ● | ● | ● | ○ | – | ● | ● | ● | ● | ● |
-| Section | ● | ● | ● | ● | ● | ● | ● | – | ● | ● | ◆ | ● | ● |
-| Section edge | ● | ● | ● | ● | ● | ● | ○ | – | ● | ◆ | ◆ | ● | ● |
-| Mute recorded | ● | ● | ● | ◆ | ● | ● | ○ | – | ● | ● | ● | ● | ● |
-| Undo last pass | ● | ● | ● | ◆ | ● | ● | ○ | – | ● | ● | ● | ● | ● |
-| Clear recorded | ● | ● | ● | ○ | ● | ● | ○ | – | ● | ● | ● | ● | ● |
-| Mute show | ● | ● | ● | ● | ◆ | ● | ○ | – | ● | ● | ◆ | ● | ● |
-| Rename section | ● | ● | ● | ● | ● | ● | ○ | – | ● | ● | ● | ● | ● |
-| Section name | ● | ● | ● | ● | ● | ● | ○ | – | ● | ◆ | ● | ● | ● |
-| Split section | ● | ● | ● | ● | ● | ● | ○ | – | ● | ● | ● | ● | ● |
-| Merge with next | ● | ● | ● | ● | ● | ● | ○ | – | ● | ● | ● | ● | ● |
-| Fill empty sections | ● | ● | ● | ● | ● | ● | ○ | – | ● | ● | ● | ● | ● |
-| Remove look from section | ● | ● | ● | ● | ● | ● | ○ | – | ● | ● | ● | ● | ● |
-| Add look to section | ● | ● | ● | ● | ● | ● | ○ | – | ● | ◆ | ● | ● | ● |
+| Control | LIVE off | LIVE on | Lock on | Recording on | Autopilot on | Something held | Engine not connected | Nothing patched | Edit surface | Learn mode | A song plays | No song plays | An output lost | Window closed |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Search songs | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ◆ | ● | ● | ● | – |
+| Library filter | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ● | ● | ● | ● | – |
+| Song in the library | ● | ● | ● | ● | ● | ● | ● | – | ● | ● | ◆ | ● | ● | – |
+| Follows | ● | ● | ● | ● | ● | ● | ○ | – | ● | ● | ◆ | ◆ | ● | – |
+| Play from a section | ● | ● | ● | ○ | ● | ◆ | ○ | – | ● | ● | ○ | ◆ | ● | – |
+| Sections look right | ● | ● | ● | ● | ● | ● | ○ | – | ● | ● | ● | ● | ● | – |
+| Section | ● | ● | ● | ● | ● | ● | ● | – | ● | ● | ◆ | ● | ● | – |
+| Section edge | ● | ● | ● | ● | ● | ● | ○ | – | ● | ◆ | ◆ | ● | ● | – |
+| Mute recorded | ● | ● | ● | ◆ | ● | ● | ○ | – | ● | ● | ● | ● | ● | – |
+| Undo last pass | ● | ● | ● | ◆ | ● | ● | ○ | – | ● | ● | ● | ● | ● | – |
+| Clear recorded | ● | ● | ● | ○ | ● | ● | ○ | – | ● | ● | ● | ● | ● | – |
+| Mute show | ● | ● | ● | ● | ◆ | ● | ○ | – | ● | ● | ◆ | ● | ● | – |
+| Rename section | ● | ● | ● | ● | ● | ● | ○ | – | ● | ● | ● | ● | ● | – |
+| Section name | ● | ● | ● | ● | ● | ● | ○ | – | ● | ◆ | ● | ● | ● | – |
+| Split section | ● | ● | ● | ● | ● | ● | ○ | – | ● | ● | ● | ● | ● | – |
+| Merge with next | ● | ● | ● | ● | ● | ● | ○ | – | ● | ● | ● | ● | ● | – |
+| Fill empty sections | ● | ● | ● | ● | ● | ● | ○ | – | ● | ● | ● | ● | ● | – |
+| Remove look from section | ● | ● | ● | ● | ● | ● | ○ | – | ● | ● | ● | ● | ● | – |
+| Add look to section | ● | ● | ● | ● | ● | ● | ○ | – | ● | ◆ | ● | ● | ● | – |
 
 ### Songs: where a cell is not the usual of its kind
 
@@ -1197,19 +1201,19 @@ stateDiagram-v2
 
 | Control | On screen | On a mapped controller | Undo | Learn | Function first |
 | --- | --- | --- | --- | --- | --- |
-| Search songs | At once: the screen owns this state | None | no. Nothing in the project changes | no. Text cannot come from a pad or a fader | **keep**. It says what it is and what a press does |
-| Library filter | At once: the screen owns this state | None | no. Nothing in the project changes | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
-| Song in the library | At once: the screen owns this state | None | no. Nothing in the project changes | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
-| Follows | The new setting shows when the engine reports it, in the same screen frame | The mapped control shows on or off | yes. One step in Undo | yes. A button or a value: one mapping | **change**. It sits in the header of one song but is a setting of the whole app, and it overlaps the DJ link indicator and the clock feed. Its place is In/Out, beside the clock |
-| Play from a section | The flag 'Listening' with the time walks along the rows, from the next screen frame on | The mapped control is lit while it runs | no. Playing is not a change to the project. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **change**. Three words for one thing: 'Play from', 'Stop listening', 'Listening'. And no music plays. One word, the one Looks uses: 'Try from Drop', 'Stop'. A song that is not analysed says 'Not analysed yet' |
+| Search songs | At once: the screen owns this state | None | no. Nothing in the show file changes | no. Text cannot come from a pad or a fader | **keep**. It says what it is and what a press does |
+| Library filter | At once: the screen owns this state | None | no. Nothing in the show file changes | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
+| Song in the library | At once: the screen owns this state | None | no. Nothing in the show file changes | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
+| Follows | The new setting shows when the engine reports it, in the same screen frame | The mapped control shows on or off | yes. One step in Undo | yes. A button or a value: one mapping | **change**. It sits in the header of one song but is a setting of the whole app, and it overlaps the DJ link indicator and the tempo feed. Its place is In/Out, beside the tempo feed |
+| Play from a section | The flag 'Listening' with the time walks along the rows, from the next screen frame on | The mapped control is lit while it runs | no. Playing is not a change to the show file. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **change**. Three words for one thing: 'Play from', 'Stop listening', 'Listening'. And no music plays. One word, the one Looks uses: 'Try from Drop', 'Stop'. A song that is not analysed says 'Not analysed yet' |
 | Sections look right | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
-| Section | At once: the screen owns this state | None | no. Nothing in the project changes | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
+| Section | At once: the screen owns this state | None | no. Nothing in the show file changes | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
 | Section edge | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | no. Arranging is done on screen, not from a controller | **keep**. It says what it is and what a press does |
 | Mute recorded | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | yes. A button or a value: one mapping | **change**. Off with no reason while nothing is recorded. It says 'Nothing recorded' |
 | Undo last pass | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | yes. A button or a value: one mapping | **change**. Off with no reason while there is no finished pass. It says 'No pass yet' |
 | Clear recorded | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | yes. A button or a value: one mapping | **change**. Off with no reason while nothing is recorded. It says 'Nothing recorded'. While a pass is written it is off too |
 | Mute show | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
-| Rename section | At once: the screen owns this state | None | no. Nothing in the project changes | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
+| Rename section | At once: the screen owns this state | None | no. Nothing in the show file changes | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
 | Section name | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | no. Text cannot come from a pad or a fader | **keep**. It says what it is and what a press does |
 | Split section | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
 | Merge with next | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
@@ -1278,60 +1282,60 @@ stateDiagram-v2
 
 ### Looks: in each situation
 
-| Control | LIVE off | LIVE on | Lock on | Recording on | Autopilot on | Something held | Engine not connected | Nothing patched | Edit surface | Learn mode | A song plays | No song plays | An output lost |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Looks or Autopilot | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● |
-| Widen the library | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● |
-| Search looks | ● | ● | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ● | ● |
-| Type filter | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● |
-| New group | ● | ● | ● | ● | ● | ◆ | ○ | ◆ | ● | ● | ● | ● | ● |
-| Fold a group | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● |
-| Rename group | ● | ● | ● | ● | ● | ● | ○ | ● | ● | ● | ● | ● | ● |
-| Group name | ● | ● | ● | ● | ● | ◆ | ○ | ◆ | ● | ◆ | ● | ● | ● |
-| Delete group | ● | ● | ● | ● | ● | ◆ | ○ | ◆ | ● | ● | ● | ● | ● |
-| Look in the library | ● | ● | ● | ● | ● | ● | ◆ | – | ● | ◆ | ● | ● | ● |
-| Breadcrumb | ● | ● | ● | ● | ● | ● | ● | – | ● | ◆ | ● | ● | ● |
-| Back to the outer sequence | ● | ● | ● | ● | ● | ● | ● | – | ● | ● | ● | ● | ● |
-| Remove from group | ● | ● | ● | ● | ◆ | ◆ | ○ | – | ● | ● | ● | ● | ● |
-| Add to a group | ● | ● | ● | ● | ◆ | ◆ | ○ | – | ● | ◆ | ● | ● | ● |
-| Try on lights | ● | ● | ● | ◆ | ● | ◆ | ○ | – | ● | ● | ● | ● | ● |
-| Put on Console | ● | ● | ○ | ● | ● | ◆ | ○ | – | ● | ● | ● | ● | ● |
-| Connection box | ● | ● | ● | ● | ● | ● | ● | – | ● | ◆ | ● | ● | ● |
-| Which fixtures | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ● | ● | ● | ● |
-| Set a property | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ● | ● | ● | ● |
-| Clear a property | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ● | ● | ● | ● |
-| Remove a colour | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ● | ● | ● | ● |
-| Add a colour | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ● | ● | ● | ● |
-| Step position | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ● | ● | ● | ● |
-| Gobo | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ● | ● | ● | ● |
-| Step dimmer | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ● | ● | ● | ● |
-| Step spin | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ● | ● | ● | ● |
-| Sequence item | ● | ● | ● | ● | ● | ● | ● | – | ● | ◆ | ● | ● | ● |
-| Open an item | ● | ● | ● | ● | ● | ● | ● | – | ● | ◆ | ● | ● | ● |
-| Item bar | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ◆ | ● | ● | ● |
-| Item width handle | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ◆ | ● | ● | ● |
-| Item width | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ● | ● | ● | ● |
-| Item speed | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ● | ● | ● | ● |
-| Loop or once | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ● | ● | ● | ● |
-| Spread | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ● | ● | ● | ● |
-| Transition | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ● | ● | ● | ● |
-| Pattern shape | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ● | ● | ● | ● |
-| Pattern measure | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ● | ● | ● | ● |
-| Colours from | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ◆ | ● | ● | ● |
-| Runs on | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ● | ● | ● | ● |
-| Style in the list | ● | ● | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ● | ● |
-| New style | ● | ● | ● | ● | ◆ | ● | ○ | ● | ● | ● | ● | ● | ● |
-| Style name | ● | ● | ● | ● | ◆ | ● | ○ | ● | ● | ◆ | ● | ● | ● |
-| Use this style | ● | ● | ● | ● | ◆ | ● | ○ | ● | ● | ● | ● | ● | ● |
-| Delete style | ● | ● | ● | ● | ◆ | ● | ○ | ● | ● | ● | ● | ● | ● |
-| Rule: when | ● | ● | ● | ● | ◆ | ● | ○ | ● | ● | ◆ | ● | ● | ● |
-| Rule: pick one from | ● | ● | ● | ● | ◆ | ● | ○ | ◆ | ● | ◆ | ● | ● | ● |
-| Rule: fit | ● | ● | ● | ● | ◆ | ● | ○ | ● | ● | ◆ | ● | ● | ● |
-| Remove rule | ● | ● | ● | ● | ◆ | ● | ○ | ● | ● | ● | ● | ● | ● |
-| Add a rule | ● | ● | ● | ● | ◆ | ● | ○ | ● | ● | ● | ● | ● | ● |
-| Lights it may use | ● | ● | ● | ● | ◆ | ● | ○ | – | ● | ● | ● | ● | ● |
-| How wild | ● | ● | ● | ● | ◆ | ● | ○ | ● | ● | ● | ● | ● | ● |
-| Never dark | ● | ● | ● | ● | ◆ | ● | ○ | ◆ | ● | ◆ | ● | ● | ● |
+| Control | LIVE off | LIVE on | Lock on | Recording on | Autopilot on | Something held | Engine not connected | Nothing patched | Edit surface | Learn mode | A song plays | No song plays | An output lost | Window closed |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Looks or Autopilot | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | – |
+| Widen the library | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | – |
+| Search looks | ● | ● | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ● | ● | – |
+| Type filter | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | – |
+| New group | ● | ● | ● | ● | ● | ◆ | ○ | ◆ | ● | ● | ● | ● | ● | – |
+| Fold a group | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | – |
+| Rename group | ● | ● | ● | ● | ● | ● | ○ | ● | ● | ● | ● | ● | ● | – |
+| Group name | ● | ● | ● | ● | ● | ◆ | ○ | ◆ | ● | ◆ | ● | ● | ● | – |
+| Delete group | ● | ● | ● | ● | ● | ◆ | ○ | ◆ | ● | ● | ● | ● | ● | – |
+| Look in the library | ● | ● | ● | ● | ● | ● | ◆ | – | ● | ◆ | ● | ● | ● | – |
+| Breadcrumb | ● | ● | ● | ● | ● | ● | ● | – | ● | ◆ | ● | ● | ● | – |
+| Back to the outer sequence | ● | ● | ● | ● | ● | ● | ● | – | ● | ● | ● | ● | ● | – |
+| Remove from group | ● | ● | ● | ● | ◆ | ◆ | ○ | – | ● | ● | ● | ● | ● | – |
+| Add to a group | ● | ● | ● | ● | ◆ | ◆ | ○ | – | ● | ◆ | ● | ● | ● | – |
+| Try on lights | ● | ● | ● | ◆ | ● | ◆ | ○ | – | ● | ● | ● | ● | ● | – |
+| Put on Console | ● | ● | ○ | ● | ● | ◆ | ○ | – | ● | ● | ● | ● | ● | – |
+| Connection box | ● | ● | ● | ● | ● | ● | ● | – | ● | ◆ | ● | ● | ● | – |
+| Which fixtures | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ● | ● | ● | ● | – |
+| Set a property | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ● | ● | ● | ● | – |
+| Clear a property | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ● | ● | ● | ● | – |
+| Remove a colour | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ● | ● | ● | ● | – |
+| Add a colour | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ● | ● | ● | ● | – |
+| Step position | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ● | ● | ● | ● | – |
+| Gobo | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ● | ● | ● | ● | – |
+| Step dimmer | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ● | ● | ● | ● | – |
+| Step spin | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ● | ● | ● | ● | – |
+| Sequence item | ● | ● | ● | ● | ● | ● | ● | – | ● | ◆ | ● | ● | ● | – |
+| Open an item | ● | ● | ● | ● | ● | ● | ● | – | ● | ◆ | ● | ● | ● | – |
+| Item bar | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ◆ | ● | ● | ● | – |
+| Item width handle | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ◆ | ● | ● | ● | – |
+| Item width | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ● | ● | ● | ● | – |
+| Item speed | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ● | ● | ● | ● | – |
+| Loop or once | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ● | ● | ● | ● | – |
+| Spread | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ● | ● | ● | ● | – |
+| Transition | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ● | ● | ● | ● | – |
+| Pattern shape | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ● | ● | ● | ● | – |
+| Pattern measure | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ● | ● | ● | ● | – |
+| Colours from | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ◆ | ● | ● | ● | – |
+| Runs on | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ● | ● | ● | ● | – |
+| Style in the list | ● | ● | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ● | ● | – |
+| New style | ● | ● | ● | ● | ◆ | ● | ○ | ● | ● | ● | ● | ● | ● | – |
+| Style name | ● | ● | ● | ● | ◆ | ● | ○ | ● | ● | ◆ | ● | ● | ● | – |
+| Use this style | ● | ● | ● | ● | ◆ | ● | ○ | ● | ● | ● | ● | ● | ● | – |
+| Delete style | ● | ● | ● | ● | ◆ | ● | ○ | ● | ● | ● | ● | ● | ● | – |
+| Rule: when | ● | ● | ● | ● | ◆ | ● | ○ | ● | ● | ◆ | ● | ● | ● | – |
+| Rule: pick one from | ● | ● | ● | ● | ◆ | ● | ○ | ◆ | ● | ◆ | ● | ● | ● | – |
+| Rule: fit | ● | ● | ● | ● | ◆ | ● | ○ | ● | ● | ◆ | ● | ● | ● | – |
+| Remove rule | ● | ● | ● | ● | ◆ | ● | ○ | ● | ● | ● | ● | ● | ● | – |
+| Add a rule | ● | ● | ● | ● | ◆ | ● | ○ | ● | ● | ● | ● | ● | ● | – |
+| Lights it may use | ● | ● | ● | ● | ◆ | ● | ○ | – | ● | ● | ● | ● | ● | – |
+| How wild | ● | ● | ● | ● | ◆ | ● | ○ | ● | ● | ● | ● | ● | ● | – |
+| Never dark | ● | ● | ● | ● | ◆ | ● | ○ | ◆ | ● | ◆ | ● | ● | ● | – |
 
 ### Looks: where a cell is not the usual of its kind
 
@@ -1347,73 +1351,73 @@ stateDiagram-v2
 | Delete group | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
 | Delete group | Nothing patched | works | Works on a group you just added |
 | Look in the library | Engine not connected | works | Opening works. Dragging onto a group is refused: 'Engine not connected' |
-| Look in the library | Nothing patched | not there | No look is open. An empty project has none, and no mockup shows how to make one |
+| Look in the library | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
 | Look in the library | Learn mode | works | Not picked: opening a look to edit it is done on screen. It works as usual and Learn keeps waiting |
-| Breadcrumb | Nothing patched | not there | No look is open. An empty project has none, and no mockup shows how to make one |
+| Breadcrumb | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
 | Breadcrumb | Learn mode | works | Not picked: finding your way in the editor is done on screen. It works as usual and Learn keeps waiting |
-| Back to the outer sequence | Nothing patched | not there | No look is open. An empty project has none, and no mockup shows how to make one |
+| Back to the outer sequence | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
 | Remove from group | Autopilot on | works | Works. The autopilot no longer picks this look from that group |
 | Remove from group | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
-| Remove from group | Nothing patched | not there | No look is open. An empty project has none, and no mockup shows how to make one |
+| Remove from group | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
 | Add to a group | Autopilot on | works | Works. The autopilot may pick this look from that group from now on |
 | Add to a group | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
-| Add to a group | Nothing patched | not there | No look is open. An empty project has none, and no mockup shows how to make one |
+| Add to a group | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
 | Add to a group | Learn mode | works | Not picked: a list that opens has no pad or fader to stand for it. It works as usual and Learn keeps waiting |
 | Try on lights | Recording on | works | Works. A try is not recorded: only the Console is |
 | Try on lights | Something held | works | Works. A try never adds to what you hold |
-| Try on lights | Nothing patched | not there | No look is open. An empty project has none, and no mockup shows how to make one |
+| Try on lights | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
 | Put on Console | Lock on | off | Locked while LIVE is on |
 | Put on Console | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
-| Put on Console | Nothing patched | not there | No look is open. An empty project has none, and no mockup shows how to make one |
-| Connection box | Nothing patched | not there | No look is open. An empty project has none, and no mockup shows how to make one |
+| Put on Console | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
+| Connection box | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
 | Connection box | Learn mode | works | Not picked: a jump is there only for the open look. It works as usual and Learn keeps waiting |
 | Which fixtures | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
-| Which fixtures | Nothing patched | not there | No look is open. An empty project has none, and no mockup shows how to make one |
+| Which fixtures | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
 | Set a property | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
-| Set a property | Nothing patched | not there | No look is open. An empty project has none, and no mockup shows how to make one |
+| Set a property | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
 | Clear a property | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
-| Clear a property | Nothing patched | not there | No look is open. An empty project has none, and no mockup shows how to make one |
+| Clear a property | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
 | Remove a colour | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
-| Remove a colour | Nothing patched | not there | No look is open. An empty project has none, and no mockup shows how to make one |
+| Remove a colour | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
 | Add a colour | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
-| Add a colour | Nothing patched | not there | No look is open. An empty project has none, and no mockup shows how to make one |
+| Add a colour | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
 | Step position | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
-| Step position | Nothing patched | not there | No look is open. An empty project has none, and no mockup shows how to make one |
+| Step position | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
 | Gobo | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
-| Gobo | Nothing patched | not there | No look is open. An empty project has none, and no mockup shows how to make one |
+| Gobo | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
 | Step dimmer | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
-| Step dimmer | Nothing patched | not there | No look is open. An empty project has none, and no mockup shows how to make one |
+| Step dimmer | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
 | Step spin | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
-| Step spin | Nothing patched | not there | No look is open. An empty project has none, and no mockup shows how to make one |
-| Sequence item | Nothing patched | not there | No look is open. An empty project has none, and no mockup shows how to make one |
+| Step spin | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
+| Sequence item | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
 | Sequence item | Learn mode | works | Not picked: selecting in the editor is done on screen. It works as usual and Learn keeps waiting |
-| Open an item | Nothing patched | not there | No look is open. An empty project has none, and no mockup shows how to make one |
+| Open an item | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
 | Open an item | Learn mode | works | Not picked: finding your way in the editor is done on screen. It works as usual and Learn keeps waiting |
 | Item bar | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
-| Item bar | Nothing patched | not there | No look is open. An empty project has none, and no mockup shows how to make one |
+| Item bar | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
 | Item bar | Learn mode | works | Not picked: arranging is done on screen, not from a controller. It works as usual and Learn keeps waiting |
 | Item width handle | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
-| Item width handle | Nothing patched | not there | No look is open. An empty project has none, and no mockup shows how to make one |
+| Item width handle | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
 | Item width handle | Learn mode | works | Not picked: arranging is done on screen, not from a controller. It works as usual and Learn keeps waiting |
 | Item width | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
-| Item width | Nothing patched | not there | No look is open. An empty project has none, and no mockup shows how to make one |
+| Item width | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
 | Item speed | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
-| Item speed | Nothing patched | not there | No look is open. An empty project has none, and no mockup shows how to make one |
+| Item speed | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
 | Loop or once | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
-| Loop or once | Nothing patched | not there | No look is open. An empty project has none, and no mockup shows how to make one |
+| Loop or once | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
 | Spread | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
-| Spread | Nothing patched | not there | No look is open. An empty project has none, and no mockup shows how to make one |
+| Spread | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
 | Transition | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
-| Transition | Nothing patched | not there | No look is open. An empty project has none, and no mockup shows how to make one |
+| Transition | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
 | Pattern shape | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
-| Pattern shape | Nothing patched | not there | No look is open. An empty project has none, and no mockup shows how to make one |
+| Pattern shape | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
 | Pattern measure | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
-| Pattern measure | Nothing patched | not there | No look is open. An empty project has none, and no mockup shows how to make one |
+| Pattern measure | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
 | Colours from | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
-| Colours from | Nothing patched | not there | No look is open. An empty project has none, and no mockup shows how to make one |
+| Colours from | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
 | Colours from | Learn mode | works | Not picked: a list that opens has no pad or fader to stand for it. It works as usual and Learn keeps waiting |
 | Runs on | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
-| Runs on | Nothing patched | not there | No look is open. An empty project has none, and no mockup shows how to make one |
+| Runs on | Nothing patched | not there | No look is open. An empty show file has none, and no mockup shows how to make one |
 | Style in the list | Learn mode | works | Not picked: opening a style to edit it is done on screen. It works as usual and Learn keeps waiting |
 | New style | Autopilot on | works | Works. The autopilot follows it from its next pick on |
 | Style name | Autopilot on | works | Works. The autopilot follows it from its next pick on |
@@ -1497,23 +1501,23 @@ stateDiagram-v2
 
 | Control | On screen | On a mapped controller | Undo | Learn | Function first |
 | --- | --- | --- | --- | --- | --- |
-| Looks or Autopilot | At once: the screen owns this state | None | no. Nothing in the project changes | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
-| Widen the library | At once: the screen owns this state | None | no. Nothing in the project changes | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
-| Search looks | At once: the screen owns this state | None | no. Nothing in the project changes | no. Text cannot come from a pad or a fader | **keep**. It says what it is and what a press does |
-| Type filter | At once: the screen owns this state | None | no. Nothing in the project changes | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
+| Looks or Autopilot | At once: the screen owns this state | None | no. Nothing in the show file changes | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
+| Widen the library | At once: the screen owns this state | None | no. Nothing in the show file changes | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
+| Search looks | At once: the screen owns this state | None | no. Nothing in the show file changes | no. Text cannot come from a pad or a fader | **keep**. It says what it is and what a press does |
+| Type filter | At once: the screen owns this state | None | no. Nothing in the show file changes | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
 | New group | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
-| Fold a group | At once: the screen owns this state | None | no. Nothing in the project changes | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
-| Rename group | At once: the screen owns this state | None | no. Nothing in the project changes | yes. A button or a value: one mapping | **change**. A pencil with no word, on every group header at all times. It appears with the mode that uses it: in the widened library, and it says 'Rename' |
+| Fold a group | At once: the screen owns this state | None | no. Nothing in the show file changes | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
+| Rename group | At once: the screen owns this state | None | no. Nothing in the show file changes | yes. A button or a value: one mapping | **change**. A pencil with no word, on every group header at all times. It appears with the mode that uses it: in the widened library, and it says 'Rename' |
 | Group name | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | no. Text cannot come from a pad or a fader | **keep**. It says what it is and what a press does |
 | Delete group | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | yes. A button or a value: one mapping | **change**. A cross with no word. Everywhere else the cross means 'take out of this place'; here it deletes the group itself. It says 'Delete group' and shows in the widened library only |
 | Look in the library | At once: the screen owns this state | None | yes. Joining a group is one step in Undo. Opening is not a step | no. Opening a look to edit it is done on screen | **keep**. It says what it is and what a press does |
-| Breadcrumb | At once: the screen owns this state | None | no. Nothing in the project changes | no. Finding your way in the editor is done on screen | **keep**. It says what it is and what a press does |
-| Back to the outer sequence | At once: the screen owns this state | None | no. Nothing in the project changes | yes. A button or a value: one mapping | **remove**. Two controls for one thing: the breadcrumb above it already goes back, and says where to |
+| Breadcrumb | At once: the screen owns this state | None | no. Nothing in the show file changes | no. Finding your way in the editor is done on screen | **keep**. It says what it is and what a press does |
+| Back to the outer sequence | At once: the screen owns this state | None | no. Nothing in the show file changes | yes. A button or a value: one mapping | **remove**. Two controls for one thing: the breadcrumb above it already goes back, and says where to |
 | Remove from group | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
 | Add to a group | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | no. A list that opens has no pad or fader to stand for it | **keep**. It says what it is and what a press does |
-| Try on lights | A 4 px paper frame on the way down. Pink body and the NOW flag when the engine reports it runs | The mapped pad is lit while the try runs | no. Playing is not a change to the project. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
+| Try on lights | A 4 px paper frame on the way down. Pink body and the NOW flag when the engine reports it runs | The mapped pad is lit while the try runs | no. Playing is not a change to the show file. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
 | Put on Console | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | yes. A button or a value: one mapping | **change**. It changes the Console layout, so the lock has to hold it too. Today it works while locked |
-| Connection box | At once: the screen owns this state | None | no. Nothing in the project changes | no. A jump is there only for the open look | **keep**. It says what it is and what a press does |
+| Connection box | At once: the screen owns this state | None | no. Nothing in the show file changes | no. A jump is there only for the open look | **keep**. It says what it is and what a press does |
 | Which fixtures | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
 | Set a property | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
 | Clear a property | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
@@ -1523,8 +1527,8 @@ stateDiagram-v2
 | Gobo | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | yes. A button or a value: one mapping | **change**. Pictures with no word. The name of the gobo goes under each picture |
 | Step dimmer | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
 | Step spin | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
-| Sequence item | At once: the screen owns this state | None | no. Nothing in the project changes | no. Selecting in the editor is done on screen | **keep**. It says what it is and what a press does |
-| Open an item | At once: the screen owns this state | None | no. Nothing in the project changes | no. Finding your way in the editor is done on screen | **keep**. It says what it is and what a press does |
+| Sequence item | At once: the screen owns this state | None | no. Nothing in the show file changes | no. Selecting in the editor is done on screen | **keep**. It says what it is and what a press does |
+| Open an item | At once: the screen owns this state | None | no. Nothing in the show file changes | no. Finding your way in the editor is done on screen | **keep**. It says what it is and what a press does |
 | Item bar | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | no. Arranging is done on screen, not from a controller | **keep**. It says what it is and what a press does |
 | Item width handle | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | no. Arranging is done on screen, not from a controller | **change**. The handle is on every bar at all times. It shows on the selected bar only |
 | Item width | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | yes. A button or a value: one mapping | **change**. 'Narrower' is off with no reason at a quarter beat. It says 'A quarter beat is the least' |
@@ -1536,7 +1540,7 @@ stateDiagram-v2
 | Pattern measure | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | yes. A button or a value: one mapping | **change**. Off with no reason at 1 and at 32 beats. It says '1 beat is the least' and '32 beats is the most' |
 | Colours from | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | no. A list that opens has no pad or fader to stand for it | **keep**. It says what it is and what a press does |
 | Runs on | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
-| Style in the list | At once: the screen owns this state | None | no. Nothing in the project changes | no. Opening a style to edit it is done on screen | **keep**. It says what it is and what a press does |
+| Style in the list | At once: the screen owns this state | None | no. Nothing in the show file changes | no. Opening a style to edit it is done on screen | **keep**. It says what it is and what a press does |
 | New style | The new setting shows when the engine reports it, in the same screen frame | The mapped control shows on or off | yes. One step in Undo | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
 | Style name | The new setting shows when the engine reports it, in the same screen frame | The mapped control shows on or off | yes. One step in Undo | no. Text cannot come from a pad or a fader | **keep**. It says what it is and what a press does |
 | Use this style | The new setting shows when the engine reports it, in the same screen frame | The mapped control shows on or off | yes. One step in Undo | yes. A button or a value: one mapping | **change**. While the style is in use it stays as a pressed button 'In use' that does nothing. It goes then: the list already says 'In use'. One signal per state |
@@ -1575,7 +1579,7 @@ stateDiagram-v2
 | Pick a mode | `patch.add.mode` | Step 2: picks one of the model's modes. Each says its name and what it gives | nothing: the picked mode | view |
 | Proposed address | `patch.add.address` | Step 3: the first free address is proposed. One down or up changes it. The switches to set on the light are drawn under it | nothing: the address of the new light | view |
 | Next | `patch.add.next` | Goes to the next step, and names it: 'Next: address', 'Next: flash it'. Off on a clash: 'Pick a free address' | `Identify` | view |
-| Yes, that is this one | `patch.add.confirm` | Step 4: the light that flashed joins the rig and is selected. The flow closes | `AddFixture` `Identify` | edit |
+| Yes, that is this one | `patch.add.confirm` | Step 4: the light that flashed joins the patch and is selected. The flow closes | `AddFixture` `Identify` | edit |
 | Nothing flashed | `patch.add.nothing-flashed` | Step 4: goes back to the address with a hint: check the cable, the mode and the switches | `Identify` | view |
 | Back | `patch.add.back` | Goes one step back | nothing: the step of the flow | view |
 | Start over | `patch.add.start-over` | Empties the flow and goes to step 1 | nothing: the step of the flow | view |
@@ -1589,38 +1593,38 @@ stateDiagram-v2
 
 ### Patch: in each situation
 
-| Control | LIVE off | LIVE on | Lock on | Recording on | Autopilot on | Something held | Engine not connected | Nothing patched | Edit surface | Learn mode | A song plays | No song plays | An output lost |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Search universes | ● | ● | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ● | ● |
-| Pixel panel in the list | ● | ● | ● | ● | ● | ● | ● | – | ● | ◆ | ● | ● | ● |
-| Universe in the list | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ◆ | ● | ● | ● |
-| Add lights | ● | ● | ● | ● | ● | ● | ○ | ◆ | ● | ◆ | ● | ● | ● |
-| Add a pixel panel | ● | ● | ● | ● | ● | ● | ○ | ● | ● | ◆ | ● | ● | ● |
-| Pixel run in the grid | ● | ● | ● | ● | ● | ● | ● | – | ● | ◆ | ● | ● | ● |
-| Light in the grid | ● | ◆ | ● | ● | ● | ● | ○ | – | ● | ◆ | ● | ● | ● |
-| Order grip | ● | ◆ | ● | ● | ● | ● | ○ | – | ● | ◆ | ● | ● | ● |
-| Light in the list | ● | ● | ● | ● | ● | ● | ● | – | ● | ◆ | ● | ● | ● |
-| Move earlier or later | ● | ◆ | ● | ● | ● | ● | ○ | – | ● | ◆ | ● | ● | ● |
-| Address | ● | ◆ | ● | ● | ● | ● | ○ | – | ● | ◆ | ● | ● | ● |
-| Move to a free address | ● | ◆ | ● | ● | ● | ● | ○ | – | ● | ◆ | ● | ● | ● |
-| Flash it | ● | ● | ● | ◆ | ◆ | ◆ | ○ | – | ● | ◆ | ● | ● | ◆ |
-| Leave for now | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ◆ | ● | ● | ◆ |
-| Search the fixture library | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ◆ | ● | ● | ◆ |
-| Pick a model | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ◆ | ● | ● | ◆ |
-| Pick a mode | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ◆ | ● | ● | ◆ |
-| Proposed address | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ◆ | ● | ● | ◆ |
-| Next | ● | ◆ | ● | ● | ● | ● | ○ | ◆ | ● | ◆ | ● | ● | ◆ |
-| Yes, that is this one | ● | ◆ | ● | ● | ● | ● | ○ | ◆ | ● | ◆ | ● | ● | ◆ |
-| Nothing flashed | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ◆ | ● | ● | ◆ |
-| Back | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ◆ | ● | ● | ◆ |
-| Start over | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ◆ | ● | ● | ◆ |
-| Panel name | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ◆ | ● | ● | ● |
-| Columns and rows | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ◆ | ● | ● | ● |
-| Wiring | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ◆ | ● | ● | ● |
-| Pixel type | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ◆ | ● | ● | ● |
-| Colour order | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ◆ | ● | ● | ● |
-| Start universe | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ◆ | ● | ● | ● |
-| Add the panel | ● | ● | ● | ● | ● | ● | ○ | ◆ | ● | ◆ | ● | ● | ● |
+| Control | LIVE off | LIVE on | Lock on | Recording on | Autopilot on | Something held | Engine not connected | Nothing patched | Edit surface | Learn mode | A song plays | No song plays | An output lost | Window closed |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Search universes | ● | ● | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ● | ● | – |
+| Pixel panel in the list | ● | ● | ● | ● | ● | ● | ● | – | ● | ◆ | ● | ● | ● | – |
+| Universe in the list | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ◆ | ● | ● | ● | – |
+| Add lights | ● | ● | ● | ● | ● | ● | ○ | ◆ | ● | ◆ | ● | ● | ● | – |
+| Add a pixel panel | ● | ● | ● | ● | ● | ● | ○ | ● | ● | ◆ | ● | ● | ● | – |
+| Pixel run in the grid | ● | ● | ● | ● | ● | ● | ● | – | ● | ◆ | ● | ● | ● | – |
+| Light in the grid | ● | ◆ | ● | ● | ● | ● | ○ | – | ● | ◆ | ● | ● | ● | – |
+| Order grip | ● | ◆ | ● | ● | ● | ● | ○ | – | ● | ◆ | ● | ● | ● | – |
+| Light in the list | ● | ● | ● | ● | ● | ● | ● | – | ● | ◆ | ● | ● | ● | – |
+| Move earlier or later | ● | ◆ | ● | ● | ● | ● | ○ | – | ● | ◆ | ● | ● | ● | – |
+| Address | ● | ◆ | ● | ● | ● | ● | ○ | – | ● | ◆ | ● | ● | ● | – |
+| Move to a free address | ● | ◆ | ● | ● | ● | ● | ○ | – | ● | ◆ | ● | ● | ● | – |
+| Flash it | ● | ● | ● | ◆ | ◆ | ◆ | ○ | – | ● | ◆ | ● | ● | ◆ | – |
+| Leave for now | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ◆ | ● | ● | ◆ | – |
+| Search the fixture library | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ◆ | ● | ● | ◆ | – |
+| Pick a model | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ◆ | ● | ● | ◆ | – |
+| Pick a mode | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ◆ | ● | ● | ◆ | – |
+| Proposed address | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ◆ | ● | ● | ◆ | – |
+| Next | ● | ◆ | ● | ● | ● | ● | ○ | ◆ | ● | ◆ | ● | ● | ◆ | – |
+| Yes, that is this one | ● | ◆ | ● | ● | ● | ● | ○ | ◆ | ● | ◆ | ● | ● | ◆ | – |
+| Nothing flashed | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ◆ | ● | ● | ◆ | – |
+| Back | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ◆ | ● | ● | ◆ | – |
+| Start over | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ◆ | ● | ● | ◆ | – |
+| Panel name | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ◆ | ● | ● | ● | – |
+| Columns and rows | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ◆ | ● | ● | ● | – |
+| Wiring | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ◆ | ● | ● | ● | – |
+| Pixel type | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ◆ | ● | ● | ● | – |
+| Colour order | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ◆ | ● | ● | ● | – |
+| Start universe | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ◆ | ● | ● | ● | – |
+| Add the panel | ● | ● | ● | ● | ● | ● | ○ | ◆ | ● | ◆ | ● | ● | ● | – |
 
 ### Patch: where a cell is not the usual of its kind
 
@@ -1632,7 +1636,7 @@ stateDiagram-v2
 | Universe in the list | Nothing patched | works | Works. Universe 1 is there, empty |
 | Universe in the list | Learn mode | works | Not picked: patching is done on screen. It works as usual and Learn keeps waiting |
 | Add lights | Engine not connected | off | Engine not connected |
-| Add lights | Nothing patched | works | Works. It is the paper button: the one thing to do in an empty project |
+| Add lights | Nothing patched | works | Works. It is the paper button: the one thing to do in an empty show file |
 | Add lights | Learn mode | works | Not picked: patching is done on screen. It works as usual and Learn keeps waiting |
 | Add a pixel panel | Engine not connected | off | Engine not connected |
 | Add a pixel panel | Learn mode | works | Not picked: patching is done on screen. It works as usual and Learn keeps waiting |
@@ -1748,35 +1752,35 @@ stateDiagram-v2
 
 | Control | On screen | On a mapped controller | Undo | Learn | Function first |
 | --- | --- | --- | --- | --- | --- |
-| Search universes | At once: the screen owns this state | None | no. Nothing in the project changes | no. Text cannot come from a pad or a fader | **keep**. It says what it is and what a press does |
-| Pixel panel in the list | At once: the screen owns this state | None | no. Nothing in the project changes | no. Patching is done on screen | **keep**. It says what it is and what a press does |
-| Universe in the list | At once: the screen owns this state | None | no. Nothing in the project changes | no. Patching is done on screen | **keep**. It says what it is and what a press does |
-| Add lights | At once: the screen owns this state | None | no. Nothing in the project changes | no. Patching is done on screen | **keep**. It says what it is and what a press does |
-| Add a pixel panel | At once: the screen owns this state | None | no. Nothing in the project changes | no. Patching is done on screen | **keep**. It says what it is and what a press does |
-| Pixel run in the grid | At once: the screen owns this state | None | no. Nothing in the project changes | no. Patching is done on screen | **keep**. It says what it is and what a press does |
+| Search universes | At once: the screen owns this state | None | no. Nothing in the show file changes | no. Text cannot come from a pad or a fader | **keep**. It says what it is and what a press does |
+| Pixel panel in the list | At once: the screen owns this state | None | no. Nothing in the show file changes | no. Patching is done on screen | **keep**. It says what it is and what a press does |
+| Universe in the list | At once: the screen owns this state | None | no. Nothing in the show file changes | no. Patching is done on screen | **keep**. It says what it is and what a press does |
+| Add lights | At once: the screen owns this state | None | no. Nothing in the show file changes | no. Patching is done on screen | **keep**. It says what it is and what a press does |
+| Add a pixel panel | At once: the screen owns this state | None | no. Nothing in the show file changes | no. Patching is done on screen | **keep**. It says what it is and what a press does |
+| Pixel run in the grid | At once: the screen owns this state | None | no. Nothing in the show file changes | no. Patching is done on screen | **keep**. It says what it is and what a press does |
 | Light in the grid | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | no. Arranging is done on screen, not from a controller | **keep**. It says what it is and what a press does |
 | Order grip | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | no. Arranging is done on screen, not from a controller | **remove**. Two controls for one thing, and a grip that is always there. The two arrows on the same row move a light one place, by touch and by keyboard. The number stays: it says the place |
-| Light in the list | At once: the screen owns this state | None | no. Nothing in the project changes | no. Patching is done on screen | **keep**. It says what it is and what a press does |
+| Light in the list | At once: the screen owns this state | None | no. Nothing in the show file changes | no. Patching is done on screen | **keep**. It says what it is and what a press does |
 | Move earlier or later | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | no. Patching is done on screen | **change**. The arrow that cannot move is off with no reason, on the first and the last light. It is gone there instead |
 | Address | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | no. Patching is done on screen | **change**. At address 1 and at the last place that fits, a press does nothing and nothing says so. The button that cannot move is off and says 'First address' or 'Last address that fits' |
 | Move to a free address | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | no. Patching is done on screen | **change**. With no free place it reads 'Move to no free' and does nothing. It is off then and says 'No free place in this universe' |
-| Flash it | Pressed look on the way down, before the engine answers. Its state when the engine reports it, in the same screen frame | The mapped control shows the same state | no. Playing is not a change to the project. Its opposite is at hand: stop, Release | no. Patching is done on screen | **keep**. It says what it is and what a press does |
-| Leave for now | At once: the screen owns this state | None | no. Nothing in the project changes | no. Patching is done on screen | **keep**. It says what it is and what a press does |
-| Search the fixture library | At once: the screen owns this state | None | no. Nothing in the project changes | no. Text cannot come from a pad or a fader | **keep**. It says what it is and what a press does |
-| Pick a model | At once: the screen owns this state | None | no. Nothing in the project changes | no. Patching is done on screen | **keep**. It says what it is and what a press does |
-| Pick a mode | At once: the screen owns this state | None | no. Nothing in the project changes | no. Patching is done on screen | **keep**. It says what it is and what a press does |
-| Proposed address | At once: the screen owns this state | None | no. Nothing in the project changes | no. Patching is done on screen | **keep**. It says what it is and what a press does |
-| Next | At once: the screen owns this state | None | no. Nothing in the project changes | no. Patching is done on screen | **keep**. It says what it is and what a press does |
+| Flash it | Pressed look on the way down, before the engine answers. Its state when the engine reports it, in the same screen frame | The mapped control shows the same state | no. Playing is not a change to the show file. Its opposite is at hand: stop, Release | no. Patching is done on screen | **keep**. It says what it is and what a press does |
+| Leave for now | At once: the screen owns this state | None | no. Nothing in the show file changes | no. Patching is done on screen | **keep**. It says what it is and what a press does |
+| Search the fixture library | At once: the screen owns this state | None | no. Nothing in the show file changes | no. Text cannot come from a pad or a fader | **keep**. It says what it is and what a press does |
+| Pick a model | At once: the screen owns this state | None | no. Nothing in the show file changes | no. Patching is done on screen | **keep**. It says what it is and what a press does |
+| Pick a mode | At once: the screen owns this state | None | no. Nothing in the show file changes | no. Patching is done on screen | **keep**. It says what it is and what a press does |
+| Proposed address | At once: the screen owns this state | None | no. Nothing in the show file changes | no. Patching is done on screen | **keep**. It says what it is and what a press does |
+| Next | At once: the screen owns this state | None | no. Nothing in the show file changes | no. Patching is done on screen | **keep**. It says what it is and what a press does |
 | Yes, that is this one | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | no. Patching is done on screen | **keep**. It says what it is and what a press does |
-| Nothing flashed | At once: the screen owns this state | None | no. Nothing in the project changes | no. Patching is done on screen | **keep**. It says what it is and what a press does |
-| Back | At once: the screen owns this state | None | no. Nothing in the project changes | no. Patching is done on screen | **change**. Off with no reason in step 1. It is gone there |
-| Start over | At once: the screen owns this state | None | no. Nothing in the project changes | no. Patching is done on screen | **keep**. Quiet on purpose: it is the way out of a wrong pick, not the next thing to do |
-| Panel name | At once: the screen owns this state | None | no. Nothing in the project changes | no. Text cannot come from a pad or a fader | **keep**. It says what it is and what a press does |
-| Columns and rows | At once: the screen owns this state | None | no. Nothing in the project changes | no. Text cannot come from a pad or a fader | **keep**. It says what it is and what a press does |
-| Wiring | At once: the screen owns this state | None | no. Nothing in the project changes | no. Patching is done on screen | **keep**. It says what it is and what a press does |
-| Pixel type | At once: the screen owns this state | None | no. Nothing in the project changes | no. Patching is done on screen | **keep**. It says what it is and what a press does |
-| Colour order | At once: the screen owns this state | None | no. Nothing in the project changes | no. A list that opens has no pad or fader to stand for it | **keep**. It says what it is and what a press does |
-| Start universe | At once: the screen owns this state | None | no. Nothing in the project changes | no. Text cannot come from a pad or a fader | **keep**. It says what it is and what a press does |
+| Nothing flashed | At once: the screen owns this state | None | no. Nothing in the show file changes | no. Patching is done on screen | **keep**. It says what it is and what a press does |
+| Back | At once: the screen owns this state | None | no. Nothing in the show file changes | no. Patching is done on screen | **change**. Off with no reason in step 1. It is gone there |
+| Start over | At once: the screen owns this state | None | no. Nothing in the show file changes | no. Patching is done on screen | **keep**. Quiet on purpose: it is the way out of a wrong pick, not the next thing to do |
+| Panel name | At once: the screen owns this state | None | no. Nothing in the show file changes | no. Text cannot come from a pad or a fader | **keep**. It says what it is and what a press does |
+| Columns and rows | At once: the screen owns this state | None | no. Nothing in the show file changes | no. Text cannot come from a pad or a fader | **keep**. It says what it is and what a press does |
+| Wiring | At once: the screen owns this state | None | no. Nothing in the show file changes | no. Patching is done on screen | **keep**. It says what it is and what a press does |
+| Pixel type | At once: the screen owns this state | None | no. Nothing in the show file changes | no. Patching is done on screen | **keep**. It says what it is and what a press does |
+| Colour order | At once: the screen owns this state | None | no. Nothing in the show file changes | no. A list that opens has no pad or fader to stand for it | **keep**. It says what it is and what a press does |
+| Start universe | At once: the screen owns this state | None | no. Nothing in the show file changes | no. Text cannot come from a pad or a fader | **keep**. It says what it is and what a press does |
 | Add the panel | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | no. Patching is done on screen | **change**. It lets a panel land on universes that are already used, and nothing says so. It is off then and says which universe is taken |
 
 ## DMX
@@ -1803,23 +1807,23 @@ stateDiagram-v2
 
 ### DMX: in each situation
 
-| Control | LIVE off | LIVE on | Lock on | Recording on | Autopilot on | Something held | Engine not connected | Nothing patched | Edit surface | Learn mode | A song plays | No song plays | An output lost |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Universe tabs | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ◆ |
-| Patched only | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ● | ● | ● | ● |
-| Changing | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ● | ● | ● | ● |
-| Channel cell | ● | ● | ● | ● | ● | ◆ | ● | ● | ● | ◆ | ● | ● | ● |
-| Channel fader | ● | ● | ● | ◆ | ◆ | ◆ | ○ | ◆ | ● | ● | ● | ● | ○ |
-| Zero | ● | ● | ● | ◆ | ◆ | ◆ | ○ | ◆ | ● | ● | ● | ● | ○ |
-| Full | ● | ● | ● | ◆ | ◆ | ◆ | ○ | ◆ | ● | ● | ● | ● | ○ |
-| Release the channel | ○ | ● | ● | ◆ | ◆ | ◆ | ○ | ◆ | ● | ● | ● | ● | ◆ |
-| Held channel in the list | – | ● | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ● | ● |
-| Release in the list | – | ● | ● | ◆ | ◆ | ● | ○ | ◆ | ● | ◆ | ● | ● | ◆ |
-| Release channels | ○ | ● | ● | ◆ | ◆ | ◆ | ○ | ◆ | ● | ● | ● | ● | ◆ |
-| Output row | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● |
-| Brightness among equals | ● | ◆ | ● | ● | ● | ◆ | ○ | ● | ● | ● | ● | ● | ● |
-| Manual control ends | ● | ◆ | ● | ● | ● | ◆ | ○ | ● | ● | ● | ● | ● | ● |
-| When a look ends | ● | ◆ | ● | ● | ● | ◆ | ○ | ● | ● | ● | ● | ● | ● |
+| Control | LIVE off | LIVE on | Lock on | Recording on | Autopilot on | Something held | Engine not connected | Nothing patched | Edit surface | Learn mode | A song plays | No song plays | An output lost | Window closed |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Universe tabs | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ◆ | – |
+| Patched only | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ● | ● | ● | ● | – |
+| Changing | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ● | ● | ● | ● | – |
+| Channel cell | ● | ● | ● | ● | ● | ◆ | ● | ● | ● | ◆ | ● | ● | ● | – |
+| Channel fader | ● | ● | ● | ◆ | ◆ | ◆ | ○ | ◆ | ● | ● | ● | ● | ○ | – |
+| Zero | ● | ● | ● | ◆ | ◆ | ◆ | ○ | ◆ | ● | ● | ● | ● | ○ | – |
+| Full | ● | ● | ● | ◆ | ◆ | ◆ | ○ | ◆ | ● | ● | ● | ● | ○ | – |
+| Release the channel | ○ | ● | ● | ◆ | ◆ | ◆ | ○ | ◆ | ● | ● | ● | ● | ◆ | – |
+| Held channel in the list | – | ● | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ● | ● | – |
+| Release in the list | – | ● | ● | ◆ | ◆ | ● | ○ | ◆ | ● | ◆ | ● | ● | ◆ | – |
+| Release channels | ○ | ● | ● | ◆ | ◆ | ◆ | ○ | ◆ | ● | ● | ● | ● | ◆ | – |
+| Output row | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | – |
+| Brightness among equals | ● | ◆ | ● | ● | ● | ◆ | ○ | ● | ● | ● | ● | ● | ● | – |
+| Manual control ends | ● | ◆ | ● | ● | ● | ◆ | ○ | ● | ● | ● | ● | ● | ● | – |
+| When a look ends | ● | ◆ | ● | ● | ● | ◆ | ○ | ● | ● | ● | ● | ● | ● | – |
 
 ### DMX: where a cell is not the usual of its kind
 
@@ -1896,18 +1900,18 @@ stateDiagram-v2
 
 | Control | On screen | On a mapped controller | Undo | Learn | Function first |
 | --- | --- | --- | --- | --- | --- |
-| Universe tabs | At once: the screen owns this state | None | no. Nothing in the project changes | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
-| Patched only | At once: the screen owns this state | None | no. Nothing in the project changes | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
-| Changing | At once: the screen owns this state | None | no. Nothing in the project changes | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
-| Channel cell | At once: the screen owns this state | None | no. Nothing in the project changes | no. Finding a channel is done on screen | **keep**. It says what it is and what a press does |
-| Channel fader | The thumb follows the finger at once. The value, the cell and the 'Held by hand' list follow when the engine reports it | A motor fader follows. A plain fader takes over when it crosses the value | no. Playing is not a change to the project. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
-| Zero | Pressed look on the way down, before the engine answers. Its state when the engine reports it, in the same screen frame | The mapped control shows the same state | no. Playing is not a change to the project. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
-| Full | Pressed look on the way down, before the engine answers. Its state when the engine reports it, in the same screen frame | The mapped control shows the same state | no. Playing is not a change to the project. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
-| Release the channel | Pressed look on the way down, before the engine answers. Its state when the engine reports it, in the same screen frame | The mapped control shows the same state | no. Playing is not a change to the project. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
-| Held channel in the list | At once: the screen owns this state | None | no. Nothing in the project changes | no. Finding a channel is done on screen | **keep**. It says what it is and what a press does |
-| Release in the list | Pressed look on the way down, before the engine answers. Its state when the engine reports it, in the same screen frame | The mapped control shows the same state | no. Playing is not a change to the project. Its opposite is at hand: stop, Release | no. It belongs to one row of a list that changes | **keep**. It says what it is and what a press does |
-| Release channels | Pressed look on the way down, before the engine answers. Its state when the engine reports it, in the same screen frame | The mapped control shows the same state | no. Playing is not a change to the project. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **change**. It says 'Release all', the words of the Console button that gives back everything. This one gives back raw channels only, so it says 'Release channels' |
-| Output row | At once: the screen owns this state | None | no. Nothing in the project changes | yes. A button or a value: one mapping | **remove**. Two controls for one thing: the universe tabs open a universe. A status table whose rows are also buttons says two things |
+| Universe tabs | At once: the screen owns this state | None | no. Nothing in the show file changes | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
+| Patched only | At once: the screen owns this state | None | no. Nothing in the show file changes | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
+| Changing | At once: the screen owns this state | None | no. Nothing in the show file changes | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
+| Channel cell | At once: the screen owns this state | None | no. Nothing in the show file changes | no. Finding a channel is done on screen | **keep**. It says what it is and what a press does |
+| Channel fader | The thumb follows the finger at once. The value, the cell and the 'Held by hand' list follow when the engine reports it | A motor fader follows. A plain fader takes over when it crosses the value | no. Playing is not a change to the show file. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
+| Zero | Pressed look on the way down, before the engine answers. Its state when the engine reports it, in the same screen frame | The mapped control shows the same state | no. Playing is not a change to the show file. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
+| Full | Pressed look on the way down, before the engine answers. Its state when the engine reports it, in the same screen frame | The mapped control shows the same state | no. Playing is not a change to the show file. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
+| Release the channel | Pressed look on the way down, before the engine answers. Its state when the engine reports it, in the same screen frame | The mapped control shows the same state | no. Playing is not a change to the show file. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
+| Held channel in the list | At once: the screen owns this state | None | no. Nothing in the show file changes | no. Finding a channel is done on screen | **keep**. It says what it is and what a press does |
+| Release in the list | Pressed look on the way down, before the engine answers. Its state when the engine reports it, in the same screen frame | The mapped control shows the same state | no. Playing is not a change to the show file. Its opposite is at hand: stop, Release | no. It belongs to one row of a list that changes | **keep**. It says what it is and what a press does |
+| Release channels | Pressed look on the way down, before the engine answers. Its state when the engine reports it, in the same screen frame | The mapped control shows the same state | no. Playing is not a change to the show file. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **change**. It says 'Release all', the words of the Console button that gives back everything. This one gives back raw channels only, so it says 'Release channels' |
+| Output row | At once: the screen owns this state | None | no. Nothing in the show file changes | yes. A button or a value: one mapping | **remove**. Two controls for one thing: the universe tabs open a universe. A status table whose rows are also buttons says two things |
 | Brightness among equals | The new setting shows when the engine reports it, in the same screen frame | The mapped control shows on or off | yes. One step in Undo | yes. A button or a value: one mapping | **keep**. The one place where who wins is decided |
 | Manual control ends | The new setting shows when the engine reports it, in the same screen frame | The mapped control shows on or off | yes. One step in Undo | yes. A button or a value: one mapping | **keep**. The one place where who wins is decided |
 | When a look ends | The new setting shows when the engine reports it, in the same screen frame | The mapped control shows on or off | yes. One step in Undo | yes. A button or a value: one mapping | **keep**. The one place where who wins is decided |
@@ -1918,8 +1922,8 @@ stateDiagram-v2
 
 | Control | Name | Does | Sends | Kind |
 | --- | --- | --- | --- | --- |
-| Clock feed | `inout.clock.feed` | Picks what drives the beat: Tap, Audio, MIDI clock, VirtualDJ or Timecode. Each says its tempo and how sure it is | `SetClockFeed` | setting |
-| Tap, on In/Out | `inout.clock.tap` | The same as Tap in the top bar | `TapTempo` | play |
+| Tempo feed | `inout.tempo.feed` | Picks what drives the beat: Tap, Audio, MIDI clock, VirtualDJ or Timecode. Each says its tempo and how sure it is | `SetTempoFeed` | setting |
+| Tap, on In/Out | `inout.tempo.tap` | The same as Tap in the top bar | `TapTempo` | play |
 | Test an output | `inout.out.test` | Every channel of that output at half for three seconds, then back. To see that the cable works | `TestOutput` | play |
 | Edit a mapping | `inout.mapping.edit` | Turns device, number and feedback of that row into fields. Pressed again as 'Done', they are text again | nothing: which row is being edited | edit |
 | Mapping device | `inout.mapping.device` | Which controller the mapping listens to. There while the row is edited | `UpdateMapping` | edit |
@@ -1930,25 +1934,25 @@ stateDiagram-v2
 
 ### In/Out: in each situation
 
-| Control | LIVE off | LIVE on | Lock on | Recording on | Autopilot on | Something held | Engine not connected | Nothing patched | Edit surface | Learn mode | A song plays | No song plays | An output lost |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Clock feed | ● | ◆ | ● | ● | ● | ● | ○ | ● | ● | ● | ◆ | ◆ | ● |
-| Tap, on In/Out | ● | ● | ● | ● | ● | ● | ○ | ● | ● | ● | ● | ● | ● |
-| Test an output | ● | ○ | ○ | ○ | ○ | ◆ | ○ | ◆ | ● | ◆ | ● | ● | ○ |
-| Edit a mapping | ● | ● | ○ | ● | ● | ● | ○ | ◆ | ● | ◆ | ● | ● | ● |
-| Mapping device | ● | ● | ○ | ● | ● | ● | ○ | ◆ | ● | ◆ | ● | ● | ● |
-| Note or controller number | ● | ● | ○ | ● | ● | ● | ○ | ◆ | ● | ◆ | ● | ● | ● |
-| Mapping feedback | ● | ● | ○ | ● | ● | ● | ○ | ◆ | ● | ◆ | ● | ● | ● |
-| Test a mapping | ● | ● | ◆ | ● | ● | ● | ○ | ◆ | ● | ◆ | ● | ● | ● |
-| Remove a mapping | ● | ● | ○ | ● | ● | ● | ○ | ◆ | ● | ◆ | ● | ● | ● |
+| Control | LIVE off | LIVE on | Lock on | Recording on | Autopilot on | Something held | Engine not connected | Nothing patched | Edit surface | Learn mode | A song plays | No song plays | An output lost | Window closed |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Tempo feed | ● | ◆ | ● | ● | ● | ● | ○ | ● | ● | ● | ◆ | ◆ | ● | – |
+| Tap, on In/Out | ● | ● | ● | ● | ● | ● | ○ | ● | ● | ● | ● | ● | ● | – |
+| Test an output | ● | ○ | ○ | ○ | ○ | ◆ | ○ | ◆ | ● | ◆ | ● | ● | ○ | – |
+| Edit a mapping | ● | ● | ○ | ● | ● | ● | ○ | ◆ | ● | ◆ | ● | ● | ● | – |
+| Mapping device | ● | ● | ○ | ● | ● | ● | ○ | ◆ | ● | ◆ | ● | ● | ● | – |
+| Note or controller number | ● | ● | ○ | ● | ● | ● | ○ | ◆ | ● | ◆ | ● | ● | ● | – |
+| Mapping feedback | ● | ● | ○ | ● | ● | ● | ○ | ◆ | ● | ◆ | ● | ● | ● | – |
+| Test a mapping | ● | ● | ◆ | ● | ● | ● | ○ | ◆ | ● | ◆ | ● | ● | ● | – |
+| Remove a mapping | ● | ● | ○ | ● | ● | ● | ○ | ◆ | ● | ◆ | ● | ● | ● | – |
 
 ### In/Out: where a cell is not the usual of its kind
 
 | Control | Situation |  | What happens, or the reason shown |
 | --- | --- | --- | --- |
-| Clock feed | LIVE on | works | Works mid-show. The beat jumps to the new feed at once |
-| Clock feed | A song plays | works | Works. VirtualDJ gives the tempo of the song that plays |
-| Clock feed | No song plays | works | Works. VirtualDJ has no tempo without a song: the last tempo stays |
+| Tempo feed | LIVE on | works | Works mid-show. The beat jumps to the new feed at once |
+| Tempo feed | A song plays | works | Works. VirtualDJ gives the tempo of the song that plays |
+| Tempo feed | No song plays | works | Works. VirtualDJ has no tempo without a song: the last tempo stays |
 | Test an output | LIVE on | off | LIVE is on |
 | Test an output | Lock on | off | LIVE is on |
 | Test an output | Recording on | off | LIVE is on |
@@ -1980,7 +1984,7 @@ stateDiagram-v2
 
 | Control | Press | Hold | Double press | Drag | Keyboard | Touch |
 | --- | --- | --- | --- | --- | --- | --- |
-| Clock feed | The beat follows that feed. Fires on the way up | Nothing more | As one press: the choice is already made | Nothing. Sliding to another option picks nothing | Tab to the group, arrows move and pick | As a press. 44 px |
+| Tempo feed | The beat follows that feed. Fires on the way up | Nothing more | As one press: the choice is already made | Nothing. Sliding to another option picks nothing | Tab to the group, arrows move and pick | As a press. 44 px |
 | Tap, on In/Out | One tap. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
 | Test an output | Starts the test. Pressed again: nothing: it ends by itself after three seconds. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
 | Edit a mapping | Opens the row to edit. Pressed again: the row is text again. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
@@ -1994,9 +1998,9 @@ stateDiagram-v2
 
 | Control | On screen | On a mapped controller | Undo | Learn | Function first |
 | --- | --- | --- | --- | --- | --- |
-| Clock feed | The new setting shows when the engine reports it, in the same screen frame | The mapped control shows on or off | yes. One step in Undo | yes. A button or a value: one mapping | **change**. A feed with no signal can be picked, and then nothing drives the beat. It is off and says 'No signal' |
-| Tap, on In/Out | Pressed look on the way down, before the engine answers. Its state when the engine reports it, in the same screen frame | The mapped control shows the same state | no. Playing is not a change to the project. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **remove**. Two controls for one thing. Tap is in the top bar on every screen, right above this one. The Tap feed says 'Tap in the top bar' |
-| Test an output | The button says 'Testing' and the line above it says what happens, at once | None | no. Playing is not a change to the project. Its opposite is at hand: stop, Release | no. A test is started on screen, looking at the lights | **change**. It works while LIVE is on: one press and the whole room is at half, mid-show. It is off then and says 'LIVE is on' |
+| Tempo feed | The new setting shows when the engine reports it, in the same screen frame | The mapped control shows on or off | yes. One step in Undo | yes. A button or a value: one mapping | **change**. A feed with no signal can be picked, and then nothing drives the beat. It is off and says 'No signal' |
+| Tap, on In/Out | Pressed look on the way down, before the engine answers. Its state when the engine reports it, in the same screen frame | The mapped control shows the same state | no. Playing is not a change to the show file. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **remove**. Two controls for one thing. Tap is in the top bar on every screen, right above this one. The Tap feed says 'Tap in the top bar' |
+| Test an output | The button says 'Testing' and the line above it says what happens, at once | None | no. Playing is not a change to the show file. Its opposite is at hand: stop, Release | no. A test is started on screen, looking at the lights | **change**. It works while LIVE is on: one press and the whole room is at half, mid-show. It is off then and says 'LIVE is on' |
 | Edit a mapping | The change shows when the engine reports it, in the same screen frame | None | no. Opening a row changes nothing | no. It belongs to one row of a list that changes | **keep**. It says what it is and what a press does |
 | Mapping device | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | no. A list that opens has no pad or fader to stand for it | **keep**. It says what it is and what a press does |
 | Note or controller number | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | no. Text cannot come from a pad or a fader | **change**. Free text for something that has a shape: 'Note 36', 'CC 48'. Text that is not one of the two is refused and the field says so |
@@ -2020,15 +2024,15 @@ stateDiagram-v2
 
 ### How it works: in each situation
 
-| Control | LIVE off | LIVE on | Lock on | Recording on | Autopilot on | Something held | Engine not connected | Nothing patched | Edit surface | Learn mode | A song plays | No song plays | An output lost |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Pad to try | ● | ● | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ● | ● |
-| Master to try | ● | ● | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ● | ● |
-| Record | ● | ● | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ● | ● |
-| Replay on Show | ● | ● | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ● | ● |
-| Release | ● | ● | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ● | ● |
-| Pick a walk | ● | ● | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ● | ● |
-| Walk: Back, Next, Again | ● | ● | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ● | ● |
+| Control | LIVE off | LIVE on | Lock on | Recording on | Autopilot on | Something held | Engine not connected | Nothing patched | Edit surface | Learn mode | A song plays | No song plays | An output lost | Window closed |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Pad to try | ● | ● | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ● | ● | – |
+| Master to try | ● | ● | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ● | ● | – |
+| Record | ● | ● | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ● | ● | – |
+| Replay on Show | ● | ● | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ● | ● | – |
+| Release | ● | ● | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ● | ● | – |
+| Pick a walk | ● | ● | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ● | ● | – |
+| Walk: Back, Next, Again | ● | ● | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ● | ● | – |
 
 ### How it works: where a cell is not the usual of its kind
 
@@ -2058,13 +2062,13 @@ stateDiagram-v2
 
 | Control | On screen | On a mapped controller | Undo | Learn | Function first |
 | --- | --- | --- | --- | --- | --- |
-| Pad to try | At once: the screen owns this state | None | no. Nothing in the project changes | no. An explainer is read, not played | **change**. In the mockup it plays on the same lights as the Console. An explainer plays on its own small model and never touches the lights. Whether the explainers ship is the owner's call |
-| Master to try | At once: the screen owns this state | None | no. Nothing in the project changes | no. An explainer is read, not played | **change**. In the mockup it plays on the same lights as the Console. An explainer plays on its own small model and never touches the lights. Whether the explainers ship is the owner's call |
-| Record | At once: the screen owns this state | None | no. Nothing in the project changes | no. An explainer is read, not played | **change**. In the mockup it plays on the same lights as the Console. An explainer plays on its own small model and never touches the lights. Whether the explainers ship is the owner's call |
-| Replay on Show | At once: the screen owns this state | None | no. Nothing in the project changes | no. An explainer is read, not played | **change**. In the mockup it plays on the same lights as the Console. An explainer plays on its own small model and never touches the lights. Whether the explainers ship is the owner's call |
-| Release | At once: the screen owns this state | None | no. Nothing in the project changes | no. An explainer is read, not played | **change**. In the mockup it plays on the same lights as the Console. An explainer plays on its own small model and never touches the lights. Whether the explainers ship is the owner's call |
-| Pick a walk | At once: the screen owns this state | None | no. Nothing in the project changes | no. An explainer is read, not played | **keep**. It changes only which walk shows |
-| Walk: Back, Next, Again | At once: the screen owns this state | None | no. Nothing in the project changes | no. An explainer is read, not played | **keep**. It changes only which step shows |
+| Pad to try | At once: the screen owns this state | None | no. Nothing in the show file changes | no. An explainer is read, not played | **change**. In the mockup it plays on the same lights as the Console. An explainer plays on its own small model and never touches the lights. Whether the explainers ship is the owner's call |
+| Master to try | At once: the screen owns this state | None | no. Nothing in the show file changes | no. An explainer is read, not played | **change**. In the mockup it plays on the same lights as the Console. An explainer plays on its own small model and never touches the lights. Whether the explainers ship is the owner's call |
+| Record | At once: the screen owns this state | None | no. Nothing in the show file changes | no. An explainer is read, not played | **change**. In the mockup it plays on the same lights as the Console. An explainer plays on its own small model and never touches the lights. Whether the explainers ship is the owner's call |
+| Replay on Show | At once: the screen owns this state | None | no. Nothing in the show file changes | no. An explainer is read, not played | **change**. In the mockup it plays on the same lights as the Console. An explainer plays on its own small model and never touches the lights. Whether the explainers ship is the owner's call |
+| Release | At once: the screen owns this state | None | no. Nothing in the show file changes | no. An explainer is read, not played | **change**. In the mockup it plays on the same lights as the Console. An explainer plays on its own small model and never touches the lights. Whether the explainers ship is the owner's call |
+| Pick a walk | At once: the screen owns this state | None | no. Nothing in the show file changes | no. An explainer is read, not played | **keep**. It changes only which walk shows |
+| Walk: Back, Next, Again | At once: the screen owns this state | None | no. Nothing in the show file changes | no. An explainer is read, not played | **keep**. It changes only which step shows |
 
 ## Modules
 
@@ -2078,11 +2082,11 @@ stateDiagram-v2
 
 ### Modules: in each situation
 
-| Control | LIVE off | LIVE on | Lock on | Recording on | Autopilot on | Something held | Engine not connected | Nothing patched | Edit surface | Learn mode | A song plays | No song plays | An output lost |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Module on the map | ● | ● | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ● | ● |
-| Trace a press | ● | ● | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ● | ● |
-| Screen that uses a module | ● | ● | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ● | ● |
+| Control | LIVE off | LIVE on | Lock on | Recording on | Autopilot on | Something held | Engine not connected | Nothing patched | Edit surface | Learn mode | A song plays | No song plays | An output lost | Window closed |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Module on the map | ● | ● | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ● | ● | – |
+| Trace a press | ● | ● | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ● | ● | – |
+| Screen that uses a module | ● | ● | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ● | ● | – |
 
 ### Modules: where a cell is not the usual of its kind
 
@@ -2104,9 +2108,69 @@ stateDiagram-v2
 
 | Control | On screen | On a mapped controller | Undo | Learn | Function first |
 | --- | --- | --- | --- | --- | --- |
-| Module on the map | At once: the screen owns this state | None | no. Nothing in the project changes | no. An explainer is read, not played | **keep**. It changes only which card shows |
-| Trace a press | At once: the screen owns this state | None | no. Nothing in the project changes | no. An explainer is read, not played | **keep**. It plays an animation and nothing else |
-| Screen that uses a module | At once: the screen owns this state | None | no. Nothing in the project changes | no. An explainer is read, not played | **keep**. A jump, like the boxes in Connections |
+| Module on the map | At once: the screen owns this state | None | no. Nothing in the show file changes | no. An explainer is read, not played | **keep**. It changes only which card shows |
+| Trace a press | At once: the screen owns this state | None | no. Nothing in the show file changes | no. An explainer is read, not played | **keep**. It plays an animation and nothing else |
+| Screen that uses a module | At once: the screen owns this state | None | no. Nothing in the show file changes | no. An explainer is read, not played | **keep**. A jump, like the boxes in Connections |
+
+## Menu bar
+
+3 controls.
+
+| Control | Name | Does | Sends | Kind |
+| --- | --- | --- | --- | --- |
+| Menu bar item | `menubar.item` | Says that the engine runs, also with no window. A press opens its menu: the state in words, the frame counter, Open window, Stop engine | nothing: its menu, open or closed | view |
+| Open window | `menubar.open-window` | Opens the window, or brings it to the front. The lights do not notice | nothing: the window, open or closed. It is the shell's own state | view |
+| Stop engine | `menubar.stop-engine` | Ends the engine in an orderly way. No frame is sent after it: this is the one control that ends the lights | `StopEngine` | setting |
+
+### Menu bar: in each situation
+
+| Control | LIVE off | LIVE on | Lock on | Recording on | Autopilot on | Something held | Engine not connected | Nothing patched | Edit surface | Learn mode | A song plays | No song plays | An output lost | Window closed |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Menu bar item | ◆ | ◆ | ◆ | ● | ● | ● | ◆ | ◆ | ● | ◆ | ● | ● | ◆ | ◆ |
+| Open window | ◆ | ◆ | ● | ● | ● | ● | ◆ | ● | ● | ◆ | ● | ● | ● | ◆ |
+| Stop engine | ◆ | ○ | ○ | ○ | ◆ | ◆ | ○ | ● | ● | ◆ | ● | ● | ● | ◆ |
+
+### Menu bar: where a cell is not the usual of its kind
+
+| Control | Situation |  | What happens, or the reason shown |
+| --- | --- | --- | --- |
+| Menu bar item | LIVE off | works | Works. The lamp is mute: the engine runs, LIVE is off |
+| Menu bar item | LIVE on | works | Works. The lamp is paper and the menu says 'LIVE on' |
+| Menu bar item | Lock on | works | Works. Nothing locks the menu bar item |
+| Menu bar item | Engine not connected | works | Works. The lamp is empty and the menu says 'Engine not connected' |
+| Menu bar item | Nothing patched | works | Works. The lamp is red and the menu says 'No lights connected' |
+| Menu bar item | Learn mode | works | Not picked: it is outside the window. Learn keeps waiting |
+| Menu bar item | An output lost | works | Works. The lamp is red and the menu names the lost output |
+| Menu bar item | Window closed | works | Works. It is the only sign that the engine runs |
+| Open window | LIVE off | works | Brings the window to the front |
+| Open window | LIVE on | works | Brings the window to the front. The show runs on |
+| Open window | Engine not connected | works | Brings the window to the front. Its trouble chip says 'Engine not connected' |
+| Open window | Learn mode | works | Not picked: it is outside the window. Learn keeps waiting |
+| Open window | Window closed | works | Opens the window. It shows the engine as it is now, mid-show too |
+| Stop engine | LIVE off | works | Stops the engine. The window, if open, closes with it and the item goes |
+| Stop engine | LIVE on | off | LIVE is on |
+| Stop engine | Lock on | off | LIVE is on |
+| Stop engine | Recording on | off | LIVE is on |
+| Stop engine | Autopilot on | works | Works. The autopilot ends with the engine |
+| Stop engine | Something held | works | Works. What you hold ends with the engine |
+| Stop engine | Learn mode | works | Not picked: it is outside the window. Learn keeps waiting |
+| Stop engine | Window closed | works | Stops the engine. The item goes: nothing of the app runs any more |
+
+### Menu bar: gestures
+
+| Control | Press | Hold | Double press | Drag | Keyboard | Touch |
+| --- | --- | --- | --- | --- | --- | --- |
+| Menu bar item | Opens the menu. Fires on the way down, as every menu of the system | Nothing more | Opens and closes the menu | Slide to an entry and lift: picks it | The system's way into the menu bar, then arrows | As a press. The system sets the size |
+| Open window | Opens the window. Fires on the way up, then the menu closes | Nothing more | As one press: the menu is closed after the first | Press the item, slide to the entry, lift: the same as a press | Arrows move through the open menu, Enter picks, Escape closes it | As a press. The system sets the size |
+| Stop engine | Stops the engine. Fires on the way up, then the menu closes | Nothing more | As one press: the menu is closed after the first | Press the item, slide to the entry, lift: the same as a press | Arrows move through the open menu, Enter picks, Escape closes it | As a press. The system sets the size |
+
+### Menu bar: feedback, undo, Learn, Function first
+
+| Control | On screen | On a mapped controller | Undo | Learn | Function first |
+| --- | --- | --- | --- | --- | --- |
+| Menu bar item | The lamp follows the engine's state when it is reported. The frame counter counts only inside the open menu: a number that runs in the menu bar is noise | None | no. Nothing in the show file changes | no. It is outside the window, drawn by the system | **keep**. It says what it is and what a press does |
+| Open window | The window is in front, at once | None | no. Nothing in the show file changes | no. It is outside the window, drawn by the system | **keep**. It says what it is and what a press does |
+| Stop engine | The item leaves the menu bar when the engine has ended | None | no. Start the app again. The show file was saved by itself | no. It is outside the window, drawn by the system | **keep**. It says what it is and what a press does |
 
 ## Not controls: 35 elements of the mockups
 
@@ -2197,8 +2261,8 @@ stateDiagram-v2
 | `how/Screen/back` | screens/how/index.tsx:289 | Back | `how.walk.step` |
 | `how/Screen/again` | screens/how/index.tsx:295 | Again | `how.walk.step` |
 | `how/Screen/start` | screens/how/index.tsx:300 | Start \| Next | `how.walk.step` |
-| `inout/Screen/button` | screens/inout/index.tsx:138 | … \| none … % sure | `inout.clock.feed` |
-| `inout/Screen/tap` | screens/inout/index.tsx:167 | Tap | `inout.clock.tap` |
+| `inout/Screen/button` | screens/inout/index.tsx:138 | … \| none … % sure | `inout.tempo.feed` |
+| `inout/Screen/tap` | screens/inout/index.tsx:167 | Tap | `inout.tempo.tap` |
 | `inout/Screen/testing` | screens/inout/index.tsx:187 | Testing \| Test | `inout.out.test` |
 | `inout/Screen/device-for` | screens/inout/index.tsx:222 | Device for … | `inout.mapping.device` |
 | `inout/Screen/note-or-controller-number-for` | screens/inout/index.tsx:233 | Note or controller number for … | `inout.mapping.message` |

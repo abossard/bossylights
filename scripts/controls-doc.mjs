@@ -26,7 +26,7 @@ const differs = (control, situation) => {
   return cell.is !== usual.is || cell.says !== usual.says;
 };
 const IS = { works: "works", off: "off", gone: "not there" };
-const KINDS = { play: "plays the lights, now, by hand", edit: "changes the project", setting: "changes how the engine behaves", view: "changes only what the screen shows" };
+const KINDS = { play: "plays the lights, now, by hand", edit: "changes the show file", setting: "changes how the engine behaves", view: "changes only what the screen shows" };
 const VERDICT = { keep: "keep", change: "change", remove: "remove" };
 
 function machineDiagram(machine) {
@@ -131,7 +131,7 @@ export function controlsDoc(inventory) {
     "# Every control, in every situation",
     "",
     "Written by `node scripts/write-controls-doc.mjs` from `ui/src/controls`. Change the data there, never this file.",
-    "This is the paper form of the storyboard catalog of issue #102. The catalog shows the same rows as live frames.",
+    "This is the paper form of the storyboard catalog of issue #102. The catalog shows the same rows as live frames: `npm run catalog`.",
     "",
     "```mermaid",
     "flowchart LR",
@@ -153,6 +153,8 @@ export function controlsDoc(inventory) {
         ["`ui/src/controls/machines.ts`", "the state machines"],
         ["`ui/src/controls/findings.ts`", "contradictions and missing controls"],
         ["`ui/src/controls.test.mjs`", "no empty cell, every element has a row, every command is sent, every state is reached"],
+        ["`ui/src/kit/`", "the components the controls are drawn with: props in, a gesture out, no engine"],
+        ["`ui/src/catalog/`", "the catalog: one page per control, a live frame per situation and state, the command as it fires, rating and comment"],
       ],
     ),
     "",

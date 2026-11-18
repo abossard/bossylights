@@ -3,7 +3,7 @@
 import { gone, off, works, type Cell, type SituationId } from "../situations.ts";
 import { button, change, choice, control, draggable, fader, field, keep, no, remove, select, toggle, NOT_A_BUTTON, NOT_A_LIST, ONLY_DRAGGED, type Control, type Row } from "../spec.ts";
 
-const NO_LOOK = gone("No look is open. An empty project has none, and no mockup shows how to make one");
+const NO_LOOK = gone("No look is open. An empty show file has none, and no mockup shows how to make one");
 const EDITOR: Partial<Record<SituationId, Cell>> = {
   empty: NO_LOOK,
   holding: works("Works. If you hold this look by hand, the change is on the lights at once"),

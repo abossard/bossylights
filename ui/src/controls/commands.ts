@@ -22,11 +22,11 @@ export const COMMANDS = {
   SetAutopilotStyle: command("Which style the autopilot uses", "style"),
   SetLock: command("Lock the Console layout while LIVE is on, or not", "on"),
   Blackout: command("Every channel goes out at zero. What is held stays held", "on", true),
-  Undo: command("Take back the last change to the project"),
+  Undo: command("Take back the last change to the show file"),
 
   // ---- tempo
   TapTempo: command("One tap. After two taps the beat follows the taps"),
-  SetClockFeed: command("Which source drives the beat", "feed: tap, audio, midi clock, virtualdj, timecode"),
+  SetTempoFeed: command("Which source drives the beat", "feed: tap, audio, midi clock, virtualdj, timecode"),
   SetSpeed: command("Sequences and patterns run at half, normal or double speed", "factor"),
 
   // ---- playing by hand
@@ -90,7 +90,7 @@ export const COMMANDS = {
   SetNeverDark: command("What plays when nothing else does", "look or none"),
 
   // ---- patch
-  AddFixture: command("A light joins the rig", "model, mode, universe, address"),
+  AddFixture: command("A light joins the patch", "model, mode, universe, address"),
   SetAddress: command("Another address for a light", "fixture, universe, address"),
   ReorderFixture: command("Move a light inside its group: the order is left to right", "fixture, by"),
   Identify: command("One light flashes so it can be found in the room, or stops", "fixture or none"),
@@ -109,6 +109,9 @@ export const COMMANDS = {
   UpdateMapping: command("Change a mapping: device, note or controller number, feedback", "mapping, change"),
   TestMapping: command("Show that a mapping is alive: the hardware control lights. Nothing fires", "mapping"),
   RemoveMapping: command("Remove a mapping", "mapping"),
+
+  // ---- the engine itself
+  StopEngine: command("The engine ends in an orderly way: it answers, closes every connection and sends no more frames. The request Stop of the API (#107)", "", true),
 
   // ---- in the engine today, with no control in any mockup
   SetOutput: command("Set up an output: its kind, universes and rate", "output, kind, universes, rate", true),

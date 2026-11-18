@@ -1,4 +1,4 @@
-// In/Out: the clock, the outputs, and the list of what was mapped with Learn.
+// In/Out: the tempo, the outputs, and the list of what was mapped with Learn.
 import { off, works, type Cell, type SituationId } from "../situations.ts";
 import { button, change, choice, control, field, remove, select, toggle, NOT_A_BUTTON, NOT_A_LIST, no, type Control, type Row } from "../spec.ts";
 
@@ -13,15 +13,15 @@ const mapping = (row: Omit<Row, "screen" | "kind" | "part">): Control =>
 
 export const INOUT: Control[] = [
   control({
-    id: "inout.clock.feed",
-    name: "Clock feed",
+    id: "inout.tempo.feed",
+    name: "Tempo feed",
     screen: "In/Out",
-    part: "Clock",
+    part: "Tempo",
     from: ["inout/Screen/button"],
     kit: "Choice",
     kind: "setting",
     does: "Picks what drives the beat: Tap, Audio, MIDI clock, VirtualDJ or Timecode. Each says its tempo and how sure it is",
-    sends: ["SetClockFeed"],
+    sends: ["SetTempoFeed"],
     gestures: choice("The beat follows that feed"),
     in: {
       "live-on": works("Works mid-show. The beat jumps to the new feed at once"),
@@ -32,10 +32,10 @@ export const INOUT: Control[] = [
     states: ["picked", "not picked", "off: no signal"],
   }),
   control({
-    id: "inout.clock.tap",
+    id: "inout.tempo.tap",
     name: "Tap, on In/Out",
     screen: "In/Out",
-    part: "Clock",
+    part: "Tempo",
     from: ["inout/Screen/tap"],
     kit: "Button",
     kind: "play",
