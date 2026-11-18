@@ -166,7 +166,7 @@ impl Engine {
             devices: std::array::from_fn(|_| None),
             held: vec![Levels::ZERO; count],
             out: vec![Levels::ZERO; count],
-            sent: [Duration::ZERO; QUEUE],
+            carried: Carried::new(),
             start,
         };
         let (tick, priority) = rt_thread::spawn("tick", engine_core::BEAT, move |priority| {
@@ -236,7 +236,8 @@ impl Engine {
     }
 
     /// The time from a send to the frame that carries it, for 95 of 100 commands, so
-    /// far. `None` before the first command.
+    /// far: counted once per output, when that output's next frame is handed over.
+    /// `None` before the first frame that carried a command.
     pub fn send_to_frame_p95(&self) -> Option<Duration> {
         percentile(&load(&self.shared.latency), 95)
     }
@@ -411,9 +412,68 @@ struct Ticker {
     held: Vec<Levels>,
     /// The frame that goes out.
     out: Vec<Levels>,
-    /// When each command applied in this wake was sent.
-    sent: [Duration; QUEUE],
+    /// When the commands were sent, until each output carried them.
+    carried: Carried,
     start: Instant,
+}
+
+/// Commands an output's frame may still have to carry. Older ones are not counted.
+const CARRY: usize = 4 * QUEUE;
+
+/// When the last [`CARRY`] applied commands were sent, and how many each output's
+/// frames carried so far: so each output counts the time from a send to its own next
+/// frame. A calculation over fixed buffers: it never allocates.
+struct Carried {
+    sent: [Duration; CARRY],
+    /// Commands applied so far.
+    applied: u64,
+    /// Per output: the commands applied before its last frame, or before it was attached.
+    carried: [u64; MAX_OUTPUTS],
+}
+
+impl Carried {
+    const fn new() -> Self {
+        Self {
+            sent: [Duration::ZERO; CARRY],
+            applied: 0,
+            carried: [0; MAX_OUTPUTS],
+        }
+    }
+
+    /// A command sent at `at` was applied.
+    fn applied(&mut self, at: Duration) {
+        if let Some(slot) = self.sent.get_mut(ring(self.applied)) {
+            *slot = at;
+        }
+        self.applied = self.applied.wrapping_add(1);
+    }
+
+    /// A new device at `output`: it carries what is applied from now on.
+    fn attached(&mut self, output: usize) {
+        if let Some(carried) = self.carried.get_mut(output) {
+            *carried = self.applied;
+        }
+    }
+
+    /// `output` handed over a frame at `handed`: each command applied since its last
+    /// frame took `handed - sent` to get there.
+    fn handed(&mut self, output: usize, handed: Duration, mut count: impl FnMut(Duration)) {
+        let Some(carried) = self.carried.get_mut(output) else {
+            return;
+        };
+        let oldest = self.applied.saturating_sub(CARRY as u64);
+        for command in (*carried).max(oldest)..self.applied {
+            if let Some(at) = self.sent.get(ring(command)) {
+                count(handed.saturating_sub(*at));
+            }
+        }
+        *carried = self.applied;
+    }
+}
+
+/// Where command number `n` lives in the ring of [`Carried`].
+fn ring(n: u64) -> usize {
+    usize::try_from(n % CARRY as u64).unwrap_or(0)
 }
 
 impl Ticker {
@@ -439,10 +499,8 @@ impl Ticker {
                     break;
                 };
                 state = self.apply(state, sent.command);
-                if let Some(slot) = self.sent.get_mut(applied) {
-                    *slot = sent.at;
-                }
                 self.swap(sent.command, sent.device);
+                self.carried.applied(sent.at);
                 applied += 1;
             }
 
@@ -453,11 +511,9 @@ impl Ticker {
             }
             for number in serve.into_iter().flatten() {
                 state = self.serve(state, number, now);
-            }
-
-            let handed = self.start.elapsed();
-            for at in self.sent.iter().take(applied) {
-                count(&self.shared.latency, handed.saturating_sub(*at));
+                let (handed, latency) = (self.start.elapsed(), &self.shared.latency);
+                self.carried
+                    .handed(number.slot(), handed, |time| count(latency, time));
             }
             self.publish(&state, applied > 0);
         }
@@ -475,6 +531,9 @@ impl Ticker {
             return;
         };
         let keeps = matches!(command, Command::Attach { .. }) && device.is_none();
+        if !keeps {
+            self.carried.attached(output.slot());
+        }
         let old = if keeps {
             None
         } else {
@@ -546,5 +605,54 @@ impl Ticker {
             .version
             .store(version.wrapping_add(2), Ordering::Release);
         shared.frame.store(state.frame, Ordering::Relaxed);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn each_output_counts_a_command_when_its_own_frame_carries_it() {
+        let ms = Duration::from_millis;
+        #[derive(Clone, Copy, Debug)]
+        enum Step {
+            Attach(usize),
+            Sent(u64),
+            Handed(usize, u64),
+        }
+        use Step::{Attach, Handed, Sent};
+        // (steps, times counted in ms)
+        let cases = [
+            (vec![Attach(0), Sent(10), Handed(0, 12)], vec![2]),
+            // applied on a wake that served nothing: counted at the next frame
+            (vec![Attach(0), Sent(10), Handed(0, 30)], vec![20]),
+            (
+                vec![Attach(0), Attach(1), Sent(10), Handed(0, 12), Handed(1, 33)],
+                vec![2, 23],
+            ),
+            (vec![Attach(0), Sent(1), Sent(2), Handed(0, 5)], vec![4, 3]),
+            (
+                vec![Attach(0), Sent(1), Handed(0, 5), Handed(0, 9)],
+                vec![4],
+            ), // once
+            (vec![Sent(1), Attach(0), Handed(0, 5)], vec![]), // sent before its device
+        ];
+        for (steps, expected) in cases {
+            let mut carried = Carried::new();
+            let mut counted = vec![];
+            for step in &steps {
+                match *step {
+                    Attach(output) => carried.attached(output),
+                    Sent(at) => carried.applied(ms(at)),
+                    Handed(output, at) => carried.handed(output, ms(at), |t| counted.push(t)),
+                }
+            }
+            assert_eq!(
+                counted,
+                expected.into_iter().map(ms).collect::<Vec<_>>(),
+                "{steps:?}"
+            );
+        }
     }
 }
