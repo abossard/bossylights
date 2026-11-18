@@ -1,0 +1,89 @@
+{
+  "label": "chromium",
+  "phases": [
+    {
+      "engineFramesPerSecond": 44,
+      "engineGapMs": {
+        "max": 76.6,
+        "p95": 26.7
+      },
+      "fps": 119.7,
+      "frameMs": {
+        "max": 50.7,
+        "p50": 8.3,
+        "p95": 9.2
+      },
+      "framesOver25ms": 1,
+      "name": "idle",
+      "seconds": 15
+    },
+    {
+      "engineFramesPerSecond": 43.7,
+      "engineGapMs": {
+        "max": 58.7,
+        "p95": 26.9
+      },
+      "fps": 120.1,
+      "frameMs": {
+        "max": 9.4,
+        "p50": 8.3,
+        "p95": 9.2
+      },
+      "framesOver25ms": 0,
+      "name": "drag",
+      "seconds": 15
+    },
+    {
+      "engineFramesPerSecond": 44,
+      "engineGapMs": {
+        "max": 43.8,
+        "p95": 27.2
+      },
+      "fps": 120,
+      "frameMs": {
+        "max": 9.4,
+        "p50": 8.3,
+        "p95": 9.2
+      },
+      "framesOver25ms": 0,
+      "name": "update",
+      "seconds": 15
+    },
+    {
+      "engineFramesPerSecond": 44,
+      "engineGapMs": {
+        "max": 42.2,
+        "p95": 27.2
+      },
+      "fps": 120.1,
+      "frameMs": {
+        "max": 9.4,
+        "p50": 8.3,
+        "p95": 9.2
+      },
+      "framesOver25ms": 0,
+      "name": "press",
+      "seconds": 20
+    }
+  ],
+  "pressToFrame": {
+    "engineWaitMs": {
+      "max": 29.2,
+      "p50": 12.4,
+      "p95": 23.3
+    },
+    "lost": 0,
+    "presses": 133,
+    "uiMs": {
+      "max": 30.9,
+      "p50": 13.7,
+      "p95": 25.2
+    }
+  },
+  "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/158.0.0.0 Safari/537.36",
+  "viewport": {
+    "devicePixelRatio": 2,
+    "height": 900,
+    "width": 1440
+  }
+}
