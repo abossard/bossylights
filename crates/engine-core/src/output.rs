@@ -3,9 +3,13 @@
 //! `crates/outputs`; this file is the data and the calculations around it.
 //!
 //! ```text
-//! [*] -> Connecting --accepted--> Running --failed--> Reconnecting --accepted--> Running
-//!                                                     Reconnecting --gave up--> NotFound --accepted--> Connecting
+//! [*] -> NotFound --accepted--> Connecting --accepted--> Running --failed--> Reconnecting --accepted--> Running
+//!                               Connecting --failed----------------------->  Reconnecting --gave up--> NotFound
 //! ```
+//!
+//! "Accepted" is the device's word: a DMX USB Pro accepts only once its adapter is found.
+//! DDP gets no answer from the device, so for it accepted, and Running, mean the frames
+//! were sent.
 
 use crate::{Levels, Refusal, Universes};
 use core::time::Duration;
@@ -193,12 +197,12 @@ pub struct Output {
 }
 
 impl Output {
-    /// A new output, due at once.
+    /// A new output, due at once. Not found until its device takes a frame.
     pub const fn new(universes: Run, rate: Rate, now: Duration) -> Self {
         Self {
             universes,
             rate,
-            status: Status::Connecting,
+            status: Status::NotFound,
             counters: Counters {
                 accepted: 0,
                 dropped: 0,

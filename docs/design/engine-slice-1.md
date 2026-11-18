@@ -63,12 +63,13 @@ The allowed edges are added to `scripts/layers.mjs` with each crate.
 ```mermaid
 stateDiagram-v2
   direction LR
-  [*] --> NotFound
-  NotFound --> Connecting: device appears
-  Connecting --> Running: first frame accepted
-  Running --> Reconnecting: device lost
-  Reconnecting --> Running: frame accepted
-  Reconnecting --> NotFound: gave up
+  [*] --> NotFound: SetOutput
+  NotFound --> Connecting: accepted, the device appeared
+  Connecting --> Running: accepted
+  Connecting --> Reconnecting: failed
+  Running --> Reconnecting: failed, the device is lost
+  Reconnecting --> Running: accepted
+  Reconnecting --> NotFound: 100 failures in a row
 ```
 
 Every output counts frames accepted, dropped and failed. "On time on the host" is not enough: the first DMX USB Pro run of the spike was minutes behind on the wire while the host numbers looked perfect.

@@ -1,6 +1,7 @@
 //! The engine with a DMX USB Pro on a fake serial port (a pseudo terminal): the output
 //! runs, goes to reconnecting when its port is "unplugged", and runs again by itself,
-//! while another output never fails.
+//! while another output never fails. An adapter plugged in after its output was set is
+//! not found until then, and runs by itself once it is there.
 
 use engine::{
     ChannelNumbers, Command, Device, Engine, Levels, Open, Outcome, OutputKind, OutputNumber, Rate,
@@ -109,6 +110,82 @@ fn unplugged_it_reconnects_and_runs_again_by_itself() {
     reading.join().unwrap();
 }
 
+/// The statuses output 1 goes through, each once, until `done` holds for the latest.
+fn statuses_until(engine: &mut Engine, done: impl Fn(&engine::Output) -> bool) -> Vec<Status> {
+    let mut seen = Vec::new();
+    let started = Instant::now();
+    loop {
+        // Asked for far more often than the output's frames: every wake's picture is seen.
+        if let Some(output) = engine.latest().state.outputs[0] {
+            if seen.last() != Some(&output.status) {
+                seen.push(output.status);
+            }
+            if done(&output) {
+                return seen;
+            }
+        }
+        assert!(started.elapsed() < Duration::from_secs(10), "{seen:?}");
+        thread::sleep(Duration::from_millis(1)); // poll
+    }
+}
+
+#[test]
+fn an_adapter_plugged_in_after_its_output_was_set_is_not_found_then_runs() {
+    let plugged = Arc::new(AtomicBool::new(false));
+    let (mut give, ends) = rtrb::RingBuffer::new(8);
+    let find: Find = {
+        let plugged = Arc::clone(&plugged);
+        Box::new(move || {
+            if !plugged.load(Ordering::Relaxed) {
+                return Err(std::io::Error::from(std::io::ErrorKind::NotFound));
+            }
+            let (mut ours, port) = TTYPort::pair()?;
+            never_wait(&port)?;
+            ours.set_timeout(Duration::from_millis(20))?;
+            give.push(ours)
+                .map_err(|_| std::io::Error::other("too many ports"))?;
+            Ok(port)
+        })
+    };
+    let mut find = Some(find);
+    let open: Open = Box::new(move |kind| match (kind, find.take()) {
+        (OutputKind::DmxUsbPro { adapter: 1 }, Some(find)) => {
+            Ok(Box::new(DmxUsbPro::open(find)?) as Box<dyn Device>)
+        }
+        _ => Err(std::io::Error::other("one adapter in this test")),
+    });
+    let stop = Arc::new(AtomicBool::new(false));
+    let reading = {
+        let stop = Arc::clone(&stop);
+        thread::spawn(move || reader(ends, Arc::new(AtomicBool::new(false)), stop))
+    };
+    let (mut engine, mut sender) = Engine::start_with(Universes::ONE, open).unwrap();
+    assert_eq!(
+        sender.send(set_output(1, None)),
+        Ok(()),
+        "no adapter is no refusal"
+    );
+
+    // (the adapter is plugged in, the statuses output 1 goes through until it settles)
+    let cases = [
+        (false, vec![Status::NotFound]),
+        (
+            true,
+            vec![Status::NotFound, Status::Connecting, Status::Running],
+        ),
+    ];
+    for (is_plugged, statuses) in cases {
+        plugged.store(is_plugged, Ordering::Relaxed);
+        let settled = *statuses.last().unwrap();
+        let seen = statuses_until(&mut engine, |output| {
+            output.status == settled && (is_plugged || output.counters.failed >= 3)
+        });
+        assert_eq!(seen, statuses, "plugged in: {is_plugged}");
+    }
+    stop.store(true, Ordering::Relaxed);
+    reading.join().unwrap();
+}
+
 /// A fake adapter 1 that only one opener may hold, like the real port: a pseudo
 /// terminal opened by its name, exclusive. Returns the engine's `open`, the test's end
 /// and the port's name.
@@ -198,7 +275,7 @@ fn a_dmx_usb_pro_output_is_set_again_replaced_and_moved_through_send() {
         ),
         (
             vec![set_output(1, None), set_output(2, None)],
-            vec![ok, Err(Refusal::CannotOpen)], // one adapter drives one output
+            vec![ok, ok], // one adapter drives one output: 2 waits for it, not found
             1,
         ),
     ];
@@ -216,7 +293,10 @@ fn a_dmx_usb_pro_output_is_set_again_replaced_and_moved_through_send() {
         assert_eq!(sender.send(set), Ok(()), "{commands:?}");
         hear(&mut end, level);
         let state = engine.fresh().state;
-        let running = state.outputs.iter().position(Option::is_some);
+        let running = state
+            .outputs
+            .iter()
+            .position(|o| o.is_some_and(|o| o.status == Status::Running));
         assert_eq!(running, Some(usize::from(drives) - 1), "{commands:?}");
     }
 }

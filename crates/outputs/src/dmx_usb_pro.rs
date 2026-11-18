@@ -15,7 +15,7 @@
 //! | Thread | Does |
 //! |---|---|
 //! | output thread | [`DmxUsbPro::take`]: puts the message in a one-slot wait-free queue and wakes the port thread. Never calls the serial driver: a vanishing device holds the driver up for many milliseconds |
-//! | port thread, one per adapter | owns the port: writes each message, never more often than the link drains. When a write fails, or the port takes no byte for [`STALLED_FOR`], it closes the port and looks for the adapter every [`LOOK_EVERY`] |
+//! | port thread, one per adapter | owns the port: writes each message, never more often than the link drains. While the adapter is not there yet, or after a write fails or the port takes no byte for [`STALLED_FOR`] (then it closes the port first), it looks for the adapter every [`LOOK_EVERY`] |
 
 use crate::{Device, Levels, Outcome};
 use engine_core::ADDRESSES;
@@ -63,7 +63,7 @@ pub fn message(frame: &[Levels], out: &mut [u8; MESSAGE]) {
     end.copy_from_slice(&[0xE7]);
 }
 
-/// Finds a port and opens it. Runs on the port thread, and once in [`DmxUsbPro::open`].
+/// Finds a port and opens it. Runs once in [`DmxUsbPro::open`], then on the port thread.
 pub type Find = Box<dyn FnMut() -> io::Result<TTYPort> + Send>;
 
 /// A DMX USB Pro, as the output thread holds it: no port, only the queue to its thread.
@@ -77,7 +77,7 @@ pub struct DmxUsbPro {
 /// What the output thread and the port thread share.
 #[derive(Default)]
 struct Shared {
-    /// Set while there is no port.
+    /// Set while there is no port: not found yet, or lost.
     lost: AtomicBool,
     stop: AtomicBool,
     /// The system error that lost the port last, 0 if none.
@@ -98,16 +98,26 @@ impl LostWith {
 }
 
 impl DmxUsbPro {
-    /// Finds and opens the port once, here, then hands it to its own thread. Call it off
+    /// Looks for the port once, here, then hands it to its own thread. An adapter that
+    /// is not there is no error: the thread looks for it every [`LOOK_EVERY`], and frames
+    /// fail until it is found. Fails only when the system refuses a thread. Call it off
     /// the output thread.
     pub fn open(mut find: Find) -> io::Result<Self> {
-        let port = find()?;
+        let port = find().ok();
+        let link = if port.is_some() {
+            Link::Writing
+        } else {
+            Link::NotFound
+        };
         let (to_port, messages) = rtrb::RingBuffer::new(1);
-        let shared = Arc::new(Shared::default());
+        let shared = Arc::new(Shared {
+            lost: AtomicBool::new(port.is_none()),
+            ..Shared::default()
+        });
         let port_thread = PortThread {
             find,
-            port: Some(port),
-            link: Link::Writing,
+            port,
+            link,
             messages,
             shared: Arc::clone(&shared),
         };
@@ -182,7 +192,7 @@ impl PortThread {
     fn run(mut self) {
         while !self.shared.stop.load(Ordering::Relaxed) {
             let Some(port) = &self.port else {
-                // A lost adapter is gone for a while; then look again. `drop` wakes it;
+                // An adapter not found or lost is gone for a while; then look again. `drop` wakes it;
                 // a wake left over from `take` does not cut the wait short.
                 let look_at = Instant::now() + LOOK_EVERY;
                 while Instant::now() < look_at && !self.shared.stop.load(Ordering::Relaxed) {
@@ -214,6 +224,8 @@ impl PortThread {
                     self.shared.lost.store(true, Ordering::Release);
                     self.port = None; // closed here, never on the output thread
                 }
+                // A write never leads here: the link was found before it.
+                Link::NotFound => {}
             }
         }
     }
@@ -241,7 +253,7 @@ fn write_all(port: &TTYPort, message: &[u8], stop: &AtomicBool, mut link: Link) 
         match link {
             Link::Writing => {}
             Link::Stalled { .. } => thread::sleep(QUEUE_FULL),
-            Link::Lost { .. } => return link,
+            Link::NotFound | Link::Lost { .. } => return link,
         }
     }
     link
@@ -250,12 +262,15 @@ fn write_all(port: &TTYPort, message: &[u8], stop: &AtomicBool, mut link: Link) 
 /// The port thread's link to the adapter.
 ///
 /// ```text
+/// [*] --> NotFound --found--> Writing
 /// Writing --no byte--> Stalled --no byte for STALLED_FOR--> Lost --found again--> Writing
 ///    ^                    |                                   ^
 ///    +------- bytes ------+          any write error ---------+
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Link {
+    /// No port yet: the adapter was not there when the output was set.
+    NotFound,
     /// The last write took bytes.
     Writing,
     /// Writes take no byte since `since`: the driver queue is full.
@@ -281,8 +296,8 @@ enum Seen {
 fn next(link: Link, seen: Seen, now: Instant) -> Link {
     match (link, seen) {
         (_, Seen::Error(with)) => Link::Lost { with },
-        (Link::Lost { .. }, Seen::Found) => Link::Writing,
-        (lost @ Link::Lost { .. }, Seen::Bytes | Seen::NoBytes) => lost,
+        (Link::NotFound | Link::Lost { .. }, Seen::Found) => Link::Writing,
+        (gone @ (Link::NotFound | Link::Lost { .. }), Seen::Bytes | Seen::NoBytes) => gone,
         (Link::Writing | Link::Stalled { .. }, Seen::Bytes | Seen::Found) => Link::Writing,
         (Link::Writing, Seen::NoBytes) => Link::Stalled { since: now },
         (Link::Stalled { since }, Seen::NoBytes) => {
@@ -298,7 +313,7 @@ fn next(link: Link, seen: Seen, now: Instant) -> Link {
 }
 
 /// The finder for real adapters: the `adapter`th DMX USB Pro by USB identity when it
-/// first runs (in [`DmxUsbPro::open`]), from then on that same adapter by its serial.
+/// first finds one, from then on that same adapter by its serial.
 /// Opened at [`BAUD`], 8 data bits, 2 stop bits, writes that never wait.
 pub fn find(adapter: u8) -> Find {
     let mut wanted = None;
@@ -399,7 +414,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_port_that_takes_no_byte_for_a_while_is_lost() {
+    fn every_link_and_what_the_port_thread_saw() {
         let t0 = Instant::now();
         let stalled = Link::Stalled { since: t0 };
         let lost = |with| Link::Lost { with };
@@ -422,6 +437,12 @@ mod tests {
             (lost(io), Seen::Bytes, t0, lost(io)),
             (lost(io), Seen::Found, t0, Link::Writing),
             (Link::Writing, Seen::Found, t0, Link::Writing),
+            (Link::NotFound, Seen::Found, t0, Link::Writing), // plugged in after the output was set
+            (Link::NotFound, Seen::NoBytes, t0, Link::NotFound),
+            (Link::NotFound, Seen::Bytes, t0, Link::NotFound),
+            (Link::NotFound, Seen::Error(io), t0, lost(io)),
+            (stalled, Seen::Found, t0, Link::Writing),
+            (lost(io), Seen::Error(gone), t0, lost(gone)),
         ];
         for (link, seen, now, after) in cases {
             assert_eq!(next(link, seen, now), after, "{link:?} {seen:?}");
