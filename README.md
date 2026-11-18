@@ -55,6 +55,15 @@ How an output gets on and off the tick thread:
 
 Engine API: `GET /health` (`ok` while the engine runs) and the WebSocket `GET /api`. Types: `ui/src/engine-api.ts`, generated from `crates/engine-core/src/api.rs`.
 
+| Who may open `/api` | Why |
+|---|---|
+| a client that is no web page (sends no `Origin`) | the shell, tests, scripts |
+| the app window (`tauri://localhost`, `http://tauri.localhost`) | the desk itself |
+| the UI in a browser (`http://127.0.0.1:5174`, and `:5299` under the end-to-end tests) | development |
+| any other web page | refused with 403: a page must not stop or steer the lights. `/health` and `/version` stay open, they change nothing |
+
+The list is `ORIGINS` in `crates/engine-server/src/lib.rs`. No pairing or token yet: that comes with a remote on a tablet or phone.
+
 | Client sends | Engine answers |
 |---|---|
 | `{"Send": {"command": {"SetChannel": {"channel": {"universe": 1, "address": 1}, "value": 255}}}}` | `"Accepted"`, or `{"Refused": {"reason": "NoSuchAddress"}}` and nothing changes |

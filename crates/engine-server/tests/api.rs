@@ -309,3 +309,50 @@ async fn stop_answers_stopping_closes_every_connection_and_ends_the_server() {
     assert!(matches!(ended, Ok(Ok(()))), "{ended:?}");
     assert!(TcpStream::connect(address).await.is_err(), "nobody listens");
 }
+
+#[tokio::test]
+async fn only_the_app_and_the_dev_ui_may_open_the_api() {
+    use tokio_tungstenite::tungstenite::Error;
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    use tokio_tungstenite::tungstenite::http::{HeaderValue, StatusCode};
+    let (address, _socket, _served) = start().await;
+    // (the page's origin, or none, and the answer to the handshake)
+    let cases = [
+        (None, StatusCode::SWITCHING_PROTOCOLS), // the shell, tests, scripts
+        (Some("tauri://localhost"), StatusCode::SWITCHING_PROTOCOLS),
+        (
+            Some("http://tauri.localhost"),
+            StatusCode::SWITCHING_PROTOCOLS,
+        ),
+        (
+            Some("http://127.0.0.1:5174"),
+            StatusCode::SWITCHING_PROTOCOLS,
+        ),
+        (
+            Some("http://127.0.0.1:5299"),
+            StatusCode::SWITCHING_PROTOCOLS,
+        ),
+        (Some("https://evil.example"), StatusCode::FORBIDDEN),
+        (Some("http://127.0.0.1:5175"), StatusCode::FORBIDDEN), // the catalog needs none
+        (Some("http://localhost:5174"), StatusCode::FORBIDDEN),
+        (Some("http://127.0.0.1:51740"), StatusCode::FORBIDDEN),
+        (Some("null"), StatusCode::FORBIDDEN), // a sandboxed page or a file
+        (
+            Some("tauri://localhost.evil.example"),
+            StatusCode::FORBIDDEN,
+        ),
+    ];
+    for (origin, expected) in cases {
+        let mut request = format!("ws://{address}/api").into_client_request().unwrap();
+        if let Some(origin) = origin {
+            let origin = HeaderValue::from_static(origin);
+            request.headers_mut().insert("origin", origin);
+        }
+        let status = match tokio_tungstenite::connect_async(request).await {
+            Ok((_, response)) => response.status(),
+            Err(Error::Http(response)) => response.status(),
+            Err(error) => panic!("{origin:?}: {error}"),
+        };
+        assert_eq!(status, expected, "{origin:?}");
+    }
+}

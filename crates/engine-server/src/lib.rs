@@ -7,15 +7,18 @@
 //! | `GET /version` | the API version, as text: a client checks it before it talks |
 //! | `GET /api` | WebSocket: `Send`, `Query`, `Subscribe`, `Stop` in, JSON replies out |
 //!
-//! The plain routes allow any origin, so a web page can read them. The WebSocket does too.
+//! The plain routes allow any origin, so a web page can read them: they change nothing.
+//! The WebSocket commands the lights, so only the pages in `ORIGINS` may open it, and
+//! clients that are no web page (they send no `Origin`). Any other page gets 403.
 
 #![forbid(unsafe_code)]
 
 use axum::Router;
 use axum::extract::State;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::http::header::ACCESS_CONTROL_ALLOW_ORIGIN;
-use axum::response::Response;
+use axum::http::header::{ACCESS_CONTROL_ALLOW_ORIGIN, ORIGIN};
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use engine::{API_VERSION, ChannelLevel, Engine, Levels, Refusal, Reply, Request, Sender, changes};
 use std::io;
@@ -64,8 +67,26 @@ struct Subscription {
     universes: Vec<Levels>,
 }
 
-async fn connect(socket: WebSocketUpgrade, State(api): State<Arc<Api>>) -> Response {
-    socket.on_upgrade(move |socket| talk(socket, api))
+/// The web pages that may open the API, and why. A browser always sends the page's
+/// origin; the shell, tests and scripts send none.
+const ORIGINS: [&str; 4] = [
+    "tauri://localhost",      // the app window on macOS and Linux
+    "http://tauri.localhost", // the app window on Windows
+    "http://127.0.0.1:5174",  // the UI in a browser, `npm run ui`
+    "http://127.0.0.1:5299",  // the same UI under the end-to-end tests, `playwright.config.ts`
+];
+
+async fn connect(
+    headers: HeaderMap,
+    socket: WebSocketUpgrade,
+    State(api): State<Arc<Api>>,
+) -> Response {
+    match headers.get(ORIGIN) {
+        Some(origin) if !ORIGINS.iter().any(|allowed| origin == allowed) => {
+            StatusCode::FORBIDDEN.into_response()
+        }
+        _ => socket.on_upgrade(move |socket| talk(socket, api)),
+    }
 }
 
 /// One connection: answers each request; once subscribed, sends what changed with every
