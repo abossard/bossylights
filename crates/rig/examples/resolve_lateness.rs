@@ -1,0 +1,115 @@
+//! Resolves 10 000 RGB lights on 64 universes at 60 frames a second, on a thread with the
+//! engine's real-time policy. Each frame every light gets new values, then `resolve`
+//! writes the universes. Prints, in microseconds: the p99 of how late a frame was done
+//! (resolved, after it was due), the worst, and the p99 of the work itself. The system's
+//! answer on the policy goes to stderr.
+//!
+//! `cargo run -q --release -p rig --example resolve_lateness -- [seconds, 60 if none]`
+
+use engine_core::{
+    ChannelNumbers, Levels, Light, LightNumber, Lights, MAX_LIGHTS, MAX_UNIVERSES, Universes,
+    Writer, next_frame, resolve, sleep_before,
+};
+use std::hint;
+use std::path::Path;
+use std::process::ExitCode;
+use std::thread;
+use std::time::{Duration, Instant};
+
+const LIGHTS: u16 = 10_000;
+const PERIOD: Duration = Duration::from_nanos(1_000_000_000 / 60);
+
+fn main() -> ExitCode {
+    let seconds = std::env::args().nth(1).map_or(Ok(60), |s| s.parse::<u64>());
+    match seconds.map_err(|e| e.to_string()).and_then(run) {
+        Ok(line) => {
+            println!("{line}");
+            ExitCode::SUCCESS
+        }
+        Err(problem) => {
+            eprintln!("resolve_lateness: {problem}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn run(seconds: u64) -> Result<String, String> {
+    let writers = patch()?;
+    let frames = seconds * 60;
+    let (thread, priority) =
+        rt_thread::spawn("resolve_lateness", move |_| frames_of(&writers, frames))
+            .map_err(|e| e.to_string())?;
+    eprintln!("priority: {priority:?}, {frames} frames of {LIGHTS} lights");
+    let (mut late, mut work) = thread.join().map_err(|_| "the thread panicked")?;
+    late.sort_unstable();
+    work.sort_unstable();
+    let p99 = |sorted: &[Duration]| {
+        let rank = (sorted.len() * 99).div_ceil(100).max(1) - 1;
+        sorted.get(rank).copied().unwrap_or_default().as_micros()
+    };
+    let worst = late.last().copied().unwrap_or_default().as_micros();
+    Ok(format!("{} {worst} {}", p99(&late), p99(&work)))
+}
+
+/// 10 000 RGB PARs of three channels, 170 to a universe, from address 1 of universe 1.
+fn patch() -> Result<Vec<Writer>, String> {
+    let file = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../fixture-library/tests/definitions/Generic-Generic-RGB.qxf");
+    let bytes = std::fs::read(&file).map_err(|e| e.to_string())?;
+    let fixture =
+        fixture_library::parse("Generic-Generic-RGB.qxf", &bytes).map_err(|e| format!("{e:?}"))?;
+    let mode = fixture
+        .modes
+        .iter()
+        .find(|m| m.name == "RGB")
+        .ok_or("no RGB mode")?;
+    let universes = Universes::new(MAX_UNIVERSES).ok_or("universes")?;
+    let lights = Lights::new(MAX_LIGHTS).ok_or("lights")?;
+    let mut writers = Vec::new();
+    for n in 0..LIGHTS {
+        let at = ChannelNumbers {
+            universe: 1 + n / 170,
+            address: 1 + n % 170 * 3,
+        };
+        let first = LightNumber::new(n, lights).ok_or("light number")?;
+        let rigged = rig::compile(mode, at, first, universes, lights)
+            .map_err(|e| format!("light {n}: {e:?}"))?;
+        writers.extend(rigged.writers);
+    }
+    Ok(writers)
+}
+
+/// Runs `frames` frames as the engine's tick does: sleep, spin the last millisecond, then
+/// the frame's work. How late each frame was done, and how long its work took.
+fn frames_of(writers: &[Writer], frames: u64) -> (Vec<Duration>, Vec<Duration>) {
+    let mut values = vec![Light::DARK; usize::from(LIGHTS)];
+    let mut out = vec![Levels::ZERO; usize::from(MAX_UNIVERSES)];
+    let capacity = usize::try_from(frames).unwrap_or(0);
+    let (mut late, mut work) = (Vec::with_capacity(capacity), Vec::with_capacity(capacity));
+    let start = Instant::now();
+    let mut due = PERIOD;
+    for frame in 0..frames {
+        thread::sleep(sleep_before(due, start.elapsed()));
+        while start.elapsed() < due {
+            hint::spin_loop();
+        }
+        let woke = start.elapsed();
+        let frame = frame as u16;
+        for (n, value) in (0..).zip(values.iter_mut()) {
+            let step = frame.wrapping_mul(97).wrapping_add(n);
+            *value = Light {
+                intensity: step,
+                red: step.wrapping_mul(3),
+                green: step.wrapping_mul(5),
+                blue: step.wrapping_mul(7),
+            };
+        }
+        resolve(&values, writers, &mut out);
+        hint::black_box(&out);
+        let done = start.elapsed();
+        late.push(done.saturating_sub(due));
+        work.push(done.saturating_sub(woke));
+        due = next_frame(due, done, PERIOD);
+    }
+    (late, work)
+}

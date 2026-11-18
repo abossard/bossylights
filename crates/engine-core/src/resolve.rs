@@ -1,0 +1,424 @@
+//! Lights to bytes. The Rig compiles a mode at an address into writers, off the tick
+//! thread. [`resolve`] runs them every frame. A writer says which light, what to take,
+//! how, and where it goes. Nothing here knows a fixture, a mode, a maker or a colour
+//! model: only the values of a light and arithmetic on them.
+//!
+//! ```text
+//! lights (values per light) + writers --resolve--> bytes in the universes
+//! ```
+//!
+//! | A light | 16 bits, 0 to 65 535 is 0 to 1 |
+//! |---|---|
+//! | intensity | how bright |
+//! | red, green, blue | its colour |
+//!
+//! A value of 16 bits goes out as one byte (its high byte) or as a coarse and a fine
+//! byte. So an 8-bit channel always shows the coarse byte of the same value.
+
+use crate::channel::{Channel, Levels};
+
+/// The most lights an engine can have: 64 universes of 170 RGB pixels and more.
+pub const MAX_LIGHTS: u16 = 16_384;
+
+/// How many lights this engine has, 1 to [`MAX_LIGHTS`]. A setting, fixed while the
+/// engine runs: the buffer of light values has this length.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Lights(u16);
+
+impl Lights {
+    /// `None` outside 1 to [`MAX_LIGHTS`].
+    pub const fn new(count: u16) -> Option<Self> {
+        if count >= 1 && count <= MAX_LIGHTS {
+            Some(Self(count))
+        } else {
+            None
+        }
+    }
+
+    pub const fn count(self) -> u16 {
+        self.0
+    }
+}
+
+/// One light of this engine, counted from 0, below its [`Lights`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LightNumber(u16);
+
+impl LightNumber {
+    /// `None` at or past `lights`.
+    pub const fn new(index: u16, lights: Lights) -> Option<Self> {
+        if index < lights.0 {
+            Some(Self(index))
+        } else {
+            None
+        }
+    }
+
+    pub const fn index(self) -> u16 {
+        self.0
+    }
+}
+
+/// What a light shows this frame, every property with a value. 0 to 65 535 is 0 to 1.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Light {
+    pub intensity: u16,
+    pub red: u16,
+    pub green: u16,
+    pub blue: u16,
+}
+
+impl Light {
+    /// Intensity 0, colour black.
+    pub const DARK: Self = Self {
+        intensity: 0,
+        red: 0,
+        green: 0,
+        blue: 0,
+    };
+}
+
+/// One channel, or a coarse and fine pair, and what goes there each frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Writer {
+    /// The same byte every frame: a shutter held open, the default of a channel no
+    /// light writes.
+    Fixed { at: Channel, value: u8 },
+    /// A value taken from a light.
+    Takes {
+        light: LightNumber,
+        take: Take,
+        at: Place,
+    },
+}
+
+/// Where a value of 16 bits goes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Place {
+    /// Its high byte only.
+    Byte(Channel),
+    /// The high byte to `coarse`, the low byte to `fine`.
+    Pair { coarse: Channel, fine: Channel },
+}
+
+/// What a writer takes from its light, and how: the part `of` the light, less `less`,
+/// then scaled, then turned.
+///
+/// | Channel | Take |
+/// |---|---|
+/// | a dimmer | intensity |
+/// | red beside a dimmer | red |
+/// | red without a dimmer | red, times intensity |
+/// | red beside white | red, less shared |
+/// | white | shared: the part red, green and blue all have |
+/// | cyan | red, falling: full less red |
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Take {
+    pub of: Part,
+    pub less: Less,
+    pub scale: Scale,
+    pub sense: Sense,
+}
+
+impl Take {
+    /// Intensity as it is: a dimmer.
+    pub const INTENSITY: Self = Self {
+        of: Part::Intensity,
+        less: Less::Nothing,
+        scale: Scale::Whole,
+        sense: Sense::Rising,
+    };
+
+    /// The value of this take for `light`, 16 bits.
+    pub fn value(self, light: &Light) -> u16 {
+        let shared = light.red.min(light.green).min(light.blue);
+        let part = match self.of {
+            Part::Intensity => light.intensity,
+            Part::Red => light.red,
+            Part::Green => light.green,
+            Part::Blue => light.blue,
+            Part::Shared => shared,
+        };
+        let less = match self.less {
+            Less::Nothing => part,
+            Less::Shared => part.saturating_sub(shared),
+        };
+        let scaled = match self.scale {
+            Scale::Whole => less,
+            Scale::ByIntensity => times(less, light.intensity),
+        };
+        match self.sense {
+            Sense::Rising => scaled,
+            Sense::Falling => u16::MAX - scaled,
+        }
+    }
+}
+
+/// A part of a light.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Part {
+    Intensity,
+    Red,
+    Green,
+    Blue,
+    /// The smallest of red, green and blue: the part all three have.
+    Shared,
+}
+
+/// What is taken off the part.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Less {
+    Nothing,
+    /// The part red, green and blue all have, which another channel shows.
+    Shared,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Scale {
+    Whole,
+    /// Times the light's intensity: the mode has nothing else that dims it.
+    ByIntensity,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Sense {
+    /// More of the part, a higher value.
+    Rising,
+    /// More of the part, a lower value: full less the value.
+    Falling,
+}
+
+/// `a` times `b`, both 0 to 1 in 16 bits, rounded to the nearest.
+fn times(a: u16, b: u16) -> u16 {
+    let product = u32::from(a) * u32::from(b) + u32::from(u16::MAX / 2);
+    u16::try_from(product / u32::from(u16::MAX)).unwrap_or(u16::MAX)
+}
+
+/// Every writer's byte for this frame, written into `out`, a buffer the caller owns.
+/// `lights` are the values of the lights by number. A channel no writer names keeps what
+/// `out` holds. A writer whose light is past `lights` writes nothing. Allocates nothing,
+/// cannot fail.
+pub fn resolve(lights: &[Light], writers: &[Writer], out: &mut [Levels]) {
+    for writer in writers {
+        match *writer {
+            Writer::Fixed { at, value } => put(at, value, out),
+            Writer::Takes { light, take, at } => {
+                let Some(light) = lights.get(usize::from(light.0)) else {
+                    continue;
+                };
+                let [high, low] = take.value(light).to_be_bytes();
+                match at {
+                    Place::Byte(at) => put(at, high, out),
+                    Place::Pair { coarse, fine } => {
+                        put(coarse, high, out);
+                        put(fine, low, out);
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn put(at: Channel, value: u8, out: &mut [Levels]) {
+    if let Some(level) = at.level(out) {
+        *level = value;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{ChannelNumbers, Universes};
+
+    const FULL: u16 = u16::MAX;
+    const HALF: u16 = 0x8000;
+
+    fn light(intensity: u16, (red, green, blue): (u16, u16, u16)) -> Light {
+        Light {
+            intensity,
+            red,
+            green,
+            blue,
+        }
+    }
+
+    fn take(of: Part, less: Less, scale: Scale, sense: Sense) -> Take {
+        Take {
+            of,
+            less,
+            scale,
+            sense,
+        }
+    }
+
+    #[test]
+    fn a_take_is_a_part_less_scaled_turned() {
+        use Less::{Nothing, Shared as LessShared};
+        use Part::{Blue, Green, Intensity, Red, Shared};
+        use Scale::{ByIntensity, Whole};
+        use Sense::{Falling, Rising};
+        let orange = (FULL, HALF, 0x1000);
+        let grey = (HALF, HALF, HALF);
+        // (take, light, value)
+        let cases = [
+            (
+                take(Intensity, Nothing, Whole, Rising),
+                light(HALF, orange),
+                HALF,
+            ),
+            (take(Red, Nothing, Whole, Rising), light(0, orange), FULL),
+            (take(Green, Nothing, Whole, Rising), light(0, orange), HALF),
+            (take(Blue, Nothing, Whole, Rising), light(0, orange), 0x1000),
+            (
+                take(Shared, Nothing, Whole, Rising),
+                light(0, orange),
+                0x1000,
+            ),
+            (
+                take(Red, LessShared, Whole, Rising),
+                light(0, orange),
+                FULL - 0x1000,
+            ),
+            (take(Shared, LessShared, Whole, Rising), light(0, orange), 0),
+            (
+                take(Red, Nothing, ByIntensity, Rising),
+                light(HALF, orange),
+                HALF,
+            ),
+            (take(Red, Nothing, ByIntensity, Rising), light(0, orange), 0),
+            (
+                take(Red, Nothing, ByIntensity, Rising),
+                light(FULL, orange),
+                FULL,
+            ),
+            // 0.5 × 0.5 is 0.25, rounded to the nearest
+            (
+                take(Green, Nothing, ByIntensity, Rising),
+                light(HALF, grey),
+                0x4000,
+            ),
+            (take(Red, Nothing, Whole, Falling), light(0, orange), 0),
+            (
+                take(Blue, Nothing, Whole, Falling),
+                light(0, orange),
+                FULL - 0x1000,
+            ),
+            (
+                take(Red, Nothing, ByIntensity, Falling),
+                light(0, orange),
+                FULL,
+            ),
+            (Take::INTENSITY, light(0x1234, grey), 0x1234),
+        ];
+        for (take, light, value) in cases {
+            assert_eq!(take.value(&light), value, "{take:?} of {light:?}");
+        }
+    }
+
+    fn channel(address: u16) -> Channel {
+        ChannelNumbers {
+            universe: 1,
+            address,
+        }
+        .check(Universes::ONE)
+        .unwrap()
+    }
+
+    fn number(index: u16) -> LightNumber {
+        LightNumber::new(index, Lights::new(4).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn resolve_writes_each_writer_and_leaves_the_rest() {
+        let lights = [light(0x1234, (FULL, 0, 0)), light(HALF, (0, HALF, 0))];
+        let takes = |index, take, at| Writer::Takes {
+            light: number(index),
+            take,
+            at,
+        };
+        let green = take(Part::Green, Less::Nothing, Scale::Whole, Sense::Rising);
+        // (writers, the bytes at addresses 1 to 6, the rest of `out` holding 7)
+        let cases = [
+            (vec![], [7, 7, 7, 7, 7, 7]),
+            (
+                vec![Writer::Fixed {
+                    at: channel(2),
+                    value: 8,
+                }],
+                [7, 8, 7, 7, 7, 7],
+            ),
+            (
+                vec![takes(0, Take::INTENSITY, Place::Byte(channel(1)))],
+                [0x12, 7, 7, 7, 7, 7],
+            ),
+            (
+                vec![takes(
+                    0,
+                    Take::INTENSITY,
+                    Place::Pair {
+                        coarse: channel(3),
+                        fine: channel(6),
+                    },
+                )],
+                [7, 7, 0x12, 7, 7, 0x34],
+            ),
+            (
+                vec![
+                    takes(0, green, Place::Byte(channel(4))),
+                    takes(1, green, Place::Byte(channel(5))),
+                ],
+                [7, 7, 7, 0, 0x80, 7],
+            ),
+            // light 3 is a number of the engine, but past the values given: nothing
+            (
+                vec![takes(3, Take::INTENSITY, Place::Byte(channel(1)))],
+                [7, 7, 7, 7, 7, 7],
+            ),
+        ];
+        for (writers, expected) in cases {
+            let mut out = [Levels([7; crate::ADDRESSES])];
+            resolve(&lights, &writers, &mut out);
+            assert_eq!(out[0].0[..6], expected, "{writers:?}");
+            assert!(out[0].0[6..].iter().all(|&b| b == 7), "{writers:?}");
+        }
+    }
+
+    #[test]
+    fn a_channel_past_the_buffer_is_not_written() {
+        let two = Universes::new(2).unwrap();
+        let second = ChannelNumbers {
+            universe: 2,
+            address: 1,
+        }
+        .check(two)
+        .unwrap();
+        let mut out = [Levels::ZERO];
+        resolve(
+            &[],
+            &[Writer::Fixed {
+                at: second,
+                value: 9,
+            }],
+            &mut out,
+        );
+        assert_eq!(out, [Levels::ZERO]);
+    }
+
+    #[test]
+    fn lights_are_1_to_16_384_and_a_number_is_below_the_count() {
+        // (count, valid)
+        for (count, valid) in [
+            (0, false),
+            (1, true),
+            (MAX_LIGHTS, true),
+            (MAX_LIGHTS + 1, false),
+        ] {
+            assert_eq!(Lights::new(count).is_some(), valid, "{count}");
+        }
+        let four = Lights::new(4).unwrap();
+        // (index, valid)
+        for (index, valid) in [(0, true), (3, true), (4, false), (u16::MAX, false)] {
+            assert_eq!(LightNumber::new(index, four).is_some(), valid, "{index}");
+        }
+    }
+}

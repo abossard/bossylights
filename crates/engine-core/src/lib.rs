@@ -20,6 +20,7 @@ mod kinds;
 mod library;
 mod output;
 mod project;
+mod resolve;
 
 pub use api::{API_VERSION, MATCHES, Refusal, Reply, Request};
 pub use channel::{
@@ -35,6 +36,9 @@ pub use output::{
     Status,
 };
 pub use project::{Project, ProjectEffect, ProjectEvent, ProjectOutput};
+pub use resolve::{
+    Less, Light, LightNumber, Lights, MAX_LIGHTS, Part, Place, Scale, Sense, Take, Writer, resolve,
+};
 
 use core::time::Duration;
 use serde::{Deserialize, Serialize};

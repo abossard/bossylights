@@ -15,6 +15,7 @@
 export const CRATES = {
   "engine-core": { kind: "core", deps: ["serde"] },
   "fixture-library": { kind: "calc", deps: ["roxmltree"] }, // QLC+ fixture definitions in, a model out. Reads no files
+  rig: { kind: "calc", deps: ["engine-core", "fixture-library"] }, // a mode at an address becomes writers: only it knows an address belongs to a fixture
   "rt-thread": { kind: "action", deps: ["engine-core"] }, // the only unsafe: asks for real-time priority
   outputs: { kind: "action", deps: ["engine-core"] }, // opens devices, takes frames: only it knows bytes
   engine: { kind: "action", deps: ["engine-core", "rt-thread", "outputs"] },

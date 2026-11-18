@@ -1,0 +1,21 @@
+[package]
+name = "rig"
+description = "The Rig: a mode of a fixture at an address becomes writers for the core. A calculation, off the tick thread."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+engine-core = { path = "../engine-core" }
+fixture-library = { path = "../fixture-library" }
+
+[[test]]
+name = "no_alloc"
+harness = false
+
+[dev-dependencies]
+rt-thread = { path = "../rt-thread" }
