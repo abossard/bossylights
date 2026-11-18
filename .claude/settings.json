@@ -44,6 +44,7 @@
       "mcp__ccd_session_mgmt__set_session_effort",
       "mcp__ccd_session_mgmt__set_session_model",
       "mcp__ccd_session_mgmt__stop_session",
+      "mcp__ccd_session_mgmt__clear_session",
       "mcp__plugin_playwright_playwright"
     ],
     "deny": [
