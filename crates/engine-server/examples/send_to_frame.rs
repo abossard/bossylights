@@ -1,9 +1,12 @@
-//! Sends "set channel" at uneven times for ten seconds to an engine with one mock output
-//! at 44 a second, and prints, in microseconds, how long 95 of 100 commands took from
+//! Sends "set channel" at uneven times for ten seconds to an engine with one output at
+//! 44 a second that sends nowhere, and prints, in microseconds, how long 95 of 100 commands took from
 //! `send` to the frame that carried them.
 //! The scorecard reads it: `cargo run -q -p engine-server --example send_to_frame`.
 
-use engine::{ChannelNumbers, Command, Engine, OutputKind, OutputNumber, RunNumbers, Universes};
+use engine::{
+    ChannelNumbers, Command, Device, Engine, Levels, Outcome, OutputNumber, Rate, RunNumbers,
+    Universes,
+};
 use std::process::ExitCode;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -15,14 +18,15 @@ fn main() -> ExitCode {
         eprintln!("send_to_frame: the engine did not start");
         return ExitCode::FAILURE;
     };
-    let mock = OutputNumber::try_from(1).map(|output| Command::SetOutput {
-        output,
-        kind: OutputKind::Mock,
-        universes: RunNumbers { first: 1, count: 1 },
-        rate: None,
+    let output = OutputNumber::try_from(1);
+    let run = RunNumbers { first: 1, count: 1 }.check(Universes::ONE);
+    let attached = output.ok().zip(run.ok()).is_some_and(|(output, run)| {
+        sender
+            .attach(output, Box::new(Nowhere), run, Rate::FortyFour)
+            .is_ok()
     });
-    if !mock.is_ok_and(|mock| sender.send(mock).is_ok()) {
-        eprintln!("send_to_frame: the mock output was not added");
+    if !attached {
+        eprintln!("send_to_frame: the output was not attached");
         return ExitCode::FAILURE;
     }
     let started = Instant::now();
@@ -54,5 +58,14 @@ fn main() -> ExitCode {
             eprintln!("send_to_frame: no command reached a frame");
             ExitCode::FAILURE
         }
+    }
+}
+
+/// Takes every frame and sends it nowhere.
+struct Nowhere;
+
+impl Device for Nowhere {
+    fn take(&mut self, _frame: &[Levels]) -> Outcome {
+        Outcome::Accepted
     }
 }

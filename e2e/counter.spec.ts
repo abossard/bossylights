@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { createSocket } from "node:dgram";
 import { ENGINE } from "../playwright.config";
 
 test("the counter from the engine advances", async ({ page }) => {
@@ -26,18 +27,35 @@ test("a fader sets channel 1 through the API and shows the engine's level", asyn
   await expect(page.getByTestId("level-1")).toHaveText("200");
 });
 
-test("the debug page lists an output added through the API, with its counters", async ({ page }) => {
-  await page.goto(`/?engine=ws://${ENGINE}/api`);
-  await expect(page.getByTestId("status")).toHaveText("connected");
-  await page.evaluate(async (url) => {
-    const socket = new WebSocket(url);
-    await new Promise((opened) => (socket.onopen = opened));
-    const command = { SetOutput: { output: 16, kind: "Mock", universes: { first: 1, count: 1 }, rate: "30" } };
-    socket.send(JSON.stringify({ Send: { command } }));
-    await new Promise((answered) => (socket.onmessage = answered));
-    socket.close();
-  }, `ws://${ENGINE}/api`);
-  await expect(page.getByTestId("outputs")).toContainText(/16: mock, universes 1 to 1, 30 a second, Running, accepted [1-9]/);
+test("an output added through the API sends a fader's level as DDP and shows its counters", async ({ page }) => {
+  const udp = createSocket("udp4");
+  const packets: Buffer[] = [];
+  udp.on("message", (packet) => packets.push(packet));
+  await new Promise<void>((bound) => udp.bind(0, "127.0.0.1", bound));
+  try {
+    const address = `127.0.0.1:${udp.address().port}`;
+    await page.goto(`/?engine=ws://${ENGINE}/api`);
+    await expect(page.getByTestId("status")).toHaveText("connected");
+    await page.evaluate(
+      async ([url, address]) => {
+        const socket = new WebSocket(url);
+        await new Promise((opened) => (socket.onopen = opened));
+        const kind = { Ddp: { address, color: "Rgb" } };
+        const command = { SetOutput: { output: 16, kind, universes: { first: 1, count: 1 }, rate: "30" } };
+        socket.send(JSON.stringify({ Send: { command } }));
+        await new Promise((answered) => (socket.onmessage = answered));
+        socket.close();
+      },
+      [`ws://${ENGINE}/api`, address],
+    );
+    await expect(page.getByTestId("outputs")).toContainText(/16: universes 1 to 1, 30 a second, Running, accepted [1-9]/);
+    await page.getByTestId("fader-2").fill("123");
+    // Header: version and push, sequence, RGB, destination; then channel 2 of universe 1.
+    await expect.poll(() => packets.at(-1)?.[10 + 1]).toBe(123);
+    expect([...packets.at(-1)!.subarray(0, 4)]).toEqual([0x41, packets.at(-1)![1], 0x0b, 1]);
+  } finally {
+    udp.close();
+  }
 });
 
 const states = [

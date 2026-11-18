@@ -22,13 +22,12 @@ function refusalText(refusal: Refusal): string {
   return `NoSuchUniverse: this engine has ${refusal.NoSuchUniverse.universes}`;
 }
 
-/** An output in one line: where it sends, what, how often, its state and counters. */
+/** An output in one line: what it sends, how often, its state and counters. */
 function outputText(number: number, output: Output): string {
-  const kind = output.kind === "Mock" ? "mock" : `DDP ${output.kind.Ddp.color} to ${output.kind.Ddp.address}`;
   const { first, count } = output.universes;
   const status = typeof output.status === "string" ? output.status : `Reconnecting (${output.status.Reconnecting.failures})`;
   const c = output.counters;
-  return `${number}: ${kind}, universes ${first} to ${first + count - 1}, ${output.rate} a second, ${status}, accepted ${c.accepted}, dropped ${c.dropped}, failed ${c.failed}, off beat ${c.off_beat}`;
+  return `${number}: universes ${first} to ${first + count - 1}, ${output.rate} a second, ${status}, accepted ${c.accepted}, dropped ${c.dropped}, failed ${c.failed}, off beat ${c.off_beat}`;
 }
 
 function App() {

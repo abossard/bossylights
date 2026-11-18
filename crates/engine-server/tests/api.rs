@@ -94,7 +94,11 @@ async fn set_channel_reaches_the_state_stream_and_the_ddp_socket_in_the_next_fra
     send(&mut socket, &add).await;
     assert_eq!(answer(&mut socket).await, json!("Accepted"));
     let first = packet(&udp).await;
-    assert_eq!(first[..4], [0x41, 1, 0x0B, 1], "flags, sequence, RGB, destination");
+    assert_eq!(
+        first[..4],
+        [0x41, 1, 0x0B, 1],
+        "flags, sequence, RGB, destination"
+    );
     assert_eq!(first.len(), 10 + 510, "170 RGB pixels of universe 1");
     assert!(first[10..].iter().all(|level| *level == 0));
 
@@ -120,7 +124,10 @@ async fn set_channel_reaches_the_state_stream_and_the_ddp_socket_in_the_next_fra
     loop {
         let reply = next(&mut socket).await;
         let changed = &reply["Changed"];
-        if changed["channels"].as_array().is_some_and(|c| c.contains(&expected)) {
+        if changed["channels"]
+            .as_array()
+            .is_some_and(|c| c.contains(&expected))
+        {
             let output = &changed["state"]["outputs"][0];
             assert_eq!(output["status"], json!("Running"));
             assert_eq!(output["rate"], json!("60"), "the default for DDP");
@@ -137,6 +144,8 @@ async fn a_request_that_cannot_be_right_is_refused_and_changes_nothing() {
     send(&mut socket, &add).await;
     assert_eq!(answer(&mut socket).await, json!("Accepted"));
     let refused = |reason: Value| json!({"Refused": {"reason": reason}});
+    let address = udp.local_addr().unwrap().to_string();
+    let here = json!({"Ddp": {"address": address, "color": "Rgb"}});
     // (request, reply)
     let cases = [
         (
@@ -171,11 +180,15 @@ async fn a_request_that_cannot_be_right_is_refused_and_changes_nothing() {
             refused(json!("NotACommand")),
         ),
         (
-            output(json!("Mock"), json!({"first": 2, "count": 2}), json!(null)),
+            output(here.clone(), json!({"first": 2, "count": 2}), json!(null)),
             refused(json!({"NoSuchUniverse": {"universes": 2}})),
         ),
         (
-            output(json!("Mock"), json!({"first": 1, "count": 1}), json!("50")),
+            output(here.clone(), json!({"first": 1, "count": 1}), json!("50")),
+            refused(json!("NotACommand")),
+        ),
+        (
+            output(json!("Mock"), json!({"first": 1, "count": 1}), json!(null)),
             refused(json!("NotACommand")),
         ),
         (

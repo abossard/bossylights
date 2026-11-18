@@ -34,7 +34,10 @@ fn run(args: Vec<String>) -> Result<(), String> {
         .parse()
         .or_else(|_| format!("{target}:4048").parse())
         .map_err(|_| format!("not an IPv4 address: {target}"))?;
-    let seconds: u64 = args.get(1).map_or(Ok(30), |s| s.parse()).map_err(|_| "seconds")?;
+    let seconds: u64 = args
+        .get(1)
+        .map_or(Ok(30), |s| s.parse())
+        .map_err(|_| "seconds")?;
 
     // 320 RGBW pixels are 1280 channels: three universes, sent as one stream.
     let universes = Universes::new(3).ok_or("universes")?;
@@ -74,7 +77,9 @@ fn run(args: Vec<String>) -> Result<(), String> {
                             value,
                         }
                     };
-                    sender.send(command).map_err(|r| format!("refused: {r:?}"))?;
+                    sender
+                        .send(command)
+                        .map_err(|r| format!("refused: {r:?}"))?;
                 }
             }
         }
@@ -82,7 +87,12 @@ fn run(args: Vec<String>) -> Result<(), String> {
         thread::sleep(Duration::from_millis(25));
     }
     let state = engine.query();
-    let sent = state.outputs.first().copied().flatten().ok_or("no output")?;
+    let sent = state
+        .outputs
+        .first()
+        .copied()
+        .flatten()
+        .ok_or("no output")?;
     eprintln!(
         "{:?} at {}/s: {:?}",
         sent.status,

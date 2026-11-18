@@ -42,7 +42,9 @@ fn run() -> Result<String, String> {
             universes: RunNumbers { first: 1, count: 1 },
             rate: Some(rate),
         };
-        sender.send(command).map_err(|r| format!("refused: {r:?}"))?;
+        sender
+            .send(command)
+            .map_err(|r| format!("refused: {r:?}"))?;
     }
     thread::sleep(RUN);
     let state = engine.query();
