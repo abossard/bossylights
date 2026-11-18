@@ -1,4 +1,4 @@
-// The twelve modules from docs/design/modules.md, placed on the map.
+// The modules from docs/design/modules.md, placed on the map. Controllers is new since review 2.
 
 export interface Module {
   id: string;
@@ -7,6 +7,8 @@ export interface Module {
   sub?: string;
   /** One thing to know, on the card */
   note?: string;
+  /** proposed, not rated yet */
+  isNew?: boolean;
   /** The whole interface */
   iface: string[];
   hides: string[];
@@ -31,8 +33,9 @@ export const MODULES: Module[] = [
   { id: "library", name: "Fixture library", iface: ["search", "model"], hides: ["QLC+, OFL and GDTF file formats"], ifaceSize: 2, hidesSize: 5, core: false, screens: ["patch"], x: 545, y: 40, w: 170 },
   { id: "output", name: "Output", iface: ["devices", "send"], hides: ["USB timing", "reconnects", "Art-Net", "sACN", "DDP", "laser DAC"], ifaceSize: 2, hidesSize: 7, core: true, screens: ["dmx", "inout"], x: 815, y: 165, w: 110 },
   { id: "project", name: "Project", iface: ["read", "edit", "undo", "redo"], hides: ["file format", "autosave", "migration", "history"], ifaceSize: 4, hidesSize: 6, core: false, screens: ["looks"], x: 360, y: 40 },
-  { id: "surface", name: "Surface", iface: ["layout", "press", "reflect"], hides: ["widgets", "pages", "MIDI learn", "controller profiles", "pad colours"], ifaceSize: 3, hidesSize: 7, core: false, screens: ["console", "inout"], x: 185, y: 190 },
-  { id: "show", name: "Show", iface: ["record", "play", "edit"], hides: ["tracks", "clips", "nested song shows", "quantize", "section blocks"], ifaceSize: 3, hidesSize: 6, core: false, screens: ["songs"], x: 185, y: 290 },
+  { id: "ctl", name: "Controllers", isNew: true, note: "Proposed in review 2: controller mapping lives with In/Out, like QLC+ profiles. Not rated yet.", iface: ["devices", "learn", "mappings"], hides: ["MIDI", "OSC", "controller profiles", "pad colours sent back"], ifaceSize: 3, hidesSize: 6, core: false, screens: ["inout"], x: 185, y: 190 },
+  { id: "surface", name: "Surface", note: "Smaller since review 2: widgets and pages only. Hardware went to Controllers.", iface: ["layout", "press"], hides: ["widgets", "pages"], ifaceSize: 2, hidesSize: 4, core: false, screens: ["console"], x: 185, y: 250 },
+  { id: "show", name: "Show", iface: ["record", "play", "edit"], hides: ["tracks", "clips", "nested song shows", "quantize", "section blocks"], ifaceSize: 3, hidesSize: 6, core: false, screens: ["songs"], x: 185, y: 310 },
   { id: "music", name: "Music", iface: ["playing", "analyse"], hides: ["VirtualDJ protocols", "analysis pipeline", "beat grids", "confidence"], ifaceSize: 2, hidesSize: 6, core: false, screens: ["songs"], x: 20, y: 370 },
   { id: "autopilot", name: "Autopilot", iface: ["start", "stop"], hides: ["choosing looks", "not repeating", "staying out of your hands' way"], ifaceSize: 2, hidesSize: 5, core: false, screens: ["songs"], x: 185, y: 370 },
 ];
@@ -47,9 +50,10 @@ export const WRITERS = [
 export const ARROWS: { id: string; d: string; state?: boolean }[] = [
   { id: "ui-engine", d: "M150,54 C260,54 300,165 360,170" },
   { id: "agents-engine", d: "M150,124 C250,124 300,182 360,182" },
-  { id: "controllers-surface", d: "M150,214 L185,214" },
-  { id: "surface-engine", d: "M315,214 C335,214 340,200 360,200" },
-  { id: "show-engine", d: "M315,314 C390,314 400,270 405,220" },
+  { id: "controllers-ctl", d: "M150,214 L185,214" },
+  { id: "ctl-engine", d: "M315,214 C335,214 340,200 360,200" },
+  { id: "surface-engine", d: "M315,276 C360,276 380,255 384,220" },
+  { id: "show-engine", d: "M315,336 C400,336 412,280 414,220" },
   { id: "autopilot-engine", d: "M315,394 C440,394 455,280 450,220" },
   { id: "music-autopilot", d: "M150,394 L185,394" },
   { id: "music-clock", d: "M85,422 L85,432 L600,432 L600,402" },
@@ -66,11 +70,11 @@ export const ARROWS: { id: string; d: string; state?: boolean }[] = [
 
 /** One press, hop by hop: the path the dot takes, the module it lands on, what is said. */
 export const TRACE: { path: string; at: string; say: string; reverse?: boolean }[] = [
-  { path: "controllers-surface", at: "surface", say: "You press Sunset. Surface turns the press into a command." },
-  { path: "surface-engine", at: "engine", say: "send(start Sunset on Manual)" },
+  { path: "controllers-ctl", at: "ctl", say: "You press a pad on the Launchpad. Controllers looks up its mapping: Sunset." },
+  { path: "ctl-engine", at: "engine", say: "send(start Sunset on Manual)" },
   { path: "engine-mixer", at: "mixer", say: "apply(command)" },
   { path: "mixer-rig", at: "rig", say: "frame(time) gives a look, 44 times a second" },
   { path: "rig-output", at: "output", say: "resolve(look) gives universes: bytes go out" },
   { path: "mixer-engine", at: "engine", say: "The new state comes back through the Engine" },
-  { path: "surface-engine", at: "surface", say: "reflect(state): the pad lights up", reverse: true },
+  { path: "ctl-engine", at: "ctl", say: "The pad colour is sent back: the Launchpad lights up", reverse: true },
 ];

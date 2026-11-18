@@ -78,11 +78,11 @@ export function Screen() {
   const Node = (m: Module) => (
     <g
       class="mm-node"
-      classList={{ "is-core": m.core, "is-selected": selected() === m.id, "is-traced": tracing(m.id), "is-engine": m.id === "engine" }}
+      classList={{ "is-core": m.core, "is-selected": selected() === m.id, "is-traced": tracing(m.id), "is-engine": m.id === "engine", "is-new": !!m.isNew }}
       role="button"
       tabIndex={0}
       aria-pressed={selected() === m.id}
-      aria-label={`${m.name}${m.core ? ", real-time core" : ""}`}
+      aria-label={`${m.name}${m.core ? ", real-time core" : ""}${m.isNew ? ", new" : ""}`}
       onClick={() => setSelected(m.id)}
       onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), setSelected(m.id))}
     >
@@ -93,6 +93,12 @@ export function Screen() {
       <Show when={m.sub}>
         <text class="mm-sub" x={m.x + (m.w ?? W) / 2} y={m.y + (m.h ?? H) / 2 + 17} text-anchor="middle">
           {m.sub}
+        </text>
+      </Show>
+      <Show when={m.isNew}>
+        <rect class="mm-new" x={m.x + (m.w ?? W) - 36} y={m.y - 9} width={40} height={18} />
+        <text class="mm-new-text" x={m.x + (m.w ?? W) - 16} y={m.y + 4} text-anchor="middle">
+          new
         </text>
       </Show>
     </g>
@@ -110,7 +116,7 @@ export function Screen() {
           </Button>
         }
       >
-        <svg class="mm-svg" viewBox="0 0 940 446" role="img" aria-label="The twelve modules. Every writer goes through the Engine. The core never calls outward.">
+        <svg class="mm-svg" viewBox="0 0 940 446" role="img" aria-label="The thirteen modules. Every writer goes through the Engine. The core never calls outward.">
           <defs>
             <marker id="mm-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
               <path d="M0,0 L10,5 L0,10 z" class="mm-head" />
@@ -163,6 +169,9 @@ export function Screen() {
           <Show when={mod().core}>
             <span class="mm-core-chip">Real-time core</span>
           </Show>
+          <Show when={mod().isNew}>
+            <span class="mm-new-chip">New, not rated yet</span>
+          </Show>
         </header>
         <section>
           <h3 class="mm-h">Whole interface</h3>
@@ -209,10 +218,10 @@ export function Screen() {
 
       <Region id="questions" title="Questions for you" class="mm-questions" aside={<span class="mute">{answered()} of {QUESTIONS.length} answered · saved with your review</span>}>
         <div class="mm-q-cols">
-          <For each={["Theory", "Modules"] as const}>
+          <For each={["Review 2", "Theory", "Modules"] as const}>
             {(src) => (
               <section>
-                <h3 class="mm-h">From the {src === "Theory" ? "theory" : "module map"}</h3>
+                <h3 class="mm-h">{src === "Review 2" ? "New after review 2" : `From the ${src === "Theory" ? "theory" : "module map"}`}</h3>
                 <ol class="mm-q-list">
                   <For each={QUESTIONS.filter((q) => q.source === src)}>
                     {(q) => {

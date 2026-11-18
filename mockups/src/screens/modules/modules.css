@@ -161,6 +161,29 @@
   fill: var(--ink);
 }
 
+.mm-node.is-new rect:first-child {
+  stroke-dasharray: 6 4;
+  stroke: var(--paper);
+}
+
+.mm-node rect.mm-new {
+  fill: var(--paper);
+  stroke: none;
+}
+
+.mm-node text.mm-new-text {
+  font: 700 13px var(--font-ui);
+  fill: var(--ink);
+}
+
+.mm-new-chip {
+  padding: 3px 7px;
+  background: var(--paper);
+  color: var(--ink);
+  font-size: var(--text-sm);
+  font-weight: 700;
+}
+
 .mm-note {
   margin-top: var(--sp-2);
   padding-left: var(--sp-2);
