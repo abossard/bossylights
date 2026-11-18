@@ -30,6 +30,8 @@ export const UI_FILES = {
   "engine.ts": "engine", // the only module that talks to the engine
   "main.tsx": "view",
   "controls/": "controls", // the behaviour table of every control, its commands and state machines (#102)
+  "kit/": "kit", // the pure components the controls are drawn with: props in, a gesture out (#102)
+  "catalog/": "catalog", // the storyboard catalog, its own app: `npm run catalog` (#102)
 };
 
 /** Which layer may import which. Views never import engine internals past engine.ts. */
@@ -39,6 +41,8 @@ export const UI_LAYERS = {
   engine: ["calc", "data"],
   view: ["engine", "calc", "data"],
   controls: ["controls"], // data and calculations about controls. No engine, no view
+  kit: ["kit", "controls"], // views with no engine: the only thing they know of a control is its machine
+  catalog: ["catalog", "kit", "controls"], // draws the table with the kit. No engine
 };
 
 const NO_STD = /^#!\[(?:no_std|cfg_attr\(not\(test\),\s*no_std\))\]/m;
