@@ -24,7 +24,9 @@
 
 pub use engine_core::State;
 
-use engine_core::{Command, LATENESS_BUCKETS, lateness_bucket, next_frame, p99, update};
+use engine_core::{
+    Command, LATENESS_BUCKETS, Lateness, lateness_bucket, next_frame, p99, update, worst,
+};
 use std::io;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -72,11 +74,19 @@ impl Engine {
 
     /// How late 99 of 100 ticks woke up, so far. `None` before the first tick.
     pub fn lateness_p99(&self) -> Option<Duration> {
-        p99(&self
-            .shared
+        p99(&self.lateness())
+    }
+
+    /// How late the latest-waking tick woke up, so far. `None` before the first tick.
+    pub fn lateness_worst(&self) -> Option<Duration> {
+        worst(&self.lateness())
+    }
+
+    fn lateness(&self) -> Lateness {
+        self.shared
             .lateness
             .each_ref()
-            .map(|n| n.load(Ordering::Relaxed)))
+            .map(|n| n.load(Ordering::Relaxed))
     }
 }
 

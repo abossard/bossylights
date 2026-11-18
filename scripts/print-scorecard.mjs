@@ -1,5 +1,5 @@
 // Prints the scorecard as Markdown. With GITHUB_STEP_SUMMARY set, also writes it there.
-// Runs the engine for five seconds to measure tick lateness.
+// Runs the engine for 60 seconds to measure tick lateness.
 import { execFileSync } from "node:child_process";
 import { appendFileSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -31,8 +31,9 @@ const everything = [
 
 const lateness = () => {
   try {
-    const micros = execFileSync("cargo", ["run", "-q", "-p", "engine-server", "--example", "lateness"], { encoding: "utf8" });
-    return Number(micros.trim());
+    const out = execFileSync("cargo", ["run", "-q", "-p", "engine-server", "--example", "lateness"], { encoding: "utf8" });
+    const [p99, worst] = out.trim().split(" ").map(Number);
+    return { p99, worst };
   } catch {
     return undefined; // shown as "not measured"
   }

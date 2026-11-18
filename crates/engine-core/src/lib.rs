@@ -97,6 +97,14 @@ pub fn p99(lateness: &Lateness) -> Option<Duration> {
     None
 }
 
+/// The lateness no tick went past: the upper edge of the latest bucket that holds a
+/// tick. The last bucket holds everything later. `None` before the first tick.
+pub fn worst(lateness: &Lateness) -> Option<Duration> {
+    let bucket = lateness.iter().rposition(|count| *count > 0)?;
+    let edges = u32::try_from(bucket + 1).unwrap_or(u32::MAX);
+    Some(LATENESS_STEP.saturating_mul(edges))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -185,6 +193,32 @@ mod tests {
         for (lateness, expected) in cases {
             assert_eq!(
                 p99(&lateness),
+                expected.map(Duration::from_micros),
+                "{expected:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn worst_is_the_upper_edge_of_the_latest_bucket_with_a_tick() {
+        let ticks = |counts: &[(usize, u64)]| {
+            let mut lateness = [0; LATENESS_BUCKETS];
+            for (bucket, count) in counts {
+                lateness[*bucket] = *count;
+            }
+            lateness
+        };
+        // (bucket and count, worst in µs)
+        let cases = [
+            (ticks(&[]), None),
+            (ticks(&[(0, 1)]), Some(100)),
+            (ticks(&[(0, 1000), (7, 1)]), Some(800)),
+            (ticks(&[(2, 5), (9, 0)]), Some(300)),
+            (ticks(&[(LATENESS_BUCKETS - 1, 1)]), Some(25_100)),
+        ];
+        for (lateness, expected) in cases {
+            assert_eq!(
+                worst(&lateness),
                 expected.map(Duration::from_micros),
                 "{expected:?}"
             );

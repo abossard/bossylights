@@ -40,4 +40,6 @@ fn every_tick_counts_how_late_it_woke() {
         p99 > Duration::ZERO,
         "the p99 is a bucket's upper edge: {p99:?}"
     );
+    let worst = engine.lateness_worst().expect("ticks were counted");
+    assert!(worst >= p99, "worst {worst:?} under p99 {p99:?}");
 }

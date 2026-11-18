@@ -57,15 +57,15 @@ test("scorecard renders the numbers as tables", () => {
 |---|---|---|
 | Lines in calculation crates | 30% (30 of 100) | up |
 | Escape hatches: allow, expect, lint-disable, unsafe | 0, 1, 0, 2 | flat |
-| Tick lateness, p99 | 640 µs | flat |
+| Tick lateness in 60 s, p99 | 640 µs, worst 900 µs | flat |
 
 | Crate | Kind | Public items | Lines | Lines per public item |
 |---|---|---|---|---|
 | core | core | 3 | 30 | 10 |
 | app | action | 0 | 70 | - |
 `;
-  assert.equal(scorecard(crates, hatches, 640), expected);
-  assert.match(scorecard(crates, hatches, undefined), /Tick lateness, p99 \| not measured \|/);
+  assert.equal(scorecard(crates, hatches, { p99: 640, worst: 900 }), expected);
+  assert.match(scorecard(crates, hatches, undefined), /Tick lateness in 60 s, p99 \| not measured \|/);
 });
 
 // [outcomes, score cell]
