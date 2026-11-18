@@ -202,7 +202,7 @@ fn after_the_last_output_is_removed_a_command_still_lands_and_the_engine_stops()
         let wait_until = |what: &str, done: &dyn Fn(&Engine) -> bool| {
             let started = Instant::now();
             while !done(&engine) {
-                assert!(started.elapsed() < guard, "{outputs:?}: {what}");
+                assert!(started.elapsed() < guard, "{outputs:?}: {what}"); // guard
                 thread::sleep(Duration::from_millis(1)); // poll
             }
         };

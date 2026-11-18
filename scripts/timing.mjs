@@ -1,5 +1,6 @@
 // CI judges what is sent, never how fast. A test that compares an elapsed time with a
-// bound under one second would fail on a noisy runner. Hang guards of seconds are fine.
+// bound would fail on a noisy runner. Allowed: a literal bound of a second or more, or a
+// bound that is not a literal on a line marked `// guard` (a hang guard of seconds).
 
 /** Folders whose tests the check reads. */
 export const CHECKED = ["crates", "e2e", "shell"];
@@ -25,6 +26,7 @@ function boundMs(line) {
 const WAIT = /\bwaitForTimeout\(/;
 const SLEEP = /\bsleep\(\s*Duration::from_(millis|micros|nanos|secs_f64|secs_f32)\(\s*([\d._]+)/;
 const SLEEP_CONSTANT = /\bsleep\(\s*[A-Z][A-Z0-9_]*\s*\)/; // a named time: its size is not known here
+const GUARD = /\/\/\s*guard\b/; // a hang guard of seconds, on a bound that is not a literal
 const POLL = /\/\/\s*poll\b/;
 
 /** True when the statement sleeps under a second, or waits for a fixed time, and is not marked `// poll`. */
@@ -56,14 +58,15 @@ function statements(source) {
 }
 
 /**
- * Every statement of a test file that compares an elapsed time with a bound under a second,
+ * Every statement of a test file that compares an elapsed time with anything but a literal of a second or more (or a `// guard`),
  * or sleeps or waits a fixed time under a second without the `// poll` mark: "path:line: text".
  * A wait that polls a condition is marked `// poll` and is guarded by seconds.
  */
 export function timingBounds(path, source) {
   return statements(source).flatMap(({ at, text }) => {
     const bound = boundMs(text);
-    const compares = ELAPSED.test(text) && COMPARE.test(text) && bound !== undefined && bound < SECOND_MS;
+    const safe = (bound !== undefined && bound >= SECOND_MS) || GUARD.test(text);
+    const compares = ELAPSED.test(text) && COMPARE.test(text) && !safe;
     const first = text.split("\n").find((line) => line.trim() !== "") ?? "";
     return compares || fixedWait(text) ? [`${path}:${at + text.split("\n").findIndex((l) => l.trim() !== "")}: ${first.trim()}`] : [];
   });

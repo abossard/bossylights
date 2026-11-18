@@ -20,6 +20,14 @@ const cases = [
   ["tokio::time::sleep(Duration::from_millis(100)).await;", true],
   ["thread::sleep(Duration::from_secs_f64(0.5));", true],
   ["thread::sleep(Duration::from_millis(1)); // poll", false],
+  ["assert!(s.elapsed() < BOUND);", true],
+  ["assert!(s.elapsed() < Duration::from_millis(frames * 10));", true],
+  ["assert!(s.elapsed() < Duration::from_secs(limit));", true],
+  ["assert!(s.elapsed() < guard);", true],
+  ["assert!(s.elapsed() < guard); // guard", false],
+  ["expect(Date.now() - started).toBeLessThan(limit);", true],
+  ["assert!(s.elapsed() < Duration::from_secs(5));", false],
+  ["assert!(s.elapsed() > Duration::from_secs(1));", false],
   ["thread::sleep(LINK_TIME);", true],
   ["thread::sleep(LINK_TIME); // poll", false],
   ["thread::sleep(Duration::from_secs(3));", false],
@@ -41,6 +49,8 @@ const statementCases = [
   ["assert!(\n    started.elapsed()\n        < Duration::from_millis(5),\n    \"late\"\n);", 1],
   ["let late = started.elapsed()\n    < Duration::from_millis(5);", 1],
   ["assert!(\n    started.elapsed()\n        < Duration::from_secs(10),\n);", 0],
+  ["let late = started.elapsed()\n    < BOUND;", 1],
+  ["assert!(\n    started.elapsed() < guard, // guard\n);", 0],
   ["let t = Instant::now();\nassert!(frames > 10);\nlet d = Duration::from_millis(5);", 0],
 ];
 for (const [source, hits] of statementCases) {
