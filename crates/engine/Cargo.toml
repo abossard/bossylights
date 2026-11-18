@@ -12,6 +12,7 @@ workspace = true
 [dependencies]
 engine-core = { path = "../engine-core" }
 rt-thread = { path = "../rt-thread" }
+rtrb = "0.4.1"
 
 [[test]]
 name = "no_alloc"

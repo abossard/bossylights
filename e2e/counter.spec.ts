@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 import { ENGINE } from "../playwright.config";
 
 test("the counter from the engine advances", async ({ page }) => {
-  await page.goto(`/?engine=ws://${ENGINE}/state`);
+  await page.goto(`/?engine=ws://${ENGINE}/api`);
   await expect(page.getByTestId("status")).toHaveText("connected");
 
   const frame = page.getByTestId("frame");
@@ -15,13 +15,20 @@ test("the counter from the engine advances", async ({ page }) => {
 });
 
 test("the debug page shows the output thread's priority", async ({ page }) => {
-  await page.goto(`/?engine=ws://${ENGINE}/state`);
+  await page.goto(`/?engine=ws://${ENGINE}/api`);
   await expect(page.getByTestId("priority")).toHaveText(/^output thread: (real-time|best effort: .+)$/);
 });
 
+test("a fader sets channel 1 through the API and shows the engine's level", async ({ page }) => {
+  await page.goto(`/?engine=ws://${ENGINE}/api`);
+  await expect(page.getByTestId("status")).toHaveText("connected");
+  await page.getByTestId("fader-1").fill("200");
+  await expect(page.getByTestId("level-1")).toHaveText("200");
+});
+
 const states = [
-  { engine: `ws://${ENGINE}/state`, status: "connected" },
-  { engine: "ws://127.0.0.1:9/state", status: "disconnected" },
+  { engine: `ws://${ENGINE}/api`, status: "connected" },
+  { engine: "ws://127.0.0.1:9/api", status: "disconnected" },
 ];
 
 for (const { engine, status } of states) {

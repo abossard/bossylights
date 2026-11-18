@@ -24,6 +24,7 @@ export const CRATES = {
 export const UI_FILES = {
   "engine-api.ts": "data", // generated from crates/engine-core
   "connection.ts": "calc",
+  "picture.ts": "calc",
   "engine.ts": "engine", // the only module that talks to the engine
   "main.tsx": "view",
 };

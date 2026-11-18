@@ -1,32 +1,40 @@
 // The only file that talks to the engine: sockets and timers live here.
-// What happens next is decided by the state machine in connection.ts.
+// What happens next is decided by the state machine in connection.ts; what the
+// engine reported is kept by picture.ts.
 import { createSignal, type Accessor } from "solid-js";
 import { START, transition, type Connection, type ConnectionEvent, type Effect } from "./connection";
-import type { Priority, State } from "./engine-api";
+import type { Command, Refusal, Reply, Request } from "./engine-api";
+import { receive, type Picture } from "./picture";
 
 export interface Engine {
-  frame: Accessor<number | undefined>;
-  priority: Accessor<Priority | undefined>;
+  picture: Accessor<Picture | undefined>;
+  /** Why the last command was refused, until one is accepted. */
+  refusal: Accessor<Refusal | undefined>;
   connection: Accessor<Connection>;
+  send: (command: Command) => void;
   close: () => void;
 }
 
-const DEFAULT_URL = "ws://127.0.0.1:7744/state";
+const DEFAULT_URL = "ws://127.0.0.1:7744/api";
 const RETRY_MS = 1000;
 
-/** The engine's state stream. `?engine=ws://host:port/state` picks another engine. */
+/** The engine's API. `?engine=ws://host:port/api` picks another engine. */
 export function engineUrl(): string {
   return new URLSearchParams(location.search).get("engine") ?? DEFAULT_URL;
 }
 
-/** Connects to the engine's state stream and keeps reconnecting until closed. */
+/** Connects to the engine, subscribes to its state and keeps reconnecting until closed. */
 export function connectEngine(url: string): Engine {
   const [start, startEffects] = START;
-  const [frame, setFrame] = createSignal<number>();
-  const [priority, setPriority] = createSignal<Priority>();
+  const [picture, setPicture] = createSignal<Picture>();
+  const [refusal, setRefusal] = createSignal<Refusal>();
   const [connection, setConnection] = createSignal<Connection>(start);
   let socket: WebSocket | undefined;
   let retry: ReturnType<typeof setTimeout> | undefined;
+
+  const request = (message: Request) => {
+    if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
+  };
 
   const send = (event: ConnectionEvent) => {
     const [next, effects] = transition(connection(), event);
@@ -38,12 +46,16 @@ export function connectEngine(url: string): Engine {
     switch (effect) {
       case "open":
         socket = new WebSocket(url);
-        socket.onopen = () => send("opened");
+        socket.onopen = () => {
+          send("opened");
+          request("Subscribe");
+        };
         socket.onclose = () => send("lost");
         socket.onmessage = (message: MessageEvent<string>) => {
-          const state = JSON.parse(message.data) as State;
-          setFrame(state.frame);
-          setPriority(state.priority);
+          const reply = JSON.parse(message.data) as Reply;
+          setPicture((before) => receive(before, reply));
+          if (reply === "Accepted") setRefusal(undefined);
+          else if ("Refused" in reply) setRefusal(reply.Refused.reason);
         };
         return;
       case "wait":
@@ -57,5 +69,11 @@ export function connectEngine(url: string): Engine {
   };
 
   startEffects.forEach(perform);
-  return { frame, priority, connection, close: () => send("close") };
+  return {
+    picture,
+    refusal,
+    connection,
+    send: (command) => request({ Send: { command } }),
+    close: () => send("close"),
+  };
 }

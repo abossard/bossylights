@@ -1,4 +1,4 @@
-use engine::Engine;
+use engine::{Engine, Universes};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -6,7 +6,8 @@ use std::time::{Duration, Instant};
 fn counter_advances_44_times_a_second() {
     // how long we watch, in ms
     for ms in [250, 500, 1000] {
-        let engine = Engine::start().expect("the tick thread starts");
+        let (engine, _sender) =
+            Engine::start(Universes::ONE, |_| {}).expect("the tick thread starts");
         let before = engine.query().frame;
         let started = Instant::now();
         thread::sleep(Duration::from_millis(ms));
@@ -23,7 +24,7 @@ fn counter_advances_44_times_a_second() {
 
 #[test]
 fn dropping_the_engine_stops_the_tick_thread_quickly() {
-    let engine = Engine::start().expect("the tick thread starts");
+    let (engine, _sender) = Engine::start(Universes::ONE, |_| {}).expect("the tick thread starts");
     thread::sleep(Duration::from_millis(50));
     let started = Instant::now();
     drop(engine);
@@ -32,7 +33,7 @@ fn dropping_the_engine_stops_the_tick_thread_quickly() {
 
 #[test]
 fn every_tick_counts_how_late_it_woke() {
-    let engine = Engine::start().expect("the tick thread starts");
+    let (engine, _sender) = Engine::start(Universes::ONE, |_| {}).expect("the tick thread starts");
     assert_eq!(engine.lateness_p99(), None, "no tick yet");
     thread::sleep(Duration::from_millis(250));
     let p99 = engine.lateness_p99().expect("ticks were counted");

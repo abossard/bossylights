@@ -51,3 +51,21 @@ main {
   font-size: 14px;
   color: var(--mute);
 }
+
+.channels {
+  display: grid;
+  gap: 4px;
+  margin-top: 24px;
+}
+
+.channel {
+  display: grid;
+  grid-template-columns: 3em 12em 3em;
+  align-items: center;
+  gap: 8px;
+}
+
+.level {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
