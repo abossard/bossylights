@@ -22,6 +22,7 @@ import {
   type Layer,
   type Look,
   type Section,
+  type SectionLabel,
   type Song,
 } from "./data";
 
@@ -51,7 +52,13 @@ export interface PixelPanel {
   /** snake: every other row runs back. zigzag: every row starts on the same side */
   wiring: "snake" | "zigzag";
   startUniverse: number;
+  /** channels per pixel: RGB 3, RGBW 4 */
+  pixel: "RGB" | "RGBW";
+  /** the order the colours are wired in, as in QLC+ */
+  order: ColourOrder;
 }
+export const COLOUR_ORDERS = ["RGB", "BGR", "BRG", "GBR", "GRB", "RBG"] as const;
+export type ColourOrder = (typeof COLOUR_ORDERS)[number];
 
 /** Where a panel sits on one universe. */
 export interface PanelRun {
@@ -80,7 +87,44 @@ export interface Output {
 }
 
 export type FaderId = "wash" | "movers" | "pixels" | "strobeRate" | "laser";
-export type AutopilotStyle = "chill" | "club" | "peak" | "no-strobe";
+/** How a pick lines up with the music. */
+export type Fit = "loop" | "ends" | "once";
+export const FIT_NAME: Record<Fit, string> = { loop: "Loops until the section ends", ends: "A full pass ends on the next section", once: "Plays once, then holds" };
+/** One autopilot rule: when (song section), pick (one look from a group), fit. */
+export interface ApRule {
+  id: string;
+  when: SectionLabel;
+  pick: string;
+  fit: Fit;
+}
+/** A style: a named set of rules. */
+export interface ApStyle {
+  id: string;
+  name: string;
+  rules: ApRule[];
+}
+export const SECTION_NAME: Record<SectionLabel, string> = { intro: "Intro", build: "Build-up", drop: "Drop", break: "Break", outro: "Outro" };
+
+/** One look that runs right now, for the Console's Running panel. */
+export interface Running {
+  id: string;
+  rank: Layer;
+  lookId: string;
+  name: string;
+  colors: string[];
+  /** manual only: the pad is off, it is still held */
+  padOff?: boolean;
+}
+
+/** A jump from one screen to a place on another (the Connections diagram). */
+export interface Jump {
+  consolePage?: string;
+  song?: string;
+  section?: number;
+  fixtureGroup?: GroupId;
+  autopilotRule?: string;
+  look?: string;
+}
 
 /** The four things the LIVE switch turns on, each of which can be turned off on its own. */
 export type Indicator = "dj" | "record" | "autopilot" | "lock";
@@ -208,16 +252,19 @@ export interface RecEvent {
   value?: number;
 }
 
-/** A recording pass: a take of a song's show. */
-export interface Take {
+/** One recording pass. */
+export interface Pass {
   id: string;
-  name: string;
-  muted: boolean;
-  /** still recording: drawn in red */
-  recording: boolean;
-  /** show-clock time the take started */
-  started?: number;
+  /** show-clock time it started */
+  started: number;
   events: RecEvent[];
+}
+/** What was recorded for a song: one row. Every pass adds to it. */
+export interface Recorded {
+  muted: boolean;
+  /** the last pass is still being written: the row is red */
+  writing: boolean;
+  passes: Pass[];
 }
 
 export interface Lane {
@@ -282,15 +329,26 @@ interface State {
   rules: Rules;
   /** Sections per song, editable. */
   songSections: Record<string, SongSection[]>;
-  /** Recording passes per song, newest first. */
-  takes: Record<string, Take[]>;
+  /** What was recorded per song: one row, every pass adds to it. */
+  recorded: Record<string, Recorded>;
+  /** Looks of the show or the autopilot stopped by hand, by placed section key. */
+  stopped: Record<string, string[]>;
+  /** The groups of the looks library, in their order. A group can be empty. */
+  lookGroups: string[];
+  /** Where a jump from another screen wants to land. */
+  jump: Jump;
   /** A song's show, muted. */
   showMuted: Record<string, boolean>;
   autopilot: {
     on: boolean;
-    style: AutopilotStyle;
+    /** id of the style in use */
+    style: string;
+    styles: ApStyle[];
     wild: number;
+    /** fixture groups it may use */
     groups: Record<GroupId, boolean>;
+    /** what plays when nothing else does: a look id, or null for dark */
+    neverDark: string | null;
     /** looks replaced with "skip this look", by placed section key */
     swaps: Record<string, string[]>;
     likes: string[];
@@ -323,7 +381,7 @@ function build() {
     // three channels held by hand: PAR 1 red, PAR 5 dimmer, Mover R1 pan
     held: { 66: 255, 93: 180, 33: 96 },
     clockFeed: "vdj",
-    panels: [{ id: "panel-1", name: "Pixel panel", cols: 24, rows: 16, wiring: "snake", startUniverse: 2 }],
+    panels: [{ id: "panel-1", name: "Pixel panel", cols: 24, rows: 16, wiring: "snake", startUniverse: 2, pixel: "RGB", order: "GRB" }],
     mappings: [
       { id: "m1", control: "Blackout", screen: "Top bar", device: "Launchpad Mini", message: "Note 91", feedback: true },
       { id: "m2", control: "Master", screen: "Console", device: "Launchpad Mini", message: "CC 21", feedback: false },
@@ -345,31 +403,83 @@ function build() {
     songSections: Object.fromEntries(
       [...SONGS, ...LIBRARY_ONLY].map((song) => [song.id, song.sections.map((x, i) => ({ ...x, id: `${song.id}-${i}` }))]),
     ),
-    // a take recorded earlier today on Glass Hours, beside its show
-    takes: {
-      "glass-hours": [
-        {
-          id: "rec-1",
-          name: "Recorded today 21:58",
-          muted: false,
-          recording: false,
-          events: [
-            { at: 556, kind: "start", lookId: "strobe" },
-            { at: 586, kind: "stop", lookId: "strobe" },
-            { at: 790, kind: "fader", fader: "Wash", value: 40 },
-            { at: 965, kind: "start", lookId: "fan-out" },
-            { at: 1020, kind: "stop", lookId: "fan-out" },
-            { at: 1140, kind: "flash", lookId: "blinder", dur: 2 },
-          ],
-        },
-      ],
+    // one pass recorded earlier today on Glass Hours
+    recorded: {
+      "glass-hours": {
+        muted: false,
+        writing: false,
+        passes: [
+          {
+            id: "pass-1",
+            started: 21 * 3600 + 58 * 60,
+            events: [
+              { at: 556, kind: "start", lookId: "strobe" },
+              { at: 586, kind: "stop", lookId: "strobe" },
+              { at: 790, kind: "fader", fader: "Wash", value: 40 },
+              { at: 965, kind: "start", lookId: "fan-out" },
+              { at: 1020, kind: "stop", lookId: "fan-out" },
+              { at: 1140, kind: "flash", lookId: "blinder", dur: 2 },
+            ],
+          },
+        ],
+      },
     },
+    stopped: {},
+    lookGroups: [...new Set(Object.values(initialLibrary()).flatMap((i) => i.groups))].sort(),
+    jump: {},
     showMuted: {},
     autopilot: {
       on: true,
       style: "club",
+      styles: [
+        {
+          id: "chill",
+          name: "Chill",
+          rules: [
+            { id: "chill-1", when: "intro", pick: "washes", fit: "loop" },
+            { id: "chill-2", when: "build", pick: "chases", fit: "loop" },
+            { id: "chill-3", when: "drop", pick: "pixels", fit: "loop" },
+            { id: "chill-4", when: "break", pick: "washes", fit: "once" },
+            { id: "chill-5", when: "outro", pick: "washes", fit: "once" },
+          ],
+        },
+        {
+          id: "club",
+          name: "Club",
+          rules: [
+            { id: "club-1", when: "intro", pick: "washes", fit: "loop" },
+            { id: "club-2", when: "build", pick: "end of build-up", fit: "ends" },
+            { id: "club-3", when: "drop", pick: "drop", fit: "loop" },
+            { id: "club-4", when: "drop", pick: "strobes", fit: "once" },
+            { id: "club-5", when: "break", pick: "movement", fit: "loop" },
+            { id: "club-6", when: "outro", pick: "washes", fit: "once" },
+          ],
+        },
+        {
+          id: "peak",
+          name: "Peak",
+          rules: [
+            { id: "peak-1", when: "intro", pick: "chases", fit: "loop" },
+            { id: "peak-2", when: "build", pick: "end of build-up", fit: "ends" },
+            { id: "peak-3", when: "drop", pick: "strobes", fit: "loop" },
+            { id: "peak-4", when: "drop", pick: "pixels", fit: "loop" },
+            { id: "peak-5", when: "break", pick: "movement", fit: "loop" },
+          ],
+        },
+        {
+          id: "no-strobe",
+          name: "No strobe",
+          rules: [
+            { id: "calm-1", when: "intro", pick: "washes", fit: "loop" },
+            { id: "calm-2", when: "build", pick: "chases", fit: "ends" },
+            { id: "calm-3", when: "drop", pick: "pixels", fit: "loop" },
+            { id: "calm-4", when: "break", pick: "washes", fit: "once" },
+          ],
+        },
+      ],
       wild: 55,
       groups: { movers: true, pars: true, bars: true, laser: false },
+      neverDark: "warm-wash",
       swaps: {},
       likes: [],
     },
@@ -464,32 +574,37 @@ function build() {
     const c = currentSong();
     return c ? now() - c.start : 0;
   };
-  /** A take's blocks: start to stop, or a flash. */
-  function recBlocks(l: Take, songLen: number, pos = songPos()) {
+  /** Blocks from recorded events: start to stop, or a flash. open: still being written, a held look runs up to now. */
+  function recBlocks(events: RecEvent[], songLen: number, open = false, pos = songPos()) {
     const out: { lookId: string; start: number; end: number }[] = [];
-    const open: Record<string, number> = {};
-    for (const ev of [...l.events].sort((x, y) => x.at - y.at)) {
-      if (ev.kind === "start" && ev.lookId) open[ev.lookId] = ev.at;
-      if (ev.kind === "stop" && ev.lookId && open[ev.lookId] !== undefined) {
-        out.push({ lookId: ev.lookId, start: open[ev.lookId], end: ev.at });
-        delete open[ev.lookId];
+    const on: Record<string, number> = {};
+    for (const ev of [...events].sort((x, y) => x.at - y.at)) {
+      if (ev.kind === "start" && ev.lookId) on[ev.lookId] = ev.at;
+      if (ev.kind === "stop" && ev.lookId && on[ev.lookId] !== undefined) {
+        out.push({ lookId: ev.lookId, start: on[ev.lookId], end: ev.at });
+        delete on[ev.lookId];
       }
       if (ev.kind === "flash" && ev.lookId) out.push({ lookId: ev.lookId, start: ev.at, end: ev.at + (ev.dur ?? 1) });
     }
-    // still held while recording: it runs up to now
-    for (const [id, at] of Object.entries(open)) out.push({ lookId: id, start: at, end: l.recording ? Math.max(at + 1, pos) : songLen });
+    for (const [id, at] of Object.entries(on)) out.push({ lookId: id, start: at, end: open ? Math.max(at + 1, pos) : songLen });
     return out;
   }
-  /** What the show plays now: the section's blocks and every take that is not muted. */
+  const NO_RECORDED: Recorded = { muted: false, writing: false, passes: [] };
+  const recordedOf = (song: Song): Recorded => state.recorded[song.id] ?? NO_RECORDED;
+  /** Passes that play back: all of them, except the one being written. */
+  const finishedPasses = (r: Recorded) => (r.writing ? r.passes.slice(0, -1) : r.passes);
+  /** What the show plays now: the section's looks and what was recorded, minus what you stopped. */
   function showLooksNow(): string[] {
     const cur = currentSection();
     if (!cur) return [...state.replay];
     const pos = now() - cur.songStart;
     const base = state.showMuted[cur.song.id] ? [] : sectionLooksOf(cur.song, cur.index);
-    const rec = (state.takes[cur.song.id] ?? [])
-      .filter((l) => !l.muted && !l.recording)
-      .flatMap((l) => recBlocks(l, songLength(cur.song)).filter((x) => x.start <= pos && pos < x.end).map((x) => x.lookId));
-    return [...new Set([...state.replay, ...rec, ...base])];
+    const r = recordedOf(cur.song);
+    const rec = r.muted
+      ? []
+      : finishedPasses(r).flatMap((x) => recBlocks(x.events, songLength(cur.song)).filter((b) => b.start <= pos && pos < b.end).map((b) => b.lookId));
+    const off = state.stopped[cur.key] ?? [];
+    return [...new Set([...state.replay, ...rec, ...base])].filter((id) => !off.includes(id));
   }
   /** A section the show already covers: the autopilot leaves it alone. */
   const covered = (p: PlacedSection) => !state.showMuted[p.song.id] && sectionLooksOf(p.song, p.index).length > 0;
@@ -498,14 +613,14 @@ function build() {
   function editSong(song: Song, label: string, fn: () => void) {
     const before = {
       sections: JSON.parse(JSON.stringify(sectionsOf(song))) as SongSection[],
-      takes: JSON.parse(JSON.stringify(state.takes[song.id] ?? [])) as Take[],
+      recorded: JSON.parse(JSON.stringify(recordedOf(song))) as Recorded,
       looks: { ...state.sectionLooks },
       muted: !!state.showMuted[song.id],
     };
     fn();
     record(label, () => {
       set("songSections", song.id, before.sections);
-      set("takes", song.id, before.takes);
+      set("recorded", song.id, before.recorded);
       set("sectionLooks", reconcile(before.looks));
       set("showMuted", song.id, before.muted);
     });
@@ -559,58 +674,38 @@ function build() {
     record(`Rename ${before}`, () => set("songSections", song.id, i, "title", before), `rename:${song.id}:${i}`);
   }
 
-  const takesOf = (song: Song) => state.takes[song.id] ?? [];
-  function setTakeMuted(song: Song, takeId: string, muted: boolean) {
-    editSong(song, muted ? "Mute" : "Unmute", () => {
-      if (takeId === "show") set("showMuted", song.id, muted);
-      else set("takes", song.id, (l) => l.id === takeId, "muted", muted);
-    });
-  }
-  /** Merge a take into the show: every look started in a section joins that section. */
-  function mergeTake(song: Song, takeId: string) {
-    const take = takesOf(song).find((l) => l.id === takeId);
-    if (!take) return;
-    editSong(song, `Merge ${take.name}`, () => {
-      const secs = sectionsOf(song);
-      let t = 0;
-      const bounds = secs.map((x) => [t, (t += x.length)]);
-      for (const ev of take.events) {
-        if ((ev.kind !== "start" && ev.kind !== "flash") || !ev.lookId) continue;
-        const k = bounds.findIndex(([a, b2]) => ev.at >= a && ev.at < b2);
-        if (k < 0) continue;
-        const ids = state.sectionLooks[secs[k].id] ?? [];
-        if (!ids.includes(ev.lookId)) set("sectionLooks", secs[k].id, [...ids, ev.lookId]);
-      }
-      set("takes", song.id, (ls) => ls.filter((x) => x.id !== takeId));
-    });
-  }
-  function deleteTake(song: Song, takeId: string) {
-    editSong(song, "Delete take", () => set("takes", song.id, (ls) => ls.filter((x) => x.id !== takeId)));
+  const setShowMuted = (song: Song, muted: boolean) => editSong(song, muted ? "Mute show" : "Unmute show", () => set("showMuted", song.id, muted));
+  const setRecordedMuted = (song: Song, muted: boolean) =>
+    editSong(song, muted ? "Mute recorded" : "Unmute recorded", () => set("recorded", song.id, { ...recordedOf(song), muted }));
+  /** Clear: everything recorded for this song goes. */
+  const clearRecorded = (song: Song) => editSong(song, "Clear recorded", () => set("recorded", song.id, { ...recordedOf(song), writing: false, passes: [] }));
+  /** Undo last pass: the newest finished pass goes. */
+  function undoLastPass(song: Song) {
+    const r = recordedOf(song);
+    const done = finishedPasses(r);
+    if (!done.length) return;
+    const gone = done[done.length - 1].id;
+    editSong(song, "Undo last pass", () => set("recorded", song.id, { ...r, passes: r.passes.filter((x) => x.id !== gone) }));
   }
 
-  // recording writes into the show of the song that plays, as a new take
+  // recording writes into the Recorded row of the song that plays: a new pass each time
   let recSeq = 2;
   function recordEvent(ev: Omit<RecEvent, "at"> & { at?: number }) {
     if (!isRecording()) return;
     const cur = currentSong();
     if (!cur) return;
     const id = cur.song.id;
-    const takes = state.takes[id] ?? [];
-    let l = takes.find((x) => x.recording);
-    if (!l) {
-      l = { id: `rec-${recSeq++}`, name: "Recording", muted: false, recording: true, started: now(), events: [] };
-      set("takes", id, [l, ...takes]);
-    }
-    const lid = l.id;
-    set("takes", id, (x) => x.id === lid, "events", (es) => [...es, { ...ev, at: ev.at ?? now() - cur.start }]);
+    const r = recordedOf(cur.song);
+    if (!r.writing) set("recorded", id, { muted: r.muted, writing: true, passes: [...r.passes, { id: `pass-${recSeq++}`, started: now(), events: [] }] });
+    const last = state.recorded[id].passes.length - 1;
+    set("recorded", id, "passes", last, "events", (es) => [...es, { ...ev, at: ev.at ?? now() - cur.start }]);
   }
   // a pass ends when recording stops or the song changes
   createEffect(() => {
     const rec = isRecording();
     const playing = currentSong()?.song.id;
-    for (const [songId, takes] of Object.entries(state.takes)) {
-      if (!rec || songId !== playing)
-        takes.forEach((l, i) => l.recording && set("takes", songId, i, { recording: false, name: `Recorded today ${hhmm(l.started ?? now())}` }));
+    for (const [songId, r] of Object.entries(state.recorded)) {
+      if (r.writing && (!rec || songId !== playing)) set("recorded", songId, "writing", false);
     }
   });
 
@@ -618,14 +713,7 @@ function build() {
   /** Why the autopilot picked what it picked, in plain words. */
   const pickReason = (p: PlacedSection) => `${p.section.title}, ${energyWord(p.section.energy)} energy`;
 
-  const FALLBACK: Record<string, string[]> = {
-    low: ["breathe"],
-    rising: ["warm-wash", "tilt-wave"],
-    high: ["pulse", "fan-out", "chase-lr"],
-  };
 
-  /** What the autopilot plays in a section, after style, groups and skips. */
-  // ---- song director ---------------------------------------------------
   const sectionKey = (song: Song, index: number) => sectionsOf(song)[index]?.id ?? `${song.id}-${index}`;
   /** The looks a section of the song's show holds. */
   const sectionLooksOf = (song: Song, index: number): string[] => state.sectionLooks[sectionKey(song, index)] ?? [];
@@ -642,22 +730,20 @@ function build() {
     );
   }
 
-  /** Fill every empty section from the autopilot's style. One undo step. */
-  function fillFromStyle(song: Song) {
+  /** Fill empty sections: the autopilot picks once, with the style in use, and the picks are written into the show. */
+  function fillEmptySections(song: Song) {
     const before = { ...state.sectionLooks };
-    let n = 0;
+    const start = song.id === currentSong()?.song.id ? currentSong()!.start : 0;
+    let t = start;
     sectionsOf(song).forEach((sec, i) => {
+      const p: PlacedSection = { key: `${song.id}@${start}-${i}`, song, songIndex: 0, section: sec, index: i, start: t, end: t + sec.length, songStart: start };
+      t += sec.length;
       if (sectionLooksOf(song, i).length) return;
-      const ids = FALLBACK[energyWord(sec.energy)].filter(
-        (id) => !(state.autopilot.style === "no-strobe" && lookById(id).kind === "strobe"),
-      );
-      set("sectionLooks", sectionKey(song, i), ids);
-      n++;
+      const ids = autopilotLooks(p).map((l) => l.id);
+      if (ids.length) set("sectionLooks", sectionKey(song, i), ids);
     });
-    if (n) record(`Fill ${song.title}`, () => set("sectionLooks", reconcile(before)));
-    return n;
+    record("Fill empty sections", () => set("sectionLooks", reconcile(before)));
   }
-
   const analysisOf = (song: Song): Song["analysis"] => (state.reviewed.includes(song.id) ? "analysed" : song.analysis);
   function markReviewed(song: Song) {
     if (state.reviewed.includes(song.id)) return;
@@ -665,20 +751,71 @@ function build() {
     record(`Checked ${song.title}`, () => set("reviewed", (r) => r.filter((x) => x !== song.id)));
   }
 
-  /** What the autopilot plays in a section, after style, groups and skips. */
+
+  const activeStyle = () => state.autopilot.styles.find((x) => x.id === state.autopilot.style) ?? state.autopilot.styles[0];
+  const hash = (text: string) => [...text].reduce((a, c) => (a * 31 + c.charCodeAt(0)) >>> 0, 7);
+  /** Looks of a library group the autopilot may use: their lights must be allowed. */
+  const pickable = (group: string) =>
+    Object.values(state.library).filter((i) => i.groups.includes(group) && fixturesOf(i.id).some((g) => state.autopilot.groups[g]));
+  /** What the autopilot plays in a section: one look per rule of the style in use, each picked from the rule's group. */
   function autopilotLooks(p: PlacedSection): Look[] {
-    // the autopilot's own picks: the analysis suggests some, else by energy
-    const ids = state.autopilot.swaps[p.key] ?? (p.section.looks.length ? p.section.looks : FALLBACK[energyWord(p.section.energy)]);
-    return ids
-      .map(lookById)
-      .filter((l) => !(state.autopilot.style === "no-strobe" && l.kind === "strobe"))
-      .filter((l) => l.groups.some((g) => state.autopilot.groups[g]));
+    const off = state.stopped[p.key] ?? [];
+    const swapped = state.autopilot.swaps[p.key];
+    if (swapped) return swapped.filter((id) => !off.includes(id)).map(lookById);
+    const picks = activeStyle()
+      .rules.filter((r) => r.when === p.section.label)
+      .map((r) => {
+        const from = pickable(r.pick);
+        return from.length ? from[hash(p.key + r.id) % from.length].id : null;
+      })
+      .filter((id): id is string => !!id && !off.includes(id));
+    return [...new Set(picks)].map(lookById);
   }
 
+  /** The autopilot's looks now. With nothing to pick and nobody else playing, "Never dark" plays. */
   const autopilotNow = (): Look[] => {
     const cur = currentSection();
-    return state.autopilot.on && autopilotArmed() && cur && !covered(cur) ? autopilotLooks(cur) : [];
+    if (!state.autopilot.on || !autopilotArmed()) return [];
+    const picks = cur && !covered(cur) ? autopilotLooks(cur) : [];
+    const nd = state.autopilot.neverDark;
+    const off = cur ? (state.stopped[cur.key] ?? []) : [];
+    return !picks.length && nd && !off.includes(nd) && !showLooksNow().length && !heldManual().length ? [lookById(nd)] : picks;
   };
+
+  // ---- autopilot settings (they live on the Looks screen) -----------------
+  let apSeq = 1;
+  function editAutopilot(label: string, fn: () => void, key?: string) {
+    const before = JSON.parse(JSON.stringify({ styles: state.autopilot.styles, style: state.autopilot.style, neverDark: state.autopilot.neverDark }));
+    fn();
+    record(label, () => (set("autopilot", "styles", before.styles), set("autopilot", "style", before.style), set("autopilot", "neverDark", before.neverDark)), key);
+  }
+  const styleIndex = (styleId: string) => state.autopilot.styles.findIndex((x) => x.id === styleId);
+  function addStyle() {
+    const id = `style-${apSeq++}`;
+    editAutopilot("New style", () => set("autopilot", "styles", (ss) => [...ss, { id, name: `Style ${ss.length + 1}`, rules: [] }]));
+    return id;
+  }
+  const renameStyle = (styleId: string, name: string) =>
+    editAutopilot("Rename style", () => set("autopilot", "styles", styleIndex(styleId), "name", name), `style-name:${styleId}`);
+  function deleteStyle(styleId: string) {
+    if (state.autopilot.styles.length < 2) return;
+    editAutopilot("Delete style", () => {
+      set("autopilot", "styles", (ss) => ss.filter((x) => x.id !== styleId));
+      if (state.autopilot.style === styleId) set("autopilot", "style", state.autopilot.styles[0].id);
+    });
+  }
+  function addRule(styleId: string) {
+    const id = `rule-${apSeq++}`;
+    editAutopilot("New rule", () =>
+      set("autopilot", "styles", styleIndex(styleId), "rules", (rs) => [...rs, { id, when: "drop" as const, pick: state.lookGroups[0] ?? "", fit: "loop" as const }]),
+    );
+    return id;
+  }
+  const setRule2 = (styleId: string, ruleId: string, patch: Partial<ApRule>) =>
+    editAutopilot("Change rule", () => set("autopilot", "styles", styleIndex(styleId), "rules", (r) => r.id === ruleId, patch));
+  const removeRule = (styleId: string, ruleId: string) =>
+    editAutopilot("Remove rule", () => set("autopilot", "styles", styleIndex(styleId), "rules", (rs) => rs.filter((r) => r.id !== ruleId)));
+  const setNeverDark = (lookId: string | null) => editAutopilot("Never dark", () => set("autopilot", "neverDark", lookId));
 
   /** Skip a whole pick: every look in it is replaced with another of the same kind. */
   function skipPick(p: PlacedSection) {
@@ -886,14 +1023,15 @@ function build() {
   const setIdentify = (id: string | null) => set("identify", id);
 
   // ---- pixel panels and universes -----------------------------------------
-  const PIXELS_PER_UNIVERSE = 170;
-  /** A panel spread over universes: 170 RGB pixels each. */
+  /** A panel spread over universes: 170 RGB pixels each, or 128 RGBW. */
   function panelRuns(panel: PixelPanel): PanelRun[] {
     const total = panel.cols * panel.rows;
+    const per = panel.pixel === "RGBW" ? 4 : 3;
+    const PIXELS_PER_UNIVERSE = Math.floor(512 / per);
     const out: PanelRun[] = [];
     for (let first = 1, u = panel.startUniverse; first <= total; first += PIXELS_PER_UNIVERSE, u++) {
       const last = Math.min(total, first + PIXELS_PER_UNIVERSE - 1);
-      out.push({ panel, universe: u, address: 1, channels: (last - first + 1) * 3, firstPixel: first, lastPixel: last });
+      out.push({ panel, universe: u, address: 1, channels: (last - first + 1) * per, firstPixel: first, lastPixel: last });
     }
     return out;
   }
@@ -1111,7 +1249,7 @@ function build() {
   /** Every sequence that uses this thing directly. */
   const usedIn = (id: string): Sequence[] =>
     items().filter((i): i is Sequence => i.kind === "sequence" && i.entries.some((x) => x.ref === id));
-  const allGroups = () => [...new Set(items().flatMap((i) => i.groups))].sort();
+  const allGroups = () => state.lookGroups;
 
   // every library item plays like a look
   setLookResolver((id) => {
@@ -1153,8 +1291,67 @@ function build() {
   function addToGroup(id: string, group: string) {
     const g = group.trim();
     if (!g || state.library[id]?.groups.includes(g)) return;
+    if (!state.lookGroups.includes(g)) set("lookGroups", (gs) => [...gs, g]);
     editItem(id, `Add to ${g}`, (it) => void it.groups.push(g));
   }
+  /** New group: empty until looks are dragged in. Returns the name it got. */
+  function addGroup(name = "New group") {
+    let n = name.trim() || "New group";
+    for (let i = 2; state.lookGroups.includes(n); i++) n = `${name} ${i}`;
+    set("lookGroups", (gs) => [...gs, n]);
+    record(`New group ${n}`, () => set("lookGroups", (gs) => gs.filter((x) => x !== n)));
+    return n;
+  }
+  /** What a group change touches: the list, the looks' labels and the autopilot rules that pick from it. */
+  function editGroups(label: string, fn: () => void) {
+    const before = JSON.parse(JSON.stringify({ groups: state.lookGroups, library: state.library, styles: state.autopilot.styles }));
+    fn();
+    record(label, () => (set("lookGroups", before.groups), set("library", reconcile(before.library)), set("autopilot", "styles", before.styles)));
+  }
+  function renameGroup(from: string, to: string) {
+    const name = to.trim();
+    if (!name || name === from || state.lookGroups.includes(name)) return;
+    editGroups(`Rename ${from}`, () => {
+      set("lookGroups", (gs) => gs.map((g) => (g === from ? name : g)));
+      for (const it of Object.values(state.library)) if (it.groups.includes(from)) set("library", it.id, "groups", (gs) => gs.map((g) => (g === from ? name : g)));
+      state.autopilot.styles.forEach((_, i) => set("autopilot", "styles", i, "rules", (r) => r.pick === from, "pick", name));
+    });
+  }
+  /** Delete a group. The looks stay in the library. */
+  function deleteGroup(name: string) {
+    editGroups(`Delete ${name}`, () => {
+      set("lookGroups", (gs) => gs.filter((g) => g !== name));
+      for (const it of Object.values(state.library)) if (it.groups.includes(name)) set("library", it.id, "groups", (gs) => gs.filter((g) => g !== name));
+    });
+  }
+
+  // ---- connections: what a look is made of and who uses it -----------------
+  /** The looks it uses directly. */
+  function madeOf(id: string): Item[] {
+    const it = state.library[id];
+    const refs = !it ? [] : it.kind === "sequence" ? it.entries.map((x) => x.ref) : it.kind === "pattern" && it.colours ? [it.colours] : [];
+    return [...new Set(refs)].map((r) => state.library[r]).filter((x) => !!x);
+  }
+  /** Console pads that play it: page and pad number. */
+  const padsOf = (id: string) =>
+    Object.entries(state.pads).flatMap(([page, ids]) => ids.map((x, i) => (x === id ? { page, pad: i + 1 } : null)).filter((x) => x !== null));
+  /** Song sections whose show holds it. */
+  const sectionsUsing = (id: string) =>
+    [...SONGS, ...LIBRARY_ONLY].flatMap((song) =>
+      sectionsOf(song)
+        .map((sec, index) => ((state.sectionLooks[sec.id] ?? []).includes(id) ? { song, index, title: sec.title } : null))
+        .filter((x) => x !== null),
+    );
+  /** Autopilot rules that may pick it: rules whose group it is in. */
+  const rulesUsing = (id: string) =>
+    state.autopilot.styles.flatMap((style) => style.rules.filter((r) => state.library[id]?.groups.includes(r.pick)).map((rule) => ({ style, rule })));
+
+  /** Jump to a place on another screen. The screen reads state.jump when it opens. */
+  function jumpTo(screen: string, jump: Jump) {
+    set("jump", reconcile(jump));
+    location.hash = `/${screen}`;
+  }
+
   function removeFromGroup(id: string, group: string) {
     editItem(id, `Remove from ${group}`, (it) => {
       it.groups = it.groups.filter((x) => x !== group);
@@ -1220,11 +1417,12 @@ function build() {
   function recordFader(fader: string, value: number) {
     const cur = currentSong();
     if (!isRecording() || !cur) return;
-    const l = (state.takes[cur.song.id] ?? []).find((x) => x.recording);
-    const last = l?.events[l.events.length - 1];
+    const r = recordedOf(cur.song);
+    const pass = r.writing ? r.passes[r.passes.length - 1] : undefined;
+    const last = pass?.events[pass.events.length - 1];
     const at = now() - cur.start;
-    if (l && last?.kind === "fader" && last.fader === fader && at - last.at < 1.5) {
-      set("takes", cur.song.id, (x) => x.id === l.id, "events", l.events.length - 1, { at, value });
+    if (pass && last?.kind === "fader" && last.fader === fader && at - last.at < 1.5) {
+      set("recorded", cur.song.id, "passes", r.passes.length - 1, "events", pass.events.length - 1, { at, value });
     } else recordEvent({ kind: "fader", fader, value });
   }
 
@@ -1381,6 +1579,41 @@ function build() {
     });
     return state.xyHeld === null ? pads : [...pads, { id: "xy", name: "Movers position", since: state.xyHeld, live: true, props: ["position"], groups: ["movers"], beaten: [] }];
   }
+  /** Every look that runs right now, by rank: the Console's Running panel lists them. */
+  function running(): Running[] {
+    const out: Running[] = heldManual().map((b) => {
+      const l = lookById(b.lookId);
+      return { id: `pad-${b.id}`, rank: "manual" as const, lookId: l.id, name: l.name, colors: l.colors, padOff: b.end !== null };
+    });
+    if (state.xyHeld !== null) out.push({ id: "xy", rank: "manual", lookId: "xy", name: "Movers position", colors: ["#f4efe6"] });
+    for (const id of showLooksNow()) out.push({ id: `show-${id}`, rank: "show", lookId: id, name: lookById(id).name, colors: lookById(id).colors });
+    for (const l of autopilotNow()) out.push({ id: `autopilot-${l.id}`, rank: "autopilot", lookId: l.id, name: l.name, colors: l.colors });
+    return out;
+  }
+  /** Release one thing you hold. */
+  function releaseHold(id: string) {
+    if (id === "xy") {
+      const xy = state.xyHeld;
+      set("xyHeld", null);
+      record("Release Movers position", () => set("xyHeld", xy));
+      return;
+    }
+    const b = state.manual.find((x) => `pad-${x.id}` === id);
+    if (!b || b.released !== null) return;
+    const before = { end: b.end };
+    const t = now();
+    setBlock(b.id, { end: b.end ?? t, released: t });
+    record(`Release ${lookById(b.lookId).name}`, () => setBlock(b.id, { end: before.end, released: null }));
+  }
+  /** Stop one look of the show or the autopilot for the rest of this section. */
+  function stopLook(lookId: string) {
+    const cur = currentSection();
+    if (!cur) return;
+    const before = state.stopped[cur.key];
+    set("stopped", cur.key, [...(before ?? []), lookId]);
+    record(`Stop ${lookById(lookId).name}`, () => set("stopped", cur.key, before as string[]));
+  }
+
   /** "colour and brightness of PAR 1-8, Bars" */
   const holdText = (h: Hold) => `${h.props.join(" and ")} of ${h.groups.map((g) => GROUPS.find((x) => x.id === g)!.name).join(", ")}`;
   /** Rule 5, "stay": looks of a rank that have ended and still show. */
@@ -1530,6 +1763,24 @@ function build() {
     morePick,
     keepPick,
     setRule,
+    running,
+    releaseHold,
+    stopLook,
+    addStyle,
+    renameStyle,
+    deleteStyle,
+    addRule,
+    setStyleRule: setRule2,
+    removeRule,
+    setNeverDark,
+    addGroup,
+    renameGroup,
+    deleteGroup,
+    madeOf,
+    padsOf,
+    sectionsUsing,
+    rulesUsing,
+    jumpTo,
     winner,
     contenders,
     holds,
@@ -1541,10 +1792,11 @@ function build() {
     songPos,
     recBlocks,
     showLooksNow,
-    takesOf,
-    setTakeMuted,
-    mergeTake,
-    deleteTake,
+    recordedOf,
+    setShowMuted,
+    setRecordedMuted,
+    clearRecorded,
+    undoLastPass,
     moveSectionEdge,
     splitSection,
     mergeSections,
@@ -1578,7 +1830,7 @@ function build() {
     },
     sectionLooksOf,
     setSectionLooks,
-    fillFromStyle,
+    fillEmptySections,
     analysisOf,
     markReviewed,
     fixtureById,
