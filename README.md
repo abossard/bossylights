@@ -40,9 +40,9 @@ flowchart LR
 | Check | Proves |
 |---|---|
 | licence check | every crate and npm package is compatible with Apache-2.0 |
-| `cargo clippy` | the engine crate uses nothing that can lock (`crates/engine/clippy.toml`) |
-| `cargo test` | 44 Hz, and no allocation while ticking (`crates/engine/tests/no_alloc.rs`) |
-| `tsc` | the UI type-checks |
+| `cargo clippy` | the engine crate uses nothing that can lock, block, do I/O or log (`crates/engine/clippy.toml`) |
+| `cargo test` | `update` and the tick schedule as tables, 44 Hz, no allocation while ticking (`crates/engine/tests/no_alloc.rs`) |
+| `tsc`, `node --test` | the UI type-checks; its connection state machine, every state and event |
 | Playwright | engine + UI in a browser: the counter advances |
 
 ## Plan
