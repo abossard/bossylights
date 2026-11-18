@@ -1,5 +1,6 @@
-//! Proves that `take` allocates nothing, for every device kind. A counting allocator
-//! sees every allocation in this process; each device is opened before the window.
+//! Proves that `take` allocates and frees nothing, for every device kind, running and
+//! refused. A counting allocator sees every allocation and free in this process; each
+//! device is opened before the window.
 
 #![expect(
     unsafe_code,
@@ -16,6 +17,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 struct Counting;
 
 static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
+static FREES: AtomicUsize = AtomicUsize::new(0);
 
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
@@ -24,6 +26,7 @@ unsafe impl GlobalAlloc for Counting {
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        FREES.fetch_add(1, Ordering::SeqCst);
         unsafe { System.dealloc(ptr, layout) }
     }
 }
@@ -51,18 +54,38 @@ fn main() {
         color: Color::Rgbw,
     })
     .unwrap();
-    // (kind, the device)
-    let devices: [(&str, Box<dyn Device>); 2] = [("DDP", ddp), ("DMX USB Pro", Box::new(pro))];
-    for (kind, mut device) in devices {
-        let before = ALLOCATIONS.load(Ordering::SeqCst);
-        let accepted = (0..200)
-            .filter(|_| device.take(&frame) == Outcome::Accepted)
-            .count();
-        let allocations = ALLOCATIONS.load(Ordering::SeqCst) - before;
-        assert!(accepted > 0, "{kind}: nothing was accepted");
+    let nobody = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let SocketAddr::V4(nobody_listens) = nobody.local_addr().unwrap() else {
+        panic!("IPv4");
+    };
+    drop(nobody);
+    let refused = outputs::open(OutputKind::Ddp {
+        address: nobody_listens,
+        color: Color::Rgbw,
+    })
+    .unwrap();
+    // (kind, the device, an outcome it must give)
+    // All stay open until every one was measured: a dropped DDP output's socket thread
+    // frees as it ends.
+    let mut devices: [(&str, Box<dyn Device>, Outcome); 3] = [
+        ("DDP", ddp, Outcome::Accepted),
+        ("DDP nobody listens to", refused, Outcome::Failed),
+        ("DMX USB Pro", Box::new(pro), Outcome::Accepted),
+    ];
+    for (kind, device, expected) in &mut devices {
+        let expected = *expected;
+        let (allocated, freed) = (
+            ALLOCATIONS.load(Ordering::SeqCst),
+            FREES.load(Ordering::SeqCst),
+        );
+        let given = (0..200).filter(|_| device.take(&frame) == expected).count();
+        let allocations = ALLOCATIONS.load(Ordering::SeqCst) - allocated;
+        let frees = FREES.load(Ordering::SeqCst) - freed;
+        assert!(given > 0, "{kind}: never {expected:?}");
         assert_eq!(
-            allocations, 0,
-            "{kind}: {allocations} allocations in 200 frames"
+            (allocations, frees),
+            (0, 0),
+            "{kind}: allocations and frees in 200 frames"
         );
     }
     drop(end);

@@ -34,7 +34,7 @@ const CLEAN: u32 = 30;
 const REOPEN_EVERY: Duration = Duration::from_millis(500);
 
 /// What a failed send means.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Fault {
     /// The link is busy: the frame is dropped, nothing is wrong.
     Busy,
@@ -51,10 +51,20 @@ const NO_BUFFERS: i32 = 55;
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 const NO_BUFFERS: i32 = -1;
 
+/// The host found no answer on the link (no ARP reply): the device is off or gone.
+#[cfg(target_os = "linux")]
+const HOST_DOWN: i32 = 112;
+#[cfg(target_os = "macos")]
+const HOST_DOWN: i32 = 64;
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+const HOST_DOWN: i32 = -1;
+
 /// The table of send errors. A calculation.
 pub fn fault(error: &io::Error) -> Fault {
-    if error.raw_os_error() == Some(NO_BUFFERS) {
-        return Fault::Busy;
+    match error.raw_os_error() {
+        Some(NO_BUFFERS) => return Fault::Busy,
+        Some(HOST_DOWN) => return Fault::DeviceNotThere,
+        _ => {}
     }
     let kind = error.kind();
     if kind == ErrorKind::WouldBlock {
@@ -66,6 +76,73 @@ pub fn fault(error: &io::Error) -> Fault {
         Fault::DeviceNotThere
     } else {
         Fault::SocketBroken
+    }
+}
+
+/// How a DDP output is doing. The engine sees it only as each frame's [`Outcome`].
+///
+/// ```text
+/// [*] --> Running --not there--> Proving --CLEAN frames sent--> Running
+///            |                      |  ^------- not there ------+
+///            +---broken--> Reopening <--broken--+
+///                             |
+///                             +--new socket--> Proving
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Health {
+    /// Frames go out. DDP has no answer from the device: running means sent.
+    Running,
+    /// The device refused; `clean` frames went out since without a refusal.
+    Proving { clean: u32 },
+    /// The socket broke; a new one was asked for and has not come yet.
+    Reopening,
+}
+
+/// What happened in one `take`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Event {
+    /// Every packet of the frame went out whole.
+    Sent,
+    /// A send failed.
+    Failed(Fault),
+    /// The socket thread handed over a new socket.
+    NewSocket,
+}
+
+/// What a transition asks the caller to do.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Ask {
+    Nothing,
+    /// Wake the socket thread to open a new socket.
+    NewSocket,
+}
+
+/// The one transition function of a DDP output: a calculation.
+fn next(health: Health, event: Event) -> (Health, Ask) {
+    use Fault::{Busy, DeviceNotThere, SocketBroken};
+    match (health, event) {
+        (Health::Reopening, Event::NewSocket) => (Health::Proving { clean: 0 }, Ask::Nothing),
+        (Health::Reopening, _) => (Health::Reopening, Ask::Nothing),
+        (_, Event::Failed(SocketBroken)) => (Health::Reopening, Ask::NewSocket),
+        (_, Event::Failed(DeviceNotThere)) => (Health::Proving { clean: 0 }, Ask::Nothing),
+        (Health::Proving { clean }, Event::Sent) if clean + 1 >= CLEAN => {
+            (Health::Running, Ask::Nothing)
+        }
+        (Health::Proving { clean }, Event::Sent) => {
+            (Health::Proving { clean: clean + 1 }, Ask::Nothing)
+        }
+        (same, Event::Failed(Busy) | Event::NewSocket) | (same @ Health::Running, Event::Sent) => {
+            (same, Ask::Nothing)
+        }
+    }
+}
+
+/// What the engine is told after `event` left the output `health`.
+const fn outcome(health: Health, event: Event) -> Outcome {
+    match (health, event) {
+        (_, Event::Failed(Fault::Busy)) => Outcome::Dropped,
+        (Health::Running, _) => Outcome::Accepted,
+        (Health::Proving { .. } | Health::Reopening, _) => Outcome::Failed,
     }
 }
 
@@ -98,18 +175,17 @@ struct Shared {
 }
 
 /// A DDP output: a connected, non-blocking UDP socket and one packet's buffer. A broken
-/// socket is replaced by one the socket thread opens, off the output thread.
+/// socket is replaced by one the socket thread opens, and dropped there, off the output
+/// thread.
 pub struct Ddp {
     link: Box<dyn Link>,
     color: Color,
     sequence: u8,
     packet: [u8; HEADER + MAX_DATA],
-    /// A refusal was seen and fewer than `CLEAN` frames went out clean since.
-    down: bool,
-    clean: u32,
-    /// A new link was asked for and has not come yet.
-    reopening: bool,
+    health: Health,
     renewed: rtrb::Consumer<Box<dyn Link>>,
+    /// The socket a new one replaced, back to the socket thread to be closed and freed.
+    spent: rtrb::Producer<Box<dyn Link>>,
     shared: Arc<Shared>,
     thread: JoinHandle<()>,
 }
@@ -130,10 +206,11 @@ impl Ddp {
             ready: AtomicBool::new(false),
         });
         let (mut give, renewed) = rtrb::RingBuffer::new(1);
+        let (spent, mut close) = rtrb::RingBuffer::<Box<dyn Link>>::new(1);
         let thread = {
             let shared = Arc::clone(&shared);
             thread::Builder::new()
-                .name("ddp-socket".into())
+                .name(SOCKET_THREAD.into())
                 .spawn(move || {
                     thread::park_timeout(Duration::ZERO); // sets up the park state
                     shared.ready.store(true, Ordering::Release);
@@ -142,6 +219,9 @@ impl Ddp {
                             thread::park();
                             continue;
                         }
+                        // The socket the last new one replaced: `take` handed it back
+                        // before it asked again.
+                        while close.pop().is_ok() {}
                         match reopen() {
                             Ok(link) => {
                                 let _ = give.push(link);
@@ -152,6 +232,7 @@ impl Ddp {
                             }
                         }
                     }
+                    while close.pop().is_ok() {}
                 })?
         };
         while !shared.ready.load(Ordering::Acquire) {
@@ -162,29 +243,58 @@ impl Ddp {
             color,
             sequence: 0,
             packet: [0; HEADER + MAX_DATA],
-            down: false,
-            clean: 0,
-            reopening: false,
+            health: Health::Running,
             renewed,
+            spent,
             shared,
             thread,
         })
     }
 
-    fn refused(&mut self) -> Outcome {
-        self.down = true;
-        self.clean = 0;
-        Outcome::Failed
-    }
-
-    fn ask_for_a_new_link(&mut self) {
-        if !self.reopening {
-            self.reopening = true;
-            self.shared.want.store(true, Ordering::Release);
-            self.thread.thread().unpark();
+    /// Takes the new socket, if one came, and hands the old one back to be dropped.
+    fn renew(&mut self) {
+        if let Ok(link) = self.renewed.pop() {
+            let old = std::mem::replace(&mut self.link, link);
+            // Never full: one socket comes per ask, and the socket thread empties `spent`
+            // before it opens the next.
+            let _ = self.spent.push(old);
+            self.health = next(self.health, Event::NewSocket).0;
         }
     }
+
+    /// Sends the frame as packets; stops at the first that fails.
+    fn send(&mut self, frame: &[Levels]) -> Event {
+        self.sequence = next_sequence(self.sequence);
+        let total = data_length(frame.len() * ADDRESSES, self.color);
+        for (offset, length, last) in packets(total) {
+            let (header, data) = self.packet.split_at_mut(HEADER);
+            header.copy_from_slice(&self::header(
+                self.sequence,
+                self.color,
+                offset,
+                length,
+                last,
+            ));
+            let Some(data) = data.get_mut(..length) else {
+                // cannot happen: length is at most MAX_DATA
+                return Event::Failed(Fault::SocketBroken);
+            };
+            channels(frame, offset, data);
+            let Some(packet) = self.packet.get(..HEADER + length) else {
+                return Event::Failed(Fault::SocketBroken);
+            };
+            match self.link.send(packet) {
+                Ok(sent) if sent == packet.len() => {}
+                Ok(_) => return Event::Failed(Fault::DeviceNotThere),
+                Err(error) => return Event::Failed(fault(&error)),
+            }
+        }
+        Event::Sent
+    }
 }
+
+/// The name of the thread that opens and drops sockets.
+const SOCKET_THREAD: &str = "ddp-socket";
 
 impl Drop for Ddp {
     fn drop(&mut self) {
@@ -198,49 +308,15 @@ impl Device for Ddp {
     /// refused stays failed until `CLEAN` frames went out without a refusal. Running means
     /// frames were sent: DDP has no answer from the device.
     fn take(&mut self, frame: &[Levels]) -> Outcome {
-        if let Ok(link) = self.renewed.pop() {
-            self.link = link;
-            self.reopening = false;
+        self.renew();
+        let event = self.send(frame);
+        let (health, ask) = next(self.health, event);
+        self.health = health;
+        if ask == Ask::NewSocket {
+            self.shared.want.store(true, Ordering::Release);
+            self.thread.thread().unpark();
         }
-        self.sequence = next_sequence(self.sequence);
-        let total = data_length(frame.len() * ADDRESSES, self.color);
-        for (offset, length, last) in packets(total) {
-            let (header, data) = self.packet.split_at_mut(HEADER);
-            header.copy_from_slice(&self::header(
-                self.sequence,
-                self.color,
-                offset,
-                length,
-                last,
-            ));
-            let Some(data) = data.get_mut(..length) else {
-                return Outcome::Failed; // cannot happen: length is at most MAX_DATA
-            };
-            channels(frame, offset, data);
-            let Some(packet) = self.packet.get(..HEADER + length) else {
-                return Outcome::Failed;
-            };
-            match self.link.send(packet) {
-                Ok(sent) if sent == packet.len() => {}
-                Ok(_) => return self.refused(),
-                Err(error) => match fault(&error) {
-                    Fault::Busy => return Outcome::Dropped,
-                    Fault::DeviceNotThere => return self.refused(),
-                    Fault::SocketBroken => {
-                        self.ask_for_a_new_link();
-                        return self.refused();
-                    }
-                },
-            }
-        }
-        if self.down {
-            self.clean += 1;
-            if self.clean < CLEAN {
-                return Outcome::Failed;
-            }
-            self.down = false;
-        }
-        Outcome::Accepted
+        outcome(health, event)
     }
 }
 
@@ -293,11 +369,7 @@ pub fn channels(frame: &[Levels], offset: usize, out: &mut [u8]) {
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::unwrap_used,
-    clippy::panic,
-    reason = "a test that cannot set itself up fails"
-)]
+#[expect(clippy::unwrap_used, reason = "a test that cannot set itself up fails")]
 mod tests {
     use super::*;
 
@@ -403,6 +475,10 @@ mod tests {
                 Fault::DeviceNotThere,
             ),
             (
+                io::Error::from_raw_os_error(HOST_DOWN),
+                Fault::DeviceNotThere,
+            ),
+            (
                 io::Error::from(ErrorKind::AddrNotAvailable),
                 Fault::SocketBroken,
             ),
@@ -418,51 +494,128 @@ mod tests {
         }
     }
 
-    fn free_port() -> SocketAddrV4 {
-        let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
-        let std::net::SocketAddr::V4(address) = socket.local_addr().unwrap() else {
-            panic!("IPv4");
-        };
-        address
-    }
-
     #[test]
-    fn a_device_nobody_listens_on_is_steadily_failed_and_runs_again_when_one_appears() {
-        let address = free_port();
-        let mut ddp = Ddp::open(address, Color::Rgb).unwrap();
-        let frame = [Levels::ZERO];
-        // The host reports the first refusal on a later send.
-        let started = std::time::Instant::now();
-        while ddp.take(&frame) != Outcome::Failed {
-            assert!(started.elapsed() < Duration::from_secs(10), "no refusal"); // guard
-            thread::yield_now();
+    fn every_state_and_event_of_a_ddp_output() {
+        use Event::{Failed, NewSocket, Sent};
+        use Fault::{Busy, DeviceNotThere, SocketBroken};
+        use Health::{Proving, Reopening, Running};
+        let last = CLEAN - 1;
+        // (health, event, new health, ask, what the engine is told)
+        let cases = [
+            (Running, Sent, Running, Ask::Nothing, Outcome::Accepted),
+            (
+                Running,
+                Failed(Busy),
+                Running,
+                Ask::Nothing,
+                Outcome::Dropped,
+            ),
+            (
+                Running,
+                Failed(DeviceNotThere),
+                Proving { clean: 0 },
+                Ask::Nothing,
+                Outcome::Failed,
+            ),
+            (
+                Running,
+                Failed(SocketBroken),
+                Reopening,
+                Ask::NewSocket,
+                Outcome::Failed,
+            ),
+            (Running, NewSocket, Running, Ask::Nothing, Outcome::Accepted), // cannot happen
+            (
+                Proving { clean: 0 },
+                Sent,
+                Proving { clean: 1 },
+                Ask::Nothing,
+                Outcome::Failed,
+            ),
+            (
+                Proving { clean: last },
+                Sent,
+                Running,
+                Ask::Nothing,
+                Outcome::Accepted,
+            ),
+            (
+                Proving { clean: 5 },
+                Failed(Busy),
+                Proving { clean: 5 },
+                Ask::Nothing,
+                Outcome::Dropped,
+            ),
+            (
+                Proving { clean: last },
+                Failed(DeviceNotThere),
+                Proving { clean: 0 },
+                Ask::Nothing,
+                Outcome::Failed,
+            ),
+            (
+                Proving { clean: 5 },
+                Failed(SocketBroken),
+                Reopening,
+                Ask::NewSocket,
+                Outcome::Failed,
+            ),
+            (
+                Proving { clean: 5 },
+                NewSocket,
+                Proving { clean: 5 },
+                Ask::Nothing,
+                Outcome::Failed,
+            ), // cannot happen
+            (Reopening, Sent, Reopening, Ask::Nothing, Outcome::Failed),
+            (
+                Reopening,
+                Failed(Busy),
+                Reopening,
+                Ask::Nothing,
+                Outcome::Dropped,
+            ),
+            (
+                Reopening,
+                Failed(DeviceNotThere),
+                Reopening,
+                Ask::Nothing,
+                Outcome::Failed,
+            ),
+            (
+                Reopening,
+                Failed(SocketBroken),
+                Reopening,
+                Ask::Nothing, // asked once
+                Outcome::Failed,
+            ),
+            (
+                Reopening,
+                NewSocket,
+                Proving { clean: 0 },
+                Ask::Nothing,
+                Outcome::Failed,
+            ),
+        ];
+        for (health, event, new, ask, told) in cases {
+            assert_eq!(next(health, event), (new, ask), "{health:?} {event:?}");
+            assert_eq!(outcome(new, event), told, "{health:?} {event:?}");
         }
-        // The host reports a refusal now and then: the output stays failed in between.
-        let steady: Vec<_> = (1..CLEAN).map(|_| ddp.take(&frame)).collect();
-        assert!(steady.iter().all(|o| *o == Outcome::Failed), "{steady:?}");
-
-        let listener = UdpSocket::bind(address).unwrap();
-        listener
-            .set_read_timeout(Some(Duration::from_secs(5)))
-            .unwrap();
-        let started = std::time::Instant::now();
-        while ddp.take(&frame) != Outcome::Accepted {
-            assert!(
-                started.elapsed() < Duration::from_secs(10),
-                "never runs again"
-            ); // guard
-            thread::yield_now();
-        }
-        let mut packet = [0; 2000];
-        assert_eq!(listener.recv(&mut packet).unwrap(), HEADER + 510);
-        assert_eq!(packet.first(), Some(&0x41), "version 1 and push");
     }
 
-    /// A link that fails every send the same way.
-    struct Fails(ErrorKind);
+    /// A link that fails every send the same way, and says on which thread it was dropped:
+    /// 0 not yet, 1 the socket thread, 2 another.
+    struct Fails(ErrorKind, Arc<std::sync::atomic::AtomicU8>);
     impl Link for Fails {
         fn send(&mut self, _: &[u8]) -> io::Result<usize> {
             Err(self.0.into())
+        }
+    }
+    impl Drop for Fails {
+        fn drop(&mut self) {
+            let on_socket_thread = thread::current().name() == Some(SOCKET_THREAD);
+            self.1
+                .store(if on_socket_thread { 1 } else { 2 }, Ordering::SeqCst);
         }
     }
 
@@ -531,8 +684,9 @@ mod tests {
                 Ok(Box::new(Counts(Arc::clone(&sent))) as Box<dyn Link>)
             })
         };
+        let dropped = Arc::new(std::sync::atomic::AtomicU8::new(0));
         let mut ddp = Ddp::with(
-            Box::new(Fails(ErrorKind::AddrNotAvailable)),
+            Box::new(Fails(ErrorKind::AddrNotAvailable, Arc::clone(&dropped))),
             reopen,
             Color::Rgb,
         )
@@ -559,6 +713,17 @@ mod tests {
         assert!(
             sent.load(Ordering::SeqCst) > 0,
             "the new socket carries the frames"
+        );
+        drop(ddp);
+        let started = std::time::Instant::now();
+        while dropped.load(Ordering::SeqCst) == 0 {
+            assert!(started.elapsed() < Duration::from_secs(10), "never dropped"); // guard
+            thread::yield_now();
+        }
+        assert_eq!(
+            dropped.load(Ordering::SeqCst),
+            1,
+            "the broken socket is closed and freed on the socket thread"
         );
     }
 }
