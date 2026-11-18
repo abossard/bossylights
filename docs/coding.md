@@ -2,16 +2,18 @@
 
 Eight rules. Each has one picture. They apply to Rust and TypeScript alike.
 
-| # | Rule | From |
-|---|---|---|
-| 1 | Data, calculations, actions: keep them apart | Grokking Simplicity |
-| 2 | State flows one way | Elm, Redux |
-| 3 | State machines are written down, never implied | statecharts |
-| 4 | Deep modules, tiny interfaces | A Philosophy of Software Design |
-| 5 | Wrong values cannot be built | "parse, don't validate" |
-| 6 | Errors become states, or cannot happen | A Philosophy of Software Design |
-| 7 | The real-time core does five things less | this project |
-| 8 | Tests are tables | this project |
+| # | Rule | From | Checked by |
+|---|---|---|---|
+| 1 | Data, calculations, actions: keep them apart | Grokking Simplicity | compiler: `engine-core` has no `std`, so no clock, file or network. Test: `scripts/layers.mjs` |
+| 2 | State flows one way | Elm, Redux | `update` lives in `engine-core`. oxlint: only `ui/src/engine.ts` opens a socket, views import no setter |
+| 3 | State machines are written down, never implied | statecharts | clippy: `struct_excessive_bools`, `fn_params_excessive_bools`, `wildcard_enum_match_arm`. oxlint: exhaustive switches |
+| 4 | Deep modules, tiny interfaces | A Philosophy of Software Design | test: allowed edges in `scripts/layers.mjs`. Scorecard: public items per crate |
+| 5 | Wrong values cannot be built | "parse, don't validate" | test: `ui/src/engine-api.ts` is generated from Rust. oxlint: no `any` |
+| 6 | Errors become states, or cannot happen | A Philosophy of Software Design | clippy in core crates: no `unwrap`, `expect`, `panic`, indexing. `forbid(unsafe_code)`. Every `allow` or `expect` has a reason |
+| 7 | The real-time core does five things less | this project | compiler: `engine-core` has no `std`, no `alloc`. `crates/engine/clippy.toml`. Test: `no_alloc.rs`. Scorecard: lateness p99 |
+| 8 | Tests are tables | this project | nightly mutation testing on the calculation crates |
+
+`npm test` runs every check. `npm run scorecard` prints the numbers, `npm run mutants` the mutation score.
 
 ## 1. Data, calculations, actions
 

@@ -26,6 +26,7 @@ Needs Rust, Node 24 and npm. On Linux also the [Tauri system libraries](https://
 flowchart LR
   SH["shell/<br/>Tauri window"] -- "starts" --> EB["crates/engine-server<br/>bossylights-engine"]
   EB -- "runs" --> EN["crates/engine<br/>44 Hz tick thread"]
+  EN -- "calls" --> CO["crates/engine-core<br/>update, no std, no alloc"]
   SH -- "hosts" --> UI["ui/<br/>SolidJS"]
   UI -- "WebSocket /state" --> EB
 ```
@@ -40,10 +41,13 @@ flowchart LR
 | Check | Proves |
 |---|---|
 | licence check | every crate and npm package is compatible with Apache-2.0 |
-| `cargo clippy` | the engine crate uses nothing that can lock, block, do I/O or log (`crates/engine/clippy.toml`) |
-| `cargo test` | `update` and the tick schedule as tables, 44 Hz, no allocation while ticking (`crates/engine/tests/no_alloc.rs`) |
-| `tsc`, `node --test` | the UI type-checks; its connection state machine, every state and event |
+| layers check | crates and ui files depend only along the edges in `scripts/layers.mjs`; `engine-core` has no `std` and no `alloc` |
+| `cargo clippy` | the lints for state machines and errors (root `Cargo.toml`, core crates); nothing on the tick thread can lock, block, do I/O or log (`crates/engine/clippy.toml`) |
+| `cargo test` | `update` and the tick schedule as tables, 44 Hz, no allocation while ticking (`crates/engine/tests/no_alloc.rs`), `ui/src/engine-api.ts` matches the Rust types |
+| `tsc`, oxlint, `node --test` | the UI type-checks; exhaustive switches, no `any`, only `engine.ts` talks to the engine; its connection state machine, every state and event |
 | Playwright | engine + UI in a browser: the counter advances |
+
+`npm run scorecard` prints numbers to watch; CI writes them into each run's summary. A nightly workflow runs `npm run mutants`.
 
 ## Plan
 

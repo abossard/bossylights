@@ -9,13 +9,15 @@ Rust engine, web UI in a Tauri shell, Apache-2.0. Status: skeleton (engine count
 |---|---|
 | Install | `npm install` |
 | Run (desktop app, dev) | `npm run dev` |
-| Test everything | `npm test` |
+| Test and check everything (lints, layers, generated types, tests) | `npm test` |
+| Scorecard / mutation score | `npm run scorecard` / `npm run mutants` (needs `cargo-mutants`) |
 | Build | `npm run build` |
 | Engine alone / UI alone | `npm run engine` / `npm run ui` (browser at http://127.0.0.1:5174) |
 
 | Folder | What |
 |---|---|
-| `crates/engine` | the `Engine` and its real-time tick thread |
+| `crates/engine-core` | the real-time core: `update`, state, commands. No `std`, no `alloc` |
+| `crates/engine` | the `Engine` and its tick thread around the core |
 | `crates/engine-server` | `bossylights-engine`, the headless process serving the API |
 | `ui/` | the product web UI (SolidJS). `mockups/` is design reference only |
 | `shell/` | Tauri window: starts the engine, hosts `ui/` |
@@ -30,6 +32,7 @@ Rust engine, web UI in a Tauri shell, Apache-2.0. Status: skeleton (engine count
 ## Rules
 
 - How we write code: `docs/coding.md`. Read it before writing or reviewing code: data, calculations and actions apart; state flows one way (view, command, update, state); state machines written down; deep modules; errors as states.
+- Allowed edges between crates and ui layers: `scripts/layers.mjs`. A new crate or ui file goes there first.
 - One engine, one API, no UI inside the engine.
 - The output thread never blocks, locks or allocates.
 - Every feature has an end-to-end test that checks DMX output.
