@@ -1,13 +1,13 @@
-//! The DDP sink sends one well-formed packet per frame, and the pattern moves every frame.
+//! The DDP sink sends one well-formed packet per frame, and the rainbow moves one column every frame.
 //! A UDP socket in the test stands in for WLED.
 
-use dmx_timing::sink::{DDP_COLUMNS, DDP_PACKET, DDP_PIXELS, Sink};
+use dmx_timing::sink::{DDP_COLUMNS, DDP_PACKET, DDP_PIXELS, Sink, rainbow};
 use dmx_timing::{Config, Priority, Wait, start};
 use std::net::UdpSocket;
 use std::time::Duration;
 
 #[test]
-fn every_frame_arrives_as_one_rgbw_packet_with_a_moving_dot() {
+fn every_frame_arrives_as_one_rgbw_packet_with_the_rainbow_one_column_further() {
     let receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
     receiver
         .set_read_timeout(Some(Duration::from_millis(500)))
@@ -50,16 +50,12 @@ fn every_frame_arrives_as_one_rgbw_packet_with_a_moving_dot() {
         assert_eq!(packet.len(), DDP_PACKET, "frame {frame}: length");
         let length = u16::from_be_bytes([packet[8], packet[9]]) as usize;
         assert_eq!(length, DDP_PIXELS * 4, "frame {frame}: length field");
-        let white: Vec<usize> = packet[10..]
-            .chunks_exact(4)
-            .enumerate()
-            .filter(|(_, pixel)| pixel[3] == 255)
-            .map(|(i, _)| i % DDP_COLUMNS)
-            .collect();
-        assert_eq!(
-            white,
-            vec![frame % DDP_COLUMNS; 4],
-            "frame {frame}: dot column on all 4 rows"
-        );
+        let pixels: Vec<&[u8]> = packet[10..].chunks_exact(4).collect();
+        let shift = frame % DDP_COLUMNS;
+        for (i, pixel) in pixels.iter().enumerate() {
+            let column = i % DDP_COLUMNS;
+            let [r, g, b] = rainbow((column + DDP_COLUMNS - shift) % DDP_COLUMNS);
+            assert_eq!(*pixel, [r, g, b, 0], "frame {frame}: pixel {i}");
+        }
     }
 }

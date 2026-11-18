@@ -1,6 +1,8 @@
 //! Where frames go. A lost adapter is a state: `send` fails, the sink closes the port
 //! and tries to open it again about twice a second, without allocating. The DDP sink
 //! never waits: its UDP socket is non-blocking, and a send that would block drops the frame.
+//! Nor does the Pro sink: non-blocking writes, and a frame is dropped while the serial link
+//! is still busy with the last one, so no backlog can build up in the driver.
 
 use crate::CHANNELS;
 use crate::sys;
@@ -13,8 +15,14 @@ use std::time::{Duration, Instant};
 const BREAK: Duration = Duration::from_micros(110);
 const MARK_AFTER_BREAK: Duration = Duration::from_micros(16);
 const DMX_BAUD: u32 = 250_000;
-/// The DMX USB Pro's own serial link. Its USB chip ignores the rate, the device does the timing.
-const PRO_BAUD: u32 = 57_600;
+/// The DMX USB Pro's serial link from its USB chip to the widget is a real UART: the rate
+/// sets how fast messages get there. 57 600 carries about 5 kB/s, a quarter of what 44 full
+/// frames need (22.8 kB/s). 500 000 gives about 2x headroom; 3 000 000 dropped the widget off USB.
+const PRO_BAUD: u64 = 500_000;
+/// How long one Pro message keeps the link busy: 11 bits a byte (start, 8 data, 2 stop),
+/// counted at 80 % of the nominal rate to stay on the safe side.
+const PRO_LINK_TIME: Duration =
+    Duration::from_nanos(PRO_PACKET as u64 * 11 * 1_000_000_000 * 5 / (PRO_BAUD * 4));
 /// While disconnected, try to open the port again every this many frames.
 const RETRY_FRAMES: u32 = 22;
 /// DDP (as WLED reads it): flags (version 1, push), sequence, data type, device id,
@@ -54,15 +62,20 @@ pub struct Sink {
     retry_in: u32,
     reconnects: u32,
     frame: u32,
-    would_block: u32,
+    dropped: u32,
+    /// when the serial link has sent the last Pro message, as far as the host can tell
+    link_free_at: Option<Instant>,
+    /// bytes of the last Pro message the driver did not take yet
+    unsent: usize,
 }
 
 #[derive(Debug)]
 pub enum SendError {
     /// The port is closed; the sink is trying to open it again.
     Disconnected,
-    /// The socket's buffer is full; this frame is dropped instead of waiting.
-    WouldBlock,
+    /// The link is busy (the DDP socket is full, or the Pro's serial link still sends the
+    /// last frame): this frame is dropped instead of waiting.
+    Busy,
     /// The receiver refused the packet (no one listens on that port).
     Refused,
 }
@@ -105,7 +118,9 @@ impl Sink {
             retry_in: 0,
             reconnects: 0,
             frame: 0,
-            would_block: 0,
+            dropped: 0,
+            link_free_at: None,
+            unsent: 0,
         }
     }
 
@@ -113,9 +128,9 @@ impl Sink {
         self.reconnects
     }
 
-    /// DDP frames dropped because the socket would have blocked.
-    pub fn would_block(&self) -> u32 {
-        self.would_block
+    /// Frames dropped because the link was busy.
+    pub fn dropped(&self) -> u32 {
+        self.dropped
     }
 
     pub fn send(&mut self, channels: &[u8; CHANNELS]) -> Result<(), SendError> {
@@ -128,20 +143,29 @@ impl Sink {
                 std::hint::black_box(self.checksum);
                 return Ok(());
             }
-            Kind::Ddp => return self.send_ddp(channels),
+            Kind::Ddp => return self.send_ddp(),
             Kind::OpenDmx | Kind::Pro => {}
         }
         let fd = self.connected()?;
         let sent = match self.kind {
-            Kind::OpenDmx => self.send_open_dmx(fd, channels),
+            Kind::OpenDmx => self.send_open_dmx(fd, channels).map(|()| true),
             Kind::Pro => self.send_pro(fd, channels),
-            Kind::Mock | Kind::Ddp => Ok(()),
+            Kind::Mock | Kind::Ddp => Ok(true),
         };
-        sent.map_err(|_| {
-            sys::close(fd);
-            self.fd = None;
-            SendError::Disconnected
-        })
+        match sent {
+            Ok(true) => Ok(()),
+            Ok(false) => {
+                self.dropped += 1;
+                Err(SendError::Busy)
+            }
+            Err(_) => {
+                sys::close(fd);
+                self.fd = None;
+                self.link_free_at = None;
+                self.unsent = 0;
+                Err(SendError::Disconnected)
+            }
+        }
     }
 
     fn connected(&mut self) -> Result<i32, SendError> {
@@ -160,12 +184,10 @@ impl Sink {
     }
 
     fn open(&self) -> std::io::Result<i32> {
-        let baud = if self.kind == Kind::Pro {
-            PRO_BAUD
-        } else {
-            DMX_BAUD
-        };
-        sys::open_serial(&self.path, baud)
+        match self.kind {
+            Kind::Pro => sys::open_serial(&self.path, PRO_BAUD as u32, false),
+            _ => sys::open_serial(&self.path, DMX_BAUD, true),
+        }
     }
 
     fn send_open_dmx(&mut self, fd: i32, channels: &[u8; CHANNELS]) -> std::io::Result<()> {
@@ -178,31 +200,52 @@ impl Sink {
         sys::write_all(fd, &self.packet[..=CHANNELS])?;
         // Wait until the last byte is on the wire, or the next break would cut it off.
         // 513 bytes of 11 bits at 250 kbaud take 22.6 ms: almost the whole 22.7 ms frame.
+        // This blocks the output thread by design. Not run: the Pro run showed that the
+        // driver buffers below the tty, so whether tcdrain waits for the wire is open.
         sys::drain(fd)
     }
 
-    fn send_pro(&mut self, fd: i32, channels: &[u8; CHANNELS]) -> std::io::Result<()> {
+    /// `Ok(true)` when this frame went out, `Ok(false)` when it was dropped (link busy).
+    fn send_pro(&mut self, fd: i32, channels: &[u8; CHANNELS]) -> std::io::Result<bool> {
+        let now = Instant::now();
+        // A message cut short by a full driver queue is finished first: half a message
+        // would garble the link. The new frame is dropped.
+        if self.unsent > 0 {
+            let from = PRO_PACKET - self.unsent;
+            self.unsent -= sys::write_some(fd, &self.packet[from..PRO_PACKET])?;
+            return Ok(false);
+        }
+        if self.link_free_at.is_some_and(|free| free > now) {
+            return Ok(false);
+        }
         let length = (CHANNELS + 1) as u16;
         let [lsb, msb] = length.to_le_bytes();
         self.packet[..5].copy_from_slice(&[0x7E, 6, lsb, msb, 0]);
         self.packet[5..5 + CHANNELS].copy_from_slice(channels);
         self.packet[5 + CHANNELS] = 0xE7;
-        sys::write_all(fd, &self.packet[..PRO_PACKET])
+        let written = sys::write_some(fd, &self.packet[..PRO_PACKET])?;
+        if written == 0 {
+            return Ok(false);
+        }
+        self.unsent = PRO_PACKET - written;
+        self.link_free_at = Some(now + PRO_LINK_TIME);
+        Ok(true)
     }
 
-    /// The DMX ramp in red, plus a white dot that moves one column per frame:
-    /// a dropped or repeated frame shows as a jump or a stop of the dot.
-    fn send_ddp(&mut self, channels: &[u8; CHANNELS]) -> Result<(), SendError> {
+    /// A full-colour rainbow that moves one column per frame, the same on all 4 rows:
+    /// a dropped or repeated frame shows as a jump or a stop. White stays 0.
+    fn send_ddp(&mut self) -> Result<(), SendError> {
         let length = (DDP_PIXELS * 4) as u16;
         let [l0, l1] = length.to_be_bytes();
         let sequence = (self.frame % 15) as u8 + 1; // 1 to 15; 0 means "no sequence"
         self.packet[..DDP_HEADER].copy_from_slice(&[
             DDP_FLAGS, sequence, DDP_RGBW8, DDP_DEVICE, 0, 0, 0, 0, l0, l1,
         ]);
-        let dot = self.frame as usize % DDP_COLUMNS;
+        let shift = self.frame as usize % DDP_COLUMNS;
         for (i, pixel) in self.packet[DDP_HEADER..].chunks_exact_mut(4).enumerate() {
-            let white = if i % DDP_COLUMNS == dot { 255 } else { 0 };
-            pixel.copy_from_slice(&[channels[i % CHANNELS] / 4, 0, 0, white]);
+            let column = i % DDP_COLUMNS;
+            let [r, g, b] = rainbow((column + DDP_COLUMNS - shift) % DDP_COLUMNS);
+            pixel.copy_from_slice(&[r, g, b, 0]);
         }
         let Some(socket) = &self.socket else {
             return Err(SendError::Disconnected);
@@ -210,8 +253,8 @@ impl Sink {
         match socket.send(&self.packet) {
             Ok(_) => Ok(()),
             Err(e) if e.kind() == ErrorKind::WouldBlock => {
-                self.would_block += 1;
-                Err(SendError::WouldBlock)
+                self.dropped += 1;
+                Err(SendError::Busy)
             }
             Err(_) => Err(SendError::Refused),
         }
@@ -223,6 +266,20 @@ impl Drop for Sink {
         if let Some(fd) = self.fd.take() {
             sys::close(fd);
         }
+    }
+}
+
+/// Step `step` of `DDP_COLUMNS` around the colour wheel, full saturation and brightness.
+pub fn rainbow(step: usize) -> [u8; 3] {
+    let hue = step * 6 * 256 / DDP_COLUMNS;
+    let x = (hue % 256) as u8;
+    match hue / 256 {
+        0 => [255, x, 0],
+        1 => [255 - x, 255, 0],
+        2 => [0, 255, x],
+        3 => [0, 255 - x, 255],
+        4 => [x, 0, 255],
+        _ => [255, 0, 255 - x],
     }
 }
 

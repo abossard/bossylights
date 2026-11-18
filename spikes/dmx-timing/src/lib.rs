@@ -73,8 +73,8 @@ pub struct Report {
     pub resyncs: u32,
     pub send_errors: u32,
     pub reconnects: u32,
-    /// DDP frames dropped because the socket would have blocked
-    pub would_block: u32,
+    /// frames dropped because the link was busy (counted in `send_errors` too)
+    pub dropped: u32,
 }
 
 /// A run in progress. `ready` turns true when the loop starts, `looped` when it ends.
@@ -93,6 +93,10 @@ impl Running {
     pub fn os_thread(&self) -> usize {
         use std::os::unix::thread::JoinHandleExt;
         self.handle.as_pthread_t() as usize
+    }
+
+    pub fn is_finished(&self) -> bool {
+        self.handle.is_finished()
     }
 
     pub fn finish(self) -> Report {
@@ -169,7 +173,7 @@ fn output(config: Config, mut sink: Sink, ready: &AtomicBool, looped: &AtomicBoo
         resyncs,
         send_errors,
         reconnects: sink.reconnects(),
-        would_block: sink.would_block(),
+        dropped: sink.dropped(),
     }
 }
 

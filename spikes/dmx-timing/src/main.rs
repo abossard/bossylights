@@ -104,8 +104,20 @@ fn main() -> ExitCode {
     );
     let report = match start(args.config, sink) {
         Ok(running) => {
+            // A hard deadline: whatever the device does, the run ends.
+            let deadline =
+                std::time::Instant::now() + args.config.duration + Duration::from_secs(10);
             if let Some(hands) = args.hands {
                 prompt(hands, &running.looped);
+            }
+            while !running.is_finished() {
+                if std::time::Instant::now() > deadline {
+                    eprintln!(
+                        "dmx-timing: the output thread did not end 10 s after the run; giving up"
+                    );
+                    std::process::exit(3);
+                }
+                thread::sleep(Duration::from_millis(100));
             }
             running.finish()
         }
@@ -263,7 +275,7 @@ fn text(label: &str, r: &Report) -> String {
     let i = &r.intervals;
     format!(
         "{label}: priority {}, {} frames, interval ms min {:.2} mean {:.2} p50 {:.2} p99 {:.2} max {:.2}, off by >2 ms: {} ({:.2}%), \
-         late p99 {:.2} max {:.2} ms, resyncs {}, send errors {} (would block {}), reconnects {}",
+         late p99 {:.2} max {:.2} ms, resyncs {}, send errors {} (dropped, link busy: {}), reconnects {}",
         match &r.priority {
             Ok(()) => format!("{:?}", r.config.priority),
             Err(e) => format!("not set ({e})"),
@@ -284,7 +296,7 @@ fn text(label: &str, r: &Report) -> String {
         ms(r.late_max),
         r.resyncs,
         r.send_errors,
-        r.would_block,
+        r.dropped,
         r.reconnects,
     )
 }
@@ -298,7 +310,7 @@ fn json(label: &str, sink: &str, load: usize, r: &Report) -> String {
     format!(
         "{{\"label\":{label:?},\"sink\":{sink:?},\"os\":{os:?},\"priority\":\"{p:?}\",\"prioritySet\":{priority},\"wait\":\"{w:?}\",\
          \"seconds\":{s},\"loadThreads\":{load},\"frames\":{f},\"intervalMs\":{{\"min\":{:.3},\"mean\":{:.3},\"p50\":{:.3},\"p99\":{:.3},\"max\":{:.3}}},\
-         \"offBy2ms\":{off},\"lateMs\":{{\"p99\":{:.3},\"max\":{:.3}}},\"resyncs\":{rs},\"sendErrors\":{se},\"wouldBlock\":{wb},\"reconnects\":{rc}}}",
+         \"offBy2ms\":{off},\"lateMs\":{{\"p99\":{:.3},\"max\":{:.3}}},\"resyncs\":{rs},\"sendErrors\":{se},\"dropped\":{wb},\"reconnects\":{rc}}}",
         ms(i.min),
         i.mean / 1000.0,
         ms(i.p50),
@@ -315,6 +327,6 @@ fn json(label: &str, sink: &str, load: usize, r: &Report) -> String {
         rs = r.resyncs,
         se = r.send_errors,
         rc = r.reconnects,
-        wb = r.would_block,
+        wb = r.dropped,
     )
 }

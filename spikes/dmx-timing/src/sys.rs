@@ -85,9 +85,10 @@ fn realtime(_: Duration) -> Result<(), String> {
     Err("the time-constraint policy exists only on macOS".into())
 }
 
-/// Opens a serial port raw, 8 data bits, 2 stop bits, no flow control, at `baud`.
+/// Opens a serial port raw, 8 data bits, 2 stop bits, no flow control, at `baud`,
+/// exclusively. Writes block only if `blocking`.
 #[cfg(target_os = "macos")]
-pub fn open_serial(path: &CStr, baud: u32) -> io::Result<i32> {
+pub fn open_serial(path: &CStr, baud: u32, blocking: bool) -> io::Result<i32> {
     /// `_IOW('T', 2, speed_t)` from IOKit/serial/ioss.h: any baud rate, here 250000.
     const IOSSIOSPEED: libc::c_ulong = 0x8008_5402;
     let check = |result: libc::c_int| {
@@ -108,7 +109,9 @@ pub fn open_serial(path: &CStr, baud: u32) -> io::Result<i32> {
         // SAFETY: plain calls on our own descriptor, with a termios we own.
         unsafe {
             check(libc::ioctl(fd, libc::TIOCEXCL as libc::c_ulong))?; // a second open fails with "busy"
-            check(libc::fcntl(fd, libc::F_SETFL, 0))?; // blocking writes from here on
+            if blocking {
+                check(libc::fcntl(fd, libc::F_SETFL, 0))?;
+            }
             let mut tio: libc::termios = std::mem::zeroed();
             check(libc::tcgetattr(fd, &mut tio))?;
             libc::cfmakeraw(&mut tio);
@@ -147,7 +150,7 @@ pub fn drain(fd: i32) -> io::Result<()> {
 }
 
 #[cfg(not(target_os = "macos"))]
-pub fn open_serial(_: &CStr, _: u32) -> io::Result<i32> {
+pub fn open_serial(_: &CStr, _: u32, _: bool) -> io::Result<i32> {
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
         "the serial sinks are macOS only in this spike",
@@ -178,6 +181,23 @@ pub fn write_all(fd: i32, mut bytes: &[u8]) -> io::Result<()> {
         bytes = &bytes[written as usize..];
     }
     Ok(())
+}
+
+/// One write on a non-blocking descriptor: how many bytes the driver took, 0 if none.
+pub fn write_some(fd: i32, bytes: &[u8]) -> io::Result<usize> {
+    loop {
+        // SAFETY: reads `bytes.len()` bytes from a live slice.
+        let written = unsafe { libc::write(fd, bytes.as_ptr().cast(), bytes.len()) };
+        if written >= 0 {
+            return Ok(written as usize);
+        }
+        let error = io::Error::last_os_error();
+        match error.kind() {
+            io::ErrorKind::Interrupted => continue,
+            io::ErrorKind::WouldBlock => return Ok(0),
+            _ => return Err(error),
+        }
+    }
 }
 
 pub fn close(fd: i32) {

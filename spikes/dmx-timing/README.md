@@ -7,8 +7,8 @@ Outside the Cargo workspace and outside `npm test`. Run from this folder.
 
 | Scenario | Mock | DMX USB Pro | DDP (WLED) |
 |---|---|---|---|
-| Idle | `cargo run --release -- $RT` | `cargo run --release -- --sink pro=$PRO $RT` | `cargo run --release -- --sink ddp=HOST:4048 --api HOST:80 $RT` |
-| Heavy CPU | add `--load 10` | add `--load 10` | add `--load 10` |
+| Idle | `cargo run --release -- $RT` | `cargo run --release -- --sink pro=$PRO $RT` | `cargo run --release -- --sink ddp=HOST:4048 --api HOST:PORT $RT` |
+| Heavy CPU | add `--load 10` | run next to the mock with load | run next to the mock with load |
 | Background (App Nap stand-in) | `taskpolicy -b ./target/release/dmx-timing $RT` | the same with `--sink pro=$PRO` | the same with `--sink ddp=...` |
 | Unplug and replug | | `cargo run --release -- --sink pro=$PRO $RT --hands unplug` | |
 | Sleep and wake | | `cargo run --release -- --sink pro=$PRO $RT --hands sleep` | |
