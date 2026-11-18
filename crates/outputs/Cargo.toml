@@ -1,6 +1,6 @@
 [package]
 name = "outputs"
-description = "Every output kind and its bytes: open a device off the output thread, then take frames on it without waiting. DDP."
+description = "Every output kind and its bytes: open a device off the output thread, then take frames on it without waiting. DDP, DMX USB Pro."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,6 +11,9 @@ workspace = true
 
 [dependencies]
 engine-core = { path = "../engine-core" }
+rtrb = "0.4.1"
+serialport = { version = "4.10.1", default-features = false }
+nix = { version = "0.26.4", default-features = false, features = ["fs"] }
 
 [[test]]
 name = "no_alloc"

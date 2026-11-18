@@ -2,6 +2,8 @@
 //! without waiting and says what happened as an [`Outcome`]. The engine turns outcomes
 //! into each output's state and counters (`engine_core::Status`, `engine_core::Counters`),
 //! so they live in its state and nowhere else. Only this crate knows kinds and bytes.
+//! A device that can vanish finds itself again off the output thread
+//! ([`dmx_usb_pro`]): the engine sees only failed, then accepted frames.
 //!
 //! ```text
 //! API thread:    open(kind) -> Box<dyn Device>   socket made, connected, non-blocking
@@ -19,6 +21,7 @@
 )]
 
 pub mod ddp;
+pub mod dmx_usb_pro;
 
 pub use engine_core::{Color, Levels, Outcome, OutputKind, Rate};
 
@@ -38,6 +41,10 @@ pub fn open(kind: OutputKind) -> io::Result<Box<dyn Device>> {
         OutputKind::Ddp { address, color } => {
             Ok(Box::new(ddp::Ddp::open(address, color)?) as Box<dyn Device>)
         }
+        OutputKind::DmxUsbPro { adapter } => {
+            let find = dmx_usb_pro::find(adapter);
+            Ok(Box::new(dmx_usb_pro::DmxUsbPro::open(find)?) as Box<dyn Device>)
+        }
     }
 }
 
@@ -45,5 +52,6 @@ pub fn open(kind: OutputKind) -> io::Result<Box<dyn Device>> {
 pub const fn default_rate(kind: OutputKind) -> Rate {
     match kind {
         OutputKind::Ddp { .. } => Rate::Sixty,
+        OutputKind::DmxUsbPro { .. } => Rate::FortyFour,
     }
 }

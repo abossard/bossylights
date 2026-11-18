@@ -65,16 +65,19 @@ fn every_byte_arrives_as_wled_expects() {
 }
 
 #[test]
-fn ddp_sends_60_frames_a_second_unless_told_otherwise() {
+fn each_kind_has_its_default_rate() {
     let (_socket, address) = receiver();
     // (kind, default rate)
-    let cases = [(
-        OutputKind::Ddp {
-            address,
-            color: Color::Rgb,
-        },
-        Rate::Sixty,
-    )];
+    let cases = [
+        (
+            OutputKind::Ddp {
+                address,
+                color: Color::Rgb,
+            },
+            Rate::Sixty,
+        ),
+        (OutputKind::DmxUsbPro { adapter: 1 }, Rate::FortyFour),
+    ];
     for (kind, rate) in cases {
         assert_eq!(outputs::default_rate(kind), rate, "{kind:?}");
     }

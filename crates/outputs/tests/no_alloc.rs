@@ -6,7 +6,9 @@
     reason = "a global allocator can only be written with unsafe"
 )]
 
-use outputs::{Color, Levels, Outcome, OutputKind};
+use outputs::dmx_usb_pro::{DmxUsbPro, never_wait};
+use outputs::{Color, Device, Levels, Outcome, OutputKind};
+use serialport::TTYPort;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -35,15 +37,22 @@ fn main() {
         panic!("IPv4");
     };
     let frame = [Levels([7; 512]), Levels([9; 512])];
+    // A fake serial port: the other end stays open and unread.
+    let (end, port) = TTYPort::pair().unwrap();
+    never_wait(&port).unwrap();
+    let mut port = Some(port);
+    let pro = DmxUsbPro::open(Box::new(move || {
+        port.take()
+            .ok_or_else(|| std::io::Error::other("one port only"))
+    }))
+    .unwrap();
+    let ddp = outputs::open(OutputKind::Ddp {
+        address,
+        color: Color::Rgbw,
+    })
+    .unwrap();
     // (kind, the device)
-    let devices = [(
-        "DDP",
-        outputs::open(OutputKind::Ddp {
-            address,
-            color: Color::Rgbw,
-        })
-        .unwrap(),
-    )];
+    let devices: [(&str, Box<dyn Device>); 2] = [("DDP", ddp), ("DMX USB Pro", Box::new(pro))];
     for (kind, mut device) in devices {
         let before = ALLOCATIONS.load(Ordering::SeqCst);
         let accepted = (0..200)
@@ -56,4 +65,5 @@ fn main() {
             "{kind}: {allocations} allocations in 200 frames"
         );
     }
+    drop(end);
 }
