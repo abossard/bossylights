@@ -7,7 +7,7 @@ An open-source lighting desk that is easy first and deep on request.
 - Reads the QLC+ fixture library.
 - Built for AI agents too: one engine API, with an MCP server on top.
 
-Status: skeleton. A debug window shows the engine's frame counter, its outputs, and sets raw channels through the API. Outputs: DDP (WLED).
+Status: skeleton. A debug window shows the engine's frame counter, its outputs, and sets raw channels through the API. Outputs: DDP (WLED), ENTTEC DMX USB Pro.
 
 ## Build, run, test
 
@@ -27,7 +27,7 @@ flowchart LR
   SH["shell/<br/>Tauri window"] -- "starts" --> EB["crates/engine-server<br/>bossylights-engine"]
   EB -- "runs" --> EN["crates/engine<br/>tick thread, wakes when<br/>the next output is due"]
   EN -- "calls" --> CO["crates/engine-core<br/>update, schedule,<br/>no std, no alloc"]
-  EN -- "hands frames to" --> OU["crates/outputs<br/>every kind: DDP"]
+  EN -- "hands frames to" --> OU["crates/outputs<br/>every kind:<br/>DDP, DMX USB Pro"]
   EN -- "starts it with" --> RT["crates/rt-thread<br/>real-time priority,<br/>the only unsafe"]
   SH -- "hosts" --> UI["ui/<br/>SolidJS"]
   UI -- "WebSocket /api" --> EB
@@ -66,7 +66,7 @@ Engine API: `GET /health` (`ok` while the engine runs) and the WebSocket `GET /a
 | `ReleaseChannel` (universe, address) | lets it go back to zero |
 | `ReleaseAll` | lets every held channel go |
 | `Blackout` (on) | every channel goes out at zero while on; the held values stay |
-| `SetOutput` (output 1 to 16, kind, universes, rate) | adds or replaces an output. Kind `{"Ddp": {"address": "ip:port", "color": "Rgb" or "Rgbw"}}`. Universes `{"first": 1, "count": 3}`, sent as one stream of channels. Rate `"30"`, `"44"`, `"60"` or `null`: 60 for DDP, 44 for DMX kinds |
+| `SetOutput` (output 1 to 16, kind, universes, rate) | adds or replaces an output. Kind `{"Ddp": {"address": "ip:port", "color": "Rgb" or "Rgbw"}}` or `{"DmxUsbPro": {"adapter": 1}}` (the first ENTTEC DMX USB Pro by USB identity, in the order of their USB serial numbers). Universes `{"first": 1, "count": 3}`, sent as one stream of channels. Rate `"30"`, `"44"`, `"60"` or `null`: 60 for DDP, 44 for the DMX USB Pro |
 | `RemoveOutput` (output) | removes it |
 
 ```json
@@ -86,13 +86,38 @@ stateDiagram-v2
   NotFound --> Connecting: accepted
 ```
 
-Counters: `accepted`, `dropped` (the socket was full: the frame is dropped, never waited for), `failed`, `off_beat` (intervals more than 2 ms from the rate). With no output the engine still wakes 44 times a second and publishes its state.
+Counters: `accepted`, `dropped` (the socket or the link was busy: the frame is dropped, never waited for), `failed`, `off_beat` (intervals more than 2 ms from the rate). With no output the engine still wakes 44 times a second and publishes its state.
 
-A moving pattern on a WLED device or simulator (4 dots on 320 RGBW pixels, 30 s):
+A device that can vanish finds itself again, off the output thread:
+
+```mermaid
+sequenceDiagram
+  participant O as output thread
+  participant F as finder (one per adapter)
+  O->>O: write fails: Failed
+  O->>F: the dead port (wait-free queue), "looking" flag
+  F->>F: closes the dead port
+  loop every 500 ms while looking
+    F->>F: list USB serial ports, match the identity, open at 500 000 baud
+  end
+  F->>O: the opened port (wait-free queue)
+  O->>O: next frame: Accepted, the state goes back to Running
+```
+
+| Who looks | How often | Cost |
+|---|---|---|
+| the finder thread of each DMX USB Pro output | checks a flag every 100 ms; while the port is lost, lists the USB serial ports every 500 ms | asleep almost always. One listing is an IOKit or sysfs query of a few ms, never on the output thread |
+
+Checks that need hands or hardware. Each prints what to do and when, with a bell:
 
 | What | Command |
 |---|---|
-| WLED pattern | `cargo run -p engine-server --example wled_pattern -- 192.168.1.50` (port 4048 by default, or `ip:port`; optional seconds) |
+| WLED pattern (4 dots on 320 RGBW pixels, 30 s) | `cargo run -p engine-server --example wled_pattern -- 192.168.1.50` (port 4048 by default, or `ip:port`; optional seconds) |
+| DMX USB Pro, 10 minutes: no interval off, nothing dropped | `cargo run --release -p engine-server --example dmx_usb_pro -- <port> ten-minutes` |
+| DMX USB Pro, unplug and plug back in | `cargo run --release -p engine-server --example dmx_usb_pro -- <port> unplug` |
+| DMX USB Pro, sleep and wake | `cargo run --release -p engine-server --example dmx_usb_pro -- <port> sleep` |
+
+`<port>` is the adapter's port (`/dev/cu.usbserial-...` on macOS). It only says which adapter; the output finds it by its USB identity.
 
 `npm test` runs:
 
@@ -100,8 +125,9 @@ A moving pattern on a WLED device or simulator (4 dots on 320 RGBW pixels, 30 s)
 |---|---|
 | licence check | every crate and npm package is compatible with Apache-2.0 |
 | layers check | crates and ui files depend only along the edges in `scripts/layers.mjs`; `engine-core` has no `std` and no `alloc` |
+| names check | `engine-core` and `engine` name no protocol or device (DDP, UDP, DMX USB Pro, serial) outside the list of kinds (`scripts/names.mjs`) |
 | `cargo clippy` | the lints for state machines and errors (root `Cargo.toml`, core crates); nothing on the tick thread can lock, block, do I/O or log (`crates/engine/clippy.toml`, linked from `crates/rt-thread`); every `unsafe` block says why it is sound |
-| `cargo test` | `update`, `frame`, which output is due next, each output's state machine, DDP packets (every header byte, split at 1440 bytes) and the thread's priority as tables, no allocation while serving a DDP output and a test's own device and taking commands (`crates/engine/tests/no_alloc.rs`), `ui/src/engine-api.ts` matches the Rust types; over the WebSocket: an output added, then "set channel" changes the bytes on its DDP socket in the next frame, wrong requests are refused (`crates/engine-server/tests/api.rs`) |
+| `cargo test` | `update`, `frame`, which output is due next, each output's state machine, DDP packets (every header byte, split at 1440 bytes), DMX USB Pro messages and the thread's priority as tables, no allocation while serving two test devices and taking commands (`crates/engine/tests/no_alloc.rs`) and in each kind's `take` (`crates/outputs/tests/no_alloc.rs`); a DMX USB Pro against a fake serial port (a pseudo terminal): every byte, and unplugged, it fails until its finder hands in a new port, `ui/src/engine-api.ts` matches the Rust types; over the WebSocket: an output added, then "set channel" changes the bytes on its DDP socket in the next frame, wrong requests are refused (`crates/engine-server/tests/api.rs`) |
 | `tsc`, oxlint, `node --test` | the UI type-checks; exhaustive switches, no `any`, only `engine.ts` talks to the engine; its connection state machine, every state and event; how replies change its picture |
 | Playwright | engine + UI in a browser: the counter advances, the thread's priority shows, a fader sets a channel, an output and its counters show |
 
