@@ -124,6 +124,7 @@ sequenceDiagram
 
 - The tick thread never locks, blocks or allocates. Two boxes go round for the snapshot: no shared memory, no atomics.
 - Each output has its own rate: by default 60 a second for DDP, 44 for DMX.
+- A DDP output is Running when its frames were sent: DDP has no answer from the device. After a refusal it shows Reconnecting until 30 frames went out clean, and a broken socket (a new address) is opened again by itself.
 
 ### Who wins
 
