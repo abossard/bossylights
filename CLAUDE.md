@@ -1,7 +1,25 @@
 # CLAUDE.md
 
 Bossylights is an open-source lighting desk: easy first, deep on request.
-Rust engine, web UI in a Tauri shell, Apache-2.0. Status: planning, no code yet.
+Rust engine, web UI in a Tauri shell, Apache-2.0. Status: skeleton (engine counter in a window).
+
+## Commands
+
+| What | Command |
+|---|---|
+| Install | `npm install` |
+| Run (desktop app, dev) | `npm run dev` |
+| Test everything | `npm test` |
+| Build | `npm run build` |
+| Engine alone / UI alone | `npm run engine` / `npm run ui` (browser at http://127.0.0.1:5174) |
+
+| Folder | What |
+|---|---|
+| `crates/engine` | the `Engine` and its real-time tick thread |
+| `crates/engine-server` | `bossylights-engine`, the headless process serving the API |
+| `ui/` | the product web UI (SolidJS). `mockups/` is design reference only |
+| `shell/` | Tauri window: starts the engine, hosts `ui/` |
+| `e2e/` | Playwright tests |
 
 ## Plan
 
