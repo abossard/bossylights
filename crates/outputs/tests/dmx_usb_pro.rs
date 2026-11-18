@@ -11,7 +11,8 @@ use outputs::dmx_usb_pro::{DmxUsbPro, Find, LINK_TIME, MESSAGE, never_wait};
 use outputs::{Device, Levels, Outcome};
 use serialport::{SerialPort, TTYPort};
 use std::io::Read;
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -98,31 +99,62 @@ fn an_unplugged_port_fails_until_the_port_thread_opens_a_new_one() {
 }
 
 #[test]
-fn a_port_stuck_in_the_driver_never_holds_up_take() {
-    // A port whose writes wait, and nobody reads the other end: the driver queue fills and
-    // the port thread waits in `write` for good. A `take` that called the driver would too.
-    let (end, port) = TTYPort::pair().unwrap();
-    let mut port = Some(port);
-    let device = DmxUsbPro::open(Box::new(move || {
-        port.take()
-            .ok_or_else(|| std::io::Error::other("one port only"))
-    }))
-    .unwrap();
+fn a_port_that_takes_no_bytes_is_lost_then_found_again() {
+    // Nobody reads the other end: the driver queue fills and stays full. `take` never
+    // waits on it. After the deadline the port counts as lost; once the other end is read
+    // again, the finder gives the port back and frames are taken again.
+    let (mut end, port) = TTYPort::pair().unwrap();
+    never_wait(&port).unwrap();
+    end.set_timeout(Duration::from_secs(1)).unwrap();
+    let reading = Arc::new(AtomicBool::new(false));
+    let find: Find = {
+        let reading = Arc::clone(&reading);
+        let mut first = true;
+        Box::new(move || {
+            if !std::mem::take(&mut first) && !reading.load(Ordering::Relaxed) {
+                return Err(std::io::Error::other("still stuck"));
+            }
+            port.try_clone_native().map_err(std::io::Error::from)
+        })
+    };
+    let device = DmxUsbPro::open(find).unwrap();
     let (done, seen) = mpsc::channel();
-    thread::spawn(move || {
-        let mut device = device;
-        let frame = [Levels([1; 512])];
-        let mut outcomes = vec![];
-        while !outcomes.ends_with(&[Outcome::Dropped; 20]) {
-            thread::sleep(Duration::from_millis(5));
-            outcomes.push(device.take(&frame));
+    let taking = {
+        let reading = Arc::clone(&reading);
+        thread::spawn(move || {
+            let mut device = device;
+            let frame = [Levels([1; 512])];
+            let mut seen: Vec<Outcome> = vec![];
+            while !(seen.contains(&Outcome::Failed) && seen.last() == Some(&Outcome::Accepted)) {
+                let outcome = device.take(&frame);
+                if seen.last() != Some(&outcome) {
+                    seen.push(outcome);
+                }
+                if outcome == Outcome::Failed {
+                    reading.store(true, Ordering::Relaxed);
+                }
+                thread::yield_now();
+            }
+            let _ = done.send(seen);
+        })
+    };
+    let drain = thread::spawn(move || {
+        let mut bytes = [0; MESSAGE];
+        while !reading.load(Ordering::Relaxed) {
+            thread::yield_now();
         }
-        let _ = done.send(outcomes);
+        while end.read(&mut bytes).is_ok_and(|read| read > 0) {}
     });
-    let outcomes = seen
+    let seen = seen
         .recv_timeout(Duration::from_secs(10))
-        .expect("take came back each time; a hang means it waited on the driver");
-    assert_eq!(outcomes.first(), Some(&Outcome::Accepted));
-    assert!(!outcomes.contains(&Outcome::Failed), "{outcomes:?}");
-    drop(end);
+        .expect("the stalled port was never lost and found again, or take waited on it");
+    assert_eq!(seen.first(), Some(&Outcome::Accepted), "{seen:?}");
+    assert!(
+        seen.ends_with(&[Outcome::Dropped, Outcome::Failed, Outcome::Accepted]),
+        "{seen:?}"
+    );
+    let failed = seen.iter().filter(|o| **o == Outcome::Failed).count();
+    assert_eq!(failed, 1, "{seen:?}");
+    taking.join().unwrap();
+    drop(drain); // ends by itself once the port is closed and nothing more comes
 }

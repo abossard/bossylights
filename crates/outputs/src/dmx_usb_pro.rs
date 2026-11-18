@@ -15,7 +15,7 @@
 //! | Thread | Does |
 //! |---|---|
 //! | output thread | [`DmxUsbPro::take`]: puts the message in a one-slot wait-free queue and wakes the port thread. Never calls the serial driver: a vanishing device holds the driver up for many milliseconds |
-//! | port thread, one per adapter | owns the port: writes each message, never more often than the link drains. When a write fails it closes the port and looks for the adapter every [`LOOK_EVERY`] |
+//! | port thread, one per adapter | owns the port: writes each message, never more often than the link drains. When a write fails, or the port takes no byte for [`STALLED_FOR`], it closes the port and looks for the adapter every [`LOOK_EVERY`] |
 
 use crate::{Device, Levels, Outcome};
 use engine_core::ADDRESSES;
@@ -48,6 +48,8 @@ pub const LOOK_EVERY: Duration = Duration::from_millis(500);
 const WATCH_EVERY: Duration = Duration::from_millis(100);
 /// How long the port thread waits for a full driver queue before it tries again.
 const QUEUE_FULL: Duration = Duration::from_millis(1);
+/// How long a port may take no byte before it counts as lost: about four frames at 44.
+pub const STALLED_FOR: Duration = Duration::from_millis(100);
 
 /// Writes the message for a frame into `out`: the first 512 channels of the run.
 pub fn message(frame: &[Levels], out: &mut [u8; MESSAGE]) {
@@ -103,6 +105,7 @@ impl DmxUsbPro {
         let port_thread = PortThread {
             find,
             port: Some(port),
+            link: Link::Writing,
             messages,
             shared: Arc::clone(&shared),
         };
@@ -164,6 +167,7 @@ impl Drop for DmxUsbPro {
 struct PortThread {
     find: Find,
     port: Option<TTYPort>,
+    link: Link,
     messages: rtrb::Consumer<[u8; MESSAGE]>,
     shared: Arc<Shared>,
 }
@@ -188,6 +192,7 @@ impl PortThread {
                 if let Ok(port) = (self.find)() {
                     while self.messages.pop().is_ok() {} // from before the loss
                     self.port = Some(port);
+                    self.link = next(self.link, Seen::Found, Instant::now());
                     self.shared.lost.store(false, Ordering::Release);
                 }
                 continue;
@@ -197,10 +202,13 @@ impl PortThread {
                 continue;
             };
             let started = Instant::now();
-            match write_all(port, &message, &self.shared.stop) {
-                Ok(()) => thread::sleep(LINK_TIME.saturating_sub(started.elapsed())),
-                Err(error) => {
-                    self.shared.lost_with.store(error as i32, Ordering::Relaxed);
+            self.link = write_all(port, &message, &self.shared.stop, self.link);
+            match self.link {
+                Link::Writing | Link::Stalled { .. } => {
+                    thread::sleep(LINK_TIME.saturating_sub(started.elapsed()));
+                }
+                Link::Lost { with } => {
+                    self.shared.lost_with.store(with as i32, Ordering::Relaxed);
                     self.shared.lost.store(true, Ordering::Release);
                     self.port = None; // closed here, never on the output thread
                 }
@@ -210,21 +218,81 @@ impl PortThread {
 }
 
 /// Writes the whole message, straight to the system: a full driver queue is waited out
-/// here, on the port thread. Half a message would garble the link.
+/// here, on the port thread, until [`STALLED_FOR`] passes with no byte taken. Half a
+/// message would garble the link. Returns the link as it is after the write.
 #[expect(
     clippy::disallowed_methods,
     reason = "the port thread sleeps; the output thread never does"
 )]
-fn write_all(port: &TTYPort, message: &[u8], stop: &AtomicBool) -> Result<(), Errno> {
+fn write_all(port: &TTYPort, message: &[u8], stop: &AtomicBool, mut link: Link) -> Link {
     let mut rest = message;
     while !rest.is_empty() && !stop.load(Ordering::Relaxed) {
-        match nix::unistd::write(port.as_raw_fd(), rest) {
-            Ok(0) | Err(Errno::EAGAIN | Errno::EINTR) => thread::sleep(QUEUE_FULL),
-            Ok(written) => rest = rest.get(written..).unwrap_or_default(),
-            Err(error) => return Err(error),
+        let seen = match nix::unistd::write(port.as_raw_fd(), rest) {
+            Ok(0) | Err(Errno::EAGAIN | Errno::EINTR) => Seen::NoBytes,
+            Ok(written) => {
+                rest = rest.get(written..).unwrap_or_default();
+                Seen::Bytes
+            }
+            Err(error) => Seen::Error(error),
+        };
+        link = next(link, seen, Instant::now());
+        match link {
+            Link::Writing => {}
+            Link::Stalled { .. } => thread::sleep(QUEUE_FULL),
+            Link::Lost { .. } => return link,
         }
     }
-    Ok(())
+    link
+}
+
+/// The port thread's link to the adapter.
+///
+/// ```text
+/// Writing --no byte--> Stalled --no byte for STALLED_FOR--> Lost --found again--> Writing
+///    ^                    |                                   ^
+///    +------- bytes ------+          any write error ---------+
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Link {
+    /// The last write took bytes.
+    Writing,
+    /// Writes take no byte since `since`: the driver queue is full.
+    Stalled { since: Instant },
+    /// No port: closed after `with`, looked for every [`LOOK_EVERY`].
+    Lost { with: Errno },
+}
+
+/// What the port thread saw.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Seen {
+    /// A write took bytes.
+    Bytes,
+    /// A write took none: the driver queue is full.
+    NoBytes,
+    /// A write failed.
+    Error(Errno),
+    /// The finder opened a port again.
+    Found,
+}
+
+/// The one transition function of the link: a calculation, time comes in as `now`.
+fn next(link: Link, seen: Seen, now: Instant) -> Link {
+    match (link, seen) {
+        (_, Seen::Error(with)) => Link::Lost { with },
+        (Link::Lost { .. }, Seen::Found) => Link::Writing,
+        (lost @ Link::Lost { .. }, Seen::Bytes | Seen::NoBytes) => lost,
+        (Link::Writing | Link::Stalled { .. }, Seen::Bytes | Seen::Found) => Link::Writing,
+        (Link::Writing, Seen::NoBytes) => Link::Stalled { since: now },
+        (Link::Stalled { since }, Seen::NoBytes) => {
+            if now.saturating_duration_since(since) >= STALLED_FOR {
+                Link::Lost {
+                    with: Errno::ETIMEDOUT,
+                }
+            } else {
+                Link::Stalled { since }
+            }
+        }
+    }
 }
 
 /// The finder for real adapters: the `adapter`th DMX USB Pro by USB identity when it
@@ -327,6 +395,36 @@ pub fn never_wait(port: &TTYPort) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_port_that_takes_no_byte_for_a_while_is_lost() {
+        let t0 = Instant::now();
+        let stalled = Link::Stalled { since: t0 };
+        let lost = |with| Link::Lost { with };
+        let (io, gone) = (Errno::EIO, Errno::ENXIO);
+        // (link, what the port thread saw, when, the link after)
+        let cases = [
+            (Link::Writing, Seen::Bytes, t0, Link::Writing),
+            (Link::Writing, Seen::NoBytes, t0, stalled),
+            (stalled, Seen::NoBytes, t0 + STALLED_FOR / 2, stalled),
+            (
+                stalled,
+                Seen::NoBytes,
+                t0 + STALLED_FOR,
+                lost(Errno::ETIMEDOUT),
+            ),
+            (stalled, Seen::Bytes, t0 + STALLED_FOR / 2, Link::Writing),
+            (Link::Writing, Seen::Error(io), t0, lost(io)),
+            (stalled, Seen::Error(gone), t0, lost(gone)),
+            (lost(io), Seen::NoBytes, t0, lost(io)),
+            (lost(io), Seen::Bytes, t0, lost(io)),
+            (lost(io), Seen::Found, t0, Link::Writing),
+            (Link::Writing, Seen::Found, t0, Link::Writing),
+        ];
+        for (link, seen, now, after) in cases {
+            assert_eq!(next(link, seen, now), after, "{link:?} {seen:?}");
+        }
+    }
 
     #[test]
     fn a_lost_adapter_is_found_again_by_itself_never_by_its_place() {
