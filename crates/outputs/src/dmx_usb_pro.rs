@@ -48,8 +48,10 @@ pub const LOOK_EVERY: Duration = Duration::from_millis(500);
 const WATCH_EVERY: Duration = Duration::from_millis(100);
 /// How long the port thread waits for a full driver queue before it tries again.
 const QUEUE_FULL: Duration = Duration::from_millis(1);
-/// How long a port may take no byte before it counts as lost: about four frames at 44.
-pub const STALLED_FOR: Duration = Duration::from_millis(100);
+/// How long a port may take no byte before it counts as lost. Half a second: a busy
+/// machine or a USB hiccup can hold the queue for a few messages without the adapter
+/// being gone, and a person sees a stall within about that time anyway.
+pub const STALLED_FOR: Duration = Duration::from_millis(500);
 
 /// Writes the message for a frame into `out`: the first 512 channels of the run.
 pub fn message(frame: &[Levels], out: &mut [u8; MESSAGE]) {
