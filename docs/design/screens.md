@@ -7,7 +7,7 @@ Visual world: **Running Order** (chosen 2026-11-17). The composition to match is
 ## The world in four contributions
 
 - **Palette:** warm off-black ground `#1c1a17`, paper `#f4efe6` for text. Each of the three rows owns one flat colour: Autopilot marigold `#f2b705`, Show cyan `#20b2c9`, Manual hot pink `#ef3e7b`. Blocks are flat fills with dark text. No gradients, no glow, no shadows. Look pads keep their own colour chips. Red is only for blackout and errors.
-- **Type:** a condensed poster sans (Big Shoulders Display) for lane labels, block titles and big numerals. A workhorse sans (Archivo) for everything small. Times and values in tabular numerals.
+- **Type:** a condensed poster sans (Big Shoulders Display) for lane labels, block titles and big numerals. A sans (Archivo) for everything small. Times and values in tabular numerals.
 - **Density:** bold and chunky in the default layer, square corners, large targets (44 px minimum for anything pressed live). Expert screens (DMX) are denser and ruled.
 - **Signature move:** the **NOW line**. Wherever a screen shows time, a paper-white vertical line with a "NOW" flag marks the present, and things that run carry the same flag.
 

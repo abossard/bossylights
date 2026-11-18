@@ -103,7 +103,7 @@ components:
 
 # Design System: Bossylights
 
-Built in `mockups/` (tokens in `mockups/src/styles/tokens.css`, components in `mockups/src/kit/`). This file describes what is built.
+Built in `mockups/` (tokens in `mockups/src/styles/tokens.css`, components in `mockups/src/kit/`).
 
 ## Overview
 
@@ -159,7 +159,7 @@ Warm off-black and paper, plus one flat colour for each of the three rows.
 
 **The Case Rule.** Sentence case everywhere. Capitals only for LIVE and NOW.
 
-**Character:** a condensed poster face for names and numerals, a workhorse sans for everything read at a glance.
+**Character:** a condensed poster face for names and numerals, a sans for everything read at a glance.
 
 ### Hierarchy
 

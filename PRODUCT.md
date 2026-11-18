@@ -12,7 +12,7 @@ SolidJS + Vite + TypeScript for the mockups (chosen by the owner, 2026-11-17). T
 
 ## Users
 
-People who want to do cool things with lights and want a result fast, many of them with ADHD. They run house parties, small clubs and DJ sets. They are not lighting professionals, but the same app must let an experienced operator run a real show.
+People who want to do things with lights and want a result fast, many of them with ADHD. They run house parties, small clubs and DJ sets. They are not lighting professionals, but the same app must let an experienced operator run a real show.
 
 ## Product Purpose
 

@@ -2,7 +2,7 @@
 
 Written before M1. M1 is built (a command lights two outputs, each at its own rate); the rest is design. Questions are at the end.
 
-> A program is the theory in its builders' heads (Peter Naur). This page is that theory, as pictures.
+> A program is the theory in its builders' heads (Peter Naur).
 
 ## The whole theory in one picture
 
@@ -39,7 +39,7 @@ flowchart LR
   FRAME --> RIG --> OUT
 ```
 
-**One sentence:** every frame is computed fresh from what plays, with manual over show over autopilot, and everything that happens is a command.
+Every frame is computed fresh from what plays, with manual over show over autopilot, and everything that happens is a command.
 
 ## Nine ideas
 

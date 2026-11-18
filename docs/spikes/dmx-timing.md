@@ -88,9 +88,9 @@ Mock, DMX USB Pro and DDP ran at the same time, as three processes. Each cell: p
 
 | What | Seen | Cause | Now |
 |---|---|---|---|
-| DMX USB Pro at 57 600 baud | host intervals perfect (p99 22.73 ms, 0 off), then the 10-minute run took 47 minutes to end, stuck in `close` | the widget link drains about 5 kB/s; 44 frames need 22.8 kB/s. The driver queued about 10 MB out of sight (`TIOCOUTQ` says 0, `tcflush` does not reach it, `TIOCSDRAINWAIT` needs root) | 500 000 baud. Non-blocking writes. The sink tracks when the link is free and drops a frame instead of queueing it. A hard deadline ends every run |
+| DMX USB Pro at 57 600 baud | host intervals (p99 22.73 ms, 0 off), then the 10-minute run took 47 minutes to end, stuck in `close` | the widget link drains about 5 kB/s; 44 frames need 22.8 kB/s. The driver queued about 10 MB out of sight (`TIOCOUTQ` says 0, `tcflush` does not reach it, `TIOCSDRAINWAIT` needs root) | 500 000 baud. Non-blocking writes. The sink tracks when the link is free and drops a frame instead of queueing it. A hard deadline ends every run |
 | DMX USB Pro at 3 000 000 baud | the widget dropped off USB and came back | too fast for the widget | not used |
-| First request after a run | the widget ignores the first "get parameters" after a run; the second is answered in 3 ms | not found; no backlog, else the second answer would be late | noted, not chased |
+| First request after a run | the widget ignores the first "get parameters"; the second is answered in 3 ms | not found; no backlog, else the second answer would be late | noted, not chased |
 | Allocation test | failed now and then with 1 or 2 allocations | it counted the report built after the loop | counts only the output thread until the loop ends |
 | DDP pattern in the WLED simulator | a pixel with only white (R, G, B = 0, W = 255) shows black | the simulator's drawing, not DDP | a full-colour rainbow, white 0 |
 
