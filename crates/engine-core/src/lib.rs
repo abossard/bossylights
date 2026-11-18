@@ -16,10 +16,15 @@
 
 mod api;
 mod channel;
+mod output;
 
 pub use api::{Refusal, Reply, Request};
 pub use channel::{
     ADDRESSES, Channel, ChannelLevel, ChannelNumbers, Levels, MAX_UNIVERSES, Universes, changes,
+};
+pub use output::{
+    Color, Counters, GIVE_UP, MAX_OUTPUTS, OFF_BEAT, OUTPUT_WORDS, Outcome, Output, OutputKind,
+    OutputNumber, Rate, Run, RunNumbers, Status, from_words, to_words,
 };
 
 use core::time::Duration;
@@ -36,6 +41,31 @@ pub struct State {
     pub priority: Priority,
     /// While on, every channel goes out at zero. The held levels stay.
     pub blackout: bool,
+    /// The outputs, by number. `None` where no output is set.
+    #[cfg_attr(test, ts(type = "Array<Output | null>"))]
+    pub outputs: [Option<Output>; MAX_OUTPUTS],
+    /// When the engine last woke, since it started.
+    #[serde(skip)]
+    #[cfg_attr(test, ts(skip))]
+    pub now: Duration,
+    /// When it wakes next if no output is set: the state stays alive on this beat.
+    #[serde(skip)]
+    #[cfg_attr(test, ts(skip))]
+    pub beat: Duration,
+}
+
+impl State {
+    /// A new engine's state: nothing held, no outputs.
+    pub const fn new(priority: Priority) -> Self {
+        Self {
+            frame: 0,
+            priority,
+            blackout: false,
+            outputs: [None; MAX_OUTPUTS],
+            now: Duration::ZERO,
+            beat: BEAT,
+        }
+    }
 }
 
 /// The output thread's priority, as the system answered when the thread started.
@@ -64,15 +94,27 @@ pub enum BestEffort {
     NotSupported,
 }
 
-/// What changes the state: the closed list. `C` is a [`Channel`] inside the engine
-/// and [`ChannelNumbers`] as a client sends it, before [`Command::check`].
+/// What changes the state: the closed list. `C` and `R` are a [`Channel`] and a [`Run`]
+/// inside the engine, and [`ChannelNumbers`] and [`RunNumbers`] as a client sends them,
+/// before [`Command::check`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS), ts(concrete(C = ChannelNumbers)))]
-pub enum Command<C = Channel> {
-    /// The output thread computes a frame. Never from a client.
+#[cfg_attr(
+    test,
+    derive(ts_rs::TS),
+    ts(concrete(C = ChannelNumbers, R = RunNumbers))
+)]
+pub enum Command<C = Channel, R = Run> {
+    /// The engine woke at `now`, since it started. Never from a client.
     #[serde(skip)]
     #[cfg_attr(test, ts(skip))]
-    Tick,
+    Tick { now: Duration },
+    /// A frame was handed to an output. Never from a client.
+    #[serde(skip)]
+    #[cfg_attr(test, ts(skip))]
+    Handed {
+        output: OutputNumber,
+        outcome: Outcome,
+    },
     /// Hold a channel at a level.
     SetChannel { channel: C, value: u8 },
     /// Let a channel go back to zero.
@@ -81,13 +123,23 @@ pub enum Command<C = Channel> {
     ReleaseAll,
     /// Every channel out at zero while on. The held levels stay and come back when off.
     Blackout { on: bool },
+    /// Add an output, or replace the one with this number. Its counters start at zero.
+    /// Without a rate, the kind's default.
+    SetOutput {
+        output: OutputNumber,
+        kind: OutputKind,
+        universes: R,
+        rate: Option<Rate>,
+    },
+    /// Remove an output. Nothing happens if there is none.
+    RemoveOutput { output: OutputNumber },
 }
 
-impl Command<ChannelNumbers> {
+impl Command<ChannelNumbers, RunNumbers> {
     /// The command for this engine, or why it cannot be one. Done once, at the Engine.
     pub fn check(self, universes: Universes) -> Result<Command, Refusal> {
         Ok(match self {
-            Self::Tick => return Err(Refusal::NotACommand),
+            Self::Tick { .. } | Self::Handed { .. } => return Err(Refusal::NotACommand),
             Self::SetChannel { channel, value } => Command::SetChannel {
                 channel: channel.check(universes)?,
                 value,
@@ -97,6 +149,18 @@ impl Command<ChannelNumbers> {
             },
             Self::ReleaseAll => Command::ReleaseAll,
             Self::Blackout { on } => Command::Blackout { on },
+            Self::SetOutput {
+                output,
+                kind,
+                universes: run,
+                rate,
+            } => Command::SetOutput {
+                output,
+                kind,
+                universes: run.check(universes)?,
+                rate,
+            },
+            Self::RemoveOutput { output } => Command::RemoveOutput { output },
         })
     }
 }
@@ -111,13 +175,42 @@ pub enum Effect {}
 /// widens this to a fixed-size array, never to a `Vec`.
 pub fn update(state: State, universes: &mut [Levels], command: Command) -> (State, Option<Effect>) {
     match command {
-        Command::Tick => (
+        Command::Tick { now } => (
             State {
                 frame: state.frame.wrapping_add(1),
+                now,
+                beat: next_frame(state.beat, now, BEAT),
                 ..state
             },
             None,
         ),
+        Command::Handed { output, outcome } => {
+            let mut outputs = state.outputs;
+            if let Some(Some(handed)) = outputs.get_mut(output.slot()) {
+                *handed = handed.handed(outcome, state.now);
+            }
+            (State { outputs, ..state }, None)
+        }
+        Command::SetOutput {
+            output,
+            kind,
+            universes: run,
+            rate,
+        } => {
+            let mut outputs = state.outputs;
+            if let Some(slot) = outputs.get_mut(output.slot()) {
+                let rate = rate.unwrap_or(kind.default_rate());
+                *slot = Some(Output::new(kind, run, rate, state.now));
+            }
+            (State { outputs, ..state }, None)
+        }
+        Command::RemoveOutput { output } => {
+            let mut outputs = state.outputs;
+            if let Some(slot) = outputs.get_mut(output.slot()) {
+                *slot = None;
+            }
+            (State { outputs, ..state }, None)
+        }
         Command::SetChannel { channel, value } => {
             if let Some(level) = channel.level(universes) {
                 *level = value;
@@ -144,9 +237,10 @@ pub fn update(state: State, universes: &mut [Levels], command: Command) -> (Stat
     }
 }
 
-/// The levels that go out, written into `out`, a buffer the caller owns: the held
-/// levels, or zero in a blackout.
-pub fn frame(state: &State, universes: &[Levels], out: &mut [Levels]) {
+/// The levels that go out at `_at` (since the engine started), written into `out`, a
+/// buffer the caller owns: the held levels, or zero in a blackout. No level depends on
+/// time yet; effects will.
+pub fn frame(state: &State, universes: &[Levels], _at: Duration, out: &mut [Levels]) {
     for (out, held) in out.iter_mut().zip(universes) {
         *out = if state.blackout { Levels::ZERO } else { *held };
     }
@@ -165,6 +259,28 @@ pub fn next_frame(due: Duration, now: Duration, period: Duration) -> Duration {
     } else {
         next
     }
+}
+
+/// With no output set, the engine still wakes 44 times a second, so the state stays alive.
+pub const BEAT: Duration = Duration::from_nanos(1_000_000_000 / 44);
+
+/// When the engine wakes next: when the first output is due, or on the beat if none is set.
+pub fn next_wake(state: &State) -> Duration {
+    state
+        .outputs
+        .iter()
+        .flatten()
+        .map(|output| output.due)
+        .min()
+        .unwrap_or(state.beat)
+}
+
+/// The outputs due at `now`, by number.
+pub fn due(state: &State, now: Duration) -> impl Iterator<Item = OutputNumber> + '_ {
+    (1..)
+        .zip(&state.outputs)
+        .filter(move |(_, output)| output.is_some_and(|output| output.due <= now))
+        .filter_map(|(number, _)| OutputNumber::try_from(number).ok())
 }
 
 /// The output thread sleeps until this long before a frame is due, then spins: a
@@ -229,8 +345,7 @@ mod tests {
 
     const CALM: State = State {
         frame: 7,
-        priority: Priority::RealTime,
-        blackout: false,
+        ..State::new(Priority::RealTime)
     };
     const DARK: State = State {
         blackout: true,
@@ -252,6 +367,12 @@ mod tests {
             .unwrap()
     }
 
+    fn tick(ms: u64) -> Command {
+        Command::Tick {
+            now: Duration::from_millis(ms),
+        }
+    }
+
     #[test]
     fn update_turns_a_command_into_a_new_state() {
         let set = |universe, address, value| Command::SetChannel {
@@ -270,15 +391,23 @@ mod tests {
             (
                 CALM,
                 held(&[]),
-                Command::Tick,
-                State { frame: 8, ..CALM },
+                tick(0),
+                State {
+                    frame: 8,
+                    beat: BEAT * 2,
+                    ..CALM
+                },
                 held(&[]),
             ),
             (
                 max,
                 held(&[]),
-                Command::Tick,
-                State { frame: 0, ..CALM },
+                tick(0),
+                State {
+                    frame: 0,
+                    beat: BEAT * 2,
+                    ..CALM
+                },
                 held(&[]),
             ), // wraps
             (CALM, held(&[]), set(1, 1, 255), CALM, held(&[(1, 1, 255)])),
@@ -352,7 +481,7 @@ mod tests {
         ];
         for (state, universes, expected) in cases {
             let mut out = held(&[(1, 9, 9)]); // whatever was there before
-            frame(&state, &universes, &mut out);
+            frame(&state, &universes, Duration::ZERO, &mut out);
             assert_eq!(out, expected, "{state:?}");
         }
     }
@@ -391,11 +520,158 @@ mod tests {
                 Command::Blackout { on: true },
                 Ok(Command::Blackout { on: true }),
             ),
-            (Command::Tick, Err(Refusal::NotACommand)),
+            (
+                Command::Tick {
+                    now: Duration::ZERO,
+                },
+                Err(Refusal::NotACommand),
+            ),
+            (
+                Command::SetOutput {
+                    output: OutputNumber::try_from(1).unwrap(),
+                    kind: OutputKind::Mock,
+                    universes: RunNumbers { first: 1, count: 2 },
+                    rate: None,
+                },
+                Err(Refusal::NoSuchUniverse { universes: 1 }),
+            ),
         ];
         for (sent, expected) in cases {
             assert_eq!(sent.check(one), expected, "{sent:?}");
         }
+    }
+
+    fn output(number: u8) -> OutputNumber {
+        OutputNumber::try_from(number).unwrap()
+    }
+
+    fn set_output(number: u8, rate: Rate) -> Command {
+        Command::SetOutput {
+            output: output(number),
+            kind: OutputKind::Mock,
+            universes: RunNumbers { first: 1, count: 1 }
+                .check(Universes::ONE)
+                .unwrap(),
+            rate: Some(rate),
+        }
+    }
+
+    /// Per wake: the time in ms and the outputs served.
+    type Wakes = Vec<(u64, Vec<u8>)>;
+
+    /// Runs the schedule like the output thread does, on time: wake, hand every due
+    /// output a frame. Returns, per wake, the time in ms and the outputs served.
+    fn run(mut state: State, until_ms: u64, mut at: impl FnMut(u64) -> Vec<Command>) -> Wakes {
+        let mut wakes = vec![];
+        let mut universes = [Levels::ZERO];
+        loop {
+            let now = next_wake(&state);
+            let ms = u64::try_from(now.as_millis()).unwrap();
+            if ms > until_ms {
+                return wakes;
+            }
+            state = update(state, &mut universes, Command::Tick { now }).0;
+            for command in at(ms) {
+                state = update(state, &mut universes, command).0;
+            }
+            let served: Vec<u8> = due(&state, now).map(|n| n.slot() as u8 + 1).collect();
+            for &number in &served {
+                let handed = Command::Handed {
+                    output: output(number),
+                    outcome: Outcome::Accepted,
+                };
+                state = update(state, &mut universes, handed).0;
+            }
+            wakes.push((ms, served));
+        }
+    }
+
+    #[test]
+    fn the_engine_wakes_when_the_next_output_is_due() {
+        let calm = State::new(Priority::RealTime);
+        let (thirty, forty_four, sixty) = (Rate::Thirty, Rate::FortyFour, Rate::Sixty);
+        // (outputs set on the first wake, until ms, wakes: ms and outputs served)
+        // 60 and 30 a second meet at 56.06 ms, 1 ns apart: two wakes.
+        let cases: [(Vec<Command>, u64, Wakes); 4] = [
+            (vec![], 70, vec![(22, vec![]), (45, vec![]), (68, vec![])]), // the beat
+            (
+                vec![set_output(1, sixty)],
+                40,
+                vec![(22, vec![1]), (39, vec![1])],
+            ),
+            (
+                vec![set_output(1, sixty), set_output(2, thirty)],
+                60,
+                vec![
+                    (22, vec![1, 2]),
+                    (39, vec![1]),
+                    (56, vec![1]),
+                    (56, vec![2]),
+                ],
+            ),
+            (
+                vec![
+                    set_output(1, sixty),
+                    set_output(2, thirty),
+                    set_output(3, forty_four),
+                ],
+                60,
+                vec![
+                    (22, vec![1, 2, 3]),
+                    (39, vec![1]),
+                    (45, vec![3]),
+                    (56, vec![1]),
+                    (56, vec![2]),
+                ],
+            ),
+        ];
+        for (commands, until, expected) in cases {
+            let mut first = Some(commands.clone());
+            let wakes = run(calm, until, |_| first.take().unwrap_or_default());
+            assert_eq!(wakes, expected, "{commands:?}");
+        }
+    }
+
+    #[test]
+    fn outputs_added_or_removed_while_running_change_the_wakes() {
+        let calm = State::new(Priority::RealTime);
+        let remove = Command::RemoveOutput { output: output(1) };
+        let wakes = run(calm, 100, |ms| match ms {
+            22 => vec![set_output(1, Rate::Sixty)],
+            39 => vec![set_output(2, Rate::Thirty)],
+            56 => vec![remove],
+            _ => vec![],
+        });
+        let expected = vec![
+            (22, vec![1]),    // added on the beat: served at once
+            (39, vec![1, 2]), // the second one too
+            (56, vec![]),     // 1 removed before it was served
+            (72, vec![2]),    // only 2 is left, on its own rate; no beat while it is set
+        ];
+        assert_eq!(wakes, expected);
+    }
+
+    #[test]
+    fn after_a_long_stall_each_output_starts_over_from_now() {
+        let mut universes = [Levels::ZERO];
+        let mut state = State::new(Priority::RealTime);
+        state = update(state, &mut universes, set_output(1, Rate::Sixty)).0;
+        state = update(state, &mut universes, set_output(2, Rate::Thirty)).0;
+        // the machine slept for a second
+        let now = Duration::from_secs(1);
+        state = update(state, &mut universes, Command::Tick { now }).0;
+        let served: Vec<_> = due(&state, now).collect();
+        assert_eq!(served, vec![output(1), output(2)]);
+        for number in served {
+            let handed = Command::Handed {
+                output: number,
+                outcome: Outcome::Accepted,
+            };
+            state = update(state, &mut universes, handed).0;
+        }
+        assert_eq!(next_wake(&state), now + Rate::Sixty.period());
+        let thirty = state.outputs[1].unwrap();
+        assert_eq!(thirty.due, now + Rate::Thirty.period());
     }
 
     #[test]
@@ -526,8 +802,13 @@ mod tests {
              {}",
             [
                 Request::decl(&config),
-                Command::<ChannelNumbers>::decl(&config),
+                Command::<ChannelNumbers, RunNumbers>::decl(&config),
                 ChannelNumbers::decl(&config),
+                RunNumbers::decl(&config),
+                OutputNumber::decl(&config),
+                OutputKind::decl(&config),
+                Color::decl(&config),
+                Rate::decl(&config),
                 Reply::decl(&config),
                 Refusal::decl(&config),
                 State::decl(&config),
@@ -535,6 +816,10 @@ mod tests {
                 BestEffort::decl(&config),
                 Levels::decl(&config),
                 ChannelLevel::decl(&config),
+                Output::decl(&config),
+                Run::decl(&config),
+                Status::decl(&config),
+                Counters::decl(&config),
             ]
             .map(|declaration| format!("export {declaration}\n"))
             .join("\n"),

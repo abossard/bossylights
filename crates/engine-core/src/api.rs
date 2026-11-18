@@ -8,7 +8,7 @@
 //! | `"Subscribe"` | `{"Picture": ...}`, then `{"Changed": ...}` for each new frame |
 //! | anything else | `{"Refused": {"reason": "NotACommand"}}` |
 
-use crate::{ChannelLevel, ChannelNumbers, Command, Levels, State};
+use crate::{ChannelLevel, ChannelNumbers, Command, Levels, RunNumbers, State};
 use serde::{Deserialize, Serialize};
 
 /// What a client sends.
@@ -16,7 +16,9 @@ use serde::{Deserialize, Serialize};
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub enum Request {
     /// Change the state. Answered at once, before the frame that carries it.
-    Send { command: Command<ChannelNumbers> },
+    Send {
+        command: Command<ChannelNumbers, RunNumbers>,
+    },
     /// The whole picture, once.
     Query,
     /// The whole picture, then what changed with every frame.
@@ -56,4 +58,6 @@ pub enum Refusal {
     NoSuchAddress,
     /// More commands are waiting than the engine takes in one frame. Send again.
     QueueFull,
+    /// The output's device or socket could not be opened.
+    CannotOpen,
 }
