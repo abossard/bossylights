@@ -1,3 +1,4 @@
+use crate::error::Warning;
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -8,6 +9,8 @@ pub struct Fixture {
     pub model: String,
     pub kind: Kind,
     pub modes: Vec<Mode>,
+    /// What was left out so the rest could be read. Empty for a definition without faults.
+    pub warnings: Vec<Warning>,
 }
 
 /// The type of fixture, as QLC+ names them. A name it does not list is kept as `Unlisted`.
@@ -37,10 +40,11 @@ pub struct Mode {
     /// In DMX order: the first is address 1 of the fixture.
     pub channels: Vec<Channel>,
     /// One entry per pixel of a bar or a panel, each the channel numbers (counted from 0)
-    /// of that pixel. Empty for a fixture without pixels.
+    /// of that pixel. Empty for a fixture without pixels. A head that names a channel the
+    /// mode does not have is left out, with a warning.
     pub pixels: Vec<Vec<u16>>,
-    /// The grid of the pixels, from the mode or else the fixture. Left out when the mode
-    /// has heads and the grid does not have exactly one cell for each.
+    /// The grid of the pixels, from the mode or else the fixture. Left out, with a
+    /// warning, when the mode has heads and the grid does not have exactly one cell for each.
     pub layout: Option<Layout>,
 }
 

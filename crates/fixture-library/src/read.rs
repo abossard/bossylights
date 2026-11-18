@@ -1,6 +1,6 @@
 //! Bytes of a QLC+ `.qxf` file to a `Fixture`. All of the XML walking lives here.
 
-use crate::error::{Error, Problem};
+use crate::error::{Error, LeftOut, Problem, Warning};
 use crate::function::function_of;
 use crate::model::{Byte, Channel, Does, Fixture, Kind, Layout, Mode, Range, Rgb};
 use alloc::collections::BTreeMap;
@@ -55,8 +55,7 @@ pub fn parse(file: &str, bytes: &[u8]) -> Result<Fixture, Error> {
     };
     let document = Document::parse_with_options(text, options)
         .map_err(|e| failed(Some(e.pos().row), Problem::NotXml(e.to_string())))?;
-    let at = |node: Node| document.text_pos_at(node.range().start).row;
-    read(&document).map_err(|(node, problem)| failed(Some(at(node)), problem))
+    read(&document).map_err(|(node, problem)| failed(Some(line_of(node)), problem))
 }
 
 type Failure<'a> = (Node<'a, 'a>, Problem);
@@ -75,16 +74,16 @@ fn read<'a>(document: &'a Document<'a>) -> Result<Fixture, Failure<'a>> {
         .filter(|n| n.has_tag_name("Channel"))
         .map(channel)
         .collect::<Result<Vec<_>, _>>()?;
-    let modes = root
-        .children()
-        .filter(|n| n.has_tag_name("Mode"))
-        .map(|node| mode(node, root, &channels))
-        .collect::<Result<_, _>>()?;
+    let (mut modes, mut warnings) = (Vec::new(), Vec::new());
+    for node in root.children().filter(|n| n.has_tag_name("Mode")) {
+        modes.push(mode(node, root, &channels, &mut warnings)?);
+    }
     Ok(Fixture {
         maker,
         model,
         kind,
         modes,
+        warnings,
     })
 }
 
@@ -226,11 +225,13 @@ fn rgb(text: &str) -> Option<Rgb> {
     })
 }
 
-/// A mode: its channels by number, its pixels (`Head`s) and its layout.
+/// A mode: its channels by number, its pixels (`Head`s) and its layout. What does not fit
+/// is left out and said in `warnings`.
 fn mode<'a>(
     node: Node<'a, 'a>,
     root: Node<'a, 'a>,
     defined: &[Channel],
+    warnings: &mut Vec<Warning>,
 ) -> Result<Mode, Failure<'a>> {
     let name = node.attribute("Name").unwrap_or_default().to_string();
     let mut by_number: BTreeMap<u16, &Channel> = BTreeMap::new();
@@ -266,28 +267,61 @@ fn mode<'a>(
         return Err((entry, Problem::SkippedNumber(number)));
     }
     let channels: Vec<Channel> = by_number.values().map(|c| (*c).clone()).collect();
-    let pixels: Vec<Vec<u16>> = node
+    let warn = |at: Node, left_out| Warning {
+        mode: name.clone(),
+        line: line_of(at),
+        left_out,
+    };
+    let mut pixels: Vec<Vec<u16>> = Vec::new();
+    for (head, at) in node
         .children()
         .filter(|n| n.has_tag_name("Head"))
-        .map(|head| {
-            head.children()
-                .filter(|n| n.has_tag_name("Channel"))
-                .map(|n| head_channel(n, channels.len()))
-                .collect::<Result<Vec<u16>, _>>()
-        })
-        .collect::<Result<_, _>>()?;
+        .enumerate()
+    {
+        let numbers = at
+            .children()
+            .filter(|n| n.has_tag_name("Channel"))
+            .map(|n| head_channel(n).map(|number| (n, number)))
+            .collect::<Result<Vec<_>, _>>()?;
+        match numbers
+            .iter()
+            .find(|(_, number)| usize::from(*number) >= channels.len())
+        {
+            Some((n, channel)) => warnings.push(warn(
+                *n,
+                LeftOut::Head {
+                    head,
+                    channel: *channel,
+                    channels: channels.len(),
+                },
+            )),
+            None => pixels.push(numbers.into_iter().map(|(_, number)| number).collect()),
+        }
+    }
+    let found = layout_in(node).or_else(|| {
+        root.children()
+            .find(|n| n.has_tag_name("Physical"))
+            .and_then(layout_in)
+    });
     // A layout must have a cell for every head. 244 modes of the QLC+ library give one
-    // that does not (most share the fixture's grid with a mode of fewer heads): their
-    // layout is left out, the heads stay.
-    let layout = layout_in(node)
-        .or_else(|| {
-            root.children()
-                .find(|n| n.has_tag_name("Physical"))
-                .and_then(layout_in)
-        })
-        .filter(|l: &Layout| {
-            pixels.is_empty() || usize::from(l.width) * usize::from(l.height) == pixels.len()
-        });
+    // that does not (most share the fixture's grid with a mode of fewer heads).
+    let layout = match found {
+        Some((layout, at))
+            if !pixels.is_empty()
+                && usize::from(layout.width) * usize::from(layout.height) != pixels.len() =>
+        {
+            warnings.push(warn(
+                at,
+                LeftOut::Layout {
+                    layout,
+                    heads: pixels.len(),
+                },
+            ));
+            None
+        }
+        Some((layout, _)) => Some(layout),
+        None => None,
+    };
     Ok(Mode {
         name,
         channels,
@@ -296,10 +330,10 @@ fn mode<'a>(
     })
 }
 
-/// A channel of a head: a number of a channel the mode has.
-fn head_channel<'a>(node: Node<'a, 'a>, count: usize) -> Result<u16, Failure<'a>> {
+/// A channel number of a head.
+fn head_channel<'a>(node: Node<'a, 'a>) -> Result<u16, Failure<'a>> {
     let text = node.text().unwrap_or_default();
-    let number: u16 = text.trim().parse().map_err(|_| {
+    text.trim().parse().map_err(|_| {
         (
             node,
             Problem::BadNumber {
@@ -307,18 +341,20 @@ fn head_channel<'a>(node: Node<'a, 'a>, count: usize) -> Result<u16, Failure<'a>
                 text: text.to_string(),
             },
         )
-    })?;
-    if usize::from(number) >= count {
-        return Err((node, Problem::UnknownHeadChannel(number)));
-    }
-    Ok(number)
+    })
 }
 
-/// The `Layout` under a mode or under the fixture's own `Physical`.
-fn layout_in(node: Node) -> Option<Layout> {
-    let layout = node.descendants().find(|n| n.has_tag_name("Layout"))?;
-    Some(Layout {
-        width: layout.attribute("Width")?.trim().parse().ok()?,
-        height: layout.attribute("Height")?.trim().parse().ok()?,
-    })
+/// The line of a node in its file, counted from 1.
+fn line_of(node: Node) -> u32 {
+    node.document().text_pos_at(node.range().start).row
+}
+
+/// The `Layout` under a mode or under the fixture's own `Physical`, and its node.
+fn layout_in<'a>(node: Node<'a, 'a>) -> Option<(Layout, Node<'a, 'a>)> {
+    let at = node.descendants().find(|n| n.has_tag_name("Layout"))?;
+    let layout = Layout {
+        width: at.attribute("Width")?.trim().parse().ok()?,
+        height: at.attribute("Height")?.trim().parse().ok()?,
+    };
+    Some((layout, at))
 }

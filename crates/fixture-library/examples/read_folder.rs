@@ -1,5 +1,6 @@
 //! Reads a folder of QLC+ definitions (every `.qxf` under it) and prints how many were
-//! read, how many failed and why, then the tally of what the model makes of them: what
+//! read, how many failed and why, every warning (what was left out so the rest could be
+//! read), then the tally of what the model makes of them: what
 //! the channels of every mode do, what is left as "other", fine bytes, defaults, what
 //! ranges do, and how shutters and strobes let light out.
 //!
@@ -33,7 +34,7 @@ fn main() {
         process::exit(2);
     }
     paths.sort();
-    let (mut read, mut failures) = (Vec::new(), Vec::new());
+    let (mut read, mut failures, mut warnings) = (Vec::new(), Vec::new(), Vec::new());
     for path in &paths {
         let name = path
             .strip_prefix(&folder)
@@ -42,7 +43,10 @@ fn main() {
             .to_string();
         match fs::read(path) {
             Ok(bytes) => match parse(&name, &bytes) {
-                Ok(fixture) => read.push(fixture),
+                Ok(fixture) => {
+                    warnings.extend(fixture.warnings.iter().map(|w| format!("{name}: {w}")));
+                    read.push(fixture);
+                }
                 Err(error) => failures.push(error),
             },
             Err(error) => eprintln!("{name}: {error}"),
@@ -64,6 +68,10 @@ fn main() {
         for (problem, count) in why {
             println!("{count:>5}  {problem}");
         }
+    }
+    println!("\n{} warnings: left out, the rest read", warnings.len());
+    for warning in &warnings {
+        println!("{warning}");
     }
     tally(&read);
     process::exit(i32::from(!failures.is_empty()));

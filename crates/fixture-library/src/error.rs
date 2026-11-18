@@ -1,3 +1,4 @@
+use crate::model::Layout;
 use alloc::string::String;
 use core::fmt;
 
@@ -27,8 +28,6 @@ pub enum Problem {
         text: String,
     },
     UnknownChannel(String),
-    /// A head names a channel number the mode does not have.
-    UnknownHeadChannel(u16),
     DuplicateNumber(u16),
     SkippedNumber(u16),
     BackwardsRange {
@@ -64,14 +63,55 @@ impl fmt::Display for Problem {
             Self::UnknownChannel(name) => {
                 write!(f, "the mode names channel \"{name}\", which is not defined")
             }
-            Self::UnknownHeadChannel(n) => {
-                write!(f, "a head names channel {n}, which the mode does not have")
-            }
             Self::DuplicateNumber(n) => write!(f, "channel number {n} is used twice in a mode"),
             Self::SkippedNumber(n) => write!(f, "channel number {n} skips a number in a mode"),
             Self::BackwardsRange { min, max } => {
                 write!(f, "the range {min} to {max} runs backwards")
             }
+        }
+    }
+}
+
+/// Something a definition gets wrong that the rest can be read without. It is left out of
+/// the model, and said here: which mode, where in the file, what and why.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Warning {
+    pub mode: String,
+    /// The line in the file, counted from 1.
+    pub line: u32,
+    pub left_out: LeftOut,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LeftOut {
+    /// A head that names a channel the mode does not have. `head` counts the mode's heads
+    /// from 0, in the file's order; `channels` is how many the mode has.
+    Head {
+        head: usize,
+        channel: u16,
+        channels: usize,
+    },
+    /// A layout without exactly one cell for each head the mode keeps.
+    Layout { layout: Layout, heads: usize },
+}
+
+impl fmt::Display for Warning {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "mode \"{}\": line {}: ", self.mode, self.line)?;
+        match self.left_out {
+            LeftOut::Head {
+                head,
+                channel,
+                channels,
+            } => write!(
+                f,
+                "head {head} names channel {channel}, the mode has {channels}: the head is left out"
+            ),
+            LeftOut::Layout { layout, heads } => write!(
+                f,
+                "the layout is {} by {}, the mode has {heads} heads: the layout is left out",
+                layout.width, layout.height
+            ),
         }
     }
 }

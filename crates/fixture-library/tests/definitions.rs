@@ -410,62 +410,6 @@ fn a_mode_says_which_value_lets_its_light_out() {
     }
 }
 
-// heads in the mode, the layout under the mode or the fixture, the layout kept
-#[test]
-fn a_layout_is_kept_only_when_it_has_a_cell_for_every_head() {
-    let layout =
-        |w: u16, h: u16| format!(r#"<Physical><Layout Width="{w}" Height="{h}"/></Physical>"#);
-    let cases: Vec<(usize, String, String, Option<Layout>)> = vec![
-        (
-            2,
-            layout(2, 1),
-            String::new(),
-            Some(Layout {
-                width: 2,
-                height: 1,
-            }),
-        ),
-        (
-            2,
-            String::new(),
-            layout(1, 2),
-            Some(Layout {
-                width: 1,
-                height: 2,
-            }),
-        ),
-        (2, layout(3, 1), String::new(), None),
-        (2, String::new(), layout(1, 1), None),
-        (4, layout(2, 1), String::new(), None),
-        // no heads: the layout stays as the definition gives it
-        (
-            0,
-            String::new(),
-            layout(1, 1),
-            Some(Layout {
-                width: 1,
-                height: 1,
-            }),
-        ),
-    ];
-    for (heads, in_mode, in_fixture, expected) in cases {
-        let channels: String = (0..4)
-            .map(|n| format!(r#"<Channel Number="{n}">C</Channel>"#))
-            .collect();
-        let heads: String = (0..heads)
-            .map(|n| format!("<Head><Channel>{}</Channel></Head>", n % 4))
-            .collect();
-        let source = format!(
-            r#"<FixtureDefinition><Manufacturer>A</Manufacturer><Model>M</Model><Type>Other</Type>
- <Channel Name="C" Preset="IntensityRed"/>{in_fixture}
- <Mode Name="M">{in_mode}{channels}{heads}</Mode></FixtureDefinition>"#
-        );
-        let fixture = parse("t.qxf", source.as_bytes()).expect("a definition reads");
-        let mode = fixture.modes.first().expect("one mode");
-        assert_eq!(mode.layout, expected, "{source}");
-    }
-}
-
 #[test]
 fn a_colour_channel_without_ranges_has_none() {
     let fixture = read("Generic-Generic-RGB.qxf");

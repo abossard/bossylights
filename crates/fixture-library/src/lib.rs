@@ -6,7 +6,7 @@
 //! bytes (see `examples/read_folder.rs`) and passes them to [`parse`].
 //!
 //! ```text
-//! bytes + file name --parse--> Fixture | Error { file, line, problem }
+//! bytes + file name --parse--> Fixture (with its warnings) | Error { file, line, problem }
 //! [Fixture] + words --search--> the matching fixtures, best first
 //! ```
 //!
@@ -44,7 +44,7 @@ mod open;
 mod read;
 mod search;
 
-pub use error::{Error, Problem};
+pub use error::{Error, LeftOut, Problem, Warning};
 pub use model::{Byte, Channel, Does, Fixture, Function, Kind, Layout, Mode, Range, Rgb};
 pub use read::parse;
 pub use search::search;
