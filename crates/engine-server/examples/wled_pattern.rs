@@ -62,10 +62,13 @@ fn run(args: Vec<String>) -> Result<(), String> {
         (&[0, 1, 2], 240, 1),
     ];
     let started = Instant::now();
-    let mut step = 0;
+    let mut step: u32 = 0;
     while started.elapsed() < Duration::from_secs(seconds) {
         for (colours, first, speed) in dots {
-            for (pixel, value) in [(first + step * speed, 0), (first + (step + 1) * speed, 255)] {
+            for (pixel, value) in [
+                (pixel_at(first, step, speed), 0),
+                (pixel_at(first, step + 1, speed), 255),
+            ] {
                 for colour in colours {
                     let command = if value == 0 {
                         Command::ReleaseChannel {
@@ -102,11 +105,44 @@ fn run(args: Vec<String>) -> Result<(), String> {
     Ok(())
 }
 
+/// Where a dot is after `step` steps: it chases along the pixels and starts again at the first.
+fn pixel_at(first: u16, step: u32, speed: u16) -> u16 {
+    let pixel = (u64::from(first) + u64::from(step) * u64::from(speed)) % u64::from(PIXELS);
+    u16::try_from(pixel).unwrap_or_default()
+}
+
 /// The channel of a pixel's colour (0 red, 1 green, 2 blue, 3 white), counted from 1.
 fn channel(pixel: u16, colour: u16) -> ChannelNumbers {
     let n = (pixel % PIXELS) * 4 + colour;
     ChannelNumbers {
         universe: n / 512 + 1,
         address: n % 512 + 1,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // first pixel, step, pixels per step, the pixel
+    #[test]
+    fn a_dot_wraps_around_the_pixels_however_long_the_run() {
+        let cases = [
+            (0, 0, 1, 0),
+            (0, 319, 1, 319),
+            (0, 320, 1, 0),
+            (80, 2, 2, 84),
+            (160, 100, 3, 140),
+            (240, 21_845, 3, 175),
+            (240, 100_000, 3, 80),
+            (0, u32::MAX, 3, 125),
+        ];
+        for (first, step, speed, pixel) in cases {
+            assert_eq!(
+                pixel_at(first, step, speed),
+                pixel,
+                "{first} {step} {speed}"
+            );
+        }
     }
 }

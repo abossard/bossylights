@@ -16,6 +16,10 @@ path = "src/lib.rs"
 name = "bossylights-engine"
 path = "src/main.rs"
 
+[[example]]
+name = "wled_pattern"
+test = true # its pixel arithmetic has a test
+
 [dependencies]
 engine = { path = "../engine" }
 axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio", "ws"] }
