@@ -20,6 +20,7 @@ Rust engine, web UI in a Tauri shell, Apache-2.0. Status: skeleton (engine count
 | `crates/engine` | the `Engine` and its tick thread around the core |
 | `crates/rt-thread` | starts the tick thread with real-time priority. The only `unsafe` |
 | `crates/outputs` | every output kind (DDP, DMX USB Pro) and its bytes. Opened off the tick thread, `take` a frame without waiting |
+| `crates/fixture-library` | fixture definitions as a model: QLC+ `.qxf` bytes in, maker, model, modes, channels out. Reads no files. `cargo run -p fixture-library --example read_folder -- <folder>` reads a folder and prints how many were read and why any failed |
 | `crates/engine-server` | `bossylights-engine`, the headless process serving the API |
 | `ui/` | the product web UI (SolidJS). `mockups/` is design reference only |
 | `shell/` | Tauri window: starts the engine, hosts `ui/` |

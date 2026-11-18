@@ -1,0 +1,13 @@
+[package]
+name = "fixture-library"
+description = "Fixture definitions as a model: read QLC+ .qxf bytes into maker, model, modes and channels. No files, no clock."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+roxmltree = { version = "0.21.2", default-features = false, features = ["positions"] }

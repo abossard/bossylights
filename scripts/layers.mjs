@@ -10,10 +10,11 @@
  * | calc   | no  | yes   | all              |
  * | action | yes | yes   | workspace crates |
  *
- * core runs per tick. calc holds calculations that need the heap (none yet).
+ * core runs per tick. calc holds calculations that need the heap.
  */
 export const CRATES = {
   "engine-core": { kind: "core", deps: ["serde"] },
+  "fixture-library": { kind: "calc", deps: ["roxmltree"] }, // QLC+ fixture definitions in, a model out. Reads no files
   "rt-thread": { kind: "action", deps: ["engine-core"] }, // the only unsafe: asks for real-time priority
   outputs: { kind: "action", deps: ["engine-core"] }, // opens devices, takes frames: only it knows bytes
   engine: { kind: "action", deps: ["engine-core", "rt-thread", "outputs"] },
