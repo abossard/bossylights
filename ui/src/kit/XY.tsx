@@ -2,7 +2,7 @@ import { createSignal, Show } from "solid-js";
 import { keyStep, level, placeIn, type Pressable } from "./common.ts";
 import { capture } from "./dragging.ts";
 
-export interface XYPadProps extends Pressable {
+export interface XYProps extends Pressable {
   label: string;
   /** 0 to 100, left to right. */
   pan: number;
@@ -14,7 +14,7 @@ export interface XYPadProps extends Pressable {
 }
 
 /** Aims: a paper crosshair and a square dot on a quiet grid. The dot follows the finger, also outside the pad. */
-export function XYPad(props: XYPadProps) {
+export function XY(props: XYProps) {
   const [down, setDown] = createSignal(false);
 
   const follow = (e: PointerEvent) => {

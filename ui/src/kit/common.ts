@@ -1,11 +1,11 @@
-// What every component of the kit shares (issue #102).
-// A component is a view: props in, a gesture out through a callback. It imports no engine and keeps no state
+// What every primitive of the kit shares (issue #102).
+// A primitive is a view: props in, a gesture out through a callback. It imports no engine and keeps no state
 // of the show. The screen that uses it turns the gesture into a command.
 
 /**
- * Whose colour a fill is. Never decoration (DESIGN.md, the Row Colour Rule).
+ * Whose colour a fill is. One prop on every primitive, never decoration (DESIGN.md, the Row Colour Rule).
  *
- * | tone      | means                                   |
+ * | colour    | means                                   |
  * |-----------|-----------------------------------------|
  * | plain     | nothing special                         |
  * | paper     | now, or the one main action             |
@@ -14,15 +14,44 @@
  * | autopilot | the autopilot                           |
  * | danger    | blackout, recording, trouble            |
  */
-export type Tone = "plain" | "paper" | "manual" | "show" | "autopilot" | "danger";
+export type Colour = "plain" | "paper" | "manual" | "show" | "autopilot" | "danger";
 
-/** What every control that can be pressed takes. */
+export const COLOURS: readonly Colour[] = ["plain", "paper", "manual", "show", "autopilot", "danger"];
+
+/**
+ * What a lamp can say on top of the colours. A lamp only, never a fill (owner's review of the catalog, #102).
+ *
+ * | signal | means                    |
+ * |--------|--------------------------|
+ * | mute   | ready, not in effect yet |
+ * | ok     | connected, all is well   |
+ * | warn   | look here: it is trying  |
+ */
+export type Signal = Colour | "mute" | "ok" | "warn";
+
+/**
+ * How a thing stands in its place. Item and Block share it.
+ *
+ * | state  | means                                    | look                 |
+ * |--------|------------------------------------------|----------------------|
+ * | plain  | there                                    |                      |
+ * | picked | this one: open, selected                 | paper                |
+ * | lifted | being dragged                            | paper outline        |
+ * | dashed | not now: planned, waiting, changing      | dashed outline       |
+ * | clash  | it overlaps another one                  | a red bar            |
+ */
+export type Standing = "plain" | "picked" | "lifted" | "dashed" | "clash";
+
+/** What every primitive that can be pressed takes. */
 export interface Pressable {
   /** Why it cannot be pressed now. Shown under its label: a control never goes off without its reason. */
   off?: string;
   /** A hardware control is mapped to it: a 9 px paper square in its corner. */
   mapped?: boolean;
 }
+
+/** `{ off }` when there is a reason, nothing when there is none: an optional prop is left out, never undefined. */
+export const offWith = (reason: string | undefined): { off?: string } => (reason === undefined ? {} : { off: reason });
 
 /** "Chase L-R" must not break at its hyphen. */
 export const unbroken = (text: string) => text.replace(/-/g, "‑");

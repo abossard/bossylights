@@ -6,32 +6,47 @@ import { works, off, gone, type Cell, type Gesture, type SituationId } from "./s
 
 export type Screen = "Top bar" | "Console" | "Songs" | "Looks" | "Patch" | "DMX" | "In/Out" | "How it works" | "Modules" | "Menu bar";
 
-/** The component that draws it. One name per component of `ui/src/kit`. */
-export type Kit =
-  | "Button"
-  | "Toggle"
-  | "Pad"
-  | "Fader"
-  | "XYPad"
-  | "Tabs"
-  | "Segmented"
-  | "LiveSwitch"
-  | "Indicator"
-  | "Select"
-  | "TextField"
-  | "Stepper"
-  | "Row"
-  | "Chip"
-  | "Bar"
-  | "Edge"
-  | "Cell"
-  | "Swatch"
-  | "Choice"
-  | "NowStrip"
-  | "Fold"
-  | "WidgetFrame"
-  | "Node"
-  | "MenuItem";
+/** The primitives of `ui/src/kit`, named by what they are for, and the kinds of each. */
+export const PRIMITIVES = {
+  Button: ["action", "toggle"],
+  Pad: [],
+  Fader: [],
+  XY: [],
+  Picker: ["tabs", "segments", "cards", "list"],
+  Field: ["text", "search", "steps"],
+  Status: ["lamp", "pill", "flag", "value"],
+  Item: ["row", "tile", "cell", "entry", "chip", "strip"],
+  Block: ["bar", "frame"],
+  Handle: ["edge", "corner"],
+} as const;
+
+export type Primitive = keyof typeof PRIMITIVES;
+
+/** What each primitive is for: the question the operator has when reaching for it. */
+export const PRIMITIVE_FOR: Record<Primitive, string> = {
+  Button: "Do it, or switch it",
+  Pad: "Play a look",
+  Fader: "Set one value",
+  XY: "Set two values at once",
+  Picker: "Choose one of a few",
+  Field: "Give a value in words or in steps",
+  Status: "Read a state. Never pressed: no control is one, many carry one",
+  Item: "A thing where it lives: pick it, open it, take it out",
+  Block: "A thing placed in time or on a grid: arrange it",
+  Handle: "The edge of a thing: only dragged",
+};
+
+/** `Primitive.kind`, or the primitive alone when it has one kind. */
+export const kitNames = (primitive: Primitive): string[] => (PRIMITIVES[primitive].length ? PRIMITIVES[primitive].map((kind) => `${primitive}.${kind}`) : [primitive]);
+
+type Named<P extends Primitive> = (typeof PRIMITIVES)[P] extends readonly [] ? P : `${P}.${(typeof PRIMITIVES)[P][number]}`;
+
+/** What draws a control: a primitive and its kind. Where it lives on screen is `screen`, never the name of a component. */
+export type Kit = { [P in Exclude<Primitive, "Status">]: Named<P> }[Exclude<Primitive, "Status">];
+
+export const primitiveOf = (kit: Kit): Primitive => (kit.split(".")[0] ?? kit) as Primitive;
+/** Empty for a primitive of one kind. */
+export const kindOf = (kit: Kit): string => kit.split(".")[1] ?? "";
 
 /**
  * | kind    | acts on                                               |

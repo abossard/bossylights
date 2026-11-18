@@ -1,10 +1,10 @@
 import { dragHandlers } from "./dragging.ts";
 
-export interface EdgeProps {
+export interface HandleProps {
+  /** `edge`: a line moved sideways. `corner`: a corner that resizes. */
+  kind: "edge" | "corner";
   /** What it moves, for screen readers: "Edge between Intro and Drop". */
   label: string;
-  /** A corner that resizes, not a line that is moved sideways. */
-  corner?: boolean;
   /** It was dropped. How far it went, in px. */
   onDrop: (dx: number, dy: number) => void;
   /** An arrow key: one step back or forward. */
@@ -14,7 +14,7 @@ export interface EdgeProps {
 }
 
 /** A grip that is only dragged: the edge between two sections, the end of a bar, the corner of a widget. */
-export function Edge(props: EdgeProps) {
+export function Handle(props: HandleProps) {
   const drag = dragHandlers(() => ({
     onDrop: props.onDrop,
     ...(props.onLift ? { onMove: props.onLift } : {}),
@@ -29,8 +29,8 @@ export function Edge(props: EdgeProps) {
   };
   return (
     <div
-      class="k-edge"
-      classList={{ "is-corner": props.corner === true }}
+      class="k-handle"
+      data-kind={props.kind}
       role="separator"
       tabindex={0}
       aria-label={`${props.label}. Drag, or use the arrows`}

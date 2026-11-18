@@ -20,7 +20,7 @@ const checks = [
 ];
 for (const [what, faults] of checks) test(`behaviour table: ${what}`, () => assert.deepEqual(faults(), []));
 
-const row = (over) => control({ id: "x.y", name: "Y", screen: "Console", part: "P", from: ["a"], kit: "Button", kind: "play", does: "Does", sends: ["TapTempo"], gestures: button("Does"), ...over });
+const row = (over) => control({ id: "x.y", name: "Y", screen: "Console", part: "P", from: ["a"], kit: "Button.action", kind: "play", does: "Does", sends: ["TapTempo"], gestures: button("Does"), ...over });
 
 // [what, rows, not controls, inventory keys, faults]
 const faultCases = [

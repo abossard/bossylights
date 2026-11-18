@@ -1,6 +1,7 @@
 import { createSignal, Show } from "solid-js";
 import { keyStep, level, placeIn, type Pressable } from "./common.ts";
 import { capture } from "./dragging.ts";
+import { Status } from "./Status.tsx";
 
 export interface FaderProps extends Pressable {
   label: string;
@@ -40,7 +41,7 @@ export function Fader(props: FaderProps) {
   return (
     <div class="k-fader" classList={{ "is-off": props.off !== undefined }}>
       <span class="k-fader-value" aria-hidden="true">
-        {level(props.value)}
+        <Status kind="value" label={String(level(props.value))} {...(props.off === undefined ? {} : { colour: "mute" as const })} />
       </span>
       <div
         class="k-fader-track"

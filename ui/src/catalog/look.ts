@@ -3,7 +3,7 @@
 import { MACHINES } from "../controls/machines.ts";
 import type { SituationId } from "../controls/situations.ts";
 import type { Control } from "../controls/spec.ts";
-import type { Tone } from "../kit/common.ts";
+import type { Colour } from "../kit/common.ts";
 import { SAMPLES, SITUATION_STATE, STATE_LOOKS } from "./samples.ts";
 import { USES } from "./uses.ts";
 
@@ -12,7 +12,8 @@ export interface Look {
   label: string;
   /** A second, quieter line: a value as it reads, a kind, a state in words. */
   sub: string;
-  tone: Tone;
+  /** Whose it is. */
+  colour: Colour;
   /** Filled: on, selected, open. */
   on: boolean;
   /** Why it cannot be pressed. Empty: it can. */
@@ -36,13 +37,13 @@ export interface Look {
   learn: boolean;
 }
 
-const PLAIN: Look = { label: "", sub: "", tone: "plain", on: false, off: "", offOption: "", gone: "", value: 62, value2: 40, options: [], picked: "", variant: "", at: "", learn: false };
+const PLAIN: Look = { label: "", sub: "", colour: "plain", on: false, off: "", offOption: "", gone: "", value: 62, value2: 40, options: [], picked: "", variant: "", at: "", learn: false };
 
 /** The usual look of a control: nothing special is true. */
 export function usual(control: Control): Look {
   const sample = SAMPLES[control.id] ?? {};
   // A group of segments whose states are its options needs no sample.
-  const options = sample.options ?? (control.kit === "Segmented" ? control.states : []);
+  const options = sample.options ?? (control.kit === "Picker.segments" ? control.states : []);
   const use = USES[control.id];
   const at = use ? (use.at ?? MACHINES[use.machine].start) : "";
   return { ...PLAIN, label: control.name, options, picked: options[0] ?? "", ...sample, at };
@@ -89,7 +90,7 @@ export function inState(control: Control, state: string): Look {
   const toggles = control.states.some((s) => same(s, "on"));
   if (off && !(off[1] === undefined && toggles)) {
     const reason = off[1] ? capital(off[1]) : (Object.values(control.cells).find((c) => c.is === "off" && c.says !== "Engine not connected")?.says ?? "Off");
-    return control.kit === "Choice" ? { ...look, off: reason, offOption: look.options.at(-1) ?? "" } : { ...look, off: reason };
+    return control.kit === "Picker.cards" ? { ...look, off: reason, offOption: look.options.at(-1) ?? "" } : { ...look, off: reason };
   }
   const named = reasonNamed(control, state);
   if (named) return { ...look, off: named };
@@ -102,8 +103,8 @@ export function inState(control: Control, state: string): Look {
 
   if (control.kit === "Fader" && /^at \d+$/.test(state)) return { ...look, value: Number(state.slice(3)) };
   if (control.kit === "Pad") return { ...look, variant: PAD[state] ?? "idle", on: (PAD[state] ?? "idle") !== "idle" };
-  if (control.kit === "MenuItem" && LAMP[state.toLowerCase()]) return { ...look, variant: LAMP[state.toLowerCase()] ?? "", sub: capital(state) };
-  if (control.kit === "Fold" && same(state, "empty")) return { ...look, on: true, value: 0 };
+  if (control.id === "menubar.item" && LAMP[state.toLowerCase()]) return { ...look, variant: LAMP[state.toLowerCase()] ?? "", sub: capital(state) };
+  if (control.kit === "Button.toggle" && same(state, "empty")) return { ...look, on: true, value: 0 };
   if (same(state, "a look is dragged over it")) return { ...look, variant: "over" };
   if (same(state, "dragged")) return { ...look, variant: "lifted" };
   if (/clash/i.test(state)) return { ...look, variant: "clash", sub: look.sub || "Clash" };
@@ -113,8 +114,8 @@ export function inState(control: Control, state: string): Look {
   if (same(state, "waits for LIVE")) return { ...look, variant: "ready", sub: "Waits for LIVE" };
 
   if (ON.test(state)) return { ...look, on: true, variant: state.toLowerCase() };
-  // A button's fill is its tone, not a state: it stays.
-  if (USUAL.test(state)) return { ...look, on: control.kit === "Button" && look.on, variant: same(state, "off") || same(state, "ready") ? state.toLowerCase() : look.variant };
+  // The fill of an action is its colour, not a state: it stays.
+  if (USUAL.test(state)) return { ...look, on: control.kit === "Button.action" && look.on, variant: same(state, "off") || same(state, "ready") ? state.toLowerCase() : look.variant };
   // The words on it: "Record", "Stop recording".
   if (/^[A-Z÷×]/.test(state)) return { ...look, label: state, on: ON_WORDS.test(state) };
   // Anything else is said in words under the label.

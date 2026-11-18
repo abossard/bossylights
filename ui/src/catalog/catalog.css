@@ -14,7 +14,7 @@ code { font: 600 var(--text-sm) / 1.2 ui-monospace, SFMono-Regular, Menlo, monos
 /* ---- index */
 .c-index { display: flex; flex-direction: column; gap: var(--sp-3); padding: var(--sp-4); min-height: 0; border-right: var(--rule) solid var(--line); }
 .c-home { font: 900 var(--display-lg) / 1 var(--font-display); letter-spacing: 0.02em; text-decoration: none; }
-.c-index .k-field, .c-index .k-input { width: 100%; min-width: 0; }
+.c-index .k-field, .c-index .k-input, .c-index .k-list-button { width: 100%; min-width: 0; }
 .c-count { font-size: var(--text-sm); font-weight: 600; color: var(--mute); }
 .c-list { flex: 1; min-height: 0; overflow-y: auto; margin-right: calc(var(--sp-4) * -1); padding-right: var(--sp-4); }
 .c-list h2 { position: sticky; top: 0; padding: var(--sp-2) 0 var(--sp-1); background: var(--bg); font: 800 var(--display-sm) / 1 var(--font-display); letter-spacing: 0.02em; }
@@ -22,6 +22,9 @@ code { font: 600 var(--text-sm) / 1.2 ui-monospace, SFMono-Regular, Menlo, monos
 .c-list a:hover { background: var(--s1); }
 .c-list a[aria-current="page"] { background: var(--paper); color: var(--ink); }
 .c-link-name { flex: 1; min-width: 0; }
+.c-link-tag { font-size: var(--text-sm); font-weight: 600; font-stretch: var(--tight); color: var(--mute); white-space: nowrap; }
+.c-list a[aria-current="page"] .c-link-tag { color: var(--ink); }
+.c-kind { color: var(--mute); }
 .c-rated { min-width: 20px; text-align: center; font: 800 var(--display-sm) / 1 var(--font-display); }
 
 .c-tag { padding: 1px 6px; border: var(--rule) solid var(--line); font-size: var(--text-sm); font-weight: 700; font-stretch: var(--tight); white-space: nowrap; }
@@ -86,6 +89,25 @@ b[data-verdict="change"], b[data-verdict="remove"] { text-decoration: underline;
 .c-sent-none { font-size: var(--text-sm); color: var(--mute); }
 .c-command { display: inline-flex; align-items: baseline; gap: 6px; padding: 3px 6px; background: var(--paper); color: var(--ink); font: 700 var(--text-sm) / 1.2 ui-monospace, SFMono-Regular, Menlo, monospace; }
 .c-command-value { font-weight: 500; }
+
+/* a list that is open lies over what is below it */
+.c-stage:has(.k-list[data-open]) { overflow: visible; }
+.c-frame:has(.k-list[data-open]), .c-specimen:has(.k-list[data-open]) { position: relative; z-index: 2; }
+
+/* a control that needs the width of a screen: the Now strip */
+.c-page[data-wide] .c-top { grid-template-columns: 1.4fr 1fr; }
+.c-page[data-wide] .c-alone { grid-column: 1 / -1; }
+.c-page[data-wide] .c-frames { grid-template-columns: repeat(auto-fill, minmax(520px, 1fr)); }
+.c-page[data-wide] .c-stage, .c-specimen .c-stage:has(.k-item[data-kind="strip"]) { justify-items: stretch; }
+
+/* ---- a primitive: its kinds, states and colours side by side */
+.c-shelf { display: flex; flex-direction: column; gap: var(--sp-2); }
+.c-shelf .c-fact { min-height: 0; max-width: 90ch; }
+.c-specimens { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: var(--sp-2); }
+.c-specimen { min-width: 0; display: flex; flex-direction: column; gap: var(--sp-2); padding: var(--sp-2); background: var(--s1); }
+.c-specimen .c-stage { flex: 1; min-height: 88px; padding: var(--sp-3); }
+.c-specimen figcaption { font-size: var(--text-sm); font-weight: 600; color: var(--mute); }
+.c-review-wide { max-width: 560px; margin-top: var(--sp-4); }
 
 /* ---- front page */
 .c-numbers { display: flex; flex-wrap: wrap; gap: var(--sp-5); }

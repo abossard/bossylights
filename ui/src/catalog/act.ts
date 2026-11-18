@@ -92,17 +92,16 @@ function machineAct(control: Control, look: Look, use: Use, events: readonly str
   return { look: { ...next, at }, sent };
 }
 
-/** Kits whose press picks the thing: it stays marked. */
-const PICKS = new Set<Control["kit"]>(["Row", "Node", "Bar", "Cell"]);
-const FLIPS = new Set<Control["kit"]>(["Toggle", "Fold", "LiveSwitch"]);
+/** A press on these picks the thing: it stays marked. */
+const PICKS = new Set<Control["kit"]>(["Item.row", "Item.tile", "Item.cell", "Block.bar"]);
 
-/** A control with no machine: its kit says what a gesture means, the row names the command. */
+/** A control with no machine: its primitive says what a gesture means, the row names the command. */
 function plainAct(control: Control, look: Look, gesture: Act): Result {
   const first = control.sends[0];
   const send = (value = ""): Sent[] => (first ? [{ name: first, value }] : []);
   switch (gesture.is) {
     case "press": {
-      if (FLIPS.has(control.kit)) return flip(control, look);
+      if (control.kit === "Button.toggle") return flip(control, look);
       if (control.id === "menubar.item") return { look: { ...look, on: !look.on }, sent: [] };
       return { look: PICKS.has(control.kit) && !first ? { ...look, on: !look.on } : look, sent: send() };
     }
@@ -112,7 +111,7 @@ function plainAct(control: Control, look: Look, gesture: Act): Result {
     case "up":
       return { look: { ...look, variant: gesture.long ? "idle" : "manual", on: !gesture.long }, sent: [] };
     case "set":
-      return { look: { ...look, value: gesture.value, value2: gesture.value2 }, sent: send(control.kit === "XYPad" ? `pan ${gesture.value}, tilt ${gesture.value2}` : String(gesture.value)) };
+      return { look: { ...look, value: gesture.value, value2: gesture.value2 }, sent: send(control.kit === "XY" ? `pan ${gesture.value}, tilt ${gesture.value2}` : String(gesture.value)) };
     case "pick":
       return gesture.option === look.offOption ? { look, sent: [] } : { look: { ...look, picked: gesture.option }, sent: send(gesture.option) };
     case "text":

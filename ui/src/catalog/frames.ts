@@ -57,9 +57,5 @@ export function search(controls: readonly Control[], query: string): Control[] {
   return controls.filter((c) => wanted.every((w) => words(c).includes(w)));
 }
 
-/** The controls by screen, in the order of the table. */
-export function byScreen(controls: readonly Control[]): [string, Control[]][] {
-  const screens = new Map<string, Control[]>();
-  for (const c of controls) screens.set(c.screen, [...(screens.get(c.screen) ?? []), c]);
-  return [...screens];
-}
+/** The screens that have controls, in the order of the table. A screen is a tag of a control, not its place in the index. */
+export const screensOf = (controls: readonly Control[]): string[] => [...new Set(controls.map((c) => c.screen))];

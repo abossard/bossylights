@@ -21,7 +21,7 @@ Needs Rust, Node 24 and npm. On Linux also the [Tauri system libraries](https://
 | Build | `npm run build` |
 | Engine only, no window | `npm run engine` (API on `127.0.0.1:7744`; `-- --universes 64` for more, 4 by default) |
 | UI in a browser | `npm run engine` and `npm run ui`, then open http://127.0.0.1:5174 |
-| Storyboard catalog: every control, alone, in every situation | `npm run catalog` (opens http://127.0.0.1:5175, needs no engine) |
+| Storyboard catalog: the ten primitives of the kit, then every control, alone, in every situation | `npm run catalog` (opens http://127.0.0.1:5175, needs no engine) |
 
 ```mermaid
 flowchart LR

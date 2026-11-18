@@ -64,3 +64,8 @@ test("docs/design/controls.md is what the table says today (run: node scripts/wr
   const { DOC, docText } = await import("./write-controls-doc.mjs");
   assert.equal(readFileSync(DOC, "utf8"), docText());
 });
+
+test("docs/design/kit.md is what the table and the recipes say today (run: node scripts/write-kit-doc.mjs)", async () => {
+  const { DOC, docText } = await import("./write-kit-doc.mjs");
+  assert.equal(readFileSync(DOC, "utf8"), docText());
+});

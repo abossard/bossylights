@@ -9,5 +9,6 @@ export default defineConfig({
   testMatch: "catalog.spec.ts",
   outputDir: "../../../test-results/catalog",
   use: { baseURL: URL, browserName: "chromium" },
-  webServer: { command: "vite --port 5298 --strictPort", url: URL },
+  // The run rates controls: it never writes the owner's reviews into the repository.
+  webServer: { command: "vite --port 5298 --strictPort", url: URL, env: { CATALOG_REVIEWS: "off" } },
 });

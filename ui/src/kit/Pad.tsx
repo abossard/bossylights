@@ -1,6 +1,7 @@
 import { For, Show } from "solid-js";
 import { unbroken, type Pressable } from "./common.ts";
 import { capture } from "./dragging.ts";
+import { Status } from "./Status.tsx";
 
 /**
  * | state     | means                                                        |
@@ -77,13 +78,13 @@ export function Pad(props: PadProps) {
         <i class="k-mapped" aria-hidden="true" />
       </Show>
       <Show when={running()}>
-        <span class="k-now-flag k-pad-flag" aria-hidden="true">
-          NOW
+        <span class="k-pad-flag" aria-hidden="true">
+          <Status kind="flag" label="NOW" colour="paper" />
         </span>
       </Show>
       <Show when={props.state === "kept"}>
-        <span class="k-pad-kept" aria-hidden="true">
-          held
+        <span class="k-pad-flag" aria-hidden="true">
+          <Status kind="pill" label="held" colour="manual" />
         </span>
       </Show>
       <span class="k-pad-name" aria-hidden="true">

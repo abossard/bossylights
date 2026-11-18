@@ -1,13 +1,16 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { act } from "./catalog/act.ts";
-import { byScreen, framesOf, search } from "./catalog/frames.ts";
+import { byFunction, linesOf, recipe } from "./catalog/compose.ts";
+import { framesOf, screensOf, search } from "./catalog/frames.ts";
 import { inSituation, inState, usual } from "./catalog/look.ts";
-import { asMarkdown, comment, parse, rate, reviewOf } from "./catalog/review.ts";
+import { asMarkdown, comment, kitKey, merge, parse, rate, reviewOf, same } from "./catalog/review.ts";
+import { fileText } from "./catalog/reviews-file.mjs";
 import { SAMPLES, SITUATION_STATE, STATE_LOOKS } from "./catalog/samples.ts";
 import { USES } from "./catalog/uses.ts";
 import { MACHINES } from "./controls/machines.ts";
 import { SITUATIONS } from "./controls/situations.ts";
+import { kitNames, PRIMITIVES } from "./controls/spec.ts";
 import { CONTROLS } from "./controls/table.ts";
 
 const byId = (id) => CONTROLS.find((c) => c.id === id);
@@ -179,10 +182,57 @@ for (const [query, expected] of searches) {
   });
 }
 
-test("byScreen keeps every control, in the order of the table", () => {
-  assert.deepEqual(byScreen(CONTROLS).flatMap(([, controls]) => controls.map((c) => c.id)).sort(), CONTROLS.map((c) => c.id).sort());
-  assert.equal(byScreen(CONTROLS)[0][0], "Top bar");
+const KIT = Object.keys(PRIMITIVES);
+
+test("the screens are tags, in the order of the table", () => {
+  assert.equal(screensOf(CONTROLS)[0], "Top bar");
+  assert.deepEqual([...screensOf(CONTROLS)].sort(), [...new Set(CONTROLS.map((c) => c.screen))].sort());
 });
+
+test("every control is drawn with a primitive of the kit and one of its kinds", () => {
+  const known = new Set(KIT.flatMap(kitNames));
+  assert.deepEqual(CONTROLS.filter((c) => !known.has(c.kit)).map((c) => `${c.id}: ${c.kit}`), []);
+});
+
+test("no control is a Status: a status is read, never pressed", () => {
+  assert.deepEqual(CONTROLS.filter((c) => c.kit.startsWith("Status")).map((c) => c.id), []);
+});
+
+test("the index by function keeps every control, primitives in the order of the kit", () => {
+  const groups = byFunction(CONTROLS, KIT);
+  assert.deepEqual(groups.flatMap((g) => g.controls.map((c) => c.id)).sort(), CONTROLS.map((c) => c.id).sort());
+  const order = groups.map((g) => KIT.indexOf(g.primitive));
+  assert.deepEqual(order, [...order].sort((a, b) => a - b));
+  assert.deepEqual(groups.slice(0, 3).map((g) => [g.primitive, g.kind]), [["Button", "action"], ["Button", "toggle"], ["Pad", ""]]);
+});
+
+// [control, primitive, kind, colour, fixed props, the primitives inside]
+const recipes = [
+  ["top.tap", "Button", "action", "plain", { fires: "down" }, []],
+  ["top.blackout", "Button", "action", "danger", { fires: "down", holds: "3 lines" }, []],
+  ["top.live", "Button", "toggle", "plain", { mark: "knob", size: "large", holds: "2 lines" }, []],
+  ["top.indicator.dj", "Button", "toggle", "plain", { mark: "lamp", quiet: "yes", lamp: "ok" }, []],
+  ["top.indicator.autopilot", "Button", "toggle", "autopilot", { mark: "lamp" }, []],
+  ["top.indicator.recording", "Button", "toggle", "danger", { mark: "lamp", quiet: "yes" }, []],
+  ["console.pad", "Pad", "", "plain", {}, ["Status.flag", "Status.pill"]],
+  ["console.autopilot.style", "Picker", "list", "plain", {}, []],
+  ["looks.pattern.measure", "Field", "steps", "plain", {}, ["Button.action", "Status.value", "Button.action"]],
+  ["songs.section.remove-look", "Item", "chip", "plain", {}, ["Button.action"]],
+  ["top.now-strip", "Item", "strip", "plain", {}, ["Status.flag", "Status.pill"]],
+  ["menubar.item", "Item", "entry", "plain", {}, ["Status.lamp"]],
+  ["console.widget.resize", "Handle", "corner", "plain", {}, []],
+];
+for (const [id, primitive, kind, colour, props, inside] of recipes) {
+  test(`recipe: ${id} is a ${primitive} ${kind}`, () => assert.deepEqual(recipe(byId(id)), { primitive, kind, colour, props, inside }));
+}
+
+// [control, the lines it holds the width for]
+const lines = [
+  ["top.blackout", ["Blackout", "Blackout on", "While Space is down"]],
+  ["top.live", ["LIVE off", "LIVE on"]],
+  ["top.tap", []],
+];
+for (const [id, expected] of lines) test(`a control that changes its words keeps its width: ${id}`, () => assert.deepEqual(linesOf(byId(id)), expected));
 
 // [what, steps, reviews after]
 const A = "top.tap";
@@ -209,13 +259,39 @@ const stored = [
 ];
 for (const [what, text, expected] of stored) test(`stored reviews: ${what}`, () => assert.deepEqual(parse(text), expected));
 
-test("the export is a table in the order of the behaviour table", () => {
-  const text = asMarkdown({ "top.tap": { rating: 4, comment: "fine | really\nyes" }, "top.live": { rating: 0, comment: "wider" } }, CONTROLS);
+// [what, the file of the repository, this browser, both together]
+const R = (rating, comment = "") => ({ rating, comment });
+const meetings = [
+  ["an empty browser takes the file", { a: R(3) }, {}, { a: R(3) }],
+  ["a new file takes the browser", {}, { a: R(3) }, { a: R(3) }],
+  ["both keep what only one has", { a: R(3) }, { b: R(5, "good") }, { a: R(3), b: R(5, "good") }],
+  ["reviewed in both: the browser's stays", { a: R(3, "old") }, { a: R(4, "new") }, { a: R(4, "new") }],
+];
+for (const [what, file, browser, expected] of meetings) {
+  test(`reviews meet: ${what}`, () => {
+    assert.deepEqual(merge(file, browser), expected);
+    assert.equal(same(merge(file, browser), file), JSON.stringify(expected) === JSON.stringify(file));
+  });
+}
+
+// [what, the body put to the dev server, the text of the file]
+const puts = [
+  ["a map, names in order", '{"b":{"rating":1,"comment":""},"a":{"rating":2,"comment":"x"}}', '{\n  "a": {\n    "rating": 2,\n    "comment": "x"\n  },\n  "b": {\n    "rating": 1,\n    "comment": ""\n  }\n}\n'],
+  ["an empty map", "{}", "{}\n"],
+  ["broken text", "{nope", undefined],
+  ["a list", "[]", undefined],
+  ["not an object", "7", undefined],
+];
+for (const [what, body, expected] of puts) test(`the reviews file: ${what}`, () => assert.equal(fileText(body), expected));
+
+test("the export is a table: primitives first, then controls in the order of the behaviour table", () => {
+  const text = asMarkdown({ "top.tap": { rating: 4, comment: "fine | really\nyes" }, "top.live": { rating: 0, comment: "wider" }, [kitKey("Picker")]: { rating: 5, comment: "" } }, CONTROLS, KIT);
   assert.deepEqual(text.split("\n"), [
-    `Catalog review: 2 of ${CONTROLS.length} controls`,
+    `Catalog review: 2 of ${CONTROLS.length} controls, 1 of ${KIT.length} primitives`,
     "",
-    "| Control | Name | Screen | Rating | Comment |",
+    "| Reviewed | Name | Where | Rating | Comment |",
     "|---|---|---|---|---|",
+    "| Picker | `kit:Picker` | Kit | 5 of 5 |  |",
     "| LIVE switch | `top.live` | Top bar |  | wider |",
     "| Tap | `top.tap` | Top bar | 4 of 5 | fine \\| really yes |",
   ]);

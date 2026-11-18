@@ -42,7 +42,8 @@
   "overrides": [
     {
       "files": [
-        "src/engine.ts"
+        "src/engine.ts",
+        "src/catalog/storage.ts"
       ],
       "rules": {
         "no-restricted-globals": "off"
@@ -72,6 +73,7 @@
     }
   ],
   "ignorePatterns": [
-    "src/**/*.test.mjs"
+    "src/**/*.test.mjs",
+    "src/catalog/reviews-file.mjs"
   ]
 }

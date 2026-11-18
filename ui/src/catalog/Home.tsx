@@ -1,14 +1,16 @@
-// The front page of the catalog: how to read a page, how far the review is, and the reviews to take away.
+// The front page of the catalog: the kit, how to read a page, how far the review is, and the reviews to take away.
 import { For } from "solid-js";
 import { SITUATIONS } from "../controls/situations.ts";
-import type { Control } from "../controls/spec.ts";
-import { byScreen } from "./frames.ts";
-import { asMarkdown, reviewOf, type Reviews } from "./review.ts";
+import { PRIMITIVE_FOR, PRIMITIVES, primitiveOf, type Control, type Primitive } from "../controls/spec.ts";
+import { screensOf } from "./frames.ts";
+import { asMarkdown, kitKey, reviewOf, type Reviews } from "./review.ts";
 
 const VERDICTS = ["keep", "change", "remove"] as const;
 
-export function Home(props: { controls: readonly Control[]; reviews: Reviews }) {
-  const rated = () => props.controls.filter((c) => reviewOf(props.reviews, c.id).rating > 0).length;
+export function Home(props: { controls: readonly Control[]; primitives: readonly Primitive[]; reviews: Reviews }) {
+  const isRated = (id: string) => reviewOf(props.reviews, id).rating > 0;
+  const rated = () => props.controls.filter((c) => isRated(c.id)).length;
+  const drawnWith = (p: Primitive) => props.controls.filter((c) => primitiveOf(c.kit) === p);
   const copy = (e: MouseEvent & { currentTarget: HTMLButtonElement }) => {
     const text = e.currentTarget.parentElement?.querySelector("textarea");
     text?.select();
@@ -18,10 +20,13 @@ export function Home(props: { controls: readonly Control[]; reviews: Reviews }) 
     <article class="c-page c-homepage">
       <header class="c-page-head">
         <h1>Storyboard catalog</h1>
-        <p class="c-does">Every control, alone, in every situation. Play a frame: the command shows as it fires. Rate each one.</p>
+        <p class="c-does">Ten primitives, named by what they are for. Every control is one of them with props, shown alone in every situation. Play a frame: the command shows as it fires. Rate each one.</p>
       </header>
 
       <div class="c-numbers">
+        <p>
+          <b>{props.primitives.length}</b> primitives
+        </p>
         <p>
           <b>{props.controls.length}</b> controls
         </p>
@@ -39,6 +44,36 @@ export function Home(props: { controls: readonly Control[]; reviews: Reviews }) 
           <b>{rated()}</b> rated
         </p>
       </div>
+
+      <h2>The kit</h2>
+      <table class="c-table" data-kit-table>
+        <thead>
+          <tr>
+            <th>Primitive</th>
+            <th>Is for</th>
+            <th>Kinds</th>
+            <th>Controls</th>
+            <th>Rated</th>
+          </tr>
+        </thead>
+        <tbody>
+          <For each={props.primitives}>
+            {(p) => (
+              <tr>
+                <th>
+                  <a href={`#/kit/${p}`}>{p}</a>
+                </th>
+                <td>{PRIMITIVE_FOR[p]}</td>
+                <td>{PRIMITIVES[p].join(", ")}</td>
+                <td>{drawnWith(p).length || "inside others"}</td>
+                <td>
+                  {isRated(kitKey(p)) ? "yes" : "no"}, {drawnWith(p).filter((c) => isRated(c.id)).length} controls
+                </td>
+              </tr>
+            )}
+          </For>
+        </tbody>
+      </table>
 
       <h2>A page, frame by frame</h2>
       <table class="c-table">
@@ -61,12 +96,12 @@ export function Home(props: { controls: readonly Control[]; reviews: Reviews }) 
           </tr>
           <tr>
             <th>Your review</th>
-            <td>1 to 5 and a comment per control. Kept in this browser, taken away below</td>
+            <td>1 to 5 and a comment per primitive and per control. Kept in this browser and in docs/design/catalog-reviews.json</td>
           </tr>
         </tbody>
       </table>
 
-      <h2>By screen</h2>
+      <h2>Where they live</h2>
       <table class="c-table">
         <thead>
           <tr>
@@ -78,16 +113,14 @@ export function Home(props: { controls: readonly Control[]; reviews: Reviews }) 
           </tr>
         </thead>
         <tbody>
-          <For each={byScreen(props.controls)}>
+          <For each={screensOf(props.controls).map((screen) => [screen, props.controls.filter((c) => c.screen === screen)] as const)}>
             {([screen, controls]) => (
               <tr>
-                <th>
-                  <a href={`#/${controls[0]?.id ?? ""}`}>{screen}</a>
-                </th>
+                <th>{screen}</th>
                 <td>{controls.length}</td>
                 <td>{controls.filter((c) => c.first.verdict === "change").length}</td>
                 <td>{controls.filter((c) => c.first.verdict === "remove").length}</td>
-                <td>{controls.filter((c) => reviewOf(props.reviews, c.id).rating > 0).length}</td>
+                <td>{controls.filter((c) => isRated(c.id)).length}</td>
               </tr>
             )}
           </For>
@@ -96,7 +129,7 @@ export function Home(props: { controls: readonly Control[]; reviews: Reviews }) 
 
       <h2>Take the reviews away</h2>
       <div class="c-export">
-        <textarea readonly rows={8} data-export value={asMarkdown(props.reviews, props.controls)} />
+        <textarea readonly rows={8} data-export value={asMarkdown(props.reviews, props.controls, props.primitives)} />
         <button type="button" class="c-rate c-copy" onClick={copy}>
           Copy as Markdown
         </button>

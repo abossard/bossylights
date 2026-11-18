@@ -4,13 +4,14 @@ import { createSignal, For, Show } from "solid-js";
 import { COMMANDS } from "../controls/commands.ts";
 import { MACHINES, type Machine } from "../controls/machines.ts";
 import { GESTURES } from "../controls/situations.ts";
-import type { Control } from "../controls/spec.ts";
+import { kindOf, primitiveOf, type Control } from "../controls/spec.ts";
 import type { Sent } from "./act.ts";
 import { framesOf, type Frame } from "./frames.ts";
 import { FrameView } from "./FrameView.tsx";
+import { propWords } from "./KitPage.tsx";
 import type { Rating, Review } from "./review.ts";
+import { ReviewBox } from "./ReviewBox.tsx";
 
-const RATINGS: readonly Rating[] = [1, 2, 3, 4, 5];
 const LOG = 8;
 
 interface Logged {
@@ -28,17 +29,23 @@ export function Page(props: { control: Control; review: Review; onRate: (rating:
   const logged = (frame: Frame, sent: readonly Sent[]) => setLog([...sent.map((s) => ({ frame: frame.title, sent: s })).reverse(), ...log()].slice(0, LOG));
 
   return (
-    <article class="c-page" data-page={c.id}>
+    <article class="c-page" data-page={c.id} data-wide={c.kit === "Item.strip" ? "" : undefined}>
       <header class="c-page-head">
         <p class="c-crumb">
-          {c.screen} / {c.part}
+          <a href={`#/kit/${primitiveOf(c.kit)}`} data-kit-of>
+            {primitiveOf(c.kit)}
+          </a>
+          {kindOf(c.kit) ? ` / ${kindOf(c.kit)}` : ""}
         </p>
         <h1>{c.name}</h1>
         <p class="c-does">{c.does}</p>
         <p class="c-tags">
           <code>{c.id}</code>
-          <span class="c-tag">{c.kit}</span>
+          <span class="c-tag" title="Where it lives">
+            {c.screen}: {c.part}
+          </span>
           <span class="c-tag">{c.kind}</span>
+          <For each={propWords(c)}>{(word) => <span class="c-tag">{word}</span>}</For>
           <span class="c-tag" data-verdict={c.first.verdict}>
             {c.first.verdict}
           </span>
@@ -97,21 +104,7 @@ export function Page(props: { control: Control; review: Review; onRate: (rating:
         </section>
 
         <section class="c-review" aria-label="Your review">
-          <h2>Your review</h2>
-          <div class="c-rating" role="group" aria-label="Rating, 1 to 5">
-            <For each={RATINGS}>
-              {(rating) => (
-                <button type="button" class="c-rate" aria-pressed={props.review.rating === rating} aria-label={`${rating} of 5`} onClick={() => props.onRate(rating)}>
-                  {rating}
-                </button>
-              )}
-            </For>
-            <span class="c-rating-says">{props.review.rating === 0 ? "Not rated" : `${props.review.rating} of 5`}</span>
-          </div>
-          <label class="c-comment">
-            <span>What works, what does not?</span>
-            <textarea rows={3} value={props.review.comment} onInput={(e) => props.onComment(e.currentTarget.value)} />
-          </label>
+          <ReviewBox review={props.review} onRate={props.onRate} onComment={props.onComment} />
           <h2>Sent on this page</h2>
           <ol class="c-log" data-log>
             <For each={log()} fallback={<li class="c-sent-none">Play a frame: the command shows as it fires</li>}>

@@ -5,27 +5,28 @@ import type { Look } from "./look.ts";
 
 type Sample = Partial<Look>;
 
-const TONES = { tone: "danger" } as const;
+const RED = { colour: "danger" } as const;
 
 export const SAMPLES: Record<string, Sample> = {
   // ---- top bar
   "top.indicator.dj": { label: "DJ link", variant: "ready" },
-  "top.indicator.recording": { label: "Recording", variant: "ready" },
-  "top.indicator.autopilot": { label: "Autopilot", variant: "ready" },
+  "top.indicator.recording": { label: "Recording", variant: "ready", ...RED },
+  "top.indicator.autopilot": { label: "Autopilot", variant: "ready", colour: "autopilot" },
   "top.indicator.lock": { label: "Lock", variant: "ready" },
-  "top.trouble": { label: "No lights connected", ...TONES },
+  "top.live": { label: "LIVE off" },
+  "top.trouble": { label: "No lights connected", ...RED },
   "top.tap": { label: "Tap" },
-  "top.blackout": { label: "Blackout", ...TONES },
+  "top.blackout": { label: "Blackout", ...RED },
   "top.undo": { label: "Undo", sub: "Move widget" },
   "top.workspaces": { options: ["Console", "Songs", "Looks", "Patch", "DMX", "In/Out"] },
   "top.learn.cancel": { label: "Cancel" },
   "top.now-strip": { on: true },
   // ---- Console
   "console.running.fold": { label: "Running", on: true, value: 3 },
-  "console.running.release": { label: "Release", tone: "manual", on: true, sub: "Warm wash" },
-  "console.running.stop": { label: "Stop", tone: "show", on: true, sub: "Chase L-R" },
-  "console.running.release-all": { label: "Release all", tone: "manual" },
-  "console.autopilot.on": { label: "Autopilot", tone: "autopilot", variant: "ready", sub: "Waits for LIVE" },
+  "console.running.release": { label: "Release", colour: "manual", on: true, sub: "Warm wash" },
+  "console.running.stop": { label: "Stop", colour: "show", on: true, sub: "Chase L-R" },
+  "console.running.release-all": { label: "Release all", colour: "manual" },
+  "console.autopilot.on": { label: "Autopilot", colour: "autopilot", variant: "ready", sub: "Waits for LIVE" },
   "console.autopilot.style": { options: ["House", "Techno", "Chill"] },
   "console.pages": { options: ["Main", "Movers", "Pixels"] },
   "console.pad": { label: "Warm wash", variant: "idle" },
@@ -41,10 +42,10 @@ export const SAMPLES: Record<string, Sample> = {
   "songs.filter": { label: "Needs review" },
   "songs.song": { label: "Night Drive", sub: "124 BPM, 6 sections" },
   "songs.play-from": { label: "Play from Drop" },
-  "songs.section": { label: "Drop", sub: "16 bars", tone: "show" },
+  "songs.section": { label: "Drop", sub: "16 bars", colour: "show" },
   "songs.section.edge": { label: "Edge between Build and Drop" },
-  "songs.recorded.mute": { label: "Mute recorded", tone: "show" },
-  "songs.show.mute": { label: "Mute show", tone: "show" },
+  "songs.recorded.mute": { label: "Mute recorded", colour: "show" },
+  "songs.show.mute": { label: "Mute show", colour: "show" },
   "songs.section.name": { label: "Section name", picked: "Drop" },
   "songs.section.remove-look": { label: "Warm wash" },
   "songs.looks.add": { label: "Strobe white", sub: "Step" },
@@ -122,7 +123,7 @@ export const SAMPLES: Record<string, Sample> = {
 
 /** Looks of states that are written down, where the rules of `look.ts` would guess. */
 export const STATE_LOOKS: Record<string, Record<string, Sample>> = {
-  "top.live": { off: { on: false }, on: { on: true } },
+  "top.live": { off: { on: false, label: "LIVE off" }, on: { on: true, label: "LIVE on" } },
   "top.trouble": {
     "no lights": { label: "No lights connected" },
     "output lost": { label: "Output lost", sub: "DMX USB Pro" },
@@ -131,19 +132,19 @@ export const STATE_LOOKS: Record<string, Record<string, Sample>> = {
   "top.blackout": { off: { on: false }, held: { on: true, label: "Blackout on", sub: "While Space is down" }, latched: { on: true, label: "Blackout on" } },
   "top.learn": { off: { on: false }, pick: { on: true, sub: "Pick a control" }, wait: { on: true, sub: "Move a control on the hardware" } },
   "console.running.release": { "pad on": { variant: "" }, "pad off, still held": { on: false, variant: "dashed", sub: "Warm wash, pad off" } },
-  "console.edit-surface": { there: {}, "primary on an empty page": { tone: "paper", on: true } },
+  "console.edit-surface": { there: {}, "primary on an empty page": { colour: "paper", on: true } },
   "console.cue.go": { "not started": { sub: "Not started" }, "on a cue": { sub: "Cue 3 of 12" } },
   "console.cue.back": { "on a cue": { sub: "Cue 3 of 12" } },
   "console.xy": { free: { on: false }, held: { on: true } },
   "songs.song": {
     open: { on: true },
-    playing: { variant: "Playing", tone: "paper" },
+    playing: { variant: "Playing", colour: "paper" },
     "needs review": { variant: "Needs review" },
     queued: { variant: "Queued" },
   },
-  "patch.universe": { shown: { on: true }, "has a clash": { variant: "Clash", tone: "danger" }, pixels: { variant: "Pixels" } },
-  "patch.fixtures.light": { selected: { on: true }, clash: { variant: "Clash", tone: "danger" } },
-  "looks.autopilot.style": { open: { on: true }, "in use": { variant: "In use", tone: "autopilot" } },
+  "patch.universe": { shown: { on: true }, "has a clash": { variant: "Clash", colour: "danger" }, pixels: { variant: "Pixels" } },
+  "patch.fixtures.light": { selected: { on: true }, clash: { variant: "Clash", colour: "danger" } },
+  "looks.autopilot.style": { open: { on: true }, "in use": { variant: "In use", colour: "autopilot" } },
   "looks.connection": { "made of": { sub: "Step" }, "used by": { sub: "Console", label: "Main, pad 4" }, lights: { sub: "Lights", label: "PAR 1-8" } },
   "menubar.item": { "menu open": { on: true } },
 };

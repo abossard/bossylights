@@ -1,4 +1,4 @@
-// The owner's rating and comment per control: data, and the calculations over it.
+// The owner's rating and comment per control and per primitive: data, and the calculations over it.
 // `storage.ts` keeps them in the browser. The export is what goes back into the issue.
 import type { Control } from "../controls/spec.ts";
 
@@ -10,7 +10,7 @@ export interface Review {
   comment: string;
 }
 
-/** By the stable name of the control. A control with no rating and no comment is not in it. */
+/** By the stable name of the control, or `kit:` and the name of a primitive. What has no rating and no comment is not in it. */
 export type Reviews = Readonly<Record<string, Review>>;
 
 const NONE: Review = { rating: 0, comment: "" };
@@ -30,6 +30,14 @@ export function rate(reviews: Reviews, id: string, rating: Rating): Reviews {
 
 export function comment(reviews: Reviews, id: string, text: string): Reviews {
   return put(reviews, id, { ...reviewOf(reviews, id), comment: text });
+}
+
+/** The file of the repository and this browser meet: a control reviewed in both keeps the browser's. */
+export const merge = (file: Reviews, browser: Reviews): Reviews => ({ ...file, ...browser });
+
+export function same(a: Reviews, b: Reviews): boolean {
+  const ids = Object.keys(a);
+  return ids.length === Object.keys(b).length && ids.every((id) => id in b && a[id].rating === b[id].rating && a[id].comment === b[id].comment);
 }
 
 const isRating = (value: unknown): value is Rating => typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 5;
@@ -54,11 +62,17 @@ export function parse(text: string | null): Reviews {
 
 const cell = (text: string) => text.replace(/\|/g, "\\|").replace(/\s+/g, " ").trim();
 
-/** The reviews as a Markdown table, in the order of the behaviour table, for the issue. */
-export function asMarkdown(reviews: Reviews, controls: readonly Control[]): string {
-  const rows = controls.filter((c) => c.id in reviews).map((c) => {
-    const r = reviewOf(reviews, c.id);
-    return `| ${cell(c.name)} | \`${c.id}\` | ${c.screen} | ${r.rating === 0 ? "" : `${r.rating} of 5`} | ${cell(r.comment)} |`;
-  });
-  return [`Catalog review: ${rows.length} of ${controls.length} controls`, "", "| Control | Name | Screen | Rating | Comment |", "|---|---|---|---|---|", ...rows].join("\n");
+/** The name a primitive is reviewed under. Control names never start like this. */
+export const kitKey = (primitive: string) => `kit:${primitive}`;
+
+/** The reviews as a Markdown table, primitives first, then controls in the order of the behaviour table, for the issue. */
+export function asMarkdown(reviews: Reviews, controls: readonly Control[], primitives: readonly string[]): string {
+  const line = (name: string, id: string, where: string) => {
+    const r = reviewOf(reviews, id);
+    return `| ${cell(name)} | \`${id}\` | ${where} | ${r.rating === 0 ? "" : `${r.rating} of 5`} | ${cell(r.comment)} |`;
+  };
+  const kit = primitives.filter((p) => kitKey(p) in reviews).map((p) => line(p, kitKey(p), "Kit"));
+  const rows = controls.filter((c) => c.id in reviews).map((c) => line(c.name, c.id, c.screen));
+  const head = `Catalog review: ${rows.length} of ${controls.length} controls, ${kit.length} of ${primitives.length} primitives`;
+  return [head, "", "| Reviewed | Name | Where | Rating | Comment |", "|---|---|---|---|---|", ...kit, ...rows].join("\n");
 }

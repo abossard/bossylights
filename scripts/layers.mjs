@@ -32,6 +32,7 @@ export const UI_FILES = {
   "controls/": "controls", // the behaviour table of every control, its commands and state machines (#102)
   "kit/": "kit", // the pure components the controls are drawn with: props in, a gesture out (#102)
   "catalog/": "catalog", // the storyboard catalog, its own app: `npm run catalog` (#102)
+  "catalog/reviews-file.mjs": "catalog", // its dev server keeps the owner's reviews in docs/design/catalog-reviews.json
 };
 
 /** Which layer may import which. Views never import engine internals past engine.ts. */

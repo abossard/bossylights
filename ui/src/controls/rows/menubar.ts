@@ -17,7 +17,7 @@ const entry = (does: string) => ({
 });
 
 const menu = (row: Omit<Row, "screen" | "part" | "from" | "decided" | "kit">): Control =>
-  control({ learn: OUTSIDE, ...row, screen: "Menu bar", part: "Menu bar item", from: [], decided: "#107", kit: "MenuItem" });
+  control({ learn: OUTSIDE, ...row, screen: "Menu bar", part: "Menu bar item", from: [], decided: "#107", kit: "Item.entry" });
 
 export const MENUBAR: Control[] = [
   menu({

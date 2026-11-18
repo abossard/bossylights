@@ -1,0 +1,62 @@
+{
+  "console.autopilot.style": {
+    "rating": 3,
+    "comment": "native dropdown is too ugly\n"
+  },
+  "console.surprise": {
+    "rating": 3,
+    "comment": ""
+  },
+  "top.blackout": {
+    "rating": 4,
+    "comment": "needs stable width"
+  },
+  "top.indicator.autopilot": {
+    "rating": 4,
+    "comment": "yellow back ground when on"
+  },
+  "top.indicator.dj": {
+    "rating": 4,
+    "comment": "light can be green. orange or red to expose the status"
+  },
+  "top.indicator.lock": {
+    "rating": 5,
+    "comment": ""
+  },
+  "top.indicator.recording": {
+    "rating": 5,
+    "comment": ""
+  },
+  "top.learn": {
+    "rating": 5,
+    "comment": "Learn itself should be learnaeble"
+  },
+  "top.learn.cancel": {
+    "rating": 1,
+    "comment": "just presing learn again disabled learn"
+  },
+  "top.live": {
+    "rating": 5,
+    "comment": ""
+  },
+  "top.now-strip": {
+    "rating": 2,
+    "comment": "craped texte in the preview, not so cool"
+  },
+  "top.tap": {
+    "rating": 5,
+    "comment": ""
+  },
+  "top.trouble": {
+    "rating": 5,
+    "comment": ""
+  },
+  "top.undo": {
+    "rating": 5,
+    "comment": ""
+  },
+  "top.workspaces": {
+    "rating": 5,
+    "comment": ""
+  }
+}
