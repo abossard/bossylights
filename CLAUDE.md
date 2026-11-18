@@ -65,6 +65,10 @@ The owner has ADHD and is a visual learner. This applies to every output: docs, 
 
 ## Agent skills
 
+### How the work is run
+
+Roles, models, the queue loop, milestones and gates. See `docs/agents/orchestration.md`.
+
 ### Issue tracker
 
 Issues and specs live in GitHub Issues of abossard/bossylights. See `docs/agents/issue-tracker.md`.
