@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/engine-core", "crates/engine", "crates/engine-server", "shell"]
+exclude = ["spikes"] # throwaway spikes build on their own, outside the product checks
 
 [workspace.package]
 version = "0.0.0"
