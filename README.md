@@ -88,25 +88,27 @@ stateDiagram-v2
 
 Counters: `accepted`, `dropped` (the socket or the link was busy: the frame is dropped, never waited for), `failed`, `off_beat` (intervals more than 2 ms from the rate). With no output the engine still wakes 44 times a second and publishes its state.
 
-A device that can vanish finds itself again, off the output thread:
+The output thread never calls the serial driver: a vanishing device holds the driver up for many milliseconds. Each DMX USB Pro has a port thread that does every call:
 
 ```mermaid
 sequenceDiagram
   participant O as output thread
-  participant F as finder (one per adapter)
-  O->>O: write fails: Failed
-  O->>F: the dead port (wait-free queue), "looking" flag
-  F->>F: closes the dead port
-  loop every 500 ms while looking
-    F->>F: list USB serial ports, match the identity, open at 500 000 baud
+  participant P as port thread (one per adapter)
+  O->>P: the message (one-slot wait-free queue), wake
+  P->>P: write it, then wait until the link is free
+  Note over P: unplugged: write fails
+  P->>P: close the port, set "lost"
+  O->>O: next frames: Failed, at once
+  loop every 500 ms while lost
+    P->>P: list USB serial ports, match the identity, open at 500 000 baud
   end
-  F->>O: the opened port (wait-free queue)
+  P->>P: clear "lost"
   O->>O: next frame: Accepted, the state goes back to Running
 ```
 
 | Who looks | How often | Cost |
 |---|---|---|
-| the finder thread of each DMX USB Pro output | checks a flag every 100 ms; while the port is lost, lists the USB serial ports every 500 ms | asleep almost always. One listing is an IOKit or sysfs query of a few ms, never on the output thread |
+| the port thread of each DMX USB Pro output | writes each message; while the port is lost, lists the USB serial ports every 500 ms | asleep between messages. One listing is an IOKit or sysfs query of a few ms, never on the output thread |
 
 Checks that need hands or hardware. Each prints what to do and when, with a bell:
 
@@ -129,7 +131,7 @@ The DMX USB Pro checks print a timed line for every state change (with the syste
 | layers check | crates and ui files depend only along the edges in `scripts/layers.mjs`; `engine-core` has no `std` and no `alloc` |
 | names check | `engine-core` and `engine` name no protocol or device (DDP, UDP, DMX USB Pro, serial) outside the list of kinds (`scripts/names.mjs`) |
 | `cargo clippy` | the lints for state machines and errors (root `Cargo.toml`, core crates); nothing on the tick thread can lock, block, do I/O or log (`crates/engine/clippy.toml`, linked from `crates/rt-thread`); every `unsafe` block says why it is sound |
-| `cargo test` | `update`, `frame`, which output is due next, each output's state machine, DDP packets (every header byte, split at 1440 bytes), DMX USB Pro messages and the thread's priority as tables, no allocation while serving two test devices and taking commands (`crates/engine/tests/no_alloc.rs`) and in each kind's `take` (`crates/outputs/tests/no_alloc.rs`); a DMX USB Pro against a fake serial port (a pseudo terminal): every byte, and unplugged, it fails until its finder hands in a new port, `ui/src/engine-api.ts` matches the Rust types; over the WebSocket: an output added, then "set channel" changes the bytes on its DDP socket in the next frame, wrong requests are refused (`crates/engine-server/tests/api.rs`) |
+| `cargo test` | `update`, `frame`, which output is due next, each output's state machine, DDP packets (every header byte, split at 1440 bytes), DMX USB Pro messages and the thread's priority as tables, no allocation while serving two test devices and taking commands (`crates/engine/tests/no_alloc.rs`) and in each kind's `take` (`crates/outputs/tests/no_alloc.rs`); a DMX USB Pro against a fake serial port (a pseudo terminal): every byte, and unplugged, it fails until its port thread opens a new port; a port stuck in the driver never holds up `take`, `ui/src/engine-api.ts` matches the Rust types; over the WebSocket: an output added, then "set channel" changes the bytes on its DDP socket in the next frame, wrong requests are refused (`crates/engine-server/tests/api.rs`) |
 | `tsc`, oxlint, `node --test` | the UI type-checks; exhaustive switches, no `any`, only `engine.ts` talks to the engine; its connection state machine, every state and event; how replies change its picture |
 | Playwright | engine + UI in a browser: the counter advances, the thread's priority shows, a fader sets a channel, an output and its counters show |
 

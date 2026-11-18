@@ -275,12 +275,23 @@ fn hands_on(watch: &mut Watch, sender: &mut engine::Sender, step: Step) -> bool 
     );
     let calm_until = watch.started.elapsed() + CALM;
     let mut state = watch.engine.query();
+    let mut ran = false;
     while watch.started.elapsed() < calm_until {
         state = watch.tick(sender);
+        let running = state.outputs[0].is_some_and(|o| o.status == Status::Running);
+        if ran && !running {
+            watch.line(&state);
+            println!(
+                "{BELL}\nTOO EARLY: the adapter was lost at {:.1} s, before the bell. Nothing counted. Run again and wait for the bell.",
+                watch.started.elapsed().as_secs_f64()
+            );
+            return false;
+        }
+        ran |= running;
     }
     watch.line(&state);
-    if state.outputs[0].is_none_or(|o| o.status != Status::Running) {
-        println!("FAILED: the adapter was not running before the bell. Its lines above say when.");
+    if !ran {
+        println!("FAILED: the adapter never ran in the calm phase.");
         return false;
     }
 
