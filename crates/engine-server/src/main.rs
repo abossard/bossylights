@@ -2,6 +2,8 @@
 //!
 //! One engine per machine and port: a second one finds the port's lock taken and ends
 //! before it starts anything. The system frees the lock when the process ends, however.
+//! An engine that got `Stop` stops answering before its process ends, so a new one waits
+//! up to [`FREED`] for the lock before it gives up.
 //! On `Stop` it prints what it measured to stderr and ends.
 
 #![forbid(unsafe_code)]
@@ -11,9 +13,16 @@ use std::fs::{File, TryLockError};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::exit;
+use std::thread;
+use std::time::{Duration, Instant};
 
 const USAGE: &str =
     "usage: bossylights-engine [--listen 127.0.0.1:7744] [--universes 4] [--fixtures <folder>]";
+
+/// How long a new engine waits for the lock of an engine that is stopping.
+const FREED: Duration = Duration::from_secs(3);
+/// How often it looks again meanwhile.
+const LOOK: Duration = Duration::from_millis(20);
 
 /// What the process is started with.
 struct Settings {
@@ -63,16 +72,25 @@ async fn main() {
     eprint!("{}", report(&mut engine));
 }
 
-/// Holds the lock of `port` for as long as the process runs, or says who has it.
+/// Holds the lock of `port` for as long as the process runs, or says who has it. Waits up
+/// to [`FREED`] while another engine has it: one that is stopping lets go when it ends.
 fn lock(port: u16) -> Result<File, String> {
     let path = std::env::temp_dir().join(format!("bossylights-engine-{port}.lock"));
     let file = File::create(&path).map_err(|e| format!("cannot open {}: {e}", path.display()))?;
-    match file.try_lock() {
-        Ok(()) => Ok(file),
-        Err(TryLockError::WouldBlock) => Err(format!(
-            "another engine already runs on port {port}. Stop it first (the API's Stop), or pick another port with --listen"
-        )),
-        Err(TryLockError::Error(e)) => Err(format!("cannot lock {}: {e}", path.display())),
+    let until = Instant::now() + FREED;
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Ok(file),
+            Err(TryLockError::WouldBlock) if Instant::now() < until => thread::sleep(LOOK),
+            Err(TryLockError::WouldBlock) => {
+                return Err(format!(
+                    "another engine already runs on port {port}. Stop it first (the API's Stop), or pick another port with --listen"
+                ));
+            }
+            Err(TryLockError::Error(e)) => {
+                return Err(format!("cannot lock {}: {e}", path.display()));
+            }
+        }
     }
 }
 

@@ -130,3 +130,18 @@ async fn stop_ends_the_process_reports_what_it_measured_and_frees_the_port() {
     assert_eq!(stop(&listen).await, serde_json::json!("Stopping"));
     assert!(exited(&mut next).success());
 }
+
+#[tokio::test]
+async fn an_engine_started_right_after_stop_waits_for_the_port_and_answers() {
+    let listen = format!("127.0.0.1:{}", free_port());
+    let mut first = engine(&listen);
+    listening(&mut first);
+
+    assert_eq!(stop(&listen).await, serde_json::json!("Stopping"));
+    let mut next = engine(&listen);
+    listening(&mut next);
+    assert!(exited(&mut first).success());
+
+    assert_eq!(stop(&listen).await, serde_json::json!("Stopping"));
+    assert!(exited(&mut next).success());
+}
