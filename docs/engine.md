@@ -52,8 +52,9 @@ The list is `ORIGINS` in `crates/engine-server/src/lib.rs`. No pairing or token 
 | Client sends | Engine answers |
 |---|---|
 | `{"Send": {"command": {"SetChannel": {"channel": {"universe": 1, "address": 1}, "value": 255}}}}` | `"Accepted"`, or `{"Refused": {"reason": "NoSuchAddress"}}` and nothing changes |
-| `"Query"` | `{"Picture": {"state": ..., "project": ..., "library": ..., "universes": [[...512 levels]]}}`. `project.outputs`: per output `null`, `{"Kind": {"kind": ...}}` (what it sends to) or `"Attached"` (a test's own device) |
-| `"Subscribe"` | the `Picture`, then `{"Changed": {"state": ..., "project": ..., "library": ..., "channels": [...]}}` with every frame |
+| `{"Send": {"command": {"Patch": ...}}}` | `{"Patched": {"fixture": 1}}`: its number |
+| `"Query"` | `{"Picture": {"state": ..., "project": ..., "library": ..., "patch": [...], "universes": [[...512 levels]]}}`. `project.outputs`: per output `null`, `{"Kind": {"kind": ...}}` (what it sends to) or `"Attached"` (a test's own device) |
+| `"Subscribe"` | the `Picture`, then `{"Changed": {"state": ..., "project": ..., "library": ..., "patch": ..., "channels": [...]}}` with every frame. `patch` is `null` unless it changed since the last message |
 
 | Command | Does |
 |---|---|
@@ -63,6 +64,23 @@ The list is `ORIGINS` in `crates/engine-server/src/lib.rs`. No pairing or token 
 | `Blackout` (on) | every channel goes out at zero while on; the held values stay |
 | `SetOutput` (output 1 to 16, kind, universes, rate) | adds or replaces an output. Kind `{"Ddp": {"address": "ip:port", "color": "Rgb" or "Rgbw"}}` or `{"DmxUsbPro": {"adapter": 1}}` (the first ENTTEC DMX USB Pro by USB identity, in the order of their USB serial numbers, when the output first finds one; an adapter not there yet is no error, the output is NotFound until it is plugged in; from then on the output finds that same adapter by its serial, so a lost adapter never comes back as another). Adapters count from 1: 0 is `NotACommand`. Universes `{"first": 1, "count": 3}`, sent as one stream of channels. A DMX USB Pro takes one universe: more is refused with `{"TooManyUniverses": {"most": 1}}`. DDP RGB sends whole pixels: 510 of each universe's 512 channels. Rate `"30"`, `"44"`, `"60"` or `null`: 60 for DDP, 44 for the DMX USB Pro |
 | `RemoveOutput` (output) | removes it |
+
+The patch: a fixture of the library at an address. The front checks each command against it and the library, compiles the writers (`rig`) and swaps them in on the tick thread as it swaps a device.
+
+| Command | Does | Refused |
+|---|---|---|
+| `Patch` (name, maker, model, mode, at: universe, address) | adds a fixture: the lowest free number, its lights the first free from the lowest | `NoSuchFixture`, `NoSuchMode`, `{"PastTheEnd": {"channels": 3}}`, `NoSuchUniverse`, `NoSuchAddress`, `NoLightsLeft` |
+| `Move` (fixture, at) | new address, the same lights: their held values stay | `NotPatched`, as `Patch` |
+| `Unpatch` (fixture) | removes it, its lights' held values go | `NotPatched` |
+| `Rename` (fixture, name) | | `NotPatched` |
+| `SetIntensity` (target, intensity 0 to 65 535) | holds the intensity | `NotPatched`, `NoSuchLight` |
+| `SetColour` (target, red, green, blue, 0 to 65 535 each) | holds the colour | `NotPatched`, `NoSuchLight` |
+
+A target is `{"Fixture": {"fixture": 1}}` (all its lights) or `{"Light": {"light": 7}}`. Fixtures and lights count from 1. Two fixtures on the same channels are allowed: each `patch` row lists the other in `clashes`. Who wins on a shared channel is open (decision page, question 48).
+
+```json
+{"Send": {"command": {"Patch": {"name": "PAR 3", "maker": "Generic", "model": "Generic RGB", "mode": "RGB", "at": {"universe": 1, "address": 37}}}}}
+```
 
 ```json
 {"Send": {"command": {"SetOutput": {"output": 1, "kind": {"Ddp": {"address": "192.168.1.50:4048", "color": "Rgbw"}}, "universes": {"first": 1, "count": 3}, "rate": null}}}}
@@ -127,6 +145,7 @@ Each prints what to do and when, with a bell:
 | What | Command |
 |---|---|
 | WLED pattern (4 dots on 320 RGBW pixels, 30 s) | `cargo run -p engine-server --example wled_pattern -- 192.168.1.50` (port 4048 by default, or `ip:port`; optional seconds) |
+| Patch a PAR and make it red, green, blue, then unpatch it (#135) | `cargo run -p engine-server --example patch_par -- ddp 192.168.1.50` (WLED: pixel 13) or `-- dmx 1` (an RGB PAR at address 37; another address after the device) |
 | DMX USB Pro, 10 minutes: no interval off, nothing dropped | `cargo run --release -p engine-server --example dmx_usb_pro -- <port> ten-minutes` |
 | DMX USB Pro, unplug and plug back in | `cargo run --release -p engine-server --example dmx_usb_pro -- <port> unplug` |
 | DMX USB Pro, sleep and wake (press Enter once awake) | `cargo run --release -p engine-server --example dmx_usb_pro -- <port> sleep` |

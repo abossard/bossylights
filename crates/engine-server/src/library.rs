@@ -205,7 +205,8 @@ impl Shelf {
         }
     }
 
-    fn fixtures(&self) -> &[Fixture] {
+    /// The fixtures read, by maker and model. Empty while there are none.
+    pub(crate) fn fixtures(&self) -> &[Fixture] {
         match self {
             Self::Read { fixtures, .. } => fixtures,
             Self::NoFolder | Self::Reading | Self::CannotOpen => &[],

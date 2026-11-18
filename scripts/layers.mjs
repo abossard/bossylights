@@ -18,7 +18,7 @@ export const CRATES = {
   rig: { kind: "calc", deps: ["engine-core", "fixture-library"] }, // a mode at an address becomes writers: only it knows an address belongs to a fixture
   "rt-thread": { kind: "action", deps: ["engine-core"] }, // the only unsafe: asks for real-time priority
   outputs: { kind: "action", deps: ["engine-core"] }, // opens devices, takes frames: only it knows bytes
-  engine: { kind: "action", deps: ["engine-core", "rt-thread", "outputs"] },
+  engine: { kind: "action", deps: ["engine-core", "rt-thread", "outputs", "rig", "fixture-library"] }, // the front owns the patch: it checks a patch against the library and compiles writers
   "engine-server": { kind: "action", deps: ["engine", "engine-core", "fixture-library"] }, // reads the fixture folder, answers the library
   shell: { kind: "action", deps: ["engine-core"] }, // knows the API version it speaks, nothing more
 };

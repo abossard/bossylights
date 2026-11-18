@@ -23,8 +23,8 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use engine::{
-    API_VERSION, ChannelLevel, Command, Engine, Project, Refusal, Reply, Request, Sender, Snapshot,
-    changes,
+    API_VERSION, Begun, ChannelLevel, Command, Engine, Patch, Patched, Project, Refusal, Reply,
+    Request, Sender, Snapshot, changes,
 };
 use engine_core::Library;
 use library::Shelf;
@@ -46,13 +46,18 @@ pub async fn serve(
 ) -> io::Result<Engine> {
     let (stop, mut stopped) = watch::channel(false);
     let shelf = library::start(fixtures);
-    let (painted, pictures) = watch::channel(Arc::new(Picture {
-        snapshot: *engine.latest(),
-        library: shelf.borrow().library(),
-    }));
-    let reader = tokio::spawn(read(engine, shelf.clone(), painted, stop.subscribe()));
+    let (project, projects) = watch::channel(sender.project());
+    let (patch, patches) = watch::channel(sender.patch());
+    let front = Front {
+        shelf: shelf.clone(),
+        project: projects,
+        patch: patches,
+    };
+    let (painted, pictures) = watch::channel(Arc::new(front.picture(*engine.latest())));
+    let reader = tokio::spawn(read(engine, front, painted, stop.subscribe()));
     let api = Arc::new(Api {
-        project: watch::channel(sender.project()).0,
+        project,
+        patch,
         sender: Mutex::new(sender),
         stop,
         pictures,
@@ -81,8 +86,10 @@ struct Api {
     /// The engine front; connections take turns. Nobody holds it while a device opens.
     /// The tick thread never sees this lock.
     sender: Mutex<Sender>,
-    /// The front's project after the last command, the same for every connection.
+    /// The front's project after the last command: the reader takes it into the next picture.
     project: watch::Sender<Project>,
+    /// The front's patch after the last command: the reader takes it into the next picture.
+    patch: watch::Sender<Arc<Patch>>,
     /// Turns true once, on `Stop`. Every connection and the server watch it.
     stop: watch::Sender<bool>,
     /// The newest picture, one per frame, the same for every connection.
@@ -91,18 +98,39 @@ struct Api {
     shelf: watch::Receiver<Arc<Shelf>>,
 }
 
-/// A frame as every connection shows it: the engine's snapshot, and the library as it was
-/// when the snapshot was taken.
+/// A frame as every connection shows it: the engine's snapshot, and the library, the
+/// project and the patch as they were when the snapshot was taken.
 struct Picture {
     snapshot: Snapshot,
     library: Library,
+    project: Project,
+    patch: Arc<Patch>,
+}
+
+/// What the front holds besides the engine, as the reader takes it into each picture.
+struct Front {
+    shelf: watch::Receiver<Arc<Shelf>>,
+    project: watch::Receiver<Project>,
+    patch: watch::Receiver<Arc<Patch>>,
+}
+
+impl Front {
+    fn picture(&self, snapshot: Snapshot) -> Picture {
+        Picture {
+            snapshot,
+            library: self.shelf.borrow().library(),
+            project: *self.project.borrow(),
+            patch: Arc::clone(&self.patch.borrow()),
+        }
+    }
 }
 
 /// The one reader of the engine: takes the newest snapshot twice a beat and shares it,
-/// with the library, when it is of a new frame. Until `Stop`, then it gives the engine back.
+/// with the library, the project and the patch, when it is of a new frame. Until `Stop`,
+/// then it gives the engine back.
 async fn read(
     mut engine: Engine,
-    shelf: watch::Receiver<Arc<Shelf>>,
+    front: Front,
     painted: watch::Sender<Arc<Picture>>,
     mut stopped: watch::Receiver<bool>,
 ) -> Engine {
@@ -114,10 +142,7 @@ async fn read(
             _ = poll.tick() => {
                 let snapshot = engine.latest();
                 if snapshot.state.frame != painted.borrow().snapshot.state.frame {
-                    painted.send_replace(Arc::new(Picture {
-                        snapshot: *snapshot,
-                        library: shelf.borrow().library(),
-                    }));
+                    painted.send_replace(Arc::new(front.picture(*snapshot)));
                 }
             }
         }
@@ -166,7 +191,7 @@ async fn talk(mut socket: WebSocket, api: Arc<Api>) {
                 Some(Ok(Message::Close(_)) | Err(_)) | None => return,
             },
             Ok(()) = pictures.changed(), if subscription.is_some() => {
-                changed(&api, &mut pictures, &mut subscription)
+                changed(&mut pictures, &mut subscription)
             }
         };
         if let Some(reply) = reply
@@ -189,18 +214,19 @@ async fn answer(
         });
     };
     match request {
-        Request::Send { command } => {
-            let sent = send(api, command).await;
-            json(&sent.map_or_else(|reason| Reply::Refused { reason }, |()| Reply::Accepted))
-        }
-        Request::Query => picture(api, &pictures.borrow()),
+        Request::Send { command } => json(&match send(api, command).await {
+            Ok(Some(fixture)) => Reply::Patched { fixture },
+            Ok(None) => Reply::Accepted,
+            Err(reason) => Reply::Refused { reason },
+        }),
+        Request::Query => picture(&pictures.borrow()),
         Request::Stop => {
             api.stop.send_replace(true);
             json(&Reply::Stopping)
         }
         Request::Subscribe => {
             let now = Arc::clone(&pictures.borrow_and_update());
-            let reply = picture(api, &now);
+            let reply = picture(&now);
             *subscription = Some(now);
             reply
         }
@@ -212,34 +238,42 @@ async fn answer(
     }
 }
 
-/// Sends `command` to the front. A device it needs is opened on a thread of the blocking
-/// pool, without the front: every other client is answered meanwhile.
-async fn send(api: &Api, command: Command) -> Result<(), Refusal> {
-    let begun = api.sender.lock().await.begin(command);
+/// Sends `command` to the front, with the library as it is read so far. A device it needs
+/// is opened on a thread of the blocking pool, without the front: every other client is
+/// answered meanwhile. The number of a patched fixture.
+async fn send(api: &Api, command: Command) -> Result<Option<u16>, Refusal> {
+    let shelf = Arc::clone(&api.shelf.borrow());
+    let begun = api.sender.lock().await.begin(command, shelf.fixtures());
     let sent = match begun {
-        Ok(Some(opening)) => match tokio::task::spawn_blocking(move || opening.open()).await {
-            Ok(opened) => api.sender.lock().await.finish(opened),
-            Err(_) => Err(Refusal::CannotOpen), // the task was cancelled: the engine stops
-        },
-        Ok(None) => Ok(()),
+        Ok(Begun::Opening(opening)) => {
+            match tokio::task::spawn_blocking(move || opening.open()).await {
+                Ok(opened) => api.sender.lock().await.finish(opened).map(|()| None),
+                Err(_) => Err(Refusal::CannotOpen), // the task was cancelled: the engine stops
+            }
+        }
+        Ok(Begun::Queued) => Ok(None),
+        Ok(Begun::Patched { fixture }) => Ok(Some(fixture)),
         Err(reason) => Err(reason),
     };
-    api.project.send_replace(api.sender.lock().await.project());
+    let sender = api.sender.lock().await;
+    api.project.send_replace(sender.project());
+    api.patch.send_replace(sender.patch());
     sent
 }
 
-fn picture(api: &Api, now: &Picture) -> Option<String> {
+fn picture(now: &Picture) -> Option<String> {
     json(&Reply::Picture {
         state: now.snapshot.state,
-        project: *api.project.borrow(),
+        project: now.project,
         library: now.library,
+        patch: &now.patch.fixtures(),
         universes: now.snapshot.universes(),
     })
 }
 
-/// `Changed`: the channels that differ from the last snapshot this connection sent.
+/// `Changed`: the channels that differ from the last picture this connection sent, and
+/// the patch if it is not the one of that picture.
 fn changed(
-    api: &Api,
     pictures: &mut watch::Receiver<Arc<Picture>>,
     subscription: &mut Option<Arc<Picture>>,
 ) -> Option<String> {
@@ -247,10 +281,13 @@ fn changed(
     let now = Arc::clone(&pictures.borrow_and_update());
     let channels: Vec<ChannelLevel> =
         changes(last.snapshot.universes(), now.snapshot.universes()).collect();
+    let fixtures: Option<Vec<Patched>> =
+        (!Arc::ptr_eq(&last.patch, &now.patch)).then(|| now.patch.fixtures());
     let reply = json(&Reply::Changed {
         state: now.snapshot.state,
-        project: *api.project.borrow(),
+        project: now.project,
         library: now.library,
+        patch: fixtures.as_deref(),
         channels: &channels,
     });
     *last = now;

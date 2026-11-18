@@ -16,7 +16,8 @@
 //! ```
 
 use crate::{
-    Command, EngineCommand, MAX_OUTPUTS, OutputKind, OutputNumber, Rate, Refusal, Run, Universes,
+    Command, EngineCommand, MAX_OUTPUTS, OutputKind, OutputNumber, PatchCommand, Rate, Refusal,
+    Run, Universes,
 };
 use serde::Serialize;
 
@@ -50,6 +51,10 @@ pub enum ProjectOutput {
 
 /// What happens to the project: a client's command, or what came of an effect.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "a client's command has no heap: `Patch` carries its four names in place. Moved once per request, off the tick thread"
+)]
 pub enum ProjectEvent {
     Client(Command),
     /// The device of an `Open` effect is open and on its way to the tick thread.
@@ -70,9 +75,15 @@ pub enum ProjectEvent {
 /// What the front must do after an update, as data. `rate: None` is the kind's default,
 /// which only `outputs` knows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "a client's command has no heap: `Patch` carries its four names in place. Moved once per request, off the tick thread"
+)]
 pub enum ProjectEffect {
     /// Send this to the tick thread.
     Send(EngineCommand),
+    /// The patch checks this and says what follows (`crates/rig`).
+    Patch(PatchCommand),
     /// The output keeps its device: only its run and rate change.
     Keep {
         output: OutputNumber,
@@ -104,6 +115,7 @@ impl Project {
     /// not. On a refusal nothing changed.
     pub fn update(self, event: ProjectEvent) -> Result<(Self, Option<ProjectEffect>), Refusal> {
         let send = |command| Ok((self, Some(ProjectEffect::Send(command))));
+        let patch = |command| Ok((self, Some(ProjectEffect::Patch(command))));
         let universes = self.universes;
         match event {
             ProjectEvent::Client(command) => match command {
@@ -141,6 +153,36 @@ impl Project {
                     };
                     Ok((self.with(output, |_, opening| *opening = true), Some(open)))
                 }
+                Command::Patch {
+                    name,
+                    maker,
+                    model,
+                    mode,
+                    at,
+                } => patch(PatchCommand::Patch {
+                    name,
+                    maker,
+                    model,
+                    mode,
+                    at,
+                }),
+                Command::Move { fixture, at } => patch(PatchCommand::Move { fixture, at }),
+                Command::Unpatch { fixture } => patch(PatchCommand::Unpatch { fixture }),
+                Command::Rename { fixture, name } => patch(PatchCommand::Rename { fixture, name }),
+                Command::SetIntensity { target, intensity } => {
+                    patch(PatchCommand::SetIntensity { target, intensity })
+                }
+                Command::SetColour {
+                    target,
+                    red,
+                    green,
+                    blue,
+                } => patch(PatchCommand::SetColour {
+                    target,
+                    red,
+                    green,
+                    blue,
+                }),
                 Command::RemoveOutput { output } => {
                     self.idle(output)?;
                     let project = self.with(output, |slot, _| *slot = None);
@@ -202,7 +244,7 @@ impl Project {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Channel, ChannelNumbers, RunNumbers, kinds};
+    use crate::{Channel, ChannelNumbers, RunNumbers, Target, kinds};
 
     fn output(number: u8) -> OutputNumber {
         OutputNumber::try_from(number).unwrap()
@@ -244,7 +286,29 @@ mod tests {
         let remove = Client(Command::RemoveOutput { output: output(1) });
         // (events before, event, its effect or why not, output 1 after)
         type Done = Result<Option<ProjectEffect>, Refusal>;
-        let cases: [(Vec<ProjectEvent>, ProjectEvent, Done, Option<ProjectOutput>); 15] = [
+        let target = Target::Fixture { fixture: 3 };
+        let cases: [(Vec<ProjectEvent>, ProjectEvent, Done, Option<ProjectOutput>); 17] = [
+            // the patch checks what names a fixture or a light
+            (
+                vec![],
+                Client(Command::Unpatch { fixture: 3 }),
+                Ok(Some(ProjectEffect::Patch(PatchCommand::Unpatch {
+                    fixture: 3,
+                }))),
+                None,
+            ),
+            (
+                vec![],
+                Client(Command::SetIntensity {
+                    target,
+                    intensity: 9,
+                }),
+                Ok(Some(ProjectEffect::Patch(PatchCommand::SetIntensity {
+                    target,
+                    intensity: 9,
+                }))),
+                None,
+            ),
             (
                 vec![],
                 Client(Command::SetChannel {

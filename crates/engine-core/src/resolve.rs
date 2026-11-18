@@ -26,6 +26,9 @@ pub const MAX_LIGHTS: u16 = 16_384;
 pub struct Lights(u16);
 
 impl Lights {
+    /// [`MAX_LIGHTS`].
+    pub const MOST: Self = Self(MAX_LIGHTS);
+
     /// `None` outside 1 to [`MAX_LIGHTS`].
     pub const fn new(count: u16) -> Option<Self> {
         if count >= 1 && count <= MAX_LIGHTS {
@@ -56,6 +59,40 @@ impl LightNumber {
 
     pub const fn index(self) -> u16 {
         self.0
+    }
+}
+
+/// Lights one after the other, from `first`: a fixture's, or one. Checked against
+/// [`Lights`] when made, so it never runs past the engine's last light.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LightRun {
+    first: u16,
+    count: u16,
+}
+
+impl LightRun {
+    /// `None` when it is empty or runs past `lights`.
+    pub fn new(first: LightNumber, count: u16, lights: Lights) -> Option<Self> {
+        let end = first.0.checked_add(count)?;
+        (count > 0 && end <= lights.0).then_some(Self {
+            first: first.0,
+            count,
+        })
+    }
+
+    pub const fn first(self) -> LightNumber {
+        LightNumber(self.first)
+    }
+
+    pub const fn count(self) -> u16 {
+        self.count
+    }
+
+    /// These lights of `lights`, the values by number. Fewer when `lights` is shorter.
+    pub fn of(self, lights: &mut [Light]) -> &mut [Light] {
+        let first = usize::from(self.first).min(lights.len());
+        let end = (first + usize::from(self.count)).min(lights.len());
+        lights.get_mut(first..end).unwrap_or_default()
     }
 }
 
@@ -199,6 +236,8 @@ fn times(a: u16, b: u16) -> u16 {
 /// `out` holds. A writer whose light is past `lights` writes nothing. Allocates nothing,
 /// cannot fail.
 pub fn resolve(lights: &[Light], writers: &[Writer], out: &mut [Levels]) {
+    // Fixtures may share a channel (the patch shows the clash). Which of them wins there
+    // is not decided yet: decision page question 48, then `mix` (#136).
     for writer in writers {
         match *writer {
             Writer::Fixed { at, value } => put(at, value, out),

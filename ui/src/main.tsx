@@ -20,6 +20,7 @@ function priorityText(priority: Priority | undefined): string {
 function refusalText(refusal: Refusal): string {
   if (typeof refusal === "string") return refusal;
   if ("NoSuchUniverse" in refusal) return `NoSuchUniverse: this engine has ${refusal.NoSuchUniverse.universes}`;
+  if ("PastTheEnd" in refusal) return `PastTheEnd: its ${refusal.PastTheEnd.channels} channels run past 512`;
   return `TooManyUniverses: this kind takes at most ${refusal.TooManyUniverses.most}`;
 }
 

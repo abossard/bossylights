@@ -565,8 +565,19 @@ async fn a_device_that_opens_slowly_stalls_no_other_client_and_the_project_shows
 
     release.send(()).unwrap();
     assert_eq!(answer(&mut slow).await, json!("Accepted"));
-    send(&mut other, &json!("Query")).await;
-    let outputs = answer(&mut other).await["Picture"]["project"]["outputs"].clone();
+    // The project is in each frame's picture: the next frame shows the kind.
     let kind = &add["Send"]["command"]["SetOutput"]["kind"];
-    assert_eq!(outputs[0], json!({"Kind": {"kind": kind}}));
+    let started = Instant::now();
+    loop {
+        send(&mut other, &json!("Query")).await;
+        let outputs = answer(&mut other).await["Picture"]["project"]["outputs"].clone();
+        if outputs[0] == json!({"Kind": {"kind": kind}}) {
+            break;
+        }
+        assert_eq!(outputs[0], json!(null), "only the kind comes after none");
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "no frame shows the kind"
+        );
+    }
 }

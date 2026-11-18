@@ -3,7 +3,7 @@
 
 export type Request = { "Send": { command: Command, } } | "Query" | "Subscribe" | "Stop" | { "Search": { text: string, } } | { "Fixture": { maker: string, model: string, } } | "Failures";
 
-export type Command = { "SetChannel": { channel: ChannelNumbers, value: number, } } | { "ReleaseChannel": { channel: ChannelNumbers, } } | "ReleaseAll" | { "Blackout": { on: boolean, } } | { "SetOutput": { output: OutputNumber, kind: OutputKind, universes: RunNumbers, rate: Rate | null, } } | { "RemoveOutput": { output: OutputNumber, } };
+export type Command = { "SetChannel": { channel: ChannelNumbers, value: number, } } | { "ReleaseChannel": { channel: ChannelNumbers, } } | "ReleaseAll" | { "Blackout": { on: boolean, } } | { "SetOutput": { output: OutputNumber, kind: OutputKind, universes: RunNumbers, rate: Rate | null, } } | { "RemoveOutput": { output: OutputNumber, } } | { "Patch": { name: string, maker: string, model: string, mode: string, at: ChannelNumbers, } } | { "Move": { fixture: number, at: ChannelNumbers, } } | { "Unpatch": { fixture: number, } } | { "Rename": { fixture: number, name: string, } } | { "SetIntensity": { target: Target, intensity: number, } } | { "SetColour": { target: Target, red: number, green: number, blue: number, } };
 
 export type ChannelNumbers = { universe: number, address: number, };
 
@@ -23,9 +23,17 @@ export type Color = "Rgb" | "Rgbw";
 
 export type Rate = "30" | "44" | "60";
 
-export type Reply = "Accepted" | "Stopping" | { "Refused": { reason: Refusal, } } | { "Picture": { state: State, project: Project, library: Library, universes: Array<Levels>, } } | { "Changed": { state: State, project: Project, library: Library, channels: Array<ChannelLevel>, } } | { "Found": { fixtures: Array<Match>, } } | { "Fixture": { maker: string, model: string, kind: FixtureKind, modes: Array<ModeChannels>, } } | { "Failures": { failures: Array<Failure>, } };
+export type Reply = "Accepted" | { "Patched": { fixture: number, } } | "Stopping" | { "Refused": { reason: Refusal, } } | { "Picture": { state: State, project: Project, library: Library, 
+/**
+ * Every patched fixture, by number.
+ */
+patch: Array<Patched>, universes: Array<Levels>, } } | { "Changed": { state: State, project: Project, library: Library, 
+/**
+ * The whole patch when it changed since the last message, else `None`.
+ */
+patch: Array<Patched> | null, channels: Array<ChannelLevel>, } } | { "Found": { fixtures: Array<Match>, } } | { "Fixture": { maker: string, model: string, kind: FixtureKind, modes: Array<ModeChannels>, } } | { "Failures": { failures: Array<Failure>, } };
 
-export type Refusal = "NotACommand" | { "NoSuchUniverse": { universes: number, } } | "NoSuchAddress" | "QueueFull" | "CannotOpen" | "NoSuchFixture" | "Opening" | { "TooManyUniverses": { most: number, } };
+export type Refusal = "NotACommand" | { "NoSuchUniverse": { universes: number, } } | "NoSuchAddress" | "QueueFull" | "CannotOpen" | "NoSuchFixture" | "Opening" | { "TooManyUniverses": { most: number, } } | "NoSuchMode" | { "PastTheEnd": { channels: number, } } | "NoLightsLeft" | "NotPatched" | "NoSuchLight";
 
 export type State = { 
 /**
@@ -92,5 +100,29 @@ export type Project = {
 outputs: Array<ProjectOutput | null>, };
 
 export type ProjectOutput = { "Kind": { kind: OutputKind, } } | "Attached";
+
+export type Target = { "Light": { light: number, } } | { "Fixture": { fixture: number, } };
+
+export type Patched = { 
+/**
+ * Its number, from 1. Kept while it is patched.
+ */
+fixture: number, name: string, maker: string, model: string, mode: string, 
+/**
+ * Its first channel.
+ */
+universe: number, address: number, 
+/**
+ * How many channels it takes from its address on.
+ */
+channels: number, 
+/**
+ * Its lights, numbered from `first` (counted from 1).
+ */
+first: number, lights: number, 
+/**
+ * The fixtures that share at least one of its channels. Allowed: the patch shows it.
+ */
+clashes: Array<number>, };
 
 export const API_VERSION = 2;

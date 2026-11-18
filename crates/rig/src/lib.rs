@@ -4,6 +4,7 @@
 //!
 //! ```text
 //! mode + address + first light --compile--> writers + how many lights | Unfit
+//! patch + command + library --Patch::update--> new patch + effects | Refusal
 //! ```
 //!
 //! A fixture is one or more lights. A mode without pixels is one light. A mode with N
@@ -34,6 +35,10 @@
 )]
 
 extern crate alloc;
+
+mod patch;
+
+pub use patch::{Patch, PatchEffect};
 
 use alloc::vec;
 use alloc::vec::Vec;
@@ -73,7 +78,7 @@ pub fn compile(
     lights: Lights,
 ) -> Result<Rigged, Unfit> {
     let places = places(mode.channels.len(), at, universes)?;
-    let needs = mode.pixels.len() + 1;
+    let needs = lights_of(mode);
     let numbers = (0..needs)
         .map(|offset| {
             u16::try_from(offset)
@@ -116,6 +121,11 @@ pub fn compile(
         writers: writers.into_iter().flatten().collect(),
         lights: u16::try_from(needs).unwrap_or(u16::MAX),
     })
+}
+
+/// How many lights `mode` makes: the fixture itself, and one per pixel.
+fn lights_of(mode: &Mode) -> usize {
+    mode.pixels.len() + 1
 }
 
 /// Adds `fine` to a writer that takes a light into one byte. False for any other.

@@ -7,8 +7,8 @@
 //!
 //! ```text
 //! Sender::send ---- command (+ device: opened, then attach) --> queue --> tick thread --> outputs
-//!                                                                       |
-//! free thread: retired devices freed here <------------ return queue ---+
+//!               (+ writers: the patch, compiled by the Rig)             |
+//! free thread: retired devices and writers freed here <-- return queue -+
 //!                                                                       |
 //! Engine::latest, fresh --- an empty box ---> queue --> tick thread       |
 //!                       <-- the box, filled -- queue <-- one wake's picture
@@ -34,17 +34,20 @@
 
 pub use engine_core::{
     ADDRESSES, API_VERSION, Adapter, BEAT, BestEffort, ChannelLevel, ChannelNumbers, Color,
-    Command, Counters, Levels, MAX_OUTPUTS, MAX_UNIVERSES, Outcome, Output, OutputKind,
-    OutputNumber, Priority, Project, ProjectOutput, Rate, Refusal, Reply, Request, Run, RunNumbers,
-    State, Status, Universes, changes,
+    Command, Counters, Levels, MAX_LIGHTS, MAX_OUTPUTS, MAX_UNIVERSES, Outcome, Output, OutputKind,
+    OutputNumber, Patched, Priority, Project, ProjectOutput, Rate, Refusal, Reply, Request, Run,
+    RunNumbers, State, Status, Target, Text, Universes, changes,
 };
 pub use engine_core::{
     EngineCommand, Histogram, LATENCY_BUCKETS, LATENESS_BUCKETS, bucket, due, frame, next_wake,
     percentile, sleep_before, update, wait,
 };
+pub use fixture_library::Fixture;
+pub use rig::Patch;
 mod snapshot;
 
-use engine_core::{ProjectEffect, ProjectEvent};
+use engine_core::{Lights, ProjectEffect, ProjectEvent, Writer};
+use rig::PatchEffect;
 
 pub use outputs::Device;
 use snapshot::{Hand, Reader};
@@ -59,8 +62,11 @@ use std::time::{Duration, Instant};
 
 /// Commands the engine takes in one wake. More are refused with [`Refusal::QueueFull`].
 pub const QUEUE: usize = 256;
-/// Devices on their way back from the tick thread. Each applied command retires at most
-/// one; the sender sends no more while this many are not freed yet: it cannot fill up.
+/// The lights of every engine: the buffer of light values has this length.
+const LIGHTS: Lights = Lights::MOST;
+/// Devices and writers on their way back from the tick thread. Each applied command
+/// retires at most one; the sender sends no more while this many are not freed yet: it
+/// cannot fill up.
 const RETIRED: usize = QUEUE + MAX_OUTPUTS;
 /// How often the free thread frees retired devices when nobody wakes it.
 const FREE_EVERY: Duration = Duration::from_millis(100);
@@ -85,6 +91,9 @@ pub struct Sender {
     open: Option<Open>,
     commands: rtrb::Producer<Sent>,
     project: Project,
+    /// The fixtures, their lights and writers. Shared with readers as it is: a change
+    /// makes a new one.
+    patch: Arc<Patch>,
     /// Devices this sender sent the tick thread away from, so far. The free thread
     /// counts the ones it freed in `Shared::freed`.
     retired: u64,
@@ -121,11 +130,40 @@ pub struct Opened {
     device: io::Result<Box<dyn Device>>,
 }
 
-/// A command, when it was sent, and the device it brings.
+/// A command, when it was sent, and what it brings.
 struct Sent {
     command: EngineCommand,
     at: Duration,
-    device: Option<Box<dyn Device>>,
+    brings: Brings,
+}
+
+/// What a command brings the tick thread, made before it is sent.
+enum Brings {
+    Nothing,
+    /// An opened device, for `Attach`.
+    Device(Box<dyn Device>),
+    /// The writers of the patch, for `Writers`.
+    Writers(Vec<Writer>),
+}
+
+/// What goes back from the tick thread, to be freed on the free thread.
+#[expect(
+    dead_code,
+    reason = "held only to be dropped on the free thread, never read"
+)]
+enum Retired {
+    Device(Box<dyn Device>),
+    Writers(Vec<Writer>),
+}
+
+/// What came of [`Sender::begin`].
+pub enum Begun {
+    /// Queued for the very next wake.
+    Queued,
+    /// Patched as `fixture`, its writers queued for the very next wake.
+    Patched { fixture: u16 },
+    /// A device must be opened first: [`Opening::open`], then [`Sender::finish`].
+    Opening(Opening),
 }
 
 /// Between the threads of the engine. Atomics only.
@@ -164,6 +202,7 @@ impl Engine {
             commands: incoming,
             retired: outgoing,
             devices: std::array::from_fn(|_| None),
+            writers: Vec::new(),
             // `run` puts in the priority, once the thread has it.
             now: Box::new(Snapshot::new(universes, Priority::RealTime)),
             hand,
@@ -176,6 +215,7 @@ impl Engine {
             open: Some(open),
             commands,
             project: Project::new(universes),
+            patch: Arc::new(Patch::new(universes, LIGHTS)),
             retired: 0,
             shared: Arc::clone(&shared),
             free: free.thread().clone(),
@@ -211,17 +251,19 @@ impl Engine {
 impl Sender {
     /// Queues a command for the very next wake, or says why not. Nothing changes on a
     /// refusal. `SetOutput` opens its device here and waits for it: a caller that must
-    /// not wait uses [`Sender::begin`], [`Opening::open`] and [`Sender::finish`].
+    /// not wait uses [`Sender::begin`], [`Opening::open`] and [`Sender::finish`]. With no
+    /// library: `Patch` is refused (`NoSuchFixture`), use [`Sender::begin`] for it.
     pub fn send(&mut self, command: Command) -> Result<(), Refusal> {
-        match self.begin(command)? {
-            None => Ok(()),
-            Some(opening) => self.finish(opening.open()),
+        match self.begin(command, &[])? {
+            Begun::Queued | Begun::Patched { .. } => Ok(()),
+            Begun::Opening(opening) => self.finish(opening.open()),
         }
     }
 
-    /// Checks `command` against the project and sends what follows. `Some` when a device
-    /// must be opened first: until [`Sender::finish`] the output is `Opening`.
-    pub fn begin(&mut self, command: Command) -> Result<Option<Opening>, Refusal> {
+    /// Checks `command` against the project and sends what follows. `library` is where
+    /// `Patch` looks up its fixture. [`Begun::Opening`] when a device must be opened
+    /// first: until [`Sender::finish`] the output is `Opening`.
+    pub fn begin(&mut self, command: Command, library: &[Fixture]) -> Result<Begun, Refusal> {
         let (project, effect) = self.project.update(ProjectEvent::Client(command))?;
         if let Some(
             ProjectEffect::Keep {
@@ -234,11 +276,19 @@ impl Sender {
         {
             outputs::limits(kind).check(universes)?;
         }
-        let opening = match effect {
-            None => None,
+        let begun = match effect {
+            None => Begun::Queued,
             Some(ProjectEffect::Send(command)) => {
-                self.push(command, None)?;
-                None
+                self.push(command, Brings::Nothing)?;
+                Begun::Queued
+            }
+            Some(ProjectEffect::Patch(command)) => {
+                let (patch, effects) = self.patch.update(command, library)?;
+                let begun = self.follow(effects)?;
+                if let Some(patch) = patch {
+                    self.patch = Arc::new(patch);
+                }
+                begun
             }
             Some(ProjectEffect::Keep {
                 output,
@@ -252,15 +302,15 @@ impl Sender {
                     universes,
                     rate,
                 };
-                self.push(attach, None)?;
-                None
+                self.push(attach, Brings::Nothing)?;
+                Begun::Queued
             }
             Some(ProjectEffect::Open {
                 output,
                 kind,
                 universes,
                 rate,
-            }) => Some(Opening {
+            }) => Begun::Opening(Opening {
                 output,
                 kind,
                 universes,
@@ -272,7 +322,30 @@ impl Sender {
             }),
         };
         self.project = project;
-        Ok(opening)
+        Ok(begun)
+    }
+
+    /// Does what follows a change of the patch: all of it, or none of it.
+    fn follow(&mut self, effects: Vec<PatchEffect>) -> Result<Begun, Refusal> {
+        // Every effect sends at most one command, which retires at most one box.
+        if self.commands.slots() < effects.len()
+            || on_their_way(&self.shared, self.retired) + effects.len() as u64 > RETIRED as u64
+        {
+            self.free.unpark();
+            return Err(Refusal::QueueFull);
+        }
+        let mut begun = Begun::Queued;
+        for effect in effects {
+            match effect {
+                PatchEffect::Patched { fixture } => begun = Begun::Patched { fixture },
+                PatchEffect::Writers(writers) => {
+                    self.push(EngineCommand::Writers, Brings::Writers(writers))?;
+                    self.free.unpark(); // the old writers are on their way back
+                }
+                PatchEffect::Send(command) => self.push(command, Brings::Nothing)?,
+            }
+        }
+        Ok(begun)
     }
 
     /// Puts the device of `opened` on the tick thread, or says why not.
@@ -293,7 +366,7 @@ impl Sender {
         };
         let sent = device
             .map_err(|_| Refusal::CannotOpen)
-            .and_then(|device| self.push(attach, Some(device)));
+            .and_then(|device| self.push(attach, Brings::Device(device)));
         let event = match sent {
             Ok(()) => ProjectEvent::Opened { output, kind },
             Err(_) => ProjectEvent::OpenFailed { output },
@@ -320,7 +393,7 @@ impl Sender {
             universes,
             rate,
         };
-        self.push(command, Some(device))?;
+        self.push(command, Brings::Device(device))?;
         self.project = project;
         Ok(())
     }
@@ -330,38 +403,46 @@ impl Sender {
         self.project
     }
 
-    /// Queues `command` with the `device` it brings. A device `Attach` brings and
-    /// `RemoveOutput` send the old one back; `Attach` with no device keeps it.
-    fn push(
-        &mut self,
-        command: EngineCommand,
-        device: Option<Box<dyn Device>>,
-    ) -> Result<(), Refusal> {
+    /// The patch as it is now.
+    pub fn patch(&self) -> Arc<Patch> {
+        Arc::clone(&self.patch)
+    }
+
+    /// Queues `command` with what it `brings`. A device `Attach` brings and
+    /// `RemoveOutput` send the old one back; `Attach` with no device keeps it. `Writers`
+    /// send the old writers back.
+    fn push(&mut self, command: EngineCommand, brings: Brings) -> Result<(), Refusal> {
         // The output this command changes, and whether the device there goes back.
         let (changes, sends_back) = match command {
-            EngineCommand::Attach { output, .. } => (Some(output), device.is_some()),
+            EngineCommand::Attach { output, .. } => {
+                (Some(output), matches!(brings, Brings::Device(_)))
+            }
             EngineCommand::RemoveOutput { output } => (Some(output), true),
             EngineCommand::Tick { .. }
             | EngineCommand::Handed { .. }
             | EngineCommand::SetChannel { .. }
             | EngineCommand::ReleaseChannel { .. }
             | EngineCommand::ReleaseAll
-            | EngineCommand::Blackout { .. } => (None, false),
+            | EngineCommand::Blackout { .. }
+            | EngineCommand::Writers
+            | EngineCommand::SetIntensity { .. }
+            | EngineCommand::SetColour { .. }
+            | EngineCommand::Darken { .. } => (None, false),
         };
-        let retires =
-            sends_back && changes.is_some_and(|output| self.project.output(output).is_some());
+        let retires = matches!(command, EngineCommand::Writers)
+            || sends_back && changes.is_some_and(|output| self.project.output(output).is_some());
         if retires && on_their_way(&self.shared, self.retired) >= RETIRED as u64 {
             self.free.unpark();
-            free_elsewhere(device);
+            free_elsewhere(brings);
             return Err(Refusal::QueueFull);
         }
         let at = self.start.elapsed();
         if let Err(rtrb::PushError::Full(refused)) = self.commands.push(Sent {
             command,
             at,
-            device,
+            brings,
         }) {
-            free_elsewhere(refused.device);
+            free_elsewhere(refused.brings);
             return Err(Refusal::QueueFull);
         }
         if retires {
@@ -373,9 +454,9 @@ impl Sender {
 
 /// Frees a device the tick thread did not take on a thread of its own: closing a port can
 /// take long, and the sender may be shared behind a lock. Without a thread from the
-/// system, it is freed here after all.
-fn free_elsewhere(device: Option<Box<dyn Device>>) {
-    if let Some(device) = device {
+/// system, it is freed here after all. Writers are freed here.
+fn free_elsewhere(brings: Brings) {
+    if let Brings::Device(device) = brings {
         drop(
             thread::Builder::new()
                 .name("free a refused device".into())
@@ -414,9 +495,9 @@ fn on_their_way(shared: &Shared, retired: u64) -> u64 {
     retired.saturating_sub(shared.freed.load(Ordering::Acquire))
 }
 
-/// The free thread: frees the devices the tick thread retired, closing their ports and
-/// sockets, on a steady beat or when the sender wakes it. Until the engine stops.
-fn free(mut retired: rtrb::Consumer<Box<dyn Device>>, shared: &Shared) {
+/// The free thread: frees the devices and writers the tick thread retired, closing ports
+/// and sockets, on a steady beat or when the sender wakes it. Until the engine stops.
+fn free(mut retired: rtrb::Consumer<Retired>, shared: &Shared) {
     loop {
         while let Ok(device) = retired.pop() {
             drop(device);
@@ -446,9 +527,11 @@ impl Drop for Engine {
 struct Ticker {
     shared: Arc<Shared>,
     commands: rtrb::Consumer<Sent>,
-    retired: rtrb::Producer<Box<dyn Device>>,
+    retired: rtrb::Producer<Retired>,
     /// By output number, beside `State::outputs`.
     devices: [Option<Box<dyn Device>>; MAX_OUTPUTS],
+    /// The patch's writers: lights to bytes, every frame.
+    writers: Vec<Writer>,
     /// The state, the held levels and what was counted: what readers get a copy of.
     now: Box<Snapshot>,
     hand: Hand,
@@ -543,12 +626,19 @@ impl Ticker {
                     break;
                 };
                 self.apply(sent.command);
-                self.swap(sent.command, sent.device);
+                self.swap(sent.command, sent.brings);
                 self.carried.applied(sent.at);
                 applied += 1;
             }
 
-            frame(&self.now.state, self.now.universes(), now, &mut self.out);
+            frame(
+                &self.now.state,
+                self.now.universes(),
+                self.now.lights(),
+                &self.writers,
+                now,
+                &mut self.out,
+            );
             let mut serve = [None; MAX_OUTPUTS];
             for (slot, number) in serve.iter_mut().zip(due(&self.now.state, now)) {
                 *slot = Some(number);
@@ -566,10 +656,22 @@ impl Ticker {
         self
     }
 
-    /// For `Attach` and `RemoveOutput`: puts `device` at the output, sends the old one
-    /// back to be freed and starts the output's lateness afresh. `Attach` without a
-    /// device keeps the one there. Others change nothing.
-    fn swap(&mut self, command: EngineCommand, device: Option<Box<dyn Device>>) {
+    /// For `Attach` and `RemoveOutput`: puts the device brought at the output, sends the
+    /// old one back to be freed and starts the output's lateness afresh. `Attach` without
+    /// a device keeps the one there. For `Writers`: the writers brought take the place of
+    /// the old ones, which go back. Others change nothing.
+    fn swap(&mut self, command: EngineCommand, brings: Brings) {
+        let (device, writers) = match brings {
+            Brings::Nothing => (None, None),
+            Brings::Device(device) => (Some(device), None),
+            Brings::Writers(writers) => (None, Some(writers)),
+        };
+        if let (EngineCommand::Writers, Some(writers)) = (command, writers) {
+            let old = std::mem::replace(&mut self.writers, writers);
+            // The queue has room for every box a wake can retire (see `start`).
+            let _ = self.retired.push(Retired::Writers(old));
+            return;
+        }
         let (EngineCommand::Attach { output, .. } | EngineCommand::RemoveOutput { output }) =
             command
         else {
@@ -589,7 +691,7 @@ impl Ticker {
         };
         if let Some(old) = old {
             // The queue has room for every device a wake can retire (see `start`).
-            let _ = self.retired.push(old);
+            let _ = self.retired.push(Retired::Device(old));
         }
         self.now.attached(output.slot());
     }

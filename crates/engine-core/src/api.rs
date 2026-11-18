@@ -3,9 +3,9 @@
 //!
 //! | Client sends | Engine answers |
 //! |---|---|
-//! | `{"Send": {"command": ...}}` | `"Accepted"`, or `{"Refused": {"reason": ...}}` |
-//! | `"Query"` | `{"Picture": ...}`: the state, the project and every level |
-//! | `"Subscribe"` | `{"Picture": ...}`, then `{"Changed": ...}` for each new frame |
+//! | `{"Send": {"command": ...}}` | `"Accepted"`, `{"Patched": {"fixture": ...}}` for `Patch`, or `{"Refused": {"reason": ...}}` |
+//! | `"Query"` | `{"Picture": ...}`: the state, the project, the patch and every level |
+//! | `"Subscribe"` | `{"Picture": ...}`, then `{"Changed": ...}` for each new frame, with the patch when it changed |
 //! | `"Stop"` | `"Stopping"`, then every connection closes and the engine process ends |
 //! | `{"Search": {"text": ...}}` | `{"Found": ...}`: the best matches of the fixture library |
 //! | `{"Fixture": {"maker": ..., "model": ...}}` | `{"Fixture": ...}`: its modes and channels, or `NoSuchFixture` |
@@ -13,7 +13,7 @@
 //! | anything else | `{"Refused": {"reason": "NotACommand"}}` |
 
 use crate::library::{Failure, FixtureKind, Library, Match, ModeChannels, Text};
-use crate::{ChannelLevel, Command, Levels, Project, State};
+use crate::{ChannelLevel, Command, Levels, Patched, Project, State};
 use serde::{Deserialize, Serialize};
 
 /// The version of this API. `GET /version` answers it as text. A client that speaks
@@ -26,6 +26,10 @@ pub const API_VERSION: u16 = 2;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(test, derive(ts_rs::TS))]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "a client's command has no heap: `Patch` carries its four names in place. Moved once per request, off the tick thread"
+)]
 pub enum Request {
     /// Change the state. Answered at once, before the frame that carries it.
     Send { command: Command },
@@ -57,6 +61,8 @@ pub enum Request {
 pub enum Reply<'a> {
     /// The command is queued for the very next frame.
     Accepted,
+    /// The fixture is patched as `fixture`; its writers are queued for the very next frame.
+    Patched { fixture: u16 },
     /// The engine stops: every connection closes, then the process ends.
     Stopping,
     /// The command was not taken. Nothing changed.
@@ -66,6 +72,8 @@ pub enum Reply<'a> {
         state: State,
         project: Project,
         library: Library,
+        /// Every patched fixture, by number.
+        patch: &'a [Patched<'a>],
         universes: &'a [Levels],
     },
     /// A new frame: the state, and the channels whose held level changed since the last
@@ -74,6 +82,8 @@ pub enum Reply<'a> {
         state: State,
         project: Project,
         library: Library,
+        /// The whole patch when it changed since the last message, else `None`.
+        patch: Option<&'a [Patched<'a>]>,
         channels: &'a [ChannelLevel],
     },
     /// The answer to `Search`: at most [`MATCHES`], best first. Empty while the library
@@ -113,4 +123,14 @@ pub enum Refusal {
     Opening,
     /// This kind of output takes at most `most` universes.
     TooManyUniverses { most: u16 },
+    /// The fixture has no mode of that name.
+    NoSuchMode,
+    /// The mode's `channels` run past address 512 from there.
+    PastTheEnd { channels: u16 },
+    /// The fixture's lights do not fit in the lights the engine has left.
+    NoLightsLeft,
+    /// No fixture is patched with that number.
+    NotPatched,
+    /// No patched fixture has that light.
+    NoSuchLight,
 }

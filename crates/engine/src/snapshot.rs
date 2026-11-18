@@ -12,10 +12,10 @@
 //! for, it sends no picture.
 
 use crate::{
-    EngineCommand, Histogram, LATENCY_BUCKETS, LATENESS_BUCKETS, Levels, MAX_OUTPUTS,
+    EngineCommand, Histogram, LATENCY_BUCKETS, LATENESS_BUCKETS, Levels, MAX_LIGHTS, MAX_OUTPUTS,
     MAX_UNIVERSES, OutputNumber, Priority, State, Universes, bucket, percentile, update,
 };
-use engine_core::Effect;
+use engine_core::{Effect, Light};
 use std::thread;
 use std::time::Duration;
 
@@ -32,6 +32,8 @@ pub struct Snapshot {
     universes: Universes,
     /// The held levels. Past the engine's universes they stay zero.
     held: [Levels; MAX_UNIVERSES as usize],
+    /// The held values per light, by light number.
+    lights: [Light; MAX_LIGHTS as usize],
     /// How late each output's frames were handed over, since it was attached.
     lateness: [Times<LATENESS_BUCKETS>; MAX_OUTPUTS],
     /// The time from a send to the frame that carries it, per output that carries it.
@@ -52,6 +54,7 @@ impl Snapshot {
             state: State::new(priority),
             universes,
             held: [Levels::ZERO; MAX_UNIVERSES as usize],
+            lights: [Light::DARK; MAX_LIGHTS as usize],
             lateness: [Times::ZERO; MAX_OUTPUTS],
             latency: Times::ZERO,
         }
@@ -62,6 +65,11 @@ impl Snapshot {
         self.held
             .get(..usize::from(self.universes.count()))
             .unwrap_or_default()
+    }
+
+    /// The held values per light, by light number.
+    pub fn lights(&self) -> &[Light] {
+        &self.lights
     }
 
     /// How late this output's frames were handed over. `None` before its first.
@@ -80,11 +88,11 @@ impl Snapshot {
         self.latency.percentile(95)
     }
 
-    /// The only change to the state and the held levels: through `engine_core::update`.
+    /// The only change to the state, the held levels and the held values per light: through `engine_core::update`.
     pub(crate) fn update(&mut self, command: EngineCommand) -> Option<Effect> {
         let count = usize::from(self.universes.count());
         let held = self.held.get_mut(..count).unwrap_or_default();
-        let (state, effect) = update(self.state, held, command);
+        let (state, effect) = update(self.state, held, &mut self.lights, command);
         self.state = state;
         effect
     }

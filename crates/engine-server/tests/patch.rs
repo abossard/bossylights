@@ -1,0 +1,297 @@
+//! End to end over the API: patch the Generic RGB PAR at universe 1, address 37, make it
+//! red: 255 0 0 arrive at 37 to 39 on the DDP socket and on a fake DMX USB Pro (a pseudo
+//! terminal). Unpatch it: 0 0 0.
+
+use engine::{Adapter, Device, Engine, Open, OutputKind, Universes};
+use futures_util::{SinkExt, StreamExt};
+use outputs::dmx_usb_pro::{DmxUsbPro, Find, MESSAGE, never_wait};
+use serde_json::{Value, json};
+use serialport::{SerialPort, TTYPort};
+use std::io::Read;
+use std::net::SocketAddr;
+use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::{Duration, Instant};
+use tokio::net::{TcpStream, UdpSocket};
+use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
+
+type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
+
+/// The last full message the fake adapter got: its 512 channels.
+type Heard = Arc<Mutex<Option<[u8; 512]>>>;
+
+/// Reads the test's end of the fake port and keeps the channels of the last full message.
+fn listen(mut end: TTYPort, heard: Heard, stop: Arc<AtomicBool>) {
+    let mut bytes = Vec::new();
+    let mut chunk = [0; MESSAGE];
+    while !stop.load(Ordering::Relaxed) {
+        if let Ok(n) = end.read(&mut chunk) {
+            bytes.extend_from_slice(&chunk[..n]);
+        }
+        // a message: 0x7E, label 6, length 513, start code 0, 512 channels, 0xE7
+        while let Some(start) = bytes.iter().position(|b| *b == 0x7E) {
+            bytes.drain(..start);
+            if bytes.len() < MESSAGE {
+                break;
+            }
+            if bytes[..5] == [0x7E, 6, 0x01, 0x02, 0] && bytes[MESSAGE - 1] == 0xE7 {
+                *heard.lock().unwrap() = Some(bytes[5..5 + 512].try_into().unwrap());
+                bytes.drain(..MESSAGE);
+            } else {
+                bytes.drain(..1);
+            }
+        }
+    }
+}
+
+/// The engine's `open`: DDP as the engine opens it, adapter 1 a fake serial port whose
+/// other end `listen` reads.
+fn open(heard: Heard, stop: Arc<AtomicBool>) -> Open {
+    Box::new(move |kind| match kind {
+        OutputKind::DmxUsbPro {
+            adapter: Adapter::FIRST,
+        } => {
+            let (heard, stop) = (Arc::clone(&heard), Arc::clone(&stop));
+            let find: Find = Box::new(move || {
+                let (mut end, port) = TTYPort::pair()?;
+                never_wait(&port)?;
+                end.set_timeout(Duration::from_millis(20))?;
+                let (heard, stop) = (Arc::clone(&heard), Arc::clone(&stop));
+                thread::spawn(move || listen(end, heard, stop));
+                Ok(port)
+            });
+            Ok(Box::new(DmxUsbPro::open(find)?) as Box<dyn Device>)
+        }
+        OutputKind::Ddp { .. } | OutputKind::DmxUsbPro { .. } => outputs::open(kind),
+    })
+}
+
+async fn send(socket: &mut Socket, request: &Value) {
+    socket
+        .send(Message::text(request.to_string()))
+        .await
+        .unwrap();
+}
+
+/// The next message that is not a `Changed`.
+async fn answer(socket: &mut Socket) -> Value {
+    loop {
+        let message = tokio::time::timeout(Duration::from_secs(5), socket.next())
+            .await
+            .expect("a message within 5 s")
+            .unwrap()
+            .unwrap();
+        let reply: Value = serde_json::from_str(message.to_text().unwrap()).unwrap();
+        if reply.get("Changed").is_none() {
+            return reply;
+        }
+    }
+}
+
+async fn command(socket: &mut Socket, command: Value) -> Value {
+    send(socket, &json!({"Send": {"command": command}})).await;
+    answer(socket).await
+}
+
+/// Waits until channels 37 to 39 of universe 1 are `bytes` on the DDP socket and on the
+/// fake adapter. Frames computed while a command travelled may still lack it.
+async fn until_both(udp: &UdpSocket, heard: &Heard, bytes: [u8; 3]) {
+    let started = Instant::now();
+    let mut packet = vec![0; 1500];
+    let mut ddp = None;
+    loop {
+        if let Ok(Ok(size)) =
+            tokio::time::timeout(Duration::from_millis(100), udp.recv(&mut packet)).await
+        {
+            ddp = Some(packet[10 + 36..10 + 39].to_vec()).filter(|_| size >= 10 + 39);
+        }
+        let dmx = heard.lock().unwrap().map(|c| c[36..39].to_vec());
+        if ddp.as_deref() == Some(&bytes[..]) && dmx.as_deref() == Some(&bytes[..]) {
+            return;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "37 to 39: DDP {ddp:?}, DMX {dmx:?}, wanted {bytes:?}"
+        );
+    }
+}
+
+/// A served engine with the test definitions, its devices opened by `open`.
+async fn serve(open: Open) -> SocketAddr {
+    let (engine, sender) = Engine::start_with(Universes::new(2).unwrap(), open).unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let definitions =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../fixture-library/tests/definitions");
+    tokio::spawn(engine_server::serve(
+        listener,
+        engine,
+        sender,
+        Some(definitions),
+    ));
+    address
+}
+
+async fn connect(address: SocketAddr) -> Socket {
+    let (socket, _) = tokio_tungstenite::connect_async(format!("ws://{address}/api"))
+        .await
+        .unwrap();
+    socket
+}
+
+fn par(name: &str, address: u16) -> Value {
+    json!({"Patch": {
+        "name": name, "maker": "Generic", "model": "Generic RGB", "mode": "RGB",
+        "at": {"universe": 1, "address": address},
+    }})
+}
+
+/// Patches `par`, again until the library is read. The reply.
+async fn patch_once_read(socket: &mut Socket, par: &Value) -> Value {
+    let started = Instant::now();
+    loop {
+        let reply = command(socket, par.clone()).await;
+        if reply != json!({"Refused": {"reason": "NoSuchFixture"}}) {
+            return reply;
+        }
+        assert!(started.elapsed() < Duration::from_secs(10), "no library");
+        tokio::task::yield_now().await;
+    }
+}
+
+/// Asks until the picture shows `patch`: a picture is of a frame, and the frame after a
+/// command may not be taken yet.
+async fn until_patch(socket: &mut Socket, patch: &Value) {
+    let started = Instant::now();
+    loop {
+        send(socket, &json!("Query")).await;
+        let seen = answer(socket).await["Picture"]["patch"].clone();
+        if seen == *patch {
+            return;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "the patch: {seen}, wanted {patch}"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_patched_par_made_red_sends_255_0_0_at_37_on_ddp_and_dmx_and_unpatched_0_0_0() {
+    let heard: Heard = Arc::new(Mutex::new(None));
+    let stop = Arc::new(AtomicBool::new(false));
+    let address = serve(open(Arc::clone(&heard), Arc::clone(&stop))).await;
+    let mut socket = connect(address).await;
+    let udp = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let ddp = json!({"Ddp": {"address": udp.local_addr().unwrap().to_string(), "color": "Rgb"}});
+    let dmx = json!({"DmxUsbPro": {"adapter": 1}});
+    for (output, kind) in [(1, ddp), (2, dmx)] {
+        let set = json!({"SetOutput": {
+            "output": output, "kind": kind, "universes": {"first": 1, "count": 1}, "rate": null,
+        }});
+        assert_eq!(command(&mut socket, set).await, json!("Accepted"));
+    }
+
+    // the library is read on a thread of its own: patch once it is there
+    assert_eq!(
+        patch_once_read(&mut socket, &par("PAR 3", 37)).await,
+        json!({"Patched": {"fixture": 1}})
+    );
+    let fixture = json!({"Fixture": {"fixture": 1}});
+    let full = json!({"SetIntensity": {"target": fixture, "intensity": 65535}});
+    let red = json!({"SetColour": {"target": fixture, "red": 65535, "green": 0, "blue": 0}});
+    assert_eq!(command(&mut socket, full).await, json!("Accepted"));
+    assert_eq!(command(&mut socket, red).await, json!("Accepted"));
+    until_both(&udp, &heard, [255, 0, 0]).await;
+
+    until_patch(
+        &mut socket,
+        &json!([{
+            "fixture": 1, "name": "PAR 3", "maker": "Generic", "model": "Generic RGB",
+            "mode": "RGB", "universe": 1, "address": 37, "channels": 3, "first": 1,
+            "lights": 1, "clashes": [],
+        }]),
+    )
+    .await;
+
+    let unpatch = json!({"Unpatch": {"fixture": 1}});
+    assert_eq!(command(&mut socket, unpatch).await, json!("Accepted"));
+    until_both(&udp, &heard, [0, 0, 0]).await;
+    until_patch(&mut socket, &json!([])).await;
+    stop.store(true, Ordering::Relaxed);
+}
+
+/// Every client sees one patch and one project per frame: a subscriber, which gets the patch
+/// only when it changed, and a client that patches and asks again and again see the same
+/// for the same frame.
+#[tokio::test(flavor = "multi_thread")]
+async fn every_client_sees_the_same_patch_and_project_in_the_same_frame() {
+    const FIXTURES: u16 = 20;
+    let open: Open = Box::new(outputs::open);
+    let address = serve(open).await;
+    let (mut subscriber, mut asker) = (connect(address).await, connect(address).await);
+    assert_eq!(
+        patch_once_read(&mut asker, &par("PAR 1", 1)).await,
+        json!({"Patched": {"fixture": 1}})
+    );
+    let subscribed = async {
+        send(&mut subscriber, &json!("Subscribe")).await;
+        // (frame, patch, project), the patch carried on from the last message that had it
+        let mut frames: Vec<(u64, Value, Value)> = Vec::new();
+        while frames
+            .iter()
+            .filter(|(_, p, _)| p.as_array().map(Vec::len) == Some(usize::from(FIXTURES)))
+            .count()
+            < 5
+        {
+            let message = tokio::time::timeout(Duration::from_secs(5), subscriber.next())
+                .await
+                .expect("a message within 5 s")
+                .unwrap()
+                .unwrap();
+            let reply: Value = serde_json::from_str(message.to_text().unwrap()).unwrap();
+            let picture = reply
+                .get("Picture")
+                .or_else(|| reply.get("Changed"))
+                .unwrap();
+            let patch = if picture["patch"].is_null() {
+                frames.last().unwrap().1.clone()
+            } else {
+                picture["patch"].clone()
+            };
+            let frame = picture["state"]["frame"].as_u64().unwrap();
+            frames.push((frame, patch, picture["project"].clone()));
+        }
+        frames
+    };
+    let asked = async {
+        let mut frames = Vec::new();
+        for n in 2..=FIXTURES {
+            let name = format!("PAR {n}");
+            assert_eq!(
+                command(&mut asker, par(&name, 3 * n)).await,
+                json!({"Patched": {"fixture": n}})
+            );
+            for _ in 0..10 {
+                send(&mut asker, &json!("Query")).await;
+                let picture = answer(&mut asker).await["Picture"].clone();
+                let frame = picture["state"]["frame"].as_u64().unwrap();
+                frames.push((frame, picture["patch"].clone(), picture["project"].clone()));
+            }
+        }
+        frames
+    };
+    let (subscribed, asked) = tokio::join!(subscribed, asked);
+    let mut same = 0;
+    for (frame, patch, project) in &asked {
+        if let Some((_, seen, seen_project)) = subscribed.iter().find(|(f, _, _)| f == frame) {
+            assert_eq!(patch, seen, "frame {frame}");
+            assert_eq!(project, seen_project, "frame {frame}");
+            same += 1;
+        }
+    }
+    assert!(same >= 10, "too few frames both saw: {same}");
+}
