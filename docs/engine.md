@@ -60,7 +60,7 @@ The list is `ORIGINS` in `crates/engine-server/src/lib.rs`. No pairing or token 
 | `ReleaseChannel` (universe, address) | lets it go back to zero |
 | `ReleaseAll` | lets every held channel go |
 | `Blackout` (on) | every channel goes out at zero while on; the held values stay |
-| `SetOutput` (output 1 to 16, kind, universes, rate) | adds or replaces an output. Kind `{"Ddp": {"address": "ip:port", "color": "Rgb" or "Rgbw"}}` or `{"DmxUsbPro": {"adapter": 1}}` (the first ENTTEC DMX USB Pro by USB identity, in the order of their USB serial numbers, when the output is set; from then on the output finds that same adapter by its serial, so a lost adapter never comes back as another). Universes `{"first": 1, "count": 3}`, sent as one stream of channels. Rate `"30"`, `"44"`, `"60"` or `null`: 60 for DDP, 44 for the DMX USB Pro |
+| `SetOutput` (output 1 to 16, kind, universes, rate) | adds or replaces an output. Kind `{"Ddp": {"address": "ip:port", "color": "Rgb" or "Rgbw"}}` or `{"DmxUsbPro": {"adapter": 1}}` (the first ENTTEC DMX USB Pro by USB identity, in the order of their USB serial numbers, when the output first finds one; an adapter not there yet is no error, the output is NotFound until it is plugged in; from then on the output finds that same adapter by its serial, so a lost adapter never comes back as another). Universes `{"first": 1, "count": 3}`, sent as one stream of channels. Rate `"30"`, `"44"`, `"60"` or `null`: 60 for DDP, 44 for the DMX USB Pro |
 | `RemoveOutput` (output) | removes it |
 
 ```json
@@ -80,14 +80,17 @@ The list is `ORIGINS` in `crates/engine-server/src/lib.rs`. No pairing or token 
 
 ```mermaid
 stateDiagram-v2
-  [*] --> Connecting: SetOutput
+  direction LR
+  [*] --> NotFound: SetOutput
+  NotFound --> Connecting: accepted, the device appeared
   Connecting --> Running: accepted
-  Running --> Reconnecting: failed
   Connecting --> Reconnecting: failed
+  Running --> Reconnecting: failed, the device is lost
   Reconnecting --> Running: accepted
   Reconnecting --> NotFound: 100 failures in a row
-  NotFound --> Connecting: accepted
 ```
+
+"Accepted" is the device's word: a DMX USB Pro accepts only once its adapter is found. DDP gets no answer from the device, so for it accepted, and Running, mean the frames were sent.
 
 Counters: `accepted`, `dropped` (the socket or the link was busy: the frame is dropped, never waited for), `failed`, `off_beat` (intervals more than 2 ms from the rate). With no output the engine still wakes 44 times a second and publishes its state.
 
@@ -99,6 +102,7 @@ The output thread never calls the serial driver: a vanishing device holds the dr
 sequenceDiagram
   participant O as output thread
   participant P as port thread (one per adapter)
+  Note over P: not there when the output is set: "lost" from the start, frames fail until found
   O->>P: the message (one-slot wait-free queue), wake
   P->>P: write it, then wait until the link is free
   Note over P: unplugged: write fails
@@ -113,7 +117,7 @@ sequenceDiagram
 
 | Who looks | How often | Cost |
 |---|---|---|
-| the port thread of each DMX USB Pro output | writes each message; while the port is lost, lists the USB serial ports every 500 ms | asleep between messages. One listing is an IOKit or sysfs query of a few ms, never on the output thread |
+| the port thread of each DMX USB Pro output | writes each message; while the adapter is not there yet or lost, lists the USB serial ports every 500 ms | asleep between messages. One listing is an IOKit or sysfs query of a few ms, never on the output thread |
 
 ## Checks with hands or hardware
 
