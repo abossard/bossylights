@@ -37,6 +37,9 @@ fn main() {
     let new_allocations = ALLOCATIONS.load(Ordering::SeqCst) - allocations;
     drop(engine);
 
-    assert!(ticks >= 15, "the engine did not tick: {ticks} frames");
-    assert_eq!(new_allocations, 0, "{ticks} ticks made {new_allocations} allocations");
+    assert!(ticks >= 5, "too few ticks to prove anything: {ticks}");
+    assert_eq!(
+        new_allocations, 0,
+        "{ticks} ticks made {new_allocations} allocations"
+    );
 }

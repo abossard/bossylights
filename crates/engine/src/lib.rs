@@ -42,11 +42,16 @@ impl Engine {
                 move || tick(&shared)
             })
             .expect("the OS refused to start the tick thread");
-        Self { shared, tick: Some(tick) }
+        Self {
+            shared,
+            tick: Some(tick),
+        }
     }
 
     pub fn query(&self) -> State {
-        State { frame: self.shared.frame.load(Ordering::Relaxed) }
+        State {
+            frame: self.shared.frame.load(Ordering::Relaxed),
+        }
     }
 }
 
@@ -69,11 +74,42 @@ fn tick(shared: &Shared) {
             thread::sleep(next - now);
         }
         shared.frame.fetch_add(1, Ordering::Relaxed);
-        next += period;
-        // Fell more than a frame behind (the machine slept): resync, never burst.
-        let now = Instant::now();
-        if now > next + period {
-            next = now + period;
+        next = next_frame(next, Instant::now(), period);
+    }
+}
+
+/// How many frames late the tick may fall before it gives up catching up.
+const MAX_BEHIND: u32 = 10;
+
+/// When the frame after `due` is due. A late frame is made up at once, so the rate
+/// holds when the OS oversleeps. Far behind (the machine slept), it starts over from now.
+fn next_frame(due: Instant, now: Instant, period: Duration) -> Instant {
+    let next = due + period;
+    if now > next + period * MAX_BEHIND {
+        now + period
+    } else {
+        next
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn next_frame_catches_up_when_late_and_resyncs_after_a_stall() {
+        let period = Duration::from_millis(10);
+        let due = Instant::now();
+        // (frames late, when the next frame is due)
+        let cases = [
+            (0, due + period),          // on time
+            (3, due + period),          // oversleep: make it up at once
+            (MAX_BEHIND, due + period), // still catching up
+            (20, due + period * 21),    // machine slept: start over from now
+        ];
+        for (late, expected) in cases {
+            let now = due + period * late;
+            assert_eq!(next_frame(due, now, period), expected, "{late} frames late");
         }
     }
 }
