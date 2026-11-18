@@ -48,6 +48,17 @@
   font-size: var(--text-md);
 }
 
+.rp-previous {
+  padding: 6px 8px;
+  border-left: var(--rule) solid var(--mute);
+  font-size: var(--text-sm);
+  line-height: 1.35;
+}
+
+.rp-previous b {
+  display: block;
+}
+
 .rp-h-row {
   display: flex;
   align-items: center;

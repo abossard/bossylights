@@ -17,6 +17,7 @@ export function exportData() {
         verdict: r.verdict,
         rating: r.rating,
         comment: r.comment,
+        review2Said: r.previous ?? null,
         regionNotes: Object.entries(r.regions)
           .filter(([, n]) => n.note.trim())
           .map(([region, n]) => ({ region, title: n.title, note: n.note })),
@@ -58,6 +59,7 @@ export function toMarkdown(): string {
     lines.push(`- Verdict: ${verdictLabel(s.verdict)}`);
     lines.push(`- Rating: ${s.rating ? `${s.rating}/5` : "none"}`);
     if (s.comment.trim()) lines.push(`- Comment: ${s.comment.trim().replace(/\n+/g, " ")}`);
+    if (s.review2Said) lines.push(`- Review 2 said: ${s.review2Said.replace(/\n+/g, " ")}`);
     if (s.regionNotes.length) {
       lines.push("- Region notes:");
       for (const n of s.regionNotes) lines.push(`  - ${n.title}: ${n.note.trim().replace(/\n+/g, " ")}`);

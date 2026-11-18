@@ -3,7 +3,7 @@
 
 export interface Question {
   id: string;
-  source: "Theory" | "Modules";
+  source: "Theory" | "Modules" | "Review 2";
   number: number;
   question: string;
   /** Option A, the author's lean. Empty for open questions. */
@@ -36,4 +36,7 @@ export const QUESTIONS: Question[] = [
   q("Modules", 3, "Where does controller mapping live?", "In Surface, next to the widgets", "In In/Out, like QLC+ profiles"),
   q("Modules", 4, "Music and Autopilot", "Two modules: knowing vs deciding", "One module"),
   q("Modules", 5, "Which module will be hardest to keep narrow?"),
+  q("Review 2", 1, "Songs: a new recording pass and the Recorded row", "It adds to what is there", "It replaces what is there"),
+  q("Review 2", 2, "Modules: a Controllers module of its own (devices, learn, mappings)", "Yes", "No, keep it in Surface"),
+  q("Review 2", 3, "Looks: autopilot rules as \"when, pick, fit\" inside a style", "Yes", "No, something else"),
 ];

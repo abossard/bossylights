@@ -1350,6 +1350,8 @@ function build() {
   function jumpTo(screen: string, jump: Jump) {
     set("jump", reconcile(jump));
     location.hash = `/${screen}`;
+    // a jump lands once: the screen has read it by now
+    setTimeout(() => set("jump", reconcile({})), 400);
   }
 
   function removeFromGroup(id: string, group: string) {

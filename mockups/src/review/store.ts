@@ -15,6 +15,8 @@ export interface ScreenReview {
   rating: number | null;
   comment: string;
   regions: Record<string, RegionNote>;
+  /** the comment from the review before the screen was rebuilt, kept to read */
+  previous?: string;
 }
 
 const KEY = "bossylights.review.v1";
@@ -27,10 +29,24 @@ export interface Answer {
 
 const empty = (): ScreenReview => ({ verdict: null, rating: null, comment: "", regions: {} });
 
+/** Screens rebuilt after review 2: they show as not reviewed again. What review 2 said stays readable. */
+const REBUILT = ["console", "songs", "looks"];
+const ROUND_KEY = "bossylights.review.round";
+
 function load(): Record<string, ScreenReview> {
   try {
     const raw = localStorage.getItem(KEY);
-    return raw ? (JSON.parse(raw) as Record<string, ScreenReview>) : {};
+    const all = raw ? (JSON.parse(raw) as Record<string, ScreenReview>) : {};
+    if (localStorage.getItem(ROUND_KEY) !== "3") {
+      for (const id of REBUILT) {
+        const r = all[id];
+        if (!r) continue;
+        const said = [r.verdict ? `Verdict: ${r.verdict}` : "", r.rating ? `${r.rating}/5` : "", r.comment.trim()].filter(Boolean).join(". ");
+        all[id] = { ...r, verdict: null, rating: null, comment: "", previous: said || r.previous };
+      }
+      localStorage.setItem(ROUND_KEY, "3");
+    }
+    return all;
   } catch {
     return {};
   }
