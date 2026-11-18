@@ -48,6 +48,14 @@ const sendToFrame = () => {
   }
 };
 
-const markdown = scorecard(crates, escapeHatches(everything), lateness(), sendToFrame());
+// CI judges what is sent, never how fast: on a runner the timing is left out.
+const measured = process.env.CI === undefined;
+const markdown = scorecard(
+  crates,
+  escapeHatches(everything),
+  measured ? lateness() : undefined,
+  measured ? sendToFrame() : undefined,
+  measured ? "not measured" : "not measured on CI",
+);
 console.log(markdown);
 if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, markdown);

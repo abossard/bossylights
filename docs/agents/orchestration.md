@@ -44,7 +44,8 @@ Why cheaper models are safe for the routine: the rules are held by the compiler,
 | Learned the hard way | Rule |
 |---|---|
 | A worker waited on a run that had already ended | check the process and its expected end, not only a notification |
-| A frame-rate assertion failed on a CI runner | CI judges what is sent, a real machine judges timing |
+| A frame-rate assertion failed on a CI runner | CI judges what is sent, a real machine judges timing. No test asserts a time under one second (`scripts/check-timing.mjs`) |
+| Waiting for CI slows every ticket | nobody waits for CI. Run locally what CI runs (`npm test`), push, move on. CI is a backstop, read later |
 | A serial link looked on time and was minutes behind | count what the device accepted |
 | A capture of a hidden window was blank | a hidden web view does not draw. Say what was not seen |
 | Sessions share one checkout | one writer at a time. Stage with explicit paths. Never stash another session's work |

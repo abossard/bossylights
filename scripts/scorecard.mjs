@@ -36,14 +36,14 @@ export function escapeHatches(source) {
  * The scorecard as Markdown.
  * crates: [{ name, kind, lines, publicItems }]. hatches: from escapeHatches.
  * lateness: { p99, worst } in µs, the worst of all outputs, and offBeat: intervals off by
- * more than 2 ms on all outputs. sendToFrame: p95 in µs. Each undefined when not measured.
+ * more than 2 ms on all outputs. sendToFrame: p95 in µs. Each undefined when not measured, shown as `missing`.
  */
-export function scorecard(crates, hatches, lateness, sendToFrame) {
+export function scorecard(crates, hatches, lateness, sendToFrame, missing = "not measured") {
   const total = crates.reduce((sum, c) => sum + c.lines, 0);
   const calculation = crates.filter((c) => CALCULATION_KINDS.includes(c.kind)).reduce((sum, c) => sum + c.lines, 0);
   const share = total === 0 ? 0 : Math.round((100 * calculation) / total);
-  const late = lateness === undefined ? "not measured" : `${lateness.p99} µs, worst ${lateness.worst} µs, ${lateness.offBeat} off by > 2 ms`;
-  const press = sendToFrame === undefined ? "not measured" : `${sendToFrame} µs`;
+  const late = lateness === undefined ? missing : `${lateness.p99} µs, worst ${lateness.worst} µs, ${lateness.offBeat} off by > 2 ms`;
+  const press = sendToFrame === undefined ? missing : `${sendToFrame} µs`;
   const perItem = (c) => (c.publicItems === 0 ? "-" : `${Math.round((10 * c.lines) / c.publicItems) / 10}`);
   return [
     "## Scorecard",

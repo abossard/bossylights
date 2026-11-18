@@ -153,6 +153,7 @@ Each of the five has a test or a documented check. A claim without one does not 
 
 - The test comes first when the behaviour is known.
 - A bug gets a failing test before it gets a fix.
+- No test asserts a rate, a latency or a duration under one second: CI judges what is sent, never how fast. Timing is measured by hand (`npm run scorecard`). `scripts/check-timing.mjs` enforces it.
 
 ## Before a push
 

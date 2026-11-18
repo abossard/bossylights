@@ -68,6 +68,9 @@ test("scorecard renders the numbers as tables", () => {
   assert.equal(scorecard(crates, hatches, { p99: 640, worst: 900, offBeat: 0 }, 21700), expected);
   assert.match(scorecard(crates, hatches, undefined, undefined), /Lateness per output in 60 s [^|]*\| not measured \|/);
   assert.match(scorecard(crates, hatches, undefined, undefined), /Send to frame in 10 s, p95 [^|]*\| not measured \|/);
+  const onCi = scorecard(crates, hatches, undefined, undefined, "not measured on CI");
+  assert.match(onCi, /Lateness per output in 60 s [^|]*\| not measured on CI \|/);
+  assert.match(onCi, /Send to frame in 10 s, p95 [^|]*\| not measured on CI \|/);
 });
 
 // [outcomes, score cell]
