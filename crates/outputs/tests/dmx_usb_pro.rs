@@ -7,7 +7,7 @@
     reason = "the test waits between frames; it is not the output thread"
 )]
 
-use outputs::dmx_usb_pro::{DmxUsbPro, Find, LINK_TIME, MESSAGE, never_wait};
+use outputs::dmx_usb_pro::{DmxUsbPro, Find, MESSAGE, never_wait};
 use outputs::{Device, Levels, Outcome};
 use serialport::{SerialPort, TTYPort};
 use std::io::Read;
@@ -38,6 +38,18 @@ fn read_message(end: &mut TTYPort) -> [u8; MESSAGE] {
     message
 }
 
+/// Takes the frame once the link is free: a busy link drops it, so try again until it is accepted.
+fn take_when_free(device: &mut DmxUsbPro, frame: &[Levels]) {
+    let started = Instant::now();
+    while device.take(frame) != Outcome::Accepted {
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "never accepted"
+        );
+        thread::sleep(Duration::from_millis(1)); // poll
+    }
+}
+
 #[test]
 fn every_frame_is_one_send_dmx_message() {
     let (find, mut ends) = fake();
@@ -54,8 +66,7 @@ fn every_frame_is_one_send_dmx_message() {
         (vec![Levels([200; 512]), Levels([1; 512])], 200, 200),
     ];
     for (frame, first, last) in cases {
-        thread::sleep(LINK_TIME); // the link is free again
-        assert_eq!(device.take(&frame), Outcome::Accepted);
+        take_when_free(&mut device, &frame);
         let message = read_message(&mut end);
         assert_eq!(
             message[..5],
@@ -72,15 +83,14 @@ fn an_unplugged_port_fails_until_the_port_thread_opens_a_new_one() {
     let (find, mut ends) = fake();
     let mut device = DmxUsbPro::open(find).unwrap();
     let frame = [Levels([42; 512])];
-    thread::sleep(LINK_TIME);
-    assert_eq!(device.take(&frame), Outcome::Accepted);
+    take_when_free(&mut device, &frame);
 
     drop(ends.pop().unwrap()); // unplugged
     let mut seen = vec![];
     let started = Instant::now();
     while seen.last() != Some(&Outcome::Accepted) || !seen.contains(&Outcome::Failed) {
         assert!(started.elapsed() < Duration::from_secs(10), "{seen:?}");
-        thread::sleep(Duration::from_millis(25));
+        thread::sleep(Duration::from_millis(25)); // poll
         let outcome = device.take(&frame);
         if seen.last() != Some(&outcome) {
             seen.push(outcome);

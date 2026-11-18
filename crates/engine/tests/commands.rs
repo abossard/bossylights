@@ -203,7 +203,7 @@ fn after_the_last_output_is_removed_a_command_still_lands_and_the_engine_stops()
             let started = Instant::now();
             while !done(&engine) {
                 assert!(started.elapsed() < guard, "{outputs:?}: {what}");
-                thread::sleep(Duration::from_millis(1));
+                thread::sleep(Duration::from_millis(1)); // poll
             }
         };
         let removed = |engine: &Engine| engine.query().outputs.iter().all(Option::is_none);

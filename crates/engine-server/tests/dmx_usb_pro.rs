@@ -38,7 +38,7 @@ fn reader(mut ends: rtrb::Consumer<TTYPort>, unplug: Arc<AtomicBool>, stop: Arc<
             Some(port) => {
                 let _ = port.read(&mut message);
             }
-            None => thread::sleep(Duration::from_millis(5)),
+            None => thread::sleep(Duration::from_millis(5)), // poll
         }
     }
 }
@@ -55,7 +55,7 @@ fn status_until(engine: &Engine, done: impl Fn(Status) -> bool) -> Status {
             started.elapsed() < Duration::from_secs(10),
             "stuck at {status:?}"
         );
-        thread::sleep(Duration::from_millis(10));
+        thread::sleep(Duration::from_millis(10)); // poll
     }
 }
 
@@ -234,6 +234,6 @@ fn a_removed_dmx_usb_pro_output_frees_its_port_without_another_command() {
             started.elapsed() < Duration::from_secs(1),
             "the port stays held"
         );
-        thread::sleep(Duration::from_millis(10));
+        thread::sleep(Duration::from_millis(10)); // poll
     }
 }

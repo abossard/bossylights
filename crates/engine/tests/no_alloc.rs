@@ -15,8 +15,6 @@ mod mock;
 use engine::{ChannelNumbers, Command, Engine, Rate, RunNumbers, Universes};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::thread;
-use std::time::Duration;
 
 struct Counting;
 
@@ -41,7 +39,13 @@ fn main() {
     let run = RunNumbers { first: 1, count: 1 };
     mock::attach(&mut sender, Universes::ONE, 1, run, Rate::Sixty);
     mock::attach(&mut sender, Universes::ONE, 2, run, Rate::Thirty);
-    thread::sleep(Duration::from_millis(100)); // thread start-up may allocate
+    // Thread start-up may allocate: wait until both outputs were served.
+    mock::wait_until("the outputs were never served", || {
+        let outputs = engine.query().outputs;
+        outputs[..2]
+            .iter()
+            .all(|o| o.is_some_and(|o| o.counters.accepted > 0))
+    });
 
     let allocations = ALLOCATIONS.load(Ordering::SeqCst);
     let frame = engine.query().frame;
@@ -52,7 +56,9 @@ fn main() {
         };
         let _ = sender.send(Command::SetChannel { channel, value });
         let _ = sender.send(Command::Blackout { on: value % 2 == 0 });
-        thread::sleep(Duration::from_millis(2));
+        // Pace the commands by the tick: wait until a frame went by.
+        let seen = engine.query().frame;
+        mock::wait_until("no frame went by", || engine.query().frame > seen);
     }
     let state = engine.query();
     let ticks = state.frame - frame;

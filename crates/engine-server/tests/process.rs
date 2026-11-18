@@ -55,7 +55,7 @@ fn exited(Running(engine): &mut Running) -> ExitStatus {
             return status;
         }
         assert!(Instant::now() < until, "the engine did not end within 10 s");
-        thread::sleep(Duration::from_millis(50));
+        thread::sleep(Duration::from_millis(50)); // poll
     }
 }
 

@@ -2,7 +2,7 @@
 // bound under one second would fail on a noisy runner. Hang guards of seconds are fine.
 
 /** Folders whose tests the check reads. */
-export const CHECKED = ["crates", "e2e"];
+export const CHECKED = ["crates", "e2e", "shell"];
 
 const SECOND_MS = 1000;
 const COMPARE = /[<>]=?|toBeLessThan|toBeGreaterThan/;
@@ -22,14 +22,59 @@ function boundMs(line) {
   return js ? Number(js[1].replaceAll("_", "")) : undefined;
 }
 
-/** Every line of a test file that compares an elapsed time with a bound under a second: "path:line: text". */
+const WAIT = /\bwaitForTimeout\(/;
+const SLEEP = /\bsleep\(\s*Duration::from_(millis|micros|nanos|secs_f64|secs_f32)\(\s*([\d._]+)/;
+const SLEEP_CONSTANT = /\bsleep\(\s*[A-Z][A-Z0-9_]*\s*\)/; // a named time: its size is not known here
+const POLL = /\/\/\s*poll\b/;
+
+/** True when the statement sleeps under a second, or waits for a fixed time, and is not marked `// poll`. */
+function fixedWait(statement) {
+  if (POLL.test(statement)) return false;
+  if (WAIT.test(statement) || SLEEP_CONSTANT.test(statement)) return true;
+  const sleep = statement.match(SLEEP);
+  if (!sleep) return false;
+  const n = Number(sleep[2].replaceAll("_", ""));
+  const unit = { millis: 1, micros: 1e-3, nanos: 1e-6, secs_f64: 1000, secs_f32: 1000 }[sleep[1]];
+  return n * unit < SECOND_MS;
+}
+
+/** The statements of a source with the line each starts on: lines are joined up to one that ends in `;`, `{`, or `}`. */
+function statements(source) {
+  const found = [];
+  let text = "";
+  let from = 0;
+  source.split("\n").forEach((line, at) => {
+    if (text === "") from = at + 1;
+    text += `${line}\n`;
+    if (/[;{}]\s*(?:\/\/.*)?$/.test(line)) {
+      found.push({ at: from, text });
+      text = "";
+    }
+  });
+  if (text.trim() !== "") found.push({ at: from, text });
+  return found;
+}
+
+/**
+ * Every statement of a test file that compares an elapsed time with a bound under a second,
+ * or sleeps or waits a fixed time under a second without the `// poll` mark: "path:line: text".
+ * A wait that polls a condition is marked `// poll` and is guarded by seconds.
+ */
 export function timingBounds(path, source) {
-  return source.split("\n").flatMap((line, at) => {
-    const bound = boundMs(line);
-    const hit = ELAPSED.test(line) && COMPARE.test(line) && bound !== undefined && bound < SECOND_MS;
-    return hit ? [`${path}:${at + 1}: ${line.trim()}`] : [];
+  return statements(source).flatMap(({ at, text }) => {
+    const bound = boundMs(text);
+    const compares = ELAPSED.test(text) && COMPARE.test(text) && bound !== undefined && bound < SECOND_MS;
+    const first = text.split("\n").find((line) => line.trim() !== "") ?? "";
+    return compares || fixedWait(text) ? [`${path}:${at + text.split("\n").findIndex((l) => l.trim() !== "")}: ${first.trim()}`] : [];
   });
 }
 
-// Test files: under a tests folder (crates) or e2e.
-export const isTestFile = (path) => /(^|\/)(tests|e2e)\/.+\.(rs|ts|mjs)$/.test(path);
+/** The test code of a file: all of a tests or e2e file, the `#[cfg(test)]` module of a source file. Earlier lines are blanked so line numbers stay. */
+export function testSource(path, source) {
+  if (/(^|\/)(tests|e2e)\//.test(path)) return source;
+  const at = source.search(/^#\[cfg\(test\)\]/m);
+  return at === -1 ? "" : source.slice(0, at).replace(/[^\n]/g, "") + source.slice(at);
+}
+
+// Files the check reads: Rust and TypeScript sources, whose test code is picked by testSource.
+export const isTestFile = (path) => /\.(rs|ts|mjs)$/.test(path);

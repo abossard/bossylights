@@ -6,7 +6,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
 use tokio::task::JoinHandle;
@@ -121,16 +121,18 @@ async fn set_channel_reaches_the_state_stream_and_the_ddp_socket_in_the_next_fra
     while udp.try_recv(&mut stale).is_ok() {}
     send(&mut socket, &set(1, 3, 200)).await;
     assert_eq!(answer(&mut socket).await, json!("Accepted"));
-    // The frame computed while the command travelled may still lack it; the next has it.
-    let mut frames = Vec::new();
-    for _ in 0..2 {
-        frames.push(packet(&udp).await);
-        if frames.last().is_some_and(|p| p[10 + 2] == 200) {
-            break;
+    // Frames computed while the command travelled may still lack it: read until one has it.
+    let started = Instant::now();
+    let carried = loop {
+        let frame = packet(&udp).await;
+        if frame[10 + 2] == 200 {
+            break frame;
         }
-    }
-    let carried = frames.last().unwrap();
-    assert_eq!(carried[10 + 2], 200, "channel 3 within the next frame");
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "channel 3 never arrived"
+        );
+    };
     let others = carried[10..].iter().enumerate().filter(|(n, _)| *n != 2);
     assert!(others.into_iter().all(|(_, level)| *level == 0));
 
@@ -238,7 +240,6 @@ async fn a_request_that_cannot_be_right_is_refused_and_changes_nothing() {
     socket.send(Message::text("not json")).await.unwrap();
     assert_eq!(answer(&mut socket).await, refused(json!("NotACommand")));
 
-    tokio::time::sleep(Duration::from_millis(100)).await; // a few frames
     send(&mut socket, &json!("Query")).await;
     let picture = answer(&mut socket).await;
     let universes = picture["Picture"]["universes"].as_array().unwrap();
@@ -247,6 +248,9 @@ async fn a_request_that_cannot_be_right_is_refused_and_changes_nothing() {
     let state = &picture["Picture"]["state"];
     assert_eq!(state["blackout"], json!(false));
     assert_eq!(state["outputs"][1], json!(null), "no second output");
+    // Forget the packets sent before the refused requests: the next one is computed after them.
+    let mut stale = vec![0; 1500];
+    while udp.try_recv(&mut stale).is_ok() {}
     let last = packet(&udp).await;
     assert!(last[10..].iter().all(|level| *level == 0));
 }

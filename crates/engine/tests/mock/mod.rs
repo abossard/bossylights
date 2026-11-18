@@ -35,8 +35,17 @@ impl Heard {
         let started = Instant::now();
         while self.frames() < before + 2 {
             assert!(started.elapsed() < Duration::from_secs(2), "no frames");
-            thread::sleep(Duration::from_millis(1));
+            thread::sleep(Duration::from_millis(1)); // poll
         }
+    }
+}
+
+/// Waits until `done` holds. A hang guard of seconds, never a rate or a duration.
+pub fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
+    let started = Instant::now();
+    while !done() {
+        assert!(started.elapsed() < Duration::from_secs(10), "{what}");
+        thread::sleep(Duration::from_millis(1)); // poll
     }
 }
 
