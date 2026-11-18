@@ -1,0 +1,17 @@
+[package]
+name = "dmx-timing"
+description = "Spike #23, throwaway: how steady are DMX frames at 44 Hz from macOS, per thread setup and per adapter."
+version = "0.0.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+libc = "0.2.191"
+
+[dev-dependencies]
+libc = "0.2.191"
+
+[[test]]
+name = "no_alloc"
+harness = false

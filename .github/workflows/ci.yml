@@ -31,3 +31,30 @@ jobs:
       - run: npm test
       - name: Scorecard (written into the run summary)
         run: npm run scorecard
+
+  # Spike #23, throwaway: the DMX timing loop with the mock sink. A job of its own,
+  # so it does not slow `test`. Numbers on a shared runner are only a smoke check.
+  dmx-timing-spike:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            priority: default
+          - os: macos-latest
+            priority: realtime
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: spikes/dmx-timing
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: spikes/dmx-timing
+      - run: cargo test --release
+      - name: 20 s mock run (written into the run summary)
+        run: |
+          cargo run -q --release -- --priority ${{ matrix.priority }} --wait spin --seconds 20 \
+            --label "ci ${{ matrix.os }} ${{ matrix.priority }} spin" | tee -a "$GITHUB_STEP_SUMMARY"

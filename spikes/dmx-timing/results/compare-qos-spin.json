@@ -1,0 +1,1 @@
+{"label":"compare qos spin","sink":"mock","os":"macos","priority":"Qos","prioritySet":"ok","wait":"Spin","seconds":120,"loadThreads":0,"frames":5280,"intervalMs":{"min":0.001,"mean":22.726,"p50":22.665,"p99":26.758,"max":44.024},"offBy2ms":2052,"lateMs":{"p99":4.204,"max":23.519},"resyncs":0,"sendErrors":0,"reconnects":0}

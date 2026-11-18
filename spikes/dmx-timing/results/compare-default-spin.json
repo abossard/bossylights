@@ -1,0 +1,1 @@
+{"label":"compare default spin","sink":"mock","os":"macos","priority":"Default","prioritySet":"ok","wait":"Spin","seconds":120,"loadThreads":0,"frames":5280,"intervalMs":{"min":0.002,"mean":22.726,"p50":22.638,"p99":28.471,"max":50.200},"offBy2ms":2053,"lateMs":{"p99":8.946,"max":30.357},"resyncs":0,"sendErrors":0,"reconnects":0}

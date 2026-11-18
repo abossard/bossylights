@@ -1,0 +1,1 @@
+{"label":"compare realtime sleep","sink":"mock","os":"macos","priority":"Realtime","prioritySet":"ok","wait":"Sleep","seconds":120,"loadThreads":0,"frames":5280,"intervalMs":{"min":22.684,"mean":22.727,"p50":22.727,"p99":22.737,"max":22.766},"offBy2ms":0,"lateMs":{"p99":0.024,"max":0.057},"resyncs":0,"sendErrors":0,"reconnects":0}

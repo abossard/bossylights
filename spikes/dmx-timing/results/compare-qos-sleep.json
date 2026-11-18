@@ -1,0 +1,1 @@
+{"label":"compare qos sleep","sink":"mock","os":"macos","priority":"Qos","prioritySet":"ok","wait":"Sleep","seconds":120,"loadThreads":0,"frames":5280,"intervalMs":{"min":0.001,"mean":22.727,"p50":22.626,"p99":27.504,"max":48.249},"offBy2ms":2055,"lateMs":{"p99":5.510,"max":27.531},"resyncs":0,"sendErrors":0,"reconnects":0}
