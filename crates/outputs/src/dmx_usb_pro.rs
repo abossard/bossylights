@@ -223,29 +223,60 @@ fn write_all(port: &TTYPort, message: &[u8], stop: &AtomicBool) -> Result<(), Er
     Ok(())
 }
 
-/// The finder for real adapters: the `adapter`th DMX USB Pro by USB identity, opened at
-/// [`BAUD`], 8 data bits, 2 stop bits, writes that never wait.
+/// The finder for real adapters: the `adapter`th DMX USB Pro by USB identity when it
+/// first runs (in [`DmxUsbPro::open`]), from then on that same adapter by its serial.
+/// Opened at [`BAUD`], 8 data bits, 2 stop bits, writes that never wait.
 pub fn find(adapter: u8) -> Find {
+    let mut wanted = None;
     Box::new(move || {
-        let ports = adapters()?;
-        let name = ports
-            .get(usize::from(adapter).wrapping_sub(1))
-            .ok_or_else(|| io::Error::new(ErrorKind::NotFound, "no such DMX USB Pro"))?;
-        open_port(name)
+        let listed = adapters()?;
+        let not_found = || io::Error::new(ErrorKind::NotFound, "no such DMX USB Pro");
+        let wanted = match &mut wanted {
+            Some(wanted) => wanted,
+            empty @ None => empty.insert(pick(&listed, adapter).ok_or_else(not_found)?),
+        };
+        open_port(port_of(&listed, wanted).ok_or_else(not_found)?)
     })
+}
+
+/// A DMX USB Pro as the system lists it now.
+#[derive(Clone)]
+struct Listed {
+    serial: String,
+    port: String,
+}
+
+/// The adapter an output drives: its USB serial, fixed when its finder first ran, so a
+/// lost adapter never comes back as another. Kept in memory only: never logged, printed
+/// or put in the state.
+struct Wanted(String);
+
+/// The `adapter`th in the list, counted from 1.
+fn pick(listed: &[Listed], adapter: u8) -> Option<Wanted> {
+    listed
+        .get(usize::from(adapter).wrapping_sub(1))
+        .map(|listed| Wanted(listed.serial.clone()))
+}
+
+/// The port of the wanted adapter in the list as it is now, wherever it is in it.
+fn port_of<'a>(listed: &'a [Listed], wanted: &Wanted) -> Option<&'a str> {
+    listed
+        .iter()
+        .find(|listed| listed.serial == wanted.0)
+        .map(|listed| listed.port.as_str())
 }
 
 /// The adapter number of the port with this name, as [`find`] counts.
 pub fn adapter_of(port: &str) -> io::Result<u8> {
     let at = adapters()?
         .iter()
-        .position(|name| name == port)
+        .position(|listed| listed.port == port)
         .ok_or_else(|| io::Error::new(ErrorKind::NotFound, "that port is no DMX USB Pro"))?;
     u8::try_from(at + 1).map_err(|_| io::Error::other("too many adapters"))
 }
 
-/// The port names of every DMX USB Pro, in the order of their USB serial numbers.
-fn adapters() -> io::Result<Vec<String>> {
+/// Every DMX USB Pro, in the order of their USB serial numbers.
+fn adapters() -> io::Result<Vec<Listed>> {
     let mut ports: Vec<(String, String)> = serialport::available_ports()?
         .into_iter()
         .filter_map(|port| match port.port_type {
@@ -264,7 +295,8 @@ fn adapters() -> io::Result<Vec<String>> {
         })
         .collect();
     ports.sort();
-    Ok(ports.into_iter().map(|(_, name)| name).collect())
+    let listed = |(serial, port)| Listed { serial, port };
+    Ok(ports.into_iter().map(listed).collect())
 }
 
 /// Opens a port for the adapter, exclusive, writes never wait.
@@ -291,6 +323,56 @@ pub fn never_wait(port: &TTYPort) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_lost_adapter_is_found_again_by_itself_never_by_its_place() {
+        let listed = |serial: &str, port: &str| Listed {
+            serial: serial.into(),
+            port: port.into(),
+        };
+        let (a, b) = (listed("A1", "port a"), listed("B2", "port b"));
+        let a_again = listed("A1", "port a, plugged in again");
+        // (listed when the output is set, its adapter, listed on a reconnect, port found)
+        let cases = [
+            (
+                vec![a.clone(), b.clone()],
+                1,
+                vec![a.clone(), b.clone()],
+                Some("port a"),
+            ),
+            (
+                vec![a.clone(), b.clone()],
+                2,
+                vec![a.clone(), b.clone()],
+                Some("port b"),
+            ),
+            (
+                vec![a.clone(), b.clone()],
+                2,
+                vec![b.clone()],
+                Some("port b"),
+            ), // now first
+            (
+                vec![b.clone()],
+                1,
+                vec![a.clone(), b.clone()],
+                Some("port b"),
+            ), // now second
+            (
+                vec![a.clone()],
+                1,
+                vec![a_again],
+                Some("port a, plugged in again"),
+            ),
+            (vec![a.clone(), b.clone()], 1, vec![], None), // gone
+            (vec![a.clone(), b.clone()], 1, vec![b.clone()], None), // gone, B in its place
+            (vec![a.clone()], 2, vec![a.clone(), b.clone()], None), // never there
+        ];
+        for (n, (at_set, adapter, now, port)) in cases.into_iter().enumerate() {
+            let found = pick(&at_set, adapter).and_then(|wanted| port_of(&now, &wanted));
+            assert_eq!(found, port, "case {n}");
+        }
+    }
 
     #[test]
     fn a_frame_becomes_one_send_dmx_message() {
