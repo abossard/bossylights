@@ -1,7 +1,9 @@
 //! What a range does, when the definition says so by preset, and the value of a shutter
 //! or strobe channel that lets light out.
 
-use fixture_library::{Channel, Does, Rgb, parse};
+use Direction::{Down, Up};
+use Pace::{Goes, Random, Unsaid};
+use fixture_library::{Channel, Direction, Does, Hertz, Pace, Rgb, Turn, parse};
 
 fn definition(channel: &str) -> Vec<u8> {
     format!(
@@ -29,26 +31,131 @@ const fn rgb(red: u8, green: u8, blue: u8) -> Rgb {
     Rgb { red, green, blue }
 }
 
+fn strobe(pace: Pace) -> Option<Does> {
+    Some(Does::Strobe(pace))
+}
+
+/// From and to, in millihertz.
+const fn hz(from: u32, to: u32) -> Pace {
+    Pace::Hertz(Hertz { from, to })
+}
+
+fn gobo(picture: Option<&str>, shakes: bool) -> Option<Does> {
+    Some(Does::Gobo {
+        picture: picture.map(str::to_string),
+        shakes,
+    })
+}
+
 // the capability element's attributes, what the range does
 #[test]
 fn a_range_does_what_its_preset_says() {
     let cases: Vec<(&str, Option<Does>)> = vec![
         (r#"Preset="ShutterOpen""#, Some(Does::Open)),
         (r#"Preset="ShutterClose""#, Some(Does::Closed)),
-        (r#"Preset="StrobeSlowToFast""#, Some(Does::Strobe)),
-        (r#"Preset="StrobeFastToSlow""#, Some(Does::Strobe)),
-        (r#"Preset="StrobeRandom""#, Some(Does::Strobe)),
-        (r#"Preset="StrobeRandomSlowToFast""#, Some(Does::Strobe)),
-        (r#"Preset="StrobeRandomFastToSlow""#, Some(Does::Strobe)),
-        (r#"Preset="StrobeFrequency" Res1="10""#, Some(Does::Strobe)),
+        (r#"Preset="StrobeSlowToFast""#, strobe(Goes(Up))),
+        (r#"Preset="StrobeFastToSlow""#, strobe(Goes(Down))),
+        (r#"Preset="StrobeRandom""#, strobe(Random)),
+        (r#"Preset="StrobeRandomSlowToFast""#, strobe(Random)),
+        (r#"Preset="StrobeRandomFastToSlow""#, strobe(Random)),
+        (
+            r#"Preset="StrobeFrequency" Res1="10""#,
+            strobe(hz(10_000, 10_000)),
+        ),
+        (
+            r#"Preset="StrobeFrequency" Res1="0.5""#,
+            strobe(hz(500, 500)),
+        ),
         (
             r#"Preset="StrobeFreqRange" Res1="1" Res2="20""#,
-            Some(Does::Strobe),
+            strobe(hz(1_000, 20_000)),
         ),
-        (r#"Preset="PulseSlowToFast""#, Some(Does::Strobe)),
-        (r#"Preset="PulseFreqRange""#, Some(Does::Strobe)),
-        (r#"Preset="RampUpSlowToFast""#, Some(Does::Strobe)),
-        (r#"Preset="RampDownFrequency""#, Some(Does::Strobe)),
+        (
+            r#"Preset="StrobeFreqRange" Res1="0" Res2="12.25""#,
+            strobe(hz(0, 12_250)),
+        ),
+        // a frequency that cannot be read is not said
+        (r#"Preset="StrobeFrequency""#, strobe(Unsaid)),
+        (r#"Preset="StrobeFrequency" Res1="fast""#, strobe(Unsaid)),
+        (r#"Preset="StrobeFreqRange" Res1="1""#, strobe(Unsaid)),
+        (r#"Preset="StrobeFrequency" Res1="-3""#, strobe(Unsaid)),
+        (r#"Preset="PulseSlowToFast""#, strobe(Goes(Up))),
+        (r#"Preset="PulseFastToSlow""#, strobe(Goes(Down))),
+        (
+            r#"Preset="PulseFrequency" Res1="2""#,
+            strobe(hz(2_000, 2_000)),
+        ),
+        (r#"Preset="PulseFreqRange""#, strobe(Unsaid)),
+        (r#"Preset="RampUpSlowToFast""#, strobe(Goes(Up))),
+        (r#"Preset="RampDownFastToSlow""#, strobe(Goes(Down))),
+        (
+            r#"Preset="RampUpFreqRange" Res1="1" Res2="4""#,
+            strobe(hz(1_000, 4_000)),
+        ),
+        (r#"Preset="RampDownFrequency""#, strobe(Unsaid)),
+        (r#"Preset="RotationStop""#, Some(Does::Rotation(Turn::Stop))),
+        (
+            r#"Preset="RotationIndexed""#,
+            Some(Does::Rotation(Turn::Indexed)),
+        ),
+        (
+            r#"Preset="RotationClockwise""#,
+            Some(Does::Rotation(Turn::Clockwise(Unsaid))),
+        ),
+        (
+            r#"Preset="RotationClockwiseSlowToFast""#,
+            Some(Does::Rotation(Turn::Clockwise(Goes(Up)))),
+        ),
+        (
+            r#"Preset="RotationClockwiseFastToSlow""#,
+            Some(Does::Rotation(Turn::Clockwise(Goes(Down)))),
+        ),
+        (
+            r#"Preset="RotationCounterClockwise""#,
+            Some(Does::Rotation(Turn::CounterClockwise(Unsaid))),
+        ),
+        (
+            r#"Preset="RotationCounterClockwiseSlowToFast""#,
+            Some(Does::Rotation(Turn::CounterClockwise(Goes(Up)))),
+        ),
+        (
+            r#"Preset="RotationCounterClockwiseFastToSlow""#,
+            Some(Does::Rotation(Turn::CounterClockwise(Goes(Down)))),
+        ),
+        (
+            r#"Preset="PrismEffectOn" Res1="6""#,
+            Some(Does::Prism { faces: Some(6) }),
+        ),
+        (
+            r#"Preset="PrismEffectOn""#,
+            Some(Does::Prism { faces: None }),
+        ),
+        (
+            r#"Preset="PrismEffectOn" Res1="many""#,
+            Some(Does::Prism { faces: None }),
+        ),
+        (r#"Preset="PrismEffectOff""#, Some(Does::PrismOff)),
+        (
+            r#"Preset="GoboMacro" Res1="Others/rainbow.png""#,
+            gobo(Some("Others/rainbow.png"), false),
+        ),
+        (r#"Preset="GoboMacro" Res1="""#, gobo(None, false)),
+        (
+            r#"Preset="GoboShakeMacro" Res1="SGM/gobo00145.svg""#,
+            gobo(Some("SGM/gobo00145.svg"), true),
+        ),
+        (r#"Preset="GoboShakeMacro""#, gobo(None, true)),
+        // the older way to name a gobo picture, without a preset
+        (
+            r#"Res="Others/gobo00016.svg""#,
+            gobo(Some("Others/gobo00016.svg"), false),
+        ),
+        (r#"Preset="SlowToFast""#, Some(Does::Runs(Up))),
+        (r#"Preset="NearToFar""#, Some(Does::Runs(Up))),
+        (r#"Preset="SmallToBig""#, Some(Does::Runs(Up))),
+        (r#"Preset="FastToSlow""#, Some(Does::Runs(Down))),
+        (r#"Preset="FarToNear""#, Some(Does::Runs(Down))),
+        (r#"Preset="BigToSmall""#, Some(Does::Runs(Down))),
         (
             r##"Preset="ColorMacro" Res1="#ff8000""##,
             Some(Does::Color(rgb(255, 128, 0))),
@@ -66,13 +173,15 @@ fn a_range_does_what_its_preset_says() {
         (r#"Preset="ColorMacro" Res1="red""#, None),
         (r##"Preset="ColorDoubleMacro" Res1="#ff0000""##, None),
         (r#"Preset="LampOn""#, Some(Does::LampOn)),
+        (r#"Preset="LampOff""#, Some(Does::LampOff)),
         (r#"Preset="ResetAll""#, Some(Does::Reset)),
         (r#"Preset="ResetPanTilt""#, Some(Does::Reset)),
         (r#"Preset="ResetIris""#, Some(Does::Reset)),
-        // what the Rig and the colour wheel slice do not use
-        (r#"Preset="LampOff""#, None),
-        (r#"Preset="GoboMacro" Res1="Others/rainbow.png""#, None),
-        (r#"Preset="RotationStop""#, None),
+        // left as the label only, on purpose
+        (r#"Preset="ColorWheelIndex""#, None),
+        (r#"Preset="GenericPicture" Res1="Others/fx.png""#, None),
+        (r#"Preset="SilentModeOn""#, None),
+        (r#"Preset="Alias""#, None),
         (r#"Preset="SomethingNew""#, None),
         ("", None),
     ];
@@ -82,7 +191,7 @@ fn a_range_does_what_its_preset_says() {
         );
         let found = only_channel(&channel);
         assert_eq!(
-            found.ranges.first().map(|r| r.does),
+            found.ranges.first().map(|r| r.does.clone()),
             Some(does),
             "{attributes}"
         );

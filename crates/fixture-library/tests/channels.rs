@@ -6,7 +6,7 @@ use Function::{
     Green, Hue, Indigo, Iris, Lightness, Lime, Magenta, NoFunction, Other, Pan, Prism, Red,
     Saturation, Shutter, Speed, Strobe, Tilt, Uv, Value, White, Yellow, Zoom,
 };
-use fixture_library::{Byte, Channel, Function, parse};
+use fixture_library::{Byte, Channel, Direction, Function, parse};
 
 fn definition(channel: &str) -> Vec<u8> {
     let name = channel
@@ -298,5 +298,43 @@ fn a_mode_finds_a_channel_whose_name_has_spaces_at_the_end() {
             .and_then(|m| m.channels.first())
             .expect("one channel");
         assert_eq!(channel.function, Strobe, "{defined:?} / {used:?}");
+    }
+}
+
+// the channel element, which way its values run
+#[test]
+fn a_channel_preset_says_which_way_its_values_run() {
+    use fixture_library::Direction::{Down, Up};
+    let cases: Vec<(&str, Option<Direction>)> = vec![
+        (r#"Preset="SpeedPanSlowFast""#, Some(Up)),
+        (r#"Preset="SpeedPanFastSlow""#, Some(Down)),
+        (r#"Preset="SpeedTiltSlowFast""#, Some(Up)),
+        (r#"Preset="SpeedTiltFastSlow""#, Some(Down)),
+        (r#"Preset="SpeedPanTiltSlowFast""#, Some(Up)),
+        (r#"Preset="SpeedPanTiltFastSlow""#, Some(Down)),
+        (r#"Preset="ShutterStrobeSlowFast""#, Some(Up)),
+        (r#"Preset="ShutterStrobeFastSlow""#, Some(Down)),
+        (r#"Preset="ShutterIrisMinToMax""#, Some(Up)),
+        (r#"Preset="ShutterIrisMaxToMin""#, Some(Down)),
+        (r#"Preset="BeamFocusNearFar""#, Some(Up)),
+        (r#"Preset="BeamFocusFarNear""#, Some(Down)),
+        (r#"Preset="BeamZoomSmallBig""#, Some(Up)),
+        (r#"Preset="BeamZoomBigSmall""#, Some(Down)),
+        (r#"Preset="PrismRotationSlowFast""#, Some(Up)),
+        (r#"Preset="PrismRotationFastSlow""#, Some(Down)),
+        // a fine byte follows its coarse byte
+        (r#"Preset="BeamZoomFine""#, None),
+        (r#"Preset="ShutterIrisFine""#, None),
+        (r#"Preset="BeamFocusFine""#, None),
+        // a preset without a direction, or no preset
+        (r#"Preset="IntensityRed""#, None),
+        (r#"Preset="PositionPan""#, None),
+        (r#"Preset="ColorWheel""#, None),
+        (r#"Preset="SomethingSlowFast""#, None),
+        ("", None),
+    ];
+    for (attributes, direction) in cases {
+        let channel = format!(r#"<Channel Name="C" {attributes}/>"#);
+        assert_eq!(only_channel(&channel).direction, direction, "{attributes}");
     }
 }

@@ -41,7 +41,7 @@ impl Channel {
 }
 
 fn lets_light_out(range: &Range) -> bool {
-    !matches!(range.does, Some(Does::Closed | Does::Strobe)) && !dark(&range.label)
+    !matches!(range.does, Some(Does::Closed | Does::Strobe(_))) && !dark(&range.label)
 }
 
 fn dark(label: &str) -> bool {

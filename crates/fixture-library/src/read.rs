@@ -1,8 +1,9 @@
 //! Bytes of a QLC+ `.qxf` file to a `Fixture`. All of the XML walking lives here.
 
+use crate::capability::{self, Said};
 use crate::error::{Error, LeftOut, Problem, Warning};
-use crate::function::function_of;
-use crate::model::{Byte, Channel, Does, Fixture, Kind, Layout, Mode, Range, Rgb};
+use crate::function::{direction_of, function_of};
+use crate::model::{Byte, Channel, Degrees, Fixture, Kind, Layout, Mode, Range};
 use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -155,6 +156,7 @@ fn channel<'a>(node: Node<'a, 'a>) -> Result<Channel, Failure<'a>> {
         None => None,
     };
     let (function, byte) = function_of(node.attribute("Preset"), group, &name);
+    let direction = node.attribute("Preset").and_then(direction_of);
     let default = match node.attribute("Default") {
         Some(_) => Some(number(node, "Default")?),
         None => None,
@@ -169,6 +171,7 @@ fn channel<'a>(node: Node<'a, 'a>) -> Result<Channel, Failure<'a>> {
         function,
         byte,
         default,
+        direction,
         ranges,
     })
 }
@@ -179,49 +182,17 @@ fn range<'a>(node: Node<'a, 'a>) -> Result<Range, Failure<'a>> {
         return Err((node, Problem::BackwardsRange { min, max }));
     }
     let label = node.text().unwrap_or_default().trim().to_string();
-    let does = node
-        .attribute("Preset")
-        .and_then(|preset| does(preset, node.attribute("Res1"), node.attribute("Res2")));
+    let does = capability::does(&Said {
+        preset: node.attribute("Preset"),
+        first: node.attribute("Res1"),
+        second: node.attribute("Res2"),
+        picture: node.attribute("Res"),
+    });
     Ok(Range {
         min,
         max,
         label,
         does,
-    })
-}
-
-/// What a QLC+ capability preset does (`engine/src/qlccapability.h`), with its colours.
-/// A colour preset without a colour it can read says nothing, as in QLC+.
-fn does(preset: &str, first: Option<&str>, second: Option<&str>) -> Option<Does> {
-    match preset {
-        "ShutterOpen" => Some(Does::Open),
-        "ShutterClose" => Some(Does::Closed),
-        "LampOn" => Some(Does::LampOn),
-        "ColorMacro" => Some(Does::Color(rgb(first?)?)),
-        "ColorDoubleMacro" => Some(Does::Colors(rgb(first?)?, rgb(second?)?)),
-        _ if ["Strobe", "Pulse", "Ramp"]
-            .iter()
-            .any(|start| preset.starts_with(start)) =>
-        {
-            Some(Does::Strobe)
-        }
-        _ if preset.starts_with("Reset") => Some(Does::Reset),
-        _ => None,
-    }
-}
-
-/// `#rrggbb`, as every colour in the QLC+ library is written.
-fn rgb(text: &str) -> Option<Rgb> {
-    let hex = text.trim().strip_prefix('#')?;
-    let byte = |at: usize| {
-        hex.get(at..at + 2)
-            .and_then(|pair| u8::from_str_radix(pair, 16).ok())
-    };
-    (hex.len() == 6).then_some(())?;
-    Some(Rgb {
-        red: byte(0)?,
-        green: byte(2)?,
-        blue: byte(4)?,
     })
 }
 
@@ -327,6 +298,7 @@ fn mode<'a>(
         channels,
         pixels,
         layout,
+        degrees: degrees_of(node, root)?,
     })
 }
 
@@ -347,6 +319,27 @@ fn head_channel<'a>(node: Node<'a, 'a>) -> Result<u16, Failure<'a>> {
 /// The line of a node in its file, counted from 1.
 fn line_of(node: Node) -> u32 {
     node.document().text_pos_at(node.range().start).row
+}
+
+/// How far the head pans and tilts: the `Focus` under the mode, else under the fixture.
+fn degrees_of<'a>(mode: Node<'a, 'a>, root: Node<'a, 'a>) -> Result<Option<Degrees>, Failure<'a>> {
+    let focus = |node: Node<'a, 'a>| node.descendants().find(|n| n.has_tag_name("Focus"));
+    let Some(at) = focus(mode).or_else(|| {
+        root.children()
+            .find(|n| n.has_tag_name("Physical"))
+            .and_then(focus)
+    }) else {
+        return Ok(None);
+    };
+    let axis = |what| match at.attribute(what) {
+        Some(_) => number(at, what),
+        None => Ok(0),
+    };
+    let degrees = Degrees {
+        pan: axis("PanMax")?,
+        tilt: axis("TiltMax")?,
+    };
+    Ok((degrees.pan, degrees.tilt).ne(&(0, 0)).then_some(degrees))
 }
 
 /// The `Layout` under a mode or under the fixture's own `Physical`, and its node.

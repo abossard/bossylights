@@ -104,6 +104,34 @@ Example: a generic RGBW PAR with a dimmer, patched at universe 1, address 37, to
 | a 16 bit pair | coarse and fine | coarse and fine |
 | a shutter | | a constant: open |
 
+## The rest of a light in the fixture model (#143)
+
+M2 carries everything of a light. After #132 the model keeps every function and range. #143 adds the three things the Rig still could not read.
+
+```mermaid
+flowchart LR
+  P["Channel preset<br/>BeamZoomBigSmall"] --> D["Channel.direction<br/>Down"]
+  F["Physical Focus<br/>PanMax 540, TiltMax 270"] --> M["Mode.degrees<br/>pan 540, tilt 270"]
+  C["Capability preset<br/>StrobeFreqRange 1 to 20"] --> R["Range.does<br/>Strobe(Hertz 1 to 20)"]
+```
+
+| What | Shape | Why there |
+|---|---|---|
+| Direction | `Channel.direction: Option<Direction>`, `Up` or `Down`: more of the function as the value rises (faster, bigger, farther, more open), or less. `None` when the definition does not say | it says how values map, not what the channel does. A payload on `Function` would make every match on a function carry it. A fine byte says nothing: it follows its coarse byte |
+| Pan and tilt in degrees | `Mode.degrees: Option<Degrees { pan, tilt }>`, from the mode's own `Physical`, else the fixture's. `None` when both are 0 or missing | per mode: 12 modes of the library give their own, different from their fixture's |
+| What a range does | more `Does`, all closed types (below) | the Rig and the screens need them. Only a gobo picture is a string: QLC+ names a file, not a list |
+
+| Capability preset | `Does` |
+|---|---|
+| `Strobe*`, `Pulse*`, `Ramp*` | `Strobe(Pace)`: `Goes(Up)` (slow to fast), `Goes(Down)`, `Random`, `Hertz { from, to }` in millihertz, or `Unsaid` |
+| `RotationStop`, `RotationIndexed` | `Rotation(Turn::Stop)`, `Rotation(Turn::Indexed)` |
+| `RotationClockwise*`, `RotationCounterClockwise*` | `Rotation(Turn::Clockwise(Pace))`, `Rotation(Turn::CounterClockwise(Pace))` |
+| `PrismEffectOn` (`Res1`: faces), `PrismEffectOff` | `Prism { faces }`, `PrismOff` |
+| `GoboMacro`, `GoboShakeMacro`, a legacy relative `Res` | `Gobo { picture, shakes }`: the picture as QLC+ names the file, `None` when empty |
+| `LampOff` | `LampOff` |
+| `SlowToFast`, `NearToFar`, `SmallToBig` and their reverses | `Runs(Direction)` |
+| `ColorWheelIndex`, `GenericPicture`, `SilentMode*`, `Alias` | nothing: the label only. An index has no fixed meaning, a picture of an effect and the fan modes do not make light, an alias belongs to a later slice |
+
 ## Who wins, in this slice
 
 Three rows, one function (`mix`), one place (`engine-core`). M3 adds manual, show and autopilot to the same table.

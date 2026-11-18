@@ -46,6 +46,16 @@ pub struct Mode {
     /// The grid of the pixels, from the mode or else the fixture. Left out, with a
     /// warning, when the mode has heads and the grid does not have exactly one cell for each.
     pub layout: Option<Layout>,
+    /// How far the head pans and tilts, from the mode or else the fixture. `None` when
+    /// the definition says 0 for both, or nothing.
+    pub degrees: Option<Degrees>,
+}
+
+/// The full pan and tilt range of a moving head or scanner, in degrees.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Degrees {
+    pub pan: u16,
+    pub tilt: u16,
 }
 
 /// The pixels of a bar or a panel in a grid.
@@ -63,6 +73,9 @@ pub struct Channel {
     pub byte: Byte,
     /// The value the definition gives when nothing else is said. `None` when it gives none.
     pub default: Option<u8>,
+    /// Which way the values run, when the channel preset says. `None` for a fine byte: it
+    /// runs as its coarse byte.
+    pub direction: Option<Direction>,
     pub ranges: Vec<Range>,
 }
 
@@ -82,25 +95,81 @@ pub struct Range {
     pub does: Option<Does>,
 }
 
-/// What a range does, from its QLC+ capability preset. Only what the Rig needs (open,
-/// closed, strobe, lamp on, reset) and what the colour wheel slice needs (a colour).
-/// Every other capability preset says nothing here: its label still does.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// What a range does, from its QLC+ capability preset (`engine/src/qlccapability.h`).
+/// The presets left as the label only, on purpose: `ColorWheelIndex` (an index has no
+/// fixed meaning), `GenericPicture` (a picture of an effect, not a gobo), `SilentMode*`
+/// (the fan, no light), `Alias` (another channel's meaning, a later slice).
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Does {
     /// `ShutterOpen`: light comes out.
     Open,
     /// `ShutterClose`: no light comes out.
     Closed,
-    /// `Strobe*`, `Pulse*`, `Ramp*`: the light flashes.
-    Strobe,
+    /// `Strobe*`, `Pulse*`, `Ramp*`: the light flashes, at this pace.
+    Strobe(Pace),
     /// `ColorMacro` with its colour.
     Color(Rgb),
     /// `ColorDoubleMacro`: a split colour, both halves.
     Colors(Rgb, Rgb),
+    /// `Rotation*`: a wheel, a gobo or a prism turns, or stops.
+    Rotation(Turn),
+    /// `PrismEffectOn`, with its number of faces when the definition gives it.
+    Prism { faces: Option<u8> },
+    /// `PrismEffectOff`.
+    PrismOff,
+    /// `GoboMacro`, `GoboShakeMacro`, or a legacy `Res`: the gobo, its picture as QLC+
+    /// names the file (`Others/open.svg`) when it gives one, and whether it shakes.
+    Gobo {
+        picture: Option<String>,
+        shakes: bool,
+    },
     /// `LampOn`.
     LampOn,
+    /// `LampOff`.
+    LampOff,
     /// `Reset*`: all, pan and tilt, gobo, and so on.
     Reset,
+    /// `SlowToFast`, `NearToFar`, `SmallToBig` (up) and their reverses (down): the range
+    /// sweeps what its channel does.
+    Runs(Direction),
+}
+
+/// Which way the values of a channel or a range run: more of what it does as the value
+/// rises (faster, bigger, farther, more open), or less.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Direction {
+    Up,
+    Down,
+}
+
+/// How fast something flashes or turns.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Pace {
+    /// The definition does not say.
+    Unsaid,
+    /// From slow to fast (up) or fast to slow (down) across the range.
+    Goes(Direction),
+    /// At random.
+    Random,
+    /// In hertz, from the start of the range to its end.
+    Hertz(Hertz),
+}
+
+/// A frequency from the start of a range to its end, in millihertz: 0.5 Hz is 500.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Hertz {
+    pub from: u32,
+    pub to: u32,
+}
+
+/// What a rotation does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Turn {
+    Stop,
+    /// Turned to a position, not spinning.
+    Indexed,
+    Clockwise(Pace),
+    CounterClockwise(Pace),
 }
 
 /// A colour as a definition gives it: `#rrggbb`.

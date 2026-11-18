@@ -6,7 +6,7 @@
 //!
 //!     cargo run -p fixture-library --example read_folder -- path/to/resources/fixtures
 
-use fixture_library::{Byte, Does, Fixture, Function, Mode, parse};
+use fixture_library::{Byte, Does, Fixture, Function, Mode, Pace, parse};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::{env, fs, io, process};
@@ -125,6 +125,8 @@ fn tally(fixtures: &[Fixture]) {
         total,
     );
     row("with a default", with_default, total);
+    let with_direction = channels.iter().filter(|c| c.direction.is_some()).count();
+    row("with a direction", with_direction, total);
 
     let mut others: Vec<_> = others.into_iter().collect();
     others.sort_by(|a, b| b.1.cmp(&a.1));
@@ -136,15 +138,27 @@ fn tally(fixtures: &[Fixture]) {
     let ranges: Vec<_> = channels.iter().flat_map(|c| &c.ranges).collect();
     let mut does: BTreeMap<&str, usize> = BTreeMap::new();
     for range in &ranges {
-        let name = match range.does {
+        let name = match &range.does {
             None => "nothing said",
             Some(Does::Open) => "open",
             Some(Does::Closed) => "closed",
-            Some(Does::Strobe) => "strobe",
+            Some(Does::Strobe(Pace::Hertz(_))) => "strobe, in hertz",
+            Some(Does::Strobe(Pace::Goes(_))) => "strobe, slow to fast or back",
+            Some(Does::Strobe(Pace::Random)) => "strobe, at random",
+            Some(Does::Strobe(Pace::Unsaid)) => "strobe, pace not said",
             Some(Does::Color(_)) => "a colour",
             Some(Does::Colors(..)) => "two colours",
+            Some(Does::Rotation(_)) => "rotation",
+            Some(Does::Prism { .. }) => "prism",
+            Some(Does::PrismOff) => "prism off",
+            Some(Does::Gobo {
+                picture: Some(_), ..
+            }) => "gobo, with a picture",
+            Some(Does::Gobo { picture: None, .. }) => "gobo, no picture",
             Some(Does::LampOn) => "lamp on",
+            Some(Does::LampOff) => "lamp off",
             Some(Does::Reset) => "reset",
+            Some(Does::Runs(_)) => "runs up or down",
         };
         *does.entry(name).or_default() += 1;
     }
@@ -177,11 +191,17 @@ fn tally(fixtures: &[Fixture]) {
 
     let with_heads: Vec<_> = modes.iter().filter(|m| !m.pixels.is_empty()).collect();
     let without_layout = with_heads.iter().filter(|m| m.layout.is_none()).count();
-    println!("\n| Pixels | Count | Share |\n|---|---|---|");
+    println!("\n| Pixels and movement | Count | Share |\n|---|---|---|");
     row("modes with heads", with_heads.len(), modes.len());
     row(
         "of those: no layout, or one that does not fit the heads",
         without_layout,
         with_heads.len(),
+    );
+    let with_degrees = modes.iter().filter(|m| m.degrees.is_some()).count();
+    row(
+        "modes with a pan and tilt range in degrees",
+        with_degrees,
+        modes.len(),
     );
 }

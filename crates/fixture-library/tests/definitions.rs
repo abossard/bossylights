@@ -3,7 +3,9 @@
 
 use Byte::{Coarse, Fine};
 use Function::{Blue, Dimmer, Effect, Focus, Green, Pan, Red, Shutter, Tilt, White, Zoom};
-use fixture_library::{Byte, Does, Function, Kind, Layout, Rgb, parse, search};
+use fixture_library::{
+    Byte, Degrees, Direction, Does, Function, Hertz, Kind, Layout, Pace, Rgb, Turn, parse, search,
+};
 
 fn read(file: &str) -> fixture_library::Fixture {
     let path = format!("{}/tests/definitions/{file}", env!("CARGO_MANIFEST_DIR"));
@@ -312,7 +314,7 @@ fn a_range_says_what_it_does_when_its_preset_says() {
             vec![
                 Some(Does::Closed),
                 Some(Does::Open),
-                Some(Does::Strobe),
+                Some(Does::Strobe(Pace::Goes(Direction::Up))),
                 None,
             ],
         ),
@@ -341,13 +343,17 @@ fn a_range_says_what_it_does_when_its_preset_says() {
             .ranges
             .iter()
             .take(expected.len())
-            .map(|r| r.does)
+            .map(|r| r.does.clone())
             .collect();
         assert_eq!(does, expected, "{file} {mode} {name}");
     }
     let split = channel("XStatic-X-240Bar-RGB.qxf", "7 Channel", "Function");
     assert_eq!(
-        split.ranges.iter().find(|r| r.min == 216).map(|r| r.does),
+        split
+            .ranges
+            .iter()
+            .find(|r| r.min == 216)
+            .map(|r| r.does.clone()),
         Some(Some(Does::Colors(red, green)))
     );
 }
@@ -407,6 +413,157 @@ fn a_mode_says_which_value_lets_its_light_out() {
                 .all(|c| c.default.is_none()),
             "{file}"
         );
+    }
+}
+
+// file, every mode's pan and tilt range in degrees
+#[test]
+fn a_mode_says_how_far_it_pans_and_tilts() {
+    let moving = Some(Degrees {
+        pan: 540,
+        tilt: 270,
+    });
+    let cases: [(&str, Option<Degrees>); 7] = [
+        ("Showtec-Par-64-100W-COB-UV.qxf", None),
+        ("Generic-Generic-RGB.qxf", None),
+        ("Generic-Generic-RGBW.qxf", None),
+        ("Elation-EVC-MH.qxf", moving),
+        ("XStatic-X-240Bar-RGB.qxf", None),
+        ("JB-Systems-Lounge-Laser-DMX.qxf", None),
+        (
+            "Shehds-LED-Spot-100W.qxf",
+            Some(Degrees {
+                pan: 540,
+                tilt: 200,
+            }),
+        ),
+    ];
+    for (file, degrees) in cases {
+        for mode in read(file).modes {
+            assert_eq!(mode.degrees, degrees, "{file} {}", mode.name);
+        }
+    }
+}
+
+// file, mode, which way each channel's values run, in order
+#[test]
+fn a_mode_says_which_way_each_channel_runs() {
+    use Direction::{Down, Up};
+    let cases: [(&str, &str, Vec<Option<Direction>>); 3] = [
+        (
+            "Shehds-LED-Spot-100W.qxf",
+            "14 Channel",
+            vec![
+                None,
+                None,
+                None,
+                None,
+                Some(Up),
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(Down),
+                None,
+                None,
+                None,
+            ],
+        ),
+        (
+            "Elation-EVC-MH.qxf",
+            "12-CH",
+            vec![
+                None,
+                None,
+                None,
+                None,
+                Some(Down),
+                None,
+                None,
+                None,
+                Some(Up),
+                None,
+                None,
+                None,
+            ],
+        ),
+        (
+            "XStatic-X-240Bar-RGB.qxf",
+            "7 Channel",
+            vec![None, None, None, None, None, None, Some(Up)],
+        ),
+    ];
+    for (file, mode, expected) in cases {
+        let fixture = read(file);
+        let found = fixture
+            .modes
+            .iter()
+            .find(|m| m.name == mode)
+            .expect("the mode is there");
+        let directions: Vec<Option<Direction>> =
+            found.channels.iter().map(|c| c.direction).collect();
+        assert_eq!(directions, expected, "{file} {mode}");
+    }
+}
+
+// channel of the Shehds spot, value, what the range holding it does
+#[test]
+fn a_spot_says_what_its_strobe_gobos_rotation_and_prism_do() {
+    use Direction::{Down, Up};
+    let gobo = |picture: Option<&str>, shakes| Does::Gobo {
+        picture: picture.map(str::to_string),
+        shakes,
+    };
+    let cases: Vec<(&str, u8, Option<Does>)> = vec![
+        ("Strobe", 0, Some(Does::Closed)),
+        (
+            "Strobe",
+            100,
+            Some(Does::Strobe(Pace::Hertz(Hertz {
+                from: 0,
+                to: 25_000,
+            }))),
+        ),
+        ("Strobe", 255, Some(Does::Open)),
+        (
+            "Colour",
+            100,
+            Some(Does::Rotation(Turn::Clockwise(Pace::Goes(Up)))),
+        ),
+        ("Static Gobo", 0, Some(gobo(Some("Others/open.svg"), false))),
+        ("Static Gobo", 15, Some(gobo(None, false))),
+        (
+            "Static Gobo",
+            100,
+            Some(Does::Rotation(Turn::Clockwise(Pace::Goes(Down)))),
+        ),
+        ("Static Gobo", 132, Some(Does::Rotation(Turn::Stop))),
+        (
+            "Static Gobo",
+            200,
+            Some(Does::Rotation(Turn::CounterClockwise(Pace::Goes(Up)))),
+        ),
+        (
+            "Static Gobo",
+            228,
+            Some(gobo(Some("Chauvet/gobo00035.svg"), true)),
+        ),
+        ("Rotating Gobo", 100, Some(Does::Runs(Down))),
+        ("Rotating Gobo", 200, Some(Does::Runs(Up))),
+        ("Gobo Rotation", 0, Some(Does::Rotation(Turn::Indexed))),
+        ("Prism", 0, Some(Does::PrismOff)),
+        ("Prism", 12, Some(Does::Prism { faces: Some(6) })),
+        ("Reset", 0, Some(Does::Reset)),
+    ];
+    for (name, value, does) in cases {
+        let found = channel("Shehds-LED-Spot-100W.qxf", "14 Channel", name);
+        let range = found
+            .ranges
+            .iter()
+            .find(|r| (r.min..=r.max).contains(&value))
+            .expect("a range holds the value");
+        assert_eq!(range.does, does, "{name} {value}");
     }
 }
 

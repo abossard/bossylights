@@ -19,12 +19,13 @@
 //! |---|---|
 //! | what a channel does, coarse or fine | [`Channel::function`], [`Channel::byte`]: every QLC+ channel preset |
 //! | its value when nothing is said | [`Channel::default`], when the definition gives one |
-//! | what a range does | [`Range::does`]: open, closed, strobe, a colour, lamp on, reset |
+//! | which way its values run | [`Channel::direction`]: faster, bigger, farther, more open |
+//! | what a range does | [`Range::does`]: open, closed, strobe and its pace, a colour, rotation, prism, gobo and its picture, lamp, reset |
 //! | the value of a shutter or strobe that lets light out | [`Channel::open`], one rule |
 //! | pixels | [`Mode::pixels`]: each head's channels, all in the mode |
+//! | how far it pans and tilts | [`Mode::degrees`] |
 //!
-//! Left out for now: pan and tilt ranges in degrees (QLC+ `Physical/Focus` `PanMax`,
-//! `TiltMax`), lens, bulb and dimensions.
+//! Left out: lens, bulb and dimensions.
 
 #![no_std]
 #![forbid(unsafe_code)]
@@ -37,6 +38,7 @@
 
 extern crate alloc;
 
+mod capability;
 mod error;
 mod function;
 mod model;
@@ -45,6 +47,9 @@ mod read;
 mod search;
 
 pub use error::{Error, LeftOut, Problem, Warning};
-pub use model::{Byte, Channel, Does, Fixture, Function, Kind, Layout, Mode, Range, Rgb};
+pub use model::{
+    Byte, Channel, Degrees, Direction, Does, Fixture, Function, Hertz, Kind, Layout, Mode, Pace,
+    Range, Rgb, Turn,
+};
 pub use read::parse;
 pub use search::search;

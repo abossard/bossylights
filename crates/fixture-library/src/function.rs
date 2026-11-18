@@ -1,7 +1,7 @@
 //! What a channel does, from a preset, a group or a name. A calculation: strings in, a
 //! closed `Function` out. Anything the list does not know stays as `Other(name)`.
 
-use crate::model::{Byte, Function};
+use crate::model::{Byte, Direction, Function};
 use alloc::string::{String, ToString};
 
 /// A QLC+ channel preset (`engine/src/qlcchannel.h`), every one of them, without its
@@ -117,4 +117,28 @@ pub fn function_of(
         _ => other(),
     };
     (function, byte)
+}
+
+/// Which way a channel preset's values run. Only the presets that say it, and never a
+/// fine byte: it runs as its coarse byte.
+pub fn direction_of(preset: &str) -> Option<Direction> {
+    match preset {
+        "SpeedPanSlowFast"
+        | "SpeedTiltSlowFast"
+        | "SpeedPanTiltSlowFast"
+        | "ShutterStrobeSlowFast"
+        | "ShutterIrisMinToMax"
+        | "BeamFocusNearFar"
+        | "BeamZoomSmallBig"
+        | "PrismRotationSlowFast" => Some(Direction::Up),
+        "SpeedPanFastSlow"
+        | "SpeedTiltFastSlow"
+        | "SpeedPanTiltFastSlow"
+        | "ShutterStrobeFastSlow"
+        | "ShutterIrisMaxToMin"
+        | "BeamFocusFarNear"
+        | "BeamZoomBigSmall"
+        | "PrismRotationFastSlow" => Some(Direction::Down),
+        _ => None,
+    }
 }
