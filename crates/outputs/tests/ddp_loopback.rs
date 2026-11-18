@@ -1,6 +1,6 @@
 //! A DDP output sends to a socket on this machine; every byte that arrives is checked.
 
-use outputs::{Color, Device, Levels, Outcome, OutputKind};
+use outputs::{Color, Levels, Outcome, OutputKind, Rate};
 use std::net::{SocketAddr, UdpSocket};
 use std::time::Duration;
 
@@ -41,7 +41,7 @@ fn every_byte_arrives_as_wled_expects() {
     ];
     for (universes, color, expected) in cases {
         let (socket, address) = receiver();
-        let mut device = Device::open(OutputKind::Ddp { address, color }).unwrap();
+        let mut device = outputs::open(OutputKind::Ddp { address, color }).unwrap();
         let frame = counting(universes);
         for sequence in [1, 2] {
             assert_eq!(device.take(&frame), Outcome::Accepted);
@@ -61,5 +61,21 @@ fn every_byte_arrives_as_wled_expects() {
                 );
             }
         }
+    }
+}
+
+#[test]
+fn ddp_sends_60_frames_a_second_unless_told_otherwise() {
+    let (_socket, address) = receiver();
+    // (kind, default rate)
+    let cases = [(
+        OutputKind::Ddp {
+            address,
+            color: Color::Rgb,
+        },
+        Rate::Sixty,
+    )];
+    for (kind, rate) in cases {
+        assert_eq!(outputs::default_rate(kind), rate, "{kind:?}");
     }
 }

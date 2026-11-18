@@ -10,7 +10,7 @@
 //! | 4 to 7 | offset of this packet's data in the frame, bytes, big endian |
 //! | 8 to 9 | length of this packet's data, bytes, big endian |
 
-use crate::{Color, Levels, Outcome};
+use crate::{Color, Device, Levels, Outcome};
 use engine_core::ADDRESSES;
 use std::io::{self, ErrorKind};
 use std::net::{Ipv4Addr, SocketAddrV4, UdpSocket};
@@ -46,9 +46,11 @@ impl Ddp {
             packet: [0; HEADER + MAX_DATA],
         })
     }
+}
 
+impl Device for Ddp {
     /// Sends the frame as packets. A full socket drops the rest of the frame.
-    pub fn take(&mut self, frame: &[Levels]) -> Outcome {
+    fn take(&mut self, frame: &[Levels]) -> Outcome {
         self.sequence = next_sequence(self.sequence);
         let total = data_length(frame.len() * ADDRESSES, self.color);
         for (offset, length, last) in packets(total) {
