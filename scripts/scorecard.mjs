@@ -9,16 +9,42 @@ export function codeLines(source) {
   return source.split("\n").filter((line) => line.trim() !== "" && !line.trim().startsWith("//")).length;
 }
 
-/** Items visible outside the crate: `pub` items, not `pub(crate)` and not fields. */
+/** Names inside one `use` tree, e.g. `a::{x, b::{c, d}}` has 3. A glob counts as one. */
+function useNames(tree) {
+  return tree
+    .replace(/\s+as\s+\w+/g, "")
+    .replace(/[{}]/g, ",")
+    .split(",")
+    .map((part) => part.trim())
+    .filter((part) => part !== "" && !part.endsWith("::")).length;
+}
+
+/** Items visible outside the crate: `pub` items, not `pub(crate)` and not fields. Every name a `pub use` exports counts. */
 export function publicItems(source) {
-  const items = /^\s*pub\s+(?:const\s+fn|async\s+fn|fn|struct|enum|trait|type|const|static|mod|use)\b/gm;
-  return [...source.matchAll(items)].length;
+  const items = /^\s*pub\s+(?:const\s+fn|async\s+fn|fn|struct|enum|trait|type|const|static|mod)\b/gm;
+  const uses = [...source.matchAll(/^\s*pub\s+use\s+([^;]*);/gm)];
+  return [...source.matchAll(items)].length + uses.reduce((sum, m) => sum + useNames(m[1]), 0);
 }
 
 /** The source without its `#[cfg(test)] mod`, which by convention ends the file. */
 export function withoutTests(source) {
   const at = source.search(/^#\[cfg\(test\)\]\s*\nmod\s/m);
   return at === -1 ? source : source.slice(0, at);
+}
+
+/** The code of a crate: every file without its own test module. */
+export function crateSource(files) {
+  return files.map(withoutTests).join("\n");
+}
+
+/** The `count` numbers a measuring example printed. Throws when there are not exactly that many. */
+export function measurement(output, count) {
+  const words = output.trim().split(/\s+/).filter((w) => w !== "");
+  const numbers = words.map(Number);
+  if (numbers.length !== count || numbers.some((n) => !Number.isFinite(n))) {
+    throw new Error(`expected ${count} numbers, got ${JSON.stringify(output)}`);
+  }
+  return numbers;
 }
 
 /** Places that switch a check off. */

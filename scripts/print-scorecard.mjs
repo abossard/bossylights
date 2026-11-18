@@ -4,13 +4,13 @@ import { execFileSync } from "node:child_process";
 import { appendFileSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { CRATES } from "./layers.mjs";
-import { codeLines, escapeHatches, publicItems, scorecard, withoutTests } from "./scorecard.mjs";
+import { codeLines, crateSource, escapeHatches, measurement, publicItems, scorecard } from "./scorecard.mjs";
 
-const read = (dir, extension) =>
+const files = (dir, extension) =>
   readdirSync(dir, { recursive: true, withFileTypes: true })
     .filter((entry) => entry.isFile() && extension.test(entry.name))
-    .map((entry) => readFileSync(join(entry.parentPath, entry.name), "utf8"))
-    .join("\n");
+    .map((entry) => readFileSync(join(entry.parentPath, entry.name), "utf8"));
+const read = (dir, extension) => files(dir, extension).join("\n");
 
 const packages = JSON.parse(
   execFileSync("cargo", ["metadata", "-q", "--format-version", "1", "--no-deps", "--locked"], {
@@ -20,7 +20,7 @@ const packages = JSON.parse(
 ).packages;
 
 const crates = packages.map((p) => {
-  const source = withoutTests(read(join(dirname(p.manifest_path), "src"), /\.rs$/));
+  const source = crateSource(files(join(dirname(p.manifest_path), "src"), /\.rs$/));
   return { name: p.name, kind: CRATES[p.name]?.kind ?? "action", lines: codeLines(source), publicItems: publicItems(source) };
 });
 
@@ -29,24 +29,16 @@ const everything = [
   read("ui/src", /\.(ts|tsx|mjs)$/),
 ].join("\n");
 
+// A measurement that fails fails the script. "Not measured" is only for CI.
+const example = (name) =>
+  execFileSync("cargo", ["run", "-q", "--release", "-p", "engine-server", "--example", name], { encoding: "utf8" });
+
 const lateness = () => {
-  try {
-    const out = execFileSync("cargo", ["run", "-q", "-p", "engine-server", "--example", "lateness"], { encoding: "utf8" });
-    const [p99, worst, offBeat] = out.trim().split(" ").map(Number);
-    return { p99, worst, offBeat };
-  } catch {
-    return undefined; // shown as "not measured"
-  }
+  const [p99, worst, offBeat] = measurement(example("lateness"), 3);
+  return { p99, worst, offBeat };
 };
 
-const sendToFrame = () => {
-  try {
-    const out = execFileSync("cargo", ["run", "-q", "-p", "engine-server", "--example", "send_to_frame"], { encoding: "utf8" });
-    return Number(out.trim());
-  } catch {
-    return undefined; // shown as "not measured"
-  }
-};
+const sendToFrame = () => measurement(example("send_to_frame"), 1)[0];
 
 // CI judges what is sent, never how fast: on a runner the timing is left out.
 const measured = process.env.CI === undefined;

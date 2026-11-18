@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { codeLines, escapeHatches, mutationReport, publicItems, scorecard, withoutTests } from "./scorecard.mjs";
+import { codeLines, crateSource, escapeHatches, measurement, mutationReport, publicItems, scorecard, withoutTests } from "./scorecard.mjs";
 
 // [source, code lines]
 const lineCases = [
@@ -19,6 +19,11 @@ const publicCases = [
   ["pub const N: u8 = 1;\npub const fn f() {}\npub use x::Y;\npub mod m;\npub trait Q {}", 5],
   ["impl S {\n    pub fn method(&self) {}\n    pub const RATE: u32 = 44;\n}", 2],
 ];
+publicCases.push(
+  ["pub use a::{x, y, z};", 3],
+  ["pub use a::{\n    x,\n    y as w,\n    b::{c, d},\n};\npub use e::*;", 5],
+  ["pub(crate) use a::{x, y};\nuse b::{c, d};", 0],
+);
 for (const [source, expected] of publicCases) {
   test(`public items of ${JSON.stringify(source)}`, () => assert.equal(publicItems(source), expected));
 }
@@ -82,5 +87,30 @@ const mutationCases = [
 for (const [outcomes, row] of mutationCases) {
   test(`mutation report ${row}`, () => {
     assert.ok(mutationReport(["engine-core"], outcomes).includes(`${row}\n`));
+  });
+}
+
+// [files of one crate, code lines left after cutting each file's test module]
+const crateCases = [
+  [["fn a() {}\n"], 1],
+  [["fn a() {}\n#[cfg(test)]\nmod tests {\n    fn t() {}\n}\n", "fn b() {}\nfn c() {}\n"], 3],
+  [["fn a() {}\n", "fn b() {}\n#[cfg(test)]\nmod tests {}\n", "fn c() {}\n#[cfg(test)]\nmod tests {}\n"], 3],
+];
+for (const [files, lines] of crateCases) {
+  test(`crate source of ${files.length} files has ${lines} code lines`, () => assert.equal(codeLines(crateSource(files)), lines));
+}
+
+// [output of a measuring example, expected numbers or error]
+const measurementCases = [
+  ["640 900 0\n", 3, [640, 900, 0]],
+  ["21700\n", 1, [21700]],
+  ["", 1, "throws"],
+  ["abc 1 2", 3, "throws"],
+  ["1 2", 3, "throws"],
+];
+for (const [out, count, expected] of measurementCases) {
+  test(`measurement of ${JSON.stringify(out)}`, () => {
+    if (expected === "throws") assert.throws(() => measurement(out, count));
+    else assert.deepEqual(measurement(out, count), expected);
   });
 }
