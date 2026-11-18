@@ -1,4 +1,4 @@
-import { createSignal, createUniqueId, For, Show } from "solid-js";
+import { createEffect, createSignal, createUniqueId, For, Show, type JSX } from "solid-js";
 import { neighbour, type Pressable } from "./common.ts";
 
 export interface PickOption {
@@ -9,6 +9,14 @@ export interface PickOption {
   off?: string;
   /** Something behind it has trouble: a red mark. */
   marked?: boolean;
+  /** What it looks like, drawn above its name: a gobo, a slot of a colour wheel (`Disc`), an effect (`Preview`). Pictures show it. */
+  picture?: () => JSX.Element;
+}
+
+/** A slot of a colour wheel as a picture: one colour, or two side by side for a split slot. */
+export function Disc(props: { colours: readonly string[] }) {
+  const fill = () => (props.colours.length > 1 ? `linear-gradient(90deg, ${props.colours[0] ?? "#000"} 50%, ${props.colours[1] ?? "#000"} 50%)` : (props.colours[0] ?? "#000"));
+  return <i class="k-disc" style={{ background: fill() }} />;
 }
 
 /**
@@ -17,9 +25,12 @@ export interface PickOption {
  * | tabs     | all visible, the picked one a paper slab    | the workspaces, pages of a surface       |
  * | segments | one outlined group, the picked one filled   | two to five short words                  |
  * | cards    | each a box with a name and a line           | options that need a line of explanation  |
+ * | pictures | each a drawing with its name under it       | things known by their look: gobos, the slots of a colour wheel, effects |
  * | list     | the picked one alone, the others open below | many options, or little room             |
+ *
+ * Tabs that do not fit in a line scroll sideways, the picked one stays in view. `after` puts one action behind them.
  */
-export type PickerKind = "tabs" | "segments" | "cards" | "list";
+export type PickerKind = "tabs" | "segments" | "cards" | "pictures" | "list";
 
 export interface PickerProps extends Pressable {
   kind: PickerKind;
@@ -31,6 +42,8 @@ export interface PickerProps extends Pressable {
   size?: "small" | "regular";
   /** A choice that plays picks on the way down. Every other one on the way up. A list always picks on the way up. */
   fires?: "down" | "up";
+  /** Tabs only: one action after the last tab, as "Add page". It is a button, never a tab. */
+  after?: { label: string; onPress: () => void };
   onPick: (name: string) => void;
 }
 
@@ -70,13 +83,21 @@ function Group(props: Inner) {
               aria-selected={tabs() ? option.name === props.picked : undefined}
               aria-checked={tabs() ? undefined : option.name === props.picked}
               tabindex={option.name === props.picked ? 0 : -1}
+              ref={(el) => createEffect(() => tabs() && option.name === props.picked && el.scrollIntoView({ block: "nearest", inline: "nearest" }))}
               disabled={!props.open.includes(option.name)}
               onPointerDown={(e) => props.fires === "down" && e.button === 0 && props.onPick(option.name)}
               // A click with no pointer behind it (detail 0) is Enter or Space.
               onClick={(e) => (props.fires !== "down" || e.detail === 0) && props.onPick(option.name)}
             >
+              <Show when={props.kind === "pictures" ? option.picture : undefined}>
+                {(draw) => (
+                  <span class="k-pick-picture" aria-hidden="true">
+                    {draw()()}
+                  </span>
+                )}
+              </Show>
               <span class="k-label">{option.name}</span>
-              <Show when={props.kind === "cards" ? (option.off ?? option.sub) : undefined}>{(line) => <span class={option.off === undefined ? "k-sub" : "k-reason"}>{line()}</span>}</Show>
+              <Show when={props.kind === "cards" ? (option.off ?? option.sub) : props.kind === "pictures" ? option.off : undefined}>{(line) => <span class={option.off === undefined ? "k-sub" : "k-reason"}>{line()}</span>}</Show>
               <Show when={option.marked}>
                 <i class="k-pick-mark" role="img" aria-label="has trouble" />
               </Show>
@@ -87,6 +108,13 @@ function Group(props: Inner) {
           <i class="k-mapped" aria-hidden="true" />
         </Show>
       </div>
+      <Show when={tabs() ? props.after : undefined}>
+        {(after) => (
+          <button type="button" class="k-pick-after" disabled={props.off !== undefined} onClick={() => after().onPress()}>
+            {after().label}
+          </button>
+        )}
+      </Show>
       <Show when={props.off}>{(reason) => <span class="k-reason">{reason()}</span>}</Show>
     </div>
   );

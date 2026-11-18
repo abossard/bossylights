@@ -2,7 +2,8 @@
 // what a control is made of, before where it is used. Each specimen is live and keeps its own small state.
 import { createSignal, For, type JSX } from "solid-js";
 import type { Primitive } from "../controls/spec.ts";
-import { Block, Button, COLOURS, Fader, Field, Handle, Item, named, Pad, Picker, Status, XY, type ButtonProps, type Colour, type PadState, type PickerKind, type PickOption, type Signal, type Standing, type StatusFill, type ToggleState } from "../kit/index.ts";
+import { Block, Button, COLOURS, Fader, Field, Handle, Item, named, Pad, Picker, Preview, Status, XY, type ButtonProps, type Colour, type PadState, type PickerKind, type PickOption, type Signal, type Standing, type StatusFill, type ToggleState } from "../kit/index.ts";
+import { EFFECTS, effects, gobos, wheelSlots } from "./drawings.tsx";
 
 export interface Specimen {
   /** What is true of it: a kind, a state, a colour. */
@@ -43,9 +44,35 @@ function Level(props: { start: number; off?: string }) {
   return <Fader label="Master" value={value()} {...(props.off === undefined ? {} : { off: props.off })} onChange={setValue} />;
 }
 
-function Aim(props: { held?: boolean; off?: string }) {
-  const [at, setAt] = createSignal({ pan: 62, tilt: 40 });
-  return <XY label="Movers" pan={at().pan} tilt={at().tilt} held={props.held === true} {...(props.off === undefined ? {} : { off: props.off })} onChange={(pan, tilt) => setAt({ pan, tilt })} />;
+function Aim(props: { held?: boolean; off?: string; colour?: boolean }) {
+  const [at, setAt] = createSignal(props.colour ? { across: 8, up: 80 } : { across: 62, up: 40 });
+  return (
+    <XY
+      kind={props.colour ? "colour" : "position"}
+      label={props.colour ? "Colour" : "Movers"}
+      across={at().across}
+      up={at().up}
+      held={props.held === true}
+      {...(props.off === undefined ? {} : { off: props.off })}
+      onChange={(across, up) => setAt({ across, up })}
+    />
+  );
+}
+
+/** Tabs with an action after them. The action adds a tab, so the bar can be seen to scroll. */
+function Pages(props: { many?: boolean }) {
+  const [pages, setPages] = createSignal(props.many ? ["Main", "Movers", "Pixels", "Strobes", "Front truss", "Back truss", "Floor", "Haze and fans", "Specials"] : ["Main", "Movers", "Pixels"]);
+  const [picked, setPicked] = createSignal("Main");
+  const add = () => {
+    const name = `Page ${pages().length + 1}`;
+    setPages([...pages(), name]);
+    setPicked(name);
+  };
+  return (
+    <div style={{ width: "100%", "max-width": "360px", "min-width": "0" }}>
+      <Picker kind="tabs" label="Console pages" options={named(pages())} picked={picked()} after={{ label: "Add page", onPress: add }} onPick={setPicked} />
+    </div>
+  );
 }
 
 function Steps(props: { lessOff?: string; off?: string }) {
@@ -88,7 +115,25 @@ const lanes = (runs: boolean) => [
   { kind: "pill" as const, name: "Autopilot", label: "nothing", colour: "autopilot" as const, fill: "dashed" as const },
 ];
 
+const PLASMA = EFFECTS.Plasma?.(16) ?? (() => "#000");
+
 export const SHELVES: Record<Primitive, readonly Shelf[]> = {
+  Preview: [
+    {
+      title: "See it before it plays",
+      note: "An effect running on a small model of the panel. Read only: it takes no press and never touches the lights. What is on the lights now is a Status, not this.",
+      specimens: [
+        { says: "matrix, running", draw: () => <Preview label="Plasma on the panel" columns={16} rows={8} paint={PLASMA} /> },
+        { says: "still: one frame, for many side by side and for less motion", draw: () => <Preview label="Plasma, one frame" columns={16} rows={8} paint={PLASMA} still /> },
+        { says: "small: inside an option of a picker", draw: () => <Preview label="Plasma, small" columns={8} rows={8} paint={EFFECTS.Plasma?.(8) ?? PLASMA} size="small" /> },
+      ],
+    },
+    {
+      title: "Four effects",
+      note: "Stand-ins. An effect is a calculation: a pixel and a time in, a colour out. The same one will paint the panel.",
+      specimens: Object.entries(EFFECTS).map(([name, effect]) => ({ says: name, draw: () => <Preview label={`${name}, running`} columns={12} rows={8} paint={effect(12)} /> })),
+    },
+  ],
   Button: [
     {
       title: "Two kinds",
@@ -193,15 +238,25 @@ export const SHELVES: Record<Primitive, readonly Shelf[]> = {
         { says: "off, with the reason", draw: () => <Aim off="No moving lights" /> },
       ],
     },
+    {
+      title: "Two kinds",
+      note: "A position is a plane. A colour is a wheel: the hue around, its strength outward, white in the middle. Arrows: left and right turn the hue, up and down the strength.",
+      specimens: [
+        { says: "position", draw: () => <Aim /> },
+        { says: "colour", draw: () => <Aim colour /> },
+        { says: "colour, off", draw: () => <Aim colour off="This light has a colour wheel" /> },
+      ],
+    },
   ],
   Picker: [
     {
-      title: "Four kinds",
+      title: "Five kinds",
       note: "All of them pick one of a few. Which kind depends on how many options there are and how much room.",
       specimens: [
         { says: "tabs", draw: () => <Pick kind="tabs" label="Workspace" options={WORDS} /> },
         { says: "segments", draw: () => <Pick kind="segments" label="Speed" options={named(["half", "normal", "double"])} /> },
         { says: "cards: a line under each", draw: () => <Pick kind="cards" label="Tempo feed" options={CARDS.slice(0, 2)} /> },
+        { says: "pictures: known by their look", draw: () => <Pick kind="pictures" label="Gobo" options={gobos(["Open", "Dots", "Star", "Bars"])} /> },
         { says: "list: drawn by the kit, never by the system", draw: () => <Pick kind="list" label="Style" options={named(["House", "Techno", "Chill", "Drum and bass"])} /> },
       ],
     },
@@ -215,6 +270,25 @@ export const SHELVES: Record<Primitive, readonly Shelf[]> = {
         { says: "cards, one option off", draw: () => <Pick kind="cards" label="Tempo feed" options={CARDS} /> },
         { says: "list, one option off", draw: () => <Pick kind="list" label="Device" options={[...named(["APC mini", "Launchpad"]), { name: "nanoKONTROL", off: "Not plugged in" }]} /> },
         { says: "list, off", draw: () => <Pick kind="list" label="Style" options={named(["House"])} off="Engine not connected" /> },
+      ],
+    },
+    {
+      title: "Pictures: three choosers, one kind",
+      note: "A gobo chooser, the colour wheel of a light and a matrix effect chooser are the same control: one of a few, known by its look. Only the picture differs.",
+      specimens: [
+        { says: "gobo chooser", draw: () => <Pick kind="pictures" label="Gobo" options={gobos(["Open", "Dots", "Star", "Bars"])} /> },
+        { says: "colour wheel of a light: its slots, one split", draw: () => <Pick kind="pictures" label="Colour wheel" options={wheelSlots()} /> },
+        { says: "matrix effect chooser: a Preview runs in each option", draw: () => <Pick kind="pictures" label="Effect" options={effects()} /> },
+        { says: "one option off", draw: () => <Pick kind="pictures" label="Gobo" options={[...gobos(["Open", "Dots"]), { ...gobos(["Star"])[0], name: "Star", off: "Not on this wheel" }]} /> },
+        { says: "off", draw: () => <Pick kind="pictures" label="Gobo" options={gobos(["Open", "Dots", "Star"])} off="This light has no gobos" /> },
+      ],
+    },
+    {
+      title: "The tab bar",
+      note: "Tabs that do not fit scroll sideways and the picked one stays in view. One action may follow the tabs: a button with a dashed edge, never a tab. Press it to see the bar grow.",
+      specimens: [
+        { says: "tabs with an action after them", draw: () => <Pages /> },
+        { says: "more tabs than fit: it scrolls", draw: () => <Pages many /> },
       ],
     },
   ],

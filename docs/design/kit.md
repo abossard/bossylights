@@ -1,12 +1,12 @@
-# The kit: ten primitives, and what every control is made of
+# The kit: 11 primitives, and what every control is made of
 
 Written by `node scripts/write-kit-doc.mjs` from `ui/src/controls` and `ui/src/catalog/compose.ts`. Change the data there, never this file.
 The catalog shows the same as live pages, primitives first: `npm run catalog`.
 
 ```mermaid
 flowchart LR
-  R["212 controls<br/>one row each"] --> K["10 primitives<br/>named by what they are for"]
-  K --> V["22 kinds in use"]
+  R["212 controls<br/>one row each"] --> K["11 primitives<br/>named by what they are for"]
+  K --> V["24 kinds in use"]
   K --> C["colour<br/>one prop on all of them"]
   R -. "where it lives" .-> T["a tag:<br/>the screen"]
 ```
@@ -25,13 +25,14 @@ flowchart LR
 | **Button** | Do it, or switch it | action, toggle | 106 | 9 |
 | **Pad** | Play a look | one | 3 | – |
 | **Fader** | Set one value | one | 8 | – |
-| **XY** | Set two values at once | one | 3 | – |
-| **Picker** | Choose one of a few | tabs, segments, cards, list | 39 | – |
+| **XY** | Set two values at once | position, colour | 3 | – |
+| **Picker** | Choose one of a few | tabs, segments, cards, pictures, list | 39 | – |
 | **Field** | Give a value in words or in steps | text, search, steps | 25 | – |
 | **Status** | Read a state. Never pressed: no control is one, many carry one | lamp, pill, flag, value | – | 31 |
 | **Item** | A thing where it lives: pick it, open it, take it out | row, tile, cell, entry, chip, strip | 19 | – |
 | **Block** | A thing placed in time or on a grid: arrange it | bar, frame | 5 | – |
 | **Handle** | The edge of a thing: only dragged | edge, corner | 4 | – |
+| **Preview** | See it before it plays. Never pressed: no control is one, an option of a picker can carry one | matrix | – | – |
 
 ## Colour
 
@@ -186,12 +187,17 @@ Fixed props are the ones that never change for the control. Its words, its state
 | Channel fader | `dmx.channel.fader` | DMX | plain |  | Status.value |
 | Master to try | `how.master` | How it works | plain |  | Status.value |
 
-### XY (3)
+### XY, position (2)
 
 | Control | Name | Where | Colour | Fixed props | Carries |
 | --- | --- | --- | --- | --- | --- |
 | Movers position | `console.xy` | Console | plain |  |  |
 | Step position | `looks.step.position` | Looks | plain |  |  |
+
+### XY, colour (1)
+
+| Control | Name | Where | Colour | Fixed props | Carries |
+| --- | --- | --- | --- | --- | --- |
 | Colour wheel | `looks.step.colour.wheel` | Looks | plain |  |  |
 
 ### Picker, tabs (3)
@@ -221,15 +227,20 @@ Fixed props are the ones that never change for the control. Its words, its state
 | Frames a second | `inout.out.rate` | In/Out | plain |  |  |
 | Pick a walk | `how.walk` | How it works | plain |  |  |
 
-### Picker, cards (5)
+### Picker, cards (4)
 
 | Control | Name | Where | Colour | Fixed props | Carries |
 | --- | --- | --- | --- | --- | --- |
-| Gobo | `looks.step.gobo` | Looks | plain |  |  |
 | Pattern shape | `looks.pattern.shape` | Looks | plain |  |  |
 | Pick a model | `patch.add.model` | Patch | plain |  |  |
 | Pick a mode | `patch.add.mode` | Patch | plain |  |  |
 | Tempo feed | `inout.tempo.feed` | In/Out | plain |  |  |
+
+### Picker, pictures (1)
+
+| Control | Name | Where | Colour | Fixed props | Carries |
+| --- | --- | --- | --- | --- | --- |
+| Gobo | `looks.step.gobo` | Looks | plain |  |  |
 
 ### Picker, list (17)
 

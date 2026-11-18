@@ -30,7 +30,7 @@ export function kitDoc() {
   const kinds = groups.length;
 
   return [
-    "# The kit: ten primitives, and what every control is made of",
+    `# The kit: ${KIT.length} primitives, and what every control is made of`,
     "",
     "Written by `node scripts/write-kit-doc.mjs` from `ui/src/controls` and `ui/src/catalog/compose.ts`. Change the data there, never this file.",
     "The catalog shows the same as live pages, primitives first: `npm run catalog`.",

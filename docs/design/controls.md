@@ -22,7 +22,7 @@ flowchart LR
 | `ui/src/controls/machines.ts` | the state machines |
 | `ui/src/controls/findings.ts` | contradictions and missing controls |
 | `ui/src/controls.test.mjs` | no empty cell, every element has a row, every command is sent, every state is reached |
-| `ui/src/kit/` | ten primitives the controls are drawn with, named by what they are for: props in, a gesture out, no engine. Which one draws which control: `docs/design/kit.md` |
+| `ui/src/kit/` | the primitives the controls are drawn with, named by what they are for: props in, a gesture out, no engine. Which one draws which control: `docs/design/kit.md` |
 | `ui/src/catalog/` | the catalog: the primitives first, then one page per control with a live frame per situation and state, the command as it fires, rating and comment |
 
 ## How to read a row
@@ -113,7 +113,7 @@ The test of `DESIGN.md`, run on every control. Proposals until the owner rates t
 | Play on lights `looks.try` | Looks | The mockup says 'Try on lights'. The owner's decision 28: the word is Play, here as on Songs. 'Play on lights', then 'Stop' |
 | Put on Console `looks.put-on-console` | Looks | Today it works while locked. It changes what a pad does, so the lock holds it (decision 21) |
 | Add a colour `looks.step.colour.add` | Looks | Off with no reason at four colours. The palette says 'Four colours at most' |
-| Gobo `looks.step.gobo` | Looks | Pictures with no word. The name of the gobo goes under each picture |
+| Gobo `looks.step.gobo` | Looks | Pictures with no word in the mockup. The name of the gobo goes under each picture |
 | Item width handle `looks.seq.bar.edge` | Looks | The handle is on every bar at all times. It shows on the selected bar only |
 | Item width `looks.seq.width` | Looks | 'Narrower' is off with no reason at a quarter beat. It says 'A quarter beat is the least' |
 | Pattern measure `looks.pattern.measure` | Looks | Off with no reason at 1 and at 32 beats. It says '1 beat is the least' and '32 beats is the most' |
@@ -1537,7 +1537,7 @@ stateDiagram-v2
 | Remove a colour | `looks.step.colour.remove` | Takes one colour out of the step. The chip is the colour, with a cross | `SetStepProperty` | edit |
 | Add a colour | `looks.step.colour.add` | Adds one of twelve colours to the step. Four at most | `SetStepProperty` | edit |
 | Step position | `looks.step.position` | Where the step aims: pan left to right, tilt bottom to top | `SetStepProperty` | edit |
-| Gobo | `looks.step.gobo` | Picks the gobo of the step, by its picture | `SetStepProperty` | edit |
+| Gobo | `looks.step.gobo` | Picks the gobo of the step, by its picture. The slots are the ones of the light's gobo wheel | `SetStepProperty` | edit |
 | Step dimmer | `looks.step.dimmer` | How bright the step is, in percent | `SetStepProperty` | edit |
 | Step spin | `looks.step.spin` | How fast the gobo turns: slow, medium, fast | `SetStepProperty` | edit |
 | Sequence item | `looks.seq.item` | Selects one item of the sequence. Its use settings show below the grid | nothing: the selected item | view |
@@ -1858,7 +1858,7 @@ stateDiagram-v2
 | Remove a colour | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
 | Add a colour | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | yes. A button or a value: one mapping | **change**. Off with no reason at four colours. The palette says 'Four colours at most' |
 | Step position | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
-| Gobo | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | yes. A button or a value: one mapping | **change**. Pictures with no word. The name of the gobo goes under each picture |
+| Gobo | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | yes. A button or a value: one mapping | **change**. Pictures with no word in the mockup. The name of the gobo goes under each picture |
 | Step dimmer | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
 | Step spin | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
 | Sequence item | At once: the screen owns this state | None | no. Nothing in the show file changes | no. Selecting in the editor is done on screen | **keep**. It says what it is and what a press does |

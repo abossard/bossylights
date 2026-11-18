@@ -274,7 +274,7 @@ export const CONSOLE: Control[] = [
     screen: "Console",
     part: "XY pad",
     from: ["console/WidgetBody/movers-position"],
-    kit: "XY",
+    kit: "XY.position",
     kind: "play",
     does: "Aims the movers: pan left to right, tilt bottom to top. The position is yours until Release",
     sends: ["SetPosition"],

@@ -20,7 +20,7 @@ export function Home(props: { controls: readonly Control[]; primitives: readonly
     <article class="c-page c-homepage">
       <header class="c-page-head">
         <h1>Storyboard catalog</h1>
-        <p class="c-does">Ten primitives, named by what they are for. Every control is one of them with props, shown alone in every situation. Play a frame: the command shows as it fires. Rate each one.</p>
+        <p class="c-does">Eleven primitives, named by what they are for. Every control is one of them with props, shown alone in every situation. Play a frame: the command shows as it fires. Rate each one.</p>
       </header>
 
       <div class="c-numbers">

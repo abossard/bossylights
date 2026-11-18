@@ -67,6 +67,27 @@ export function placeIn(box: { left: number; top: number; width: number; height:
   };
 }
 
+/** Where a pointer is on a wheel: `around` 0 to 100 clockwise from the top, `out` 0 in the middle to 100 at the rim and beyond it. */
+export function wheelAt(box: { left: number; top: number; width: number; height: number }, x: number, y: number): { around: number; out: number } {
+  const rx = box.width / 2;
+  const ry = box.height / 2;
+  if (rx <= 0 || ry <= 0) return { around: 0, out: 0 };
+  const dx = (x - box.left - rx) / rx;
+  const dy = (y - box.top - ry) / ry;
+  // The middle has no direction: it reads as the top.
+  const turn = dx === 0 && dy === 0 ? 0 : (Math.atan2(dx, -dy) / (2 * Math.PI) + 1) % 1;
+  return { around: level(turn * 100) % 100, out: level(Math.hypot(dx, dy) * 100) };
+}
+
+/** Where a value sits on a wheel: percent of its box, from the left and from the top. */
+export function wheelSpot(around: number, out: number): { left: number; top: number } {
+  const angle = (around / 100) * 2 * Math.PI;
+  return { left: Math.round(50 + (out / 2) * Math.sin(angle)), top: Math.round(50 - (out / 2) * Math.cos(angle)) };
+}
+
+/** The colour of a place on the colour wheel: the hue around, white in the middle, full at the rim. */
+export const wheelColour = (around: number, out: number): string => `hsl(${Math.round(around * 3.6)} 100% ${Math.round(100 - out / 2)}%)`;
+
 /** What an arrow key does to a value: 1 a press, 10 with Shift or a page key, the ends with Home and End. */
 export function keyStep(key: string, shift: boolean): number | "start" | "end" | undefined {
   const by = shift ? 10 : 1;

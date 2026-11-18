@@ -311,7 +311,7 @@ export const LOOKS: Control[] = [
     name: "Step position",
     part: "Step editor, Position",
     from: ["looks/StepEditor/position#2"],
-    kit: "XY",
+    kit: "XY.position",
     does: "Where the step aims: pan left to right, tilt bottom to top",
     sends: ["SetStepProperty"],
     gestures: {
@@ -328,11 +328,11 @@ export const LOOKS: Control[] = [
     name: "Gobo",
     part: "Step editor, Gobo",
     from: ["looks/StepEditor/button#2"],
-    kit: "Picker.cards",
-    does: "Picks the gobo of the step, by its picture",
+    kit: "Picker.pictures",
+    does: "Picks the gobo of the step, by its picture. The slots are the ones of the light's gobo wheel",
     sends: ["SetStepProperty"],
     gestures: choice("Picks that gobo"),
-    first: change("Pictures with no word. The name of the gobo goes under each picture"),
+    first: change("Pictures with no word in the mockup. The name of the gobo goes under each picture"),
   }),
   edit({
     id: "looks.step.dimmer",
@@ -733,7 +733,7 @@ export const LOOKS: Control[] = [
     name: "Colour wheel",
     part: "Step editor, Colour",
     from: ["looks/OtherColour/colour-wheel-hue-around-strength"],
-    kit: "XY",
+    kit: "XY.colour",
     does: "Picks any colour: around is the hue, outward is how strong it is. Nothing is on the lights until 'Add this colour'",
     ui: "the colour being picked",
     gestures: {

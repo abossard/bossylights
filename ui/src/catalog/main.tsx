@@ -1,4 +1,4 @@
-// The storyboard catalog (issue #102). First the ten primitives of the kit, then every control of the
+// The storyboard catalog (issue #102). First the primitives of the kit, then every control of the
 // behaviour table under the primitive it is drawn with. Where a control lives on screen is a tag.
 // Its own app: `npm run catalog`. State flows one way: the address and the reviews in, pages out.
 import { createEffect, createMemo, createSignal, For, on, onCleanup, Show } from "solid-js";

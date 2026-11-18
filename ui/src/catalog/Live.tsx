@@ -6,6 +6,7 @@ import { Block, Button, Fader, Field, Handle, Item, named, offWith, Pad, Picker,
 import type { Act } from "./act.ts";
 import { linesOf, recipe } from "./compose.ts";
 import type { Look } from "./look.ts";
+import { gobos } from "./drawings.tsx";
 import { USES } from "./uses.ts";
 
 /** A press that comes up within this is short. Longer, it was a hold (the pad machine). */
@@ -88,12 +89,15 @@ export function Live(props: { control: Control; look: Look; act: (act: Act) => v
       );
     case "Fader":
       return <Fader label={l().label} value={l().value} {...off()} onChange={(value) => props.act({ is: "set", value, value2: l().value2 })} />;
-    case "XY":
-      return <XY label={l().label} pan={l().value} tilt={l().value2} held={l().on} {...off()} onChange={(value, value2) => props.act({ is: "set", value, value2 })} />;
+    case "XY.position":
+    case "XY.colour":
+      return <XY kind={c.kit === "XY.colour" ? "colour" : "position"} label={l().label} across={l().value} up={l().value2} held={l().on} {...off()} onChange={(value, value2) => props.act({ is: "set", value, value2 })} />;
     case "Picker.tabs":
       return <Picker kind="tabs" label={c.name} options={options().map((o, i) => (l().variant === "marked" && i === 1 ? { ...o, marked: true } : o))} picked={l().picked} onPick={pick} />;
     case "Picker.segments":
       return <Picker kind="segments" label={c.name} options={options()} picked={l().picked} {...some("size", oneOrNone(r.props.size, ["small"]))} {...some("fires", oneOrNone(r.props.fires, ["down"]))} {...off()} onPick={pick} />;
+    case "Picker.pictures":
+      return <Picker kind="pictures" label={c.name} options={gobos(l().options)} picked={l().picked} {...off()} onPick={pick} />;
     case "Picker.cards":
       return <Picker kind="cards" label={c.name} options={options().map((o) => ({ ...o, ...offWith(sideOff(o.name)) }))} picked={l().picked} onPick={pick} />;
     case "Picker.list":

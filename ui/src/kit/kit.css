@@ -218,6 +218,10 @@
   cursor: crosshair;
   overflow: hidden;
 }
+.k-xy[data-kind="colour"] { width: 160px; height: 160px; border-radius: 50%; overflow: visible; background: radial-gradient(circle, #fff 0%, transparent 70%), conic-gradient(#f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00); }
+.k-xy[data-kind="colour"].is-off { opacity: 0.35; }
+.k-xy-ring { position: absolute; width: 18px; height: 18px; margin: -9px 0 0 -9px; border-radius: 50%; border: 3px solid var(--ink); outline: 2px solid var(--paper); pointer-events: none; }
+.k-xy-swatch { display: inline-block; width: 14px; height: 14px; margin-right: 6px; vertical-align: -2px; border: var(--rule) solid var(--line); }
 .k-xy.is-held { --cross: var(--layer-manual); }
 .k-xy.is-off { --cross: var(--mute); border-style: dashed; border-color: var(--line); cursor: default; }
 .k-xy-h, .k-xy-v { position: absolute; background: var(--cross); pointer-events: none; }
@@ -255,6 +259,23 @@
 .k-pick[data-kind="cards"] .k-pick-opt[aria-checked="true"] { background: var(--paper); border-color: var(--paper); color: var(--ink); }
 .k-pick[data-kind="cards"] .k-pick-opt[aria-checked="true"] .k-sub { color: var(--ink); }
 .k-pick[data-kind="cards"] .k-pick-opt:disabled { border-style: dashed; }
+/* pictures: a drawing with its name under it */
+.k-pick[data-kind="pictures"] { flex-wrap: wrap; gap: var(--sp-2); }
+.k-pick[data-kind="pictures"] .k-pick-opt { min-width: 76px; padding: 6px 6px 4px; flex-direction: column; align-items: center; gap: 4px; background: var(--bg); border: var(--rule) solid var(--line); font-size: var(--text-sm); }
+.k-pick[data-kind="pictures"] .k-pick-opt:hover:not(:disabled) { border-color: var(--paper); }
+.k-pick[data-kind="pictures"] .k-pick-opt[aria-checked="true"] { background: var(--paper); border-color: var(--paper); color: var(--ink); }
+.k-pick[data-kind="pictures"] .k-pick-opt:disabled { border-style: dashed; }
+.k-pick[data-kind="pictures"] .k-pick-opt:disabled .k-pick-picture { opacity: 0.35; }
+.k-pick-picture { display: grid; place-items: center; min-width: 56px; min-height: 56px; background: #000; color: #fff; }
+.k-pick-picture svg { width: 48px; height: 48px; fill: currentColor; }
+.k-disc { display: block; width: 44px; height: 44px; border-radius: 50%; border: var(--rule) solid var(--line); }
+/* tabs that do not fit scroll sideways. One action may follow them: a button, never a tab */
+.k-pick-wrap:has(> .k-pick[data-kind="tabs"]) { flex-direction: row; align-items: center; max-width: 100%; }
+.k-pick[data-kind="tabs"] { overflow-x: auto; scrollbar-width: none; min-width: 0; }
+.k-pick-after { flex: none; height: var(--target); padding: 0 12px; background: none; border: var(--rule) dashed var(--line); color: var(--paper); cursor: pointer; white-space: nowrap; }
+.k-pick-after:hover:not(:disabled) { border-color: var(--paper); border-style: solid; }
+/* preview: an effect on a small model. Read only */
+.k-preview { display: block; background: #000; border: var(--rule) solid var(--line); image-rendering: pixelated; }
 /* list: the picked one alone, the others open below it. Drawn here, never by the system */
 .k-list-box { position: relative; }
 .k-list-button { position: relative; height: var(--target); min-width: 180px; padding: 0 12px; display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); text-align: left; background: var(--s1); color: var(--paper); border: var(--rule) solid var(--line); cursor: pointer; transition: border-color var(--t-fast); }

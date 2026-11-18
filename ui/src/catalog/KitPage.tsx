@@ -34,7 +34,7 @@ export function KitPage(props: { primitive: Primitive; controls: readonly Contro
       <For each={SHELVES[p]}>{(shelf) => <ShelfView shelf={shelf} />}</For>
 
       <h2>Drawn with it</h2>
-      <Show when={users.length} fallback={<p class="c-fact">No control is a {p} alone. It stands inside others: a lamp on a toggle, the state of a row, the NOW flag, a reading.</p>}>
+      <Show when={users.length} fallback={<p class="c-fact">No control is a {p} alone. It stands inside others: {p === "Preview" ? "an effect in an option of a picker, an effect beside its settings" : "a lamp on a toggle, the state of a row, the NOW flag, a reading"}.</p>}>
         <table class="c-table">
           <thead>
             <tr>

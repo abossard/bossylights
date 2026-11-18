@@ -11,13 +11,14 @@ export const PRIMITIVES = {
   Button: ["action", "toggle"],
   Pad: [],
   Fader: [],
-  XY: [],
-  Picker: ["tabs", "segments", "cards", "list"],
+  XY: ["position", "colour"],
+  Picker: ["tabs", "segments", "cards", "pictures", "list"],
   Field: ["text", "search", "steps"],
   Status: ["lamp", "pill", "flag", "value"],
   Item: ["row", "tile", "cell", "entry", "chip", "strip"],
   Block: ["bar", "frame"],
   Handle: ["edge", "corner"],
+  Preview: ["matrix"],
 } as const;
 
 export type Primitive = keyof typeof PRIMITIVES;
@@ -34,6 +35,7 @@ export const PRIMITIVE_FOR: Record<Primitive, string> = {
   Item: "A thing where it lives: pick it, open it, take it out",
   Block: "A thing placed in time or on a grid: arrange it",
   Handle: "The edge of a thing: only dragged",
+  Preview: "See it before it plays. Never pressed: no control is one, an option of a picker can carry one",
 };
 
 /** `Primitive.kind`, or the primitive alone when it has one kind. */
@@ -41,8 +43,11 @@ export const kitNames = (primitive: Primitive): string[] => (PRIMITIVES[primitiv
 
 type Named<P extends Primitive> = (typeof PRIMITIVES)[P] extends readonly [] ? P : `${P}.${(typeof PRIMITIVES)[P][number]}`;
 
+/** The primitives that are only read: no control is one. */
+type ReadOnly = "Status" | "Preview";
+
 /** What draws a control: a primitive and its kind. Where it lives on screen is `screen`, never the name of a component. */
-export type Kit = { [P in Exclude<Primitive, "Status">]: Named<P> }[Exclude<Primitive, "Status">];
+export type Kit = { [P in Exclude<Primitive, ReadOnly>]: Named<P> }[Exclude<Primitive, ReadOnly>];
 
 export const primitiveOf = (kit: Kit): Primitive => (kit.split(".")[0] ?? kit) as Primitive;
 /** Empty for a primitive of one kind. */

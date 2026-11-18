@@ -153,7 +153,7 @@ export function controlsDoc(inventory) {
         ["`ui/src/controls/machines.ts`", "the state machines"],
         ["`ui/src/controls/findings.ts`", "contradictions and missing controls"],
         ["`ui/src/controls.test.mjs`", "no empty cell, every element has a row, every command is sent, every state is reached"],
-        ["`ui/src/kit/`", "ten primitives the controls are drawn with, named by what they are for: props in, a gesture out, no engine. Which one draws which control: `docs/design/kit.md`"],
+        ["`ui/src/kit/`", "the primitives the controls are drawn with, named by what they are for: props in, a gesture out, no engine. Which one draws which control: `docs/design/kit.md`"],
         ["`ui/src/catalog/`", "the catalog: the primitives first, then one page per control with a live frame per situation and state, the command as it fires, rating and comment"],
       ],
     ),

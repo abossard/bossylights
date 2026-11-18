@@ -113,7 +113,7 @@ function plainAct(control: Control, look: Look, gesture: Act): Result {
     case "up":
       return { look: { ...look, variant: gesture.long ? "idle" : "manual", on: !gesture.long }, sent: [] };
     case "set":
-      return { look: { ...look, value: gesture.value, value2: gesture.value2 }, sent: send(control.kit === "XY" ? `pan ${gesture.value}, tilt ${gesture.value2}` : String(gesture.value)) };
+      return { look: { ...look, value: gesture.value, value2: gesture.value2 }, sent: send(control.kit === "XY.position" ? `pan ${gesture.value}, tilt ${gesture.value2}` : String(gesture.value)) };
     case "pick":
       return gesture.option === look.offOption ? { look, sent: [] } : { look: { ...look, picked: gesture.option }, sent: send(gesture.option) };
     case "text":
