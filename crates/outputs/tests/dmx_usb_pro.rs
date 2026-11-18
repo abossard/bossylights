@@ -1,6 +1,6 @@
 //! A DMX USB Pro against a fake serial port: a pseudo terminal. The test reads the other
-//! end and checks every byte; "unplugging" closes that end, and the finder hands in a new
-//! port by itself.
+//! end and checks every byte; "unplugging" closes that end, and the port thread opens a
+//! new port by itself.
 
 #![expect(
     clippy::disallowed_methods,
@@ -11,6 +11,7 @@ use outputs::dmx_usb_pro::{DmxUsbPro, Find, LINK_TIME, MESSAGE, never_wait};
 use outputs::{Device, Levels, Outcome};
 use serialport::{SerialPort, TTYPort};
 use std::io::Read;
+use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -66,7 +67,7 @@ fn every_frame_is_one_send_dmx_message() {
 }
 
 #[test]
-fn an_unplugged_port_fails_until_the_finder_hands_in_a_new_one() {
+fn an_unplugged_port_fails_until_the_port_thread_opens_a_new_one() {
     let (find, mut ends) = fake();
     let mut device = DmxUsbPro::open(find).unwrap();
     let frame = [Levels([42; 512])];
@@ -94,4 +95,34 @@ fn an_unplugged_port_fails_until_the_finder_hands_in_a_new_one() {
     assert_eq!(seen, [Outcome::Failed, Outcome::Accepted]);
     let mut end = ends.pop().expect("the finder opened a new port");
     assert_eq!(read_message(&mut end)[5], 42);
+}
+
+#[test]
+fn a_port_stuck_in_the_driver_never_holds_up_take() {
+    // A port whose writes wait, and nobody reads the other end: the driver queue fills and
+    // the port thread waits in `write` for good. A `take` that called the driver would too.
+    let (end, port) = TTYPort::pair().unwrap();
+    let mut port = Some(port);
+    let device = DmxUsbPro::open(Box::new(move || {
+        port.take()
+            .ok_or_else(|| std::io::Error::other("one port only"))
+    }))
+    .unwrap();
+    let (done, seen) = mpsc::channel();
+    thread::spawn(move || {
+        let mut device = device;
+        let frame = [Levels([1; 512])];
+        let mut outcomes = vec![];
+        while !outcomes.ends_with(&[Outcome::Dropped; 20]) {
+            thread::sleep(Duration::from_millis(5));
+            outcomes.push(device.take(&frame));
+        }
+        let _ = done.send(outcomes);
+    });
+    let outcomes = seen
+        .recv_timeout(Duration::from_secs(10))
+        .expect("take came back each time; a hang means it waited on the driver");
+    assert_eq!(outcomes.first(), Some(&Outcome::Accepted));
+    assert!(!outcomes.contains(&Outcome::Failed), "{outcomes:?}");
+    drop(end);
 }

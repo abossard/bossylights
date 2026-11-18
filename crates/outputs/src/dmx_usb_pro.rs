@@ -14,8 +14,8 @@
 //!
 //! | Thread | Does |
 //! |---|---|
-//! | output thread | [`DmxUsbPro::take`]: one non-blocking write, never more often than the link drains. A lost port goes to the finder; `take` fails until the finder hands in a new one |
-//! | finder, one per adapter | asleep. While the port is lost: looks for the adapter every [`LOOK_EVERY`], opens it and hands it in through a wait-free queue. Closes lost ports |
+//! | output thread | [`DmxUsbPro::take`]: puts the message in a one-slot wait-free queue and wakes the port thread. Never calls the serial driver: a vanishing device holds the driver up for many milliseconds |
+//! | port thread, one per adapter | owns the port: writes each message, never more often than the link drains. When a write fails it closes the port and looks for the adapter every [`LOOK_EVERY`] |
 
 use crate::{Device, Levels, Outcome};
 use engine_core::ADDRESSES;
@@ -26,7 +26,7 @@ use std::io::{self, ErrorKind};
 use std::os::fd::AsRawFd;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
-use std::thread;
+use std::thread::{self, Thread};
 use std::time::{Duration, Instant};
 
 /// The adapter's USB identity: an FTDI chip that calls itself "DMX USB PRO".
@@ -42,10 +42,12 @@ pub const MESSAGE: usize = 4 + 1 + ADDRESSES + 1;
 /// that comes sooner is dropped instead of queued.
 pub const LINK_TIME: Duration =
     Duration::from_nanos(MESSAGE as u64 * 11 * 1_000_000_000 * 5 / (BAUD as u64 * 4));
-/// How often the finder looks for a lost adapter.
+/// How often the port thread looks for a lost adapter.
 pub const LOOK_EVERY: Duration = Duration::from_millis(500);
-/// How often the finder checks whether the port was lost.
+/// How often an idle port thread checks whether it should stop.
 const WATCH_EVERY: Duration = Duration::from_millis(100);
+/// How long the port thread waits for a full driver queue before it tries again.
+const QUEUE_FULL: Duration = Duration::from_millis(1);
 
 /// Writes the message for a frame into `out`: the first 512 channels of the run.
 pub fn message(frame: &[Levels], out: &mut [u8; MESSAGE]) {
@@ -57,34 +59,34 @@ pub fn message(frame: &[Levels], out: &mut [u8; MESSAGE]) {
     end.copy_from_slice(&[0xE7]);
 }
 
-/// Finds a port and opens it. Runs on the finder thread, and once in [`DmxUsbPro::open`].
+/// Finds a port and opens it. Runs on the port thread, and once in [`DmxUsbPro::open`].
 pub type Find = Box<dyn FnMut() -> io::Result<TTYPort> + Send>;
 
-/// A DMX USB Pro, as the output thread holds it.
+/// A DMX USB Pro, as the output thread holds it: no port, only the queue to its thread.
 pub struct DmxUsbPro {
-    port: Option<TTYPort>,
     message: [u8; MESSAGE],
-    /// Bytes of the last message the driver did not take yet.
-    unsent: usize,
-    link_free_at: Option<Instant>,
-    /// Ports the finder opened.
-    found: rtrb::Consumer<TTYPort>,
-    /// Lost ports, for the finder to close.
-    lost: rtrb::Producer<TTYPort>,
-    /// Set while there is no port: the finder looks.
-    looking: Arc<AtomicBool>,
-    stop: Arc<AtomicBool>,
-    lost_with: LostWith,
+    to_port: rtrb::Producer<[u8; MESSAGE]>,
+    port_thread: Thread,
+    shared: Arc<Shared>,
 }
 
-/// Why the port was lost last: the system's error, as the output thread saw it.
-#[derive(Clone, Default)]
-pub struct LostWith(Arc<AtomicI32>);
+/// What the output thread and the port thread share.
+#[derive(Default)]
+struct Shared {
+    /// Set while there is no port.
+    lost: AtomicBool,
+    stop: AtomicBool,
+    /// The system error that lost the port last, 0 if none.
+    lost_with: AtomicI32,
+}
+
+/// Why the port was lost last: the system's error, as the port thread saw it.
+pub struct LostWith(Arc<Shared>);
 
 impl LostWith {
     /// The last error that lost the port, if one did.
     pub fn get(&self) -> Option<io::Error> {
-        match self.0.load(Ordering::Relaxed) {
+        match self.0.lost_with.load(Ordering::Relaxed) {
             0 => None,
             code => Some(io::Error::from_raw_os_error(code)),
         }
@@ -92,147 +94,121 @@ impl LostWith {
 }
 
 impl DmxUsbPro {
-    /// Finds and opens the port once, here, then starts the finder for later. Call it off
+    /// Finds and opens the port once, here, then hands it to its own thread. Call it off
     /// the output thread.
     pub fn open(mut find: Find) -> io::Result<Self> {
         let port = find()?;
-        let (found_in, found) = rtrb::RingBuffer::new(2);
-        let (lost, lost_out) = rtrb::RingBuffer::new(2);
-        let looking = Arc::new(AtomicBool::new(false));
-        let stop = Arc::new(AtomicBool::new(false));
-        let finder = Finder {
+        let (to_port, messages) = rtrb::RingBuffer::new(1);
+        let shared = Arc::new(Shared::default());
+        let port_thread = PortThread {
             find,
-            found: found_in,
-            lost: lost_out,
-            looking: Arc::clone(&looking),
-            stop: Arc::clone(&stop),
-        };
-        thread::Builder::new()
-            .name("dmx usb pro finder".into())
-            .spawn(move || finder.run())?;
-        Ok(Self {
             port: Some(port),
+            messages,
+            shared: Arc::clone(&shared),
+        };
+        let handle = thread::Builder::new()
+            .name("dmx usb pro port".into())
+            .spawn(move || port_thread.run())?;
+        Ok(Self {
             message: [0; MESSAGE],
-            unsent: 0,
-            link_free_at: None,
-            found,
-            lost,
-            looking,
-            stop,
-            lost_with: LostWith::default(),
+            to_port,
+            port_thread: handle.thread().clone(),
+            shared,
         })
     }
 
     /// Why the port was lost last; readable from any thread.
     pub fn lost_with(&self) -> LostWith {
-        self.lost_with.clone()
-    }
-
-    /// The port is gone: hand it to the finder to close, and let it look.
-    fn lose(&mut self, error: Errno) -> Outcome {
-        self.lost_with.0.store(error as i32, Ordering::Relaxed);
-        if let Some(port) = self.port.take() {
-            let _ = self.lost.push(port); // the finder empties it every WATCH_EVERY
-        }
-        self.unsent = 0;
-        self.link_free_at = None;
-        self.looking.store(true, Ordering::Release);
-        Outcome::Failed
+        LostWith(Arc::clone(&self.shared))
     }
 }
 
 impl Device for DmxUsbPro {
-    /// One non-blocking write. A busy link or a full driver queue drops the frame.
+    /// Hands the message to the port thread. While it has not taken the last one yet,
+    /// this frame is dropped; while the port is lost, it fails.
     fn take(&mut self, frame: &[Levels]) -> Outcome {
-        if let Ok(port) = self.found.pop() {
-            if let Some(old) = self.port.replace(port) {
-                let _ = self.lost.push(old);
-            }
-            self.unsent = 0;
-            self.link_free_at = None;
-        }
-        let Some(port) = &self.port else {
+        if self.shared.lost.load(Ordering::Acquire) {
             return Outcome::Failed;
-        };
-        let now = Instant::now();
-        // Half a message would garble the link: finish it first, drop this frame.
-        if self.unsent > 0 {
-            let from = MESSAGE - self.unsent;
-            return match write(port, self.message.get(from..).unwrap_or_default()) {
-                Ok(written) => {
-                    self.unsent -= written;
-                    Outcome::Dropped
-                }
-                Err(error) => self.lose(error),
-            };
         }
-        if self.link_free_at.is_some_and(|free| free > now) {
+        if self.to_port.is_full() {
             return Outcome::Dropped;
         }
         message(frame, &mut self.message);
-        match write(port, &self.message) {
-            Ok(0) => Outcome::Dropped,
-            Ok(written) => {
-                self.unsent = MESSAGE - written;
-                self.link_free_at = Some(now + LINK_TIME);
+        match self.to_port.push(self.message) {
+            Ok(()) => {
+                self.port_thread.unpark();
                 Outcome::Accepted
             }
-            Err(error) => self.lose(error),
+            Err(_) => Outcome::Dropped,
         }
     }
 }
 
 impl Drop for DmxUsbPro {
     fn drop(&mut self) {
-        self.stop.store(true, Ordering::Relaxed); // the finder ends within WATCH_EVERY
+        self.shared.stop.store(true, Ordering::Relaxed);
+        self.port_thread.unpark(); // it ends and closes the port on its own thread
     }
 }
 
-/// One `write` call that never waits: how many bytes the driver took, 0 if none. Straight
-/// to the system: serialport's own write polls first, turns an interrupted call or an
-/// odd poll result into an error, and allocates for every error.
-fn write(port: &TTYPort, bytes: &[u8]) -> Result<usize, Errno> {
-    match nix::unistd::write(port.as_raw_fd(), bytes) {
-        Err(Errno::EAGAIN | Errno::EINTR) => Ok(0),
-        result => result,
-    }
-}
-
-/// Looks for the adapter while the port is lost, off the output thread.
-struct Finder {
+/// The one thread that calls the serial driver for this adapter.
+struct PortThread {
     find: Find,
-    found: rtrb::Producer<TTYPort>,
-    lost: rtrb::Consumer<TTYPort>,
-    looking: Arc<AtomicBool>,
-    stop: Arc<AtomicBool>,
+    port: Option<TTYPort>,
+    messages: rtrb::Consumer<[u8; MESSAGE]>,
+    shared: Arc<Shared>,
 }
 
-impl Finder {
+impl PortThread {
     #[expect(
         clippy::disallowed_methods,
-        reason = "the finder thread sleeps; the output thread never does"
+        reason = "the port thread sleeps; the output thread never does"
     )]
     fn run(mut self) {
-        while !self.stop.load(Ordering::Relaxed) {
-            while let Ok(port) = self.lost.pop() {
-                drop(port); // closed here, never on the output thread
-            }
-            if !self.looking.load(Ordering::Acquire) {
-                thread::sleep(WATCH_EVERY);
+        while !self.shared.stop.load(Ordering::Relaxed) {
+            let Some(port) = &self.port else {
+                // A lost adapter is gone for a while; then look again.
+                thread::sleep(LOOK_EVERY);
+                if let Ok(port) = (self.find)() {
+                    while self.messages.pop().is_ok() {} // from before the loss
+                    self.port = Some(port);
+                    self.shared.lost.store(false, Ordering::Release);
+                }
                 continue;
-            }
-            if let Ok(port) = (self.find)() {
-                // Before the hand-over: if the new port is lost at once, the output
-                // thread's `true` comes after this and is not overwritten.
-                self.looking.store(false, Ordering::Release);
-                if let Err(rtrb::PushError::Full(port)) = self.found.push(port) {
-                    drop(port);
-                    self.looking.store(true, Ordering::Release);
+            };
+            let Ok(message) = self.messages.pop() else {
+                thread::park_timeout(WATCH_EVERY);
+                continue;
+            };
+            let started = Instant::now();
+            match write_all(port, &message, &self.shared.stop) {
+                Ok(()) => thread::sleep(LINK_TIME.saturating_sub(started.elapsed())),
+                Err(error) => {
+                    self.shared.lost_with.store(error as i32, Ordering::Relaxed);
+                    self.shared.lost.store(true, Ordering::Release);
+                    self.port = None; // closed here, never on the output thread
                 }
             }
-            thread::sleep(LOOK_EVERY);
         }
     }
+}
+
+/// Writes the whole message, straight to the system: a full driver queue is waited out
+/// here, on the port thread. Half a message would garble the link.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the port thread sleeps; the output thread never does"
+)]
+fn write_all(port: &TTYPort, message: &[u8], stop: &AtomicBool) -> Result<(), Errno> {
+    let mut rest = message;
+    while !rest.is_empty() && !stop.load(Ordering::Relaxed) {
+        match nix::unistd::write(port.as_raw_fd(), rest) {
+            Ok(0) | Err(Errno::EAGAIN | Errno::EINTR) => thread::sleep(QUEUE_FULL),
+            Ok(written) => rest = rest.get(written..).unwrap_or_default(),
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
 }
 
 /// The finder for real adapters: the `adapter`th DMX USB Pro by USB identity, opened at
@@ -292,7 +268,8 @@ fn open_port(name: &str) -> io::Result<TTYPort> {
     Ok(port)
 }
 
-/// Makes writes on `port` return at once, also for a port a test made.
+/// Makes writes on `port` return at once, and its close never wait for the queue to
+/// drain; also for a port a test made.
 pub fn never_wait(port: &TTYPort) -> io::Result<()> {
     fcntl(port.as_raw_fd(), FcntlArg::F_SETFL(OFlag::O_NONBLOCK))
         .map(|_| ())
