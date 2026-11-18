@@ -127,14 +127,14 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-  O["Everything else"] -- "messages,<br/>no shared locks" --> RT["Tick thread<br/>on a steady beat"] -- "frames" --> OUT["Output"]
+  O["Everything else"] -- "messages and opened devices,<br/>no shared locks" --> RT["Tick thread<br/>wakes when the next<br/>output is due"] -- "frames,<br/>never waits" --> OUT["Outputs"]
 ```
 
 | On the tick thread | |
 |---|---|
 | Locks | no |
 | Allocation | no |
-| Blocking calls, files, network | no (Output sends, nothing else) |
+| Blocking calls, files, network | no. Outputs send on sockets opened elsewhere, non-blocking: a full socket drops the frame |
 | Logging | no. It counts, others read the counters |
 | Calls outward | no. It never waits for anyone |
 
