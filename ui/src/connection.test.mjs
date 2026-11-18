@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { notSent, transition, versionEvent } from "./connection.ts";
+import { notSent, pickEngine, transition, versionEvent } from "./connection.ts";
 
 // Every state and event pair: [from, event, to, effects]
 const table = [
@@ -69,4 +69,15 @@ const unsent = [
 
 for (const [state, reason] of unsent) {
   test(`a command in ${state}: ${reason ?? "sent"}`, () => assert.equal(notSent(state), reason));
+}
+
+// The page's query string, what the shell told the window, the engine address used: [search, told, used]
+const engines = [
+  ["", undefined, "ws://127.0.0.1:7744/api"],
+  ["", "ws://127.0.0.1:7798/api", "ws://127.0.0.1:7798/api"],
+  ["?engine=ws://example:1/api", "ws://127.0.0.1:7798/api", "ws://example:1/api"],
+  ["?other=1", undefined, "ws://127.0.0.1:7744/api"],
+];
+for (const [search, told, used] of engines) {
+  test(`engine for ${JSON.stringify(search)} told ${told}: ${used}`, () => assert.equal(pickEngine(search, told), used));
 }

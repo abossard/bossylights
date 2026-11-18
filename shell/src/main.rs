@@ -13,6 +13,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 #![forbid(unsafe_code)]
 
+use std::fs::File;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::process::{Child, Command};
@@ -23,6 +24,9 @@ use std::time::{Duration, Instant};
 const ADDRESS: &str = "127.0.0.1:7744";
 /// How long an orderly stop may take before the shell kills its own engine.
 const STOP: Duration = Duration::from_secs(3);
+/// How long an engine may take to connect and to answer `Stop`, each. An engine that does
+/// not answer is killed, if it is ours, after that.
+const ANSWER: Duration = Duration::from_secs(1);
 
 /// What answered on the engine's address.
 #[derive(Debug, PartialEq, Eq)]
@@ -49,8 +53,22 @@ fn main() {
         eprintln!("bossylights: not an address: {address}");
         std::process::exit(2);
     };
+    // One window per engine: a second window closing would stop an engine in use.
+    let Some(_window) = one_window(address) else {
+        eprintln!("bossylights: a window for the engine on {address} is already open");
+        return;
+    };
     let mut engine = meet(address);
     tauri::Builder::default()
+        .setup(move |app| {
+            eprintln!("bossylights: the window talks to the engine on {address}");
+            tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::default())
+                .title("Bossylights")
+                .inner_size(640.0, 420.0)
+                .initialization_script(window_script(address))
+                .build()?;
+            Ok(())
+        })
         .build(tauri::generate_context!())
         .expect("the window could not be created")
         .run(move |_, event| {
@@ -58,6 +76,19 @@ fn main() {
                 stop(address, &mut engine);
             }
         });
+}
+
+/// The lock that keeps one window per engine address. It goes with the process, however it ends.
+fn one_window(address: SocketAddr) -> Option<File> {
+    let name = format!("bossylights-{}-{}.lock", address.ip(), address.port());
+    let file = File::create(std::env::temp_dir().join(name)).ok()?;
+    file.try_lock().ok()?;
+    Some(file)
+}
+
+/// What the window runs before its page: which engine it talks to.
+fn window_script(address: SocketAddr) -> String {
+    format!("window.__BOSSYLIGHTS_ENGINE__ = \"ws://{address}/api\";")
 }
 
 /// Adopts the engine on `address`, or starts one, or says why it starts nothing.
@@ -89,11 +120,18 @@ fn meet(address: SocketAddr) -> Engine {
 fn start_engine(address: SocketAddr) -> Option<Child> {
     let name = format!("bossylights-engine{}", std::env::consts::EXE_SUFFIX);
     let path = std::env::current_exe().ok()?.with_file_name(name);
-    Command::new(&path)
-        .args(["--listen", &address.to_string()])
+    detach(Command::new(&path).args(["--listen", &address.to_string()]))
         .spawn()
         .inspect_err(|error| eprintln!("bossylights: cannot start {}: {error}", path.display()))
         .ok()
+}
+
+/// The engine gets a process group of its own: a signal to the shell (Ctrl-C, a closing
+/// terminal) does not reach it.
+fn detach(command: &mut Command) -> &mut Command {
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(command, 0);
+    command
 }
 
 /// The whole HTTP answer to `GET /version`, or `None` when nothing listens.
@@ -122,30 +160,51 @@ fn found(answer: Option<&str>) -> Found {
     }
 }
 
+/// Whether quitting orders the engine to stop. An engine of our own that has died is gone:
+/// whoever listens on its address now is another shell's engine.
+fn orders_stop(engine: &mut Engine) -> bool {
+    match engine {
+        Engine::NotOurs => false,
+        Engine::Adopted => true,
+        Engine::Own(child) => matches!(child.try_wait(), Ok(None)),
+    }
+}
+
 /// Quitting stops the engine in an orderly way. Its own engine is killed if it does not
 /// end in time.
 fn stop(address: SocketAddr, engine: &mut Engine) {
-    match engine {
-        Engine::NotOurs => {}
-        Engine::Adopted => send_stop(address),
-        Engine::Own(child) => {
-            send_stop(address);
-            let until = Instant::now() + STOP;
-            while matches!(child.try_wait(), Ok(None)) && Instant::now() < until {
-                thread::sleep(Duration::from_millis(20));
-            }
-            if matches!(child.try_wait(), Ok(None)) {
-                let _ = child.kill();
-                let _ = child.wait();
-            }
+    if !orders_stop(engine) {
+        return;
+    }
+    send_stop(address, ANSWER);
+    if let Engine::Own(child) = engine {
+        let until = Instant::now() + STOP;
+        while matches!(child.try_wait(), Ok(None)) && Instant::now() < until {
+            thread::sleep(Duration::from_millis(20));
+        }
+        if matches!(child.try_wait(), Ok(None)) {
+            let _ = child.kill();
+            let _ = child.wait();
         }
     }
 }
 
-/// Sends the API's `Stop` and waits for its answer.
-fn send_stop(address: SocketAddr) {
-    let stopped =
-        tungstenite::connect(format!("ws://{address}/api")).and_then(|(mut socket, _)| {
+/// Sends the API's `Stop` and waits for its answer, each step at most `timeout`.
+fn send_stop(address: SocketAddr, timeout: Duration) {
+    let stopped = TcpStream::connect_timeout(&address, timeout)
+        .map_err(tungstenite::Error::Io)
+        .and_then(|stream| {
+            stream
+                .set_read_timeout(Some(timeout))
+                .and_then(|()| stream.set_write_timeout(Some(timeout)))
+                .map_err(tungstenite::Error::Io)?;
+            let (mut socket, _) = tungstenite::client(format!("ws://{address}/api"), stream)
+                .map_err(|error| match error {
+                    tungstenite::HandshakeError::Failure(error) => error,
+                    tungstenite::HandshakeError::Interrupted(_) => {
+                        tungstenite::Error::Io(std::io::ErrorKind::TimedOut.into())
+                    }
+                })?;
             socket.send(tungstenite::Message::text("\"Stop\""))?;
             socket.read().map(drop)
         });
@@ -185,6 +244,127 @@ mod tests {
         ];
         for (answer, expected) in cases {
             assert_eq!(found(answer.as_deref()), expected, "{answer:?}");
+        }
+    }
+
+    /// A listener that accepts and never answers.
+    fn mute() -> (std::net::TcpListener, SocketAddr) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        (listener, address)
+    }
+
+    #[test]
+    fn an_engine_that_never_answers_does_not_hold_the_stop() {
+        let (listener, address) = mute();
+        let holding = thread::spawn(move || listener.accept().map(|(stream, _)| stream));
+        let (done, returned) = std::sync::mpsc::channel();
+        thread::spawn(move || {
+            send_stop(address, Duration::from_millis(100));
+            let _ = done.send(());
+        });
+        // A hang guard of seconds: `send_stop` must return at all.
+        assert_eq!(returned.recv_timeout(Duration::from_secs(10)), Ok(())); // guard
+        drop(holding);
+    }
+
+    fn dead() -> Child {
+        let mut child = Command::new("true").spawn().unwrap();
+        child.wait().unwrap();
+        child
+    }
+
+    #[test]
+    fn a_shell_orders_a_stop_only_for_an_engine_it_may_stop() {
+        // (the engine, whether a Stop is ordered)
+        let cases = [
+            ("adopted", Engine::Adopted, true),
+            ("not ours", Engine::NotOurs, false),
+            ("own, died meanwhile", Engine::Own(dead()), false),
+            (
+                "own, running",
+                Engine::Own(Command::new("sleep").arg("30").spawn().unwrap()),
+                true,
+            ),
+        ];
+        for (name, mut engine, ordered) in cases {
+            assert_eq!(orders_stop(&mut engine), ordered, "{name}");
+            if let Engine::Own(child) = &mut engine {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        }
+    }
+
+    #[test]
+    fn a_dead_engine_of_our_own_gets_no_stop() {
+        let (listener, address) = mute();
+        listener.set_nonblocking(true).unwrap();
+        stop(address, &mut Engine::Own(dead()));
+        assert!(
+            listener.accept().is_err(),
+            "a Stop was sent to whoever listens now"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_engine_starts_in_a_process_group_of_its_own() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "ps -o pgid= -p $$"]);
+        let output = detach(&mut command).output().unwrap();
+        let group: u32 = String::from_utf8(output.stdout)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        // `ps` ran in the shell's process; the group is not ours.
+        let ours = Command::new("sh")
+            .args(["-c", "ps -o pgid= -p $$"])
+            .output()
+            .unwrap();
+        let ours: u32 = String::from_utf8(ours.stdout)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        assert_ne!(group, ours);
+    }
+
+    #[test]
+    fn one_window_per_engine_address() {
+        // Addresses nobody else uses right now: the lock is per address, and tests may run side by side.
+        let (_first_taken, first) = mute();
+        let (_other_taken, other) = mute();
+        let held = one_window(first);
+        assert!(held.is_some(), "the first window");
+        assert!(
+            one_window(first).is_none(),
+            "a second window for the same engine"
+        );
+        assert!(one_window(other).is_some(), "a window for another engine");
+        drop(held);
+        assert!(
+            one_window(first).is_some(),
+            "the lock is free once the window is gone"
+        );
+    }
+
+    #[test]
+    fn the_window_is_told_which_engine_to_talk_to() {
+        // (address, the script the window runs before the page)
+        let cases = [
+            (
+                "127.0.0.1:7744",
+                "window.__BOSSYLIGHTS_ENGINE__ = \"ws://127.0.0.1:7744/api\";",
+            ),
+            (
+                "127.0.0.1:7798",
+                "window.__BOSSYLIGHTS_ENGINE__ = \"ws://127.0.0.1:7798/api\";",
+            ),
+        ];
+        for (address, script) in cases {
+            assert_eq!(window_script(address.parse().unwrap()), script);
         }
     }
 }

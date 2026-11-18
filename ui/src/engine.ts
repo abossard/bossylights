@@ -2,7 +2,7 @@
 // What happens next is decided by the state machine in connection.ts; what the
 // engine reported is kept by picture.ts.
 import { createSignal, type Accessor } from "solid-js";
-import { START, notSent, transition, versionEvent, type Connection, type ConnectionEvent, type Effect } from "./connection";
+import { START, notSent, pickEngine, transition, versionEvent, type Connection, type ConnectionEvent, type Effect } from "./connection";
 import { API_VERSION, type Command, type Refusal, type Reply, type Request } from "./engine-api";
 import { receive, type Picture } from "./picture";
 
@@ -17,12 +17,11 @@ export interface Engine {
   close: () => void;
 }
 
-const DEFAULT_URL = "ws://127.0.0.1:7744/api";
 const RETRY_MS = 1000;
 
-/** The engine's API. `?engine=ws://host:port/api` picks another engine. */
+/** The engine's API. `?engine=ws://host:port/api` picks another engine; the desktop shell names its own. */
 export function engineUrl(): string {
-  return new URLSearchParams(location.search).get("engine") ?? DEFAULT_URL;
+  return pickEngine(location.search, (window as { __BOSSYLIGHTS_ENGINE__?: string }).__BOSSYLIGHTS_ENGINE__);
 }
 
 /** Connects to the engine, subscribes to its state and keeps reconnecting until closed. */

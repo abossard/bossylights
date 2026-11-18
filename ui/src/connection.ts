@@ -50,3 +50,10 @@ export function versionEvent(answer: string | undefined, mine: number): Connecti
 export function notSent(state: Connection): string | undefined {
   return state === "connected" ? undefined : `not sent: the engine is ${state}`;
 }
+
+const DEFAULT_ENGINE = "ws://127.0.0.1:7744/api";
+
+/** The engine to talk to: `?engine=` in the page's address, else what the shell told the window, else the default. */
+export function pickEngine(search: string, told: string | undefined): string {
+  return new URLSearchParams(search).get("engine") ?? told ?? DEFAULT_ENGINE;
+}

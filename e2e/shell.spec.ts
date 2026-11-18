@@ -69,6 +69,7 @@ test("kill the shell: the engine keeps sending, a new shell adopts it and the fr
   let second: Shell | undefined;
   try {
     await expect.poll(first.said, WAIT).toContain(`started the engine on ${ADDRESS}`);
+    await expect.poll(first.said, WAIT).toContain(`the window talks to the engine on ${ADDRESS}`);
     await expect.poll(health, WAIT).toBe(200);
     const kind = { Ddp: { address: `127.0.0.1:${udp.address().port}`, color: "Rgb" } };
     const command = { SetOutput: { output: 16, kind, universes: { first: 1, count: 1 }, rate: "30" } };
@@ -91,6 +92,25 @@ test("kill the shell: the engine keeps sending, a new shell adopts it and the fr
     if ((await health()) === 200) expect(await request("Stop")).toBe("Stopping");
     await expect.poll(health, WAIT).toBe("nobody");
     udp.close();
+  }
+});
+
+test("a second shell for the same engine opens no window and stops nothing", async () => {
+  test.setTimeout(120_000);
+  const first = startShell();
+  let second = first;
+  try {
+    await expect.poll(first.said, WAIT).toContain("the window talks to");
+    second = startShell();
+    await expect.poll(second.said, WAIT).toContain("a window for the engine on");
+    await expect.poll(() => second.process.exitCode, WAIT).toBe(0);
+    expect(second.said()).not.toContain("the window talks to");
+    expect(await health()).toBe(200);
+  } finally {
+    await kill(second);
+    await kill(first);
+    if ((await health()) === 200) expect(await request("Stop")).toBe("Stopping");
+    await expect.poll(health, WAIT).toBe("nobody");
   }
 });
 
