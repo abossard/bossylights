@@ -108,6 +108,12 @@ flowchart LR
 
 Rules need song sections. A song that is not analysed has no drop to aim at, so those rules do not fire.
 
+| Where | What |
+|---|---|
+| Looks screen | every autopilot setting: styles (a named set of rules), rules, the groups it may use, how wild, never dark |
+| Console and LIVE | only on or off, and which style |
+| Songs | nothing. The autopilot is not song specific |
+
 ## Where each idea comes from
 
 | Idea | Source |
@@ -145,3 +151,4 @@ Rules need song sections. A song that is not analysed has no drop to aim at, so 
 | 1 | Testing in the editor: the plan is a "Try on lights" button and no animated preview. This got a "no" once without a reason. |
 | 2 | Five of the six ways above are not rated yet (only way 4 is). |
 | 3 | Which patterns ship first, and how a pattern is tuned (size, direction, density). |
+| 4 | Rules as "when, pick, fit" inside a style: on the Looks screen from review 2 on, not rated yet. |

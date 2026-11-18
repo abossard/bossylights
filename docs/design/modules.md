@@ -32,6 +32,7 @@ flowchart LR
   end
 
   SURF["Surface"]
+  CTRL["Controllers<br/>new, not rated yet"]
   DOOR{{"Engine<br/>commands in, state out"}}
   SHOW["Show"]
   AUTO["Autopilot"]
@@ -49,7 +50,8 @@ flowchart LR
 
   UI --> DOOR
   AG --> DOOR
-  HW --> SURF --> DOOR
+  HW --> CTRL --> DOOR
+  SURF --> DOOR
   SHOW --> DOOR
   AUTO --> DOOR
   MUSIC --> AUTO
@@ -75,7 +77,7 @@ flowchart LR
   R1["Every writer goes<br/>through the Engine"] ~~~ R2["The core never<br/>calls outward"] ~~~ R3["Only Output knows bytes<br/>Only Rig knows addresses"]
 ```
 
-## The twelve modules
+## The thirteen modules
 
 The bar shows depth: interface size on the left, what it hides on the right.
 
@@ -89,7 +91,8 @@ The bar shows depth: interface size on the left, what it hides on the right.
 | **Fixture library** | `search` `model` | QLC+, OFL and GDTF file formats | ▮▮ → ▮▮▮▮▮ |
 | **Output** | `devices` `send` | USB timing, reconnects, Art-Net, sACN, DDP, laser DAC | ▮▮ → ▮▮▮▮▮▮▮ |
 | **Project** | `read` `edit` `undo` `redo` | file format, autosave, migration, history | ▮▮▮▮ → ▮▮▮▮▮▮ |
-| **Surface** | `layout` `press` `reflect` | widgets, pages, MIDI learn, controller profiles, pad colours | ▮▮▮ → ▮▮▮▮▮▮▮ |
+| **Surface** | `layout` `press` | widgets, pages | ▮▮ → ▮▮▮▮▮ |
+| **Controllers** (new, not rated yet) | `devices` `learn` `mappings` | MIDI, OSC, controller profiles, pad colours sent back | ▮▮▮ → ▮▮▮▮▮▮ |
 | **Show** | `record` `play` `edit` | tracks, clips, nested song shows, quantize, section blocks | ▮▮▮ → ▮▮▮▮▮▮ |
 | **Music** | `playing` `analyse` | VirtualDJ protocols, analysis pipeline, beat grids, confidence | ▮▮ → ▮▮▮▮▮▮ |
 | **Autopilot** | `start` `stop` | choosing looks, not repeating, staying out of your hands' way | ▮▮ → ▮▮▮▮▮ |
@@ -119,14 +122,14 @@ sequenceDiagram
 
 Screens are thin. Each is a view of one or two modules through the Engine.
 
-| Screen | Surface | Mixer | Show | Music | Autopilot | Project | Rig | Library | Output | Clock |
-|---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
-| Console | ● | ● | | | | | | | | |
-| Songs (show and autopilot) | | ● | ● | ● | ● | | | | | ● |
-| Looks | | ● | | | | ● | | | | |
-| Patch | | | | | | | ● | ● | | |
-| DMX | | ● | | | | | ● | | ● | |
-| In/Out | ● | | | | | | | | ● | ● |
+| Screen | Surface | Controllers | Mixer | Show | Music | Autopilot | Project | Rig | Library | Output | Clock |
+|---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
+| Console | ● | | ● | | | | | | | | |
+| Songs | | | ● | ● | ● | | | | | | ● |
+| Looks (with autopilot settings) | | | ● | | | ● | ● | | | | |
+| Patch | | | | | | | | ● | ● | | |
+| DMX | | | ● | | | | | ● | | ● | |
+| In/Out | | ● | | | | | | | | ● | ● |
 
 ## What gets no module
 
@@ -138,14 +141,14 @@ flowchart LR
   classDef no stroke:#ef3e7b,stroke-width:2px,stroke-dasharray: 5 3
 ```
 
-## Answers from review 1
+## Answers from reviews 1 and 2
 
 | # | Question | Decided |
 |---|---|---|
 | 1 | Is a Door with three operations believable? | not under that name. It is now called **Engine**, and it accepts a listed set of commands, not "anything" |
-| 2 | Can you play something that is not saved? | everything you try is saved by itself, so the question disappears |
-| 3 | Where does controller mapping live? | in Surface. Learn works on every control in the app |
+| 2 | Can you play something that is not saved? | no. Everything playable lives in Project, and what you try is saved by itself |
+| 3 | Where does controller mapping live? | review 2: in In/Out, like QLC+ profiles. So mapping leaves Surface and becomes the Controllers module. Learn still works on every control in the app |
 | 4 | Music and Autopilot | two modules: knowing and deciding |
 | 5 | Hardest module to keep narrow | open |
 
-Details: [review-1.md](review-1.md).
+Details: [review-1.md](review-1.md), [review-2.md](review-2.md).
