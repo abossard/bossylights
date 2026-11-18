@@ -27,10 +27,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-/// Starts a thread named `name` that wakes once every `period`, asks for real-time
+/// Starts a thread named `name` that wakes when it has work, asks for real-time
 /// priority on it, then runs `run` with the answer. Returns once the answer is known.
 /// Fails only when the system refuses a thread.
-pub fn spawn<F, T>(name: &str, period: Duration, run: F) -> io::Result<(JoinHandle<T>, Priority)>
+pub fn spawn<F, T>(name: &str, run: F) -> io::Result<(JoinHandle<T>, Priority)>
 where
     F: FnOnce(Priority) -> T + Send + 'static,
     T: Send + 'static,
@@ -39,7 +39,7 @@ where
     let thread = thread::Builder::new().name(name.into()).spawn({
         let answer = Arc::clone(&answer);
         move || {
-            let priority = priority(ask(period));
+            let priority = priority(ask());
             answer.store(to_bits(priority), Ordering::Release);
             run(priority)
         }
@@ -95,15 +95,16 @@ fn from_bits(bits: u64) -> Option<Priority> {
     }
 }
 
-/// The Mach time-constraint policy: every `period` the thread needs about
-/// `COMPUTATION` of CPU, done within `CONSTRAINT` after it wakes. Spike #23 measured
-/// these values: 0 of 26 399 frames off at 44 a second. Answers a `kern_return_t`.
+/// The Mach time-constraint policy: on each wake the thread needs about `COMPUTATION`
+/// of CPU, done within `CONSTRAINT`. Period 0: it wakes when an output is due, at no
+/// steady period (#125). Spike #23 measured these values: 0 of 26 399 frames off at 44
+/// a second. Answers a `kern_return_t`.
 #[cfg(target_os = "macos")]
 #[expect(
     unsafe_code,
     reason = "the Mach thread policy has no safe wrapper; each block says why it is sound"
 )]
-fn ask(period: Duration) -> Option<i32> {
+fn ask() -> Option<i32> {
     /// Sleep, then spin the last millisecond, then compute the frame.
     const COMPUTATION: Duration = Duration::from_millis(2);
     const CONSTRAINT: Duration = Duration::from_millis(5);
@@ -132,7 +133,7 @@ fn ask(period: Duration) -> Option<i32> {
             .map_or(u32::MAX, |t| u32::try_from(t).unwrap_or(u32::MAX))
     };
     let mut policy = libc::thread_time_constraint_policy {
-        period: ticks(period),
+        period: 0, // no steady period
         computation: ticks(COMPUTATION),
         constraint: ticks(CONSTRAINT),
         preemptible: 1,
@@ -158,7 +159,7 @@ fn ask(period: Duration) -> Option<i32> {
     unsafe_code,
     reason = "pthread_setschedparam has no safe wrapper; the block says why it is sound"
 )]
-fn ask(_period: Duration) -> Option<i32> {
+fn ask() -> Option<i32> {
     const FIFO_PRIORITY: libc::c_int = 40;
     let param = libc::sched_param {
         sched_priority: FIFO_PRIORITY,
@@ -169,7 +170,7 @@ fn ask(_period: Duration) -> Option<i32> {
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-fn ask(_period: Duration) -> Option<i32> {
+fn ask() -> Option<i32> {
     None
 }
 

@@ -39,7 +39,7 @@ pub use engine_core::{
 };
 pub use engine_core::{
     Checked, Histogram, LATENCY_BUCKETS, LATENESS_BUCKETS, bucket, due, frame, next_wake,
-    percentile, sleep_before, update,
+    percentile, sleep_before, update, wait,
 };
 mod snapshot;
 
@@ -153,9 +153,7 @@ impl Engine {
             carried: Carried::new(),
             start,
         };
-        let (tick, priority) = rt_thread::spawn("tick", engine_core::BEAT, move |priority| {
-            ticker.run(priority)
-        })?;
+        let (tick, priority) = rt_thread::spawn("tick", move |priority| ticker.run(priority))?;
         let sender = Sender {
             open,
             commands,
@@ -424,10 +422,11 @@ impl Ticker {
     fn run(mut self, priority: Priority) -> Self {
         self.now.state = State::new(priority);
         while !self.shared.stop.load(Ordering::Relaxed) {
-            // Sleep, then spin the last millisecond: a sleep can wake late, a spin cannot.
-            let wake = next_wake(&self.now.state);
-            thread::sleep(sleep_before(wake, self.start.elapsed()));
-            while self.start.elapsed() < wake {
+            // Sleep, then spin the last millisecond before an output: a sleep can wake
+            // late, a spin cannot. A beat with no output only sleeps.
+            let (sleep, spin) = wait(&self.now.state, self.start.elapsed());
+            thread::sleep(sleep);
+            while spin.is_some_and(|until| self.start.elapsed() < until) {
                 hint::spin_loop();
             }
             let now = self.start.elapsed();

@@ -239,8 +239,9 @@ pub fn update(state: State, universes: &mut [Levels], command: Command) -> (Stat
             rate,
         } => {
             let mut outputs = state.outputs;
+            let due = first_due(&outputs, rate, state.now);
             if let Some(slot) = outputs.get_mut(output.slot()) {
-                *slot = Some(Output::new(run, rate, state.now));
+                *slot = Some(Output::new(run, rate, due));
             }
             (State { outputs, ..state }, None)
         }
@@ -315,11 +316,25 @@ pub fn next_wake(state: &State) -> Duration {
         .unwrap_or(state.beat)
 }
 
-/// The outputs due at `now`, by number.
+/// When a new output of `rate` is first due: at the next frame of an output that runs at
+/// that rate already, so they go out in one wake. At `now` if none does.
+fn first_due(outputs: &[Option<Output>], rate: Rate, now: Duration) -> Duration {
+    outputs
+        .iter()
+        .flatten()
+        .filter(|output| output.rate == rate)
+        .map(|output| output.due)
+        .min()
+        .unwrap_or(now)
+}
+
+/// The outputs to serve at `now`, by number: those due, and those due within [`SPIN`]
+/// after. A wake costs a spin, so outputs due that close together go out in one.
 pub fn due(state: &State, now: Duration) -> impl Iterator<Item = OutputNumber> + '_ {
+    let soon = now.saturating_add(SPIN);
     (1..)
         .zip(&state.outputs)
-        .filter(move |(_, output)| output.is_some_and(|output| output.due <= now))
+        .filter(move |(_, output)| output.is_some_and(|output| output.due <= soon))
         .filter_map(|(number, _)| OutputNumber::try_from(number).ok())
 }
 
@@ -330,6 +345,17 @@ pub const SPIN: Duration = Duration::from_millis(1);
 /// How long to sleep at `now` before spinning until `due`. All times since the engine started.
 pub fn sleep_before(due: Duration, now: Duration) -> Duration {
     due.saturating_sub(now).saturating_sub(SPIN)
+}
+
+/// How the tick thread waits at `now` for its next wake: it sleeps this long, then spins
+/// until the time returned, if any. Only a wake that serves an output spins. On the beat
+/// with no output set nothing goes out, so it only sleeps.
+pub fn wait(state: &State, now: Duration) -> (Duration, Option<Duration>) {
+    let wake = next_wake(state);
+    if state.outputs.iter().all(Option::is_none) {
+        return (wake.saturating_sub(now), None);
+    }
+    (sleep_before(wake, now), Some(wake))
 }
 
 /// Times are counted in buckets this wide.
@@ -662,7 +688,7 @@ mod tests {
         let calm = State::new(Priority::RealTime);
         let (thirty, forty_four, sixty) = (Rate::Thirty, Rate::FortyFour, Rate::Sixty);
         // (outputs set on the first wake, until ms, wakes: ms and outputs served)
-        // 60 and 30 a second meet at 56.06 ms, 1 ns apart: two wakes.
+        // 60 and 30 a second meet at 56.06 ms, 1 ns apart: one wake serves both.
         let cases: [(Vec<Command>, u64, Wakes); 4] = [
             (vec![], 70, vec![(22, vec![]), (45, vec![]), (68, vec![])]), // the beat
             (
@@ -673,12 +699,7 @@ mod tests {
             (
                 vec![set_output(1, sixty), set_output(2, thirty)],
                 60,
-                vec![
-                    (22, vec![1, 2]),
-                    (39, vec![1]),
-                    (56, vec![1]),
-                    (56, vec![2]),
-                ],
+                vec![(22, vec![1, 2]), (39, vec![1]), (56, vec![1, 2])],
             ),
             (
                 vec![
@@ -691,8 +712,7 @@ mod tests {
                     (22, vec![1, 2, 3]),
                     (39, vec![1]),
                     (45, vec![3]),
-                    (56, vec![1]),
-                    (56, vec![2]),
+                    (56, vec![1, 2]),
                 ],
             ),
         ];
@@ -720,6 +740,37 @@ mod tests {
             (72, vec![2]),    // only 2 is left, on its own rate; no beat while it is set
         ];
         assert_eq!(wakes, expected);
+    }
+
+    #[test]
+    fn a_new_output_joins_the_phase_of_its_rate() {
+        let calm = State::new(Priority::RealTime);
+        let (thirty, sixty) = (Rate::Thirty, Rate::Sixty);
+        // (output added on the wake at 39 ms, wakes: ms and outputs served)
+        let cases = [
+            // a rate that runs: its next frame, with the others of its rate
+            (
+                set_output(3, thirty),
+                vec![(22, vec![1, 2]), (39, vec![1]), (56, vec![1, 2, 3])],
+            ),
+            (
+                set_output(3, sixty),
+                vec![(22, vec![1, 2]), (39, vec![1, 3]), (56, vec![1, 2, 3])],
+            ),
+            // a rate of its own: at once
+            (
+                set_output(3, Rate::FortyFour),
+                vec![(22, vec![1, 2]), (39, vec![1, 3]), (56, vec![1, 2])],
+            ),
+        ];
+        for (added, expected) in cases {
+            let wakes = run(calm, 60, |ms| match ms {
+                22 => vec![set_output(1, sixty), set_output(2, thirty)],
+                39 => vec![added],
+                _ => vec![],
+            });
+            assert_eq!(wakes, expected, "{added:?}");
+        }
     }
 
     #[test]
@@ -807,26 +858,35 @@ mod tests {
     }
 
     #[test]
-    fn sleep_before_leaves_the_last_millisecond_to_spin() {
-        let due = Duration::from_secs(5);
-        // (µs before due, µs to sleep)
+    fn a_wake_that_serves_an_output_spins_the_last_millisecond_a_beat_only_sleeps() {
+        let mut universes = [Levels::ZERO];
+        let calm = State::new(Priority::RealTime);
+        let due = BEAT; // the beat, and the output's first frame
+        let with_output = update(calm, &mut universes, set_output(1, Rate::Sixty)).0;
+        let with_output = State {
+            outputs: with_output.outputs.map(|o| o.map(|o| Output { due, ..o })),
+            ..with_output
+        };
+        let us = Duration::from_micros;
+        // (state, µs before due, µs to sleep, spin until due)
         let cases = [
-            (22_727, 21_727), // a whole frame ahead
-            (1_001, 1),
-            (1_000, 0), // spin all of it
-            (400, 0),
-            (0, 0),
+            (with_output, 22_727, 21_727, true), // a whole frame ahead
+            (with_output, 1_001, 1, true),
+            (with_output, 1_000, 0, true), // spin all of it
+            (with_output, 400, 0, true),
+            (with_output, 0, 0, true),
+            (calm, 22_727, 22_727, false), // no output: sleep to the beat
+            (calm, 400, 400, false),
+            (calm, 0, 0, false),
         ];
-        for (ahead, sleep) in cases {
-            let now = due - Duration::from_micros(ahead);
-            assert_eq!(
-                sleep_before(due, now),
-                Duration::from_micros(sleep),
-                "{ahead} µs ahead"
-            );
+        for (state, ahead, sleep, spins) in cases {
+            let now = due - us(ahead);
+            let spin = spins.then_some(due);
+            assert_eq!(wait(&state, now), (us(sleep), spin), "{ahead} µs ahead, spins {spins}");
         }
         // past due: no sleep
-        assert_eq!(sleep_before(due, due * 2), Duration::ZERO);
+        assert_eq!(wait(&with_output, due * 2), (Duration::ZERO, Some(due)));
+        assert_eq!(wait(&calm, due * 2), (Duration::ZERO, None));
     }
 
     #[test]
