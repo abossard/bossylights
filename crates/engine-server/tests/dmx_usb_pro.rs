@@ -43,11 +43,11 @@ fn reader(mut ends: rtrb::Consumer<TTYPort>, unplug: Arc<AtomicBool>, stop: Arc<
     }
 }
 
-fn status_until(engine: &Engine, done: impl Fn(Status) -> bool) -> Status {
+fn status_until(engine: &mut Engine, done: impl Fn(Status) -> bool) -> Status {
     let started = Instant::now();
     loop {
         // Output 1 is in the state from the wake after it was attached.
-        let status = engine.query().outputs[0].map(|o| o.status);
+        let status = engine.latest().state.outputs[0].map(|o| o.status);
         if let Some(status) = status.filter(|s| done(*s)) {
             return status;
         }
@@ -79,7 +79,7 @@ fn unplugged_it_reconnects_and_runs_again_by_itself() {
         thread::spawn(move || reader(ends, unplug, stop))
     };
 
-    let (engine, mut sender) = Engine::start(Universes::ONE).unwrap();
+    let (mut engine, mut sender) = Engine::start(Universes::ONE).unwrap();
     let run = RunNumbers { first: 1, count: 1 }
         .check(Universes::ONE)
         .unwrap();
@@ -91,16 +91,16 @@ fn unplugged_it_reconnects_and_runs_again_by_itself() {
         .attach(two, Box::new(Nowhere), run, Rate::Sixty)
         .unwrap();
 
-    status_until(&engine, |s| s == Status::Running);
+    status_until(&mut engine, |s| s == Status::Running);
     unplug.store(true, Ordering::Relaxed);
-    let lost = status_until(&engine, |s| s != Status::Running);
+    let lost = status_until(&mut engine, |s| s != Status::Running);
     assert!(
         matches!(lost, Status::Reconnecting { .. }),
         "lost: {lost:?}"
     );
-    status_until(&engine, |s| s == Status::Running);
+    status_until(&mut engine, |s| s == Status::Running);
 
-    let state = engine.query();
+    let state = engine.fresh().state;
     let pro = state.outputs[0].unwrap().counters;
     let other = state.outputs[1].unwrap().counters;
     assert!(pro.failed > 0 && pro.accepted > 0, "{pro:?}");
@@ -204,7 +204,7 @@ fn a_dmx_usb_pro_output_is_set_again_replaced_and_moved_through_send() {
     ];
     for (level, (commands, answers, drives)) in (1..).zip(cases) {
         let (open, mut end, _) = exclusive_adapter();
-        let (engine, mut sender) = Engine::start_with(Universes::ONE, open).unwrap();
+        let (mut engine, mut sender) = Engine::start_with(Universes::ONE, open).unwrap();
         assert_eq!(send_all(&mut sender, &commands), answers, "{commands:?}");
         let set = Command::SetChannel {
             channel: ChannelNumbers {
@@ -215,7 +215,7 @@ fn a_dmx_usb_pro_output_is_set_again_replaced_and_moved_through_send() {
         };
         assert_eq!(sender.send(set), Ok(()), "{commands:?}");
         hear(&mut end, level);
-        let state = engine.query();
+        let state = engine.fresh().state;
         let running = state.outputs.iter().position(Option::is_some);
         assert_eq!(running, Some(usize::from(drives) - 1), "{commands:?}");
     }

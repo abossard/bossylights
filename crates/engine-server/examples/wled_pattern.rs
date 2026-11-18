@@ -41,7 +41,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
 
     // 320 RGBW pixels are 1280 channels: three universes, sent as one stream.
     let universes = Universes::new(3).ok_or("universes")?;
-    let (engine, mut sender) = Engine::start(universes).map_err(|e| e.to_string())?;
+    let (mut engine, mut sender) = Engine::start(universes).map_err(|e| e.to_string())?;
     let output = OutputNumber::try_from(1).map_err(|_| "output")?;
     let add = Command::SetOutput {
         output,
@@ -89,7 +89,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
         step += 1;
         thread::sleep(Duration::from_millis(25));
     }
-    let state = engine.query();
+    let state = engine.fresh().state;
     let sent = state
         .outputs
         .first()

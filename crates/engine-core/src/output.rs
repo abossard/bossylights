@@ -232,74 +232,6 @@ impl Output {
     }
 }
 
-/// Words per output when it is handed to readers through atomics.
-pub const OUTPUT_WORDS: usize = 5;
-
-/// An output as plain numbers, so it can leave the output thread through atomics.
-/// Word 0 is 0 for no output. The schedule (`due`, `last`) stays behind.
-pub fn to_words(output: Option<&Output>) -> [u64; OUTPUT_WORDS] {
-    let Some(output) = output else {
-        return [0; OUTPUT_WORDS];
-    };
-    let rate = match output.rate {
-        Rate::Thirty => 0,
-        Rate::FortyFour => 1,
-        Rate::Sixty => 2,
-    };
-    let (status, failures) = match output.status {
-        Status::NotFound => (0, 0),
-        Status::Connecting => (1, 0),
-        Status::Running => (2, 0),
-        Status::Reconnecting { failures } => (3, failures),
-    };
-    let meta = 1 // there is an output
-        | rate << 8
-        | status << 12
-        | u64::from(output.universes.first) << 16
-        | u64::from(output.universes.count) << 32
-        | u64::from(failures) << 48;
-    let c = output.counters;
-    [meta, c.accepted, c.dropped, c.failed, c.off_beat]
-}
-
-/// The output back from [`to_words`], with an empty schedule. `None` for no output.
-pub fn from_words(words: [u64; OUTPUT_WORDS]) -> Option<Output> {
-    let [meta, accepted, dropped, failed, off_beat] = words;
-    let field = |shift: u32, bits: u32| (meta >> shift) & ((1 << bits) - 1);
-    if field(0, 1) == 0 {
-        return None;
-    }
-    let rate = match field(8, 4) {
-        0 => Rate::Thirty,
-        1 => Rate::FortyFour,
-        _ => Rate::Sixty,
-    };
-    let status = match field(12, 4) {
-        0 => Status::NotFound,
-        1 => Status::Connecting,
-        2 => Status::Running,
-        _ => Status::Reconnecting {
-            failures: field(48, 16) as u16,
-        },
-    };
-    Some(Output {
-        universes: Run {
-            first: field(16, 16) as u16,
-            count: field(32, 16) as u16,
-        },
-        rate,
-        status,
-        counters: Counters {
-            accepted,
-            dropped,
-            failed,
-            off_beat,
-        },
-        due: Duration::ZERO,
-        last: None,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -370,42 +302,6 @@ mod tests {
                 crate::next_frame(output.due, at, output.rate.period())
             );
         }
-    }
-
-    #[test]
-    fn an_output_survives_the_words() {
-        let run = RunNumbers {
-            first: 3,
-            count: 62,
-        }
-        .check(Universes::new(64).unwrap())
-        .unwrap();
-        let counters = Counters {
-            accepted: u64::MAX,
-            dropped: 2,
-            failed: 3,
-            off_beat: 4,
-        };
-        // (rate, status)
-        let cases = [
-            (Rate::Thirty, Status::NotFound),
-            (Rate::FortyFour, Status::Connecting),
-            (Rate::Sixty, Status::Running),
-            (Rate::Sixty, R(GIVE_UP - 1)),
-        ];
-        for (rate, status) in cases {
-            let output = Output {
-                status,
-                counters,
-                ..Output::new(run, rate, Duration::ZERO)
-            };
-            assert_eq!(
-                from_words(to_words(Some(&output))),
-                Some(output),
-                "{output:?}"
-            );
-        }
-        assert_eq!(from_words(to_words(None)), None);
     }
 
     #[test]

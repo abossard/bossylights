@@ -10,18 +10,19 @@
 //!                                                                       |
 //! free thread: retired devices freed here <------------ return queue ---+
 //!                                                                       |
-//! Engine::read, query <------------------- seqlock (atomics) <----------+
+//! Engine::latest, fresh --- an empty box ---> queue --> tick thread       |
+//!                       <-- the box, filled -- queue <-- one wake's picture
 //! ```
 //!
 //! The tick thread does five things less (`docs/coding.md`, rule 7). Each has a check:
 //!
 //! | No | Check |
 //! |---|---|
-//! | locks | `clippy.toml` bans every std type that locks, here and in `outputs`. Commands and devices come and go through `rtrb`, wait-free; the state leaves through atomics |
-//! | allocation | `engine-core` has no `alloc`; buffers are made in `start`; devices are opened by the `Sender` and freed by the free thread; `tests/no_alloc.rs` counts every allocation while it ticks, serves outputs and takes commands |
+//! | locks | `clippy.toml` bans every std type that locks, here and in `outputs`. Commands, devices and snapshots come and go through `rtrb`, wait-free |
+//! | allocation | `engine-core` has no `alloc`; buffers and snapshot boxes are made in `start`; devices are opened by the `Sender` and freed by the free thread; `tests/no_alloc.rs` counts every allocation while it ticks, serves outputs, takes commands and a reader asks for a snapshot on every frame |
 //! | blocking calls, files, network | `engine-core` has no `std`; `clippy.toml` bans files, sockets, processes, stdin here and in `rt-thread`. The only send is an output's non-blocking `take`. The only wait is `thread::sleep`, then a spin, until the next output is due |
 //! | logging | `clippy.toml` bans print macros and stdout/stderr; no logger dependency |
-//! | calls outward | `clippy.toml` bans channels and condvars; the tick thread only writes atomics in `Shared`, which others read |
+//! | calls outward | `clippy.toml` bans channels and condvars; the tick thread fills the boxes readers sent, it wakes nobody |
 
 #![forbid(unsafe_code)]
 #![deny(
@@ -37,14 +38,18 @@ pub use engine_core::{
     Priority, Rate, Refusal, Reply, Request, Run, RunNumbers, State, Status, Universes, changes,
 };
 pub use engine_core::{
-    Checked, Histogram, LATENCY_BUCKETS, LATENESS_BUCKETS, OUTPUT_WORDS, bucket, due, frame,
-    from_words, next_wake, percentile, sleep_before, to_words, update,
+    Checked, Histogram, LATENCY_BUCKETS, LATENESS_BUCKETS, bucket, due, frame, next_wake,
+    percentile, sleep_before, update,
 };
+mod snapshot;
+
 pub use outputs::Device;
+use snapshot::{Hand, Reader};
+pub use snapshot::{Lateness, Snapshot};
 use std::hint;
 use std::io;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering, fence};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread::{self, JoinHandle, Thread};
 use std::time::{Duration, Instant};
 
@@ -61,9 +66,9 @@ const FREE_WITHIN: Duration = Duration::from_secs(1);
 /// The running engine: reads its state. Dropping it stops the tick thread.
 pub struct Engine {
     shared: Arc<Shared>,
+    reader: Reader,
     tick: Option<JoinHandle<Ticker>>,
     free: Option<JoinHandle<()>>,
-    priority: Priority,
     universes: Universes,
 }
 
@@ -105,26 +110,9 @@ struct Sent {
     device: Option<Box<dyn Device>>,
 }
 
-/// How late an output's frames were handed over, so far.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Lateness {
-    pub p99: Duration,
-    pub worst: Duration,
-}
-
-/// Written by the tick thread, read by anyone. Atomics only.
+/// Between the threads of the engine. Atomics only.
 struct Shared {
-    frame: AtomicU64,
     stop: AtomicBool,
-    /// Per output.
-    lateness: [Times<LATENESS_BUCKETS>; MAX_OUTPUTS],
-    latency: Times<LATENCY_BUCKETS>,
-    /// A seqlock around `blackout`, `outputs` and `levels`: odd while the tick thread writes.
-    version: AtomicU64,
-    blackout: AtomicBool,
-    outputs: [[AtomicU64; OUTPUT_WORDS]; MAX_OUTPUTS],
-    /// The held levels, universe after universe.
-    levels: Box<[AtomicU8]>,
     /// Devices the free thread freed, so far.
     freed: AtomicU64,
 }
@@ -140,16 +128,10 @@ impl Engine {
     pub fn start_with(universes: Universes, open: Open) -> io::Result<(Self, Sender)> {
         let count = usize::from(universes.count());
         let shared = Arc::new(Shared {
-            frame: AtomicU64::new(0),
             stop: AtomicBool::new(false),
-            lateness: [const { Times::new() }; MAX_OUTPUTS],
-            latency: Times::new(),
-            version: AtomicU64::new(0),
-            blackout: AtomicBool::new(false),
-            outputs: [const { [const { AtomicU64::new(0) }; OUTPUT_WORDS] }; MAX_OUTPUTS],
-            levels: (0..count * ADDRESSES).map(|_| AtomicU8::new(0)).collect(),
             freed: AtomicU64::new(0),
         });
+        let (hand, queues) = snapshot::hand_over();
         let (commands, incoming) = rtrb::RingBuffer::new(QUEUE);
         let (outgoing, retired) = rtrb::RingBuffer::new(RETIRED);
         let free = {
@@ -164,7 +146,9 @@ impl Engine {
             commands: incoming,
             retired: outgoing,
             devices: std::array::from_fn(|_| None),
-            held: vec![Levels::ZERO; count],
+            // `run` puts in the priority, once the thread has it.
+            now: Box::new(Snapshot::new(universes, Priority::RealTime)),
+            hand,
             out: vec![Levels::ZERO; count],
             carried: Carried::new(),
             start,
@@ -184,9 +168,9 @@ impl Engine {
         };
         let engine = Self {
             shared,
+            reader: Reader::new(queues, Snapshot::new(universes, priority)),
             tick: Some(tick),
             free: Some(free),
-            priority,
             universes,
         };
         Ok((engine, sender))
@@ -196,51 +180,16 @@ impl Engine {
         self.universes
     }
 
-    /// The state, without the levels.
-    pub fn query(&self) -> State {
-        self.read(&mut [])
+    /// The newest picture the tick thread sent back, and asks for the next one. Never
+    /// waits: before the first comes back, the state the engine started with.
+    pub fn latest(&mut self) -> &Snapshot {
+        self.reader.latest()
     }
 
-    /// The state, and the held levels copied into `into`, as one consistent picture.
-    /// Never waits for the tick thread: it tries again if it published meanwhile.
-    pub fn read(&self, into: &mut [Levels]) -> State {
-        let shared = &self.shared;
-        loop {
-            let before = shared.version.load(Ordering::Acquire);
-            let mut state = State::new(self.priority);
-            state.blackout = shared.blackout.load(Ordering::Relaxed);
-            for (output, words) in state.outputs.iter_mut().zip(&shared.outputs) {
-                *output = from_words(words.each_ref().map(|w| w.load(Ordering::Relaxed)));
-            }
-            for (universe, cells) in into.iter_mut().zip(shared.levels.chunks(ADDRESSES)) {
-                for (level, cell) in universe.0.iter_mut().zip(cells) {
-                    *level = cell.load(Ordering::Relaxed);
-                }
-            }
-            fence(Ordering::Acquire);
-            if before.is_multiple_of(2) && shared.version.load(Ordering::Relaxed) == before {
-                state.frame = shared.frame.load(Ordering::Relaxed);
-                return state;
-            }
-            hint::spin_loop();
-        }
-    }
-
-    /// How late this output's frames were handed over, so far. `None` before its first.
-    pub fn lateness(&self, output: OutputNumber) -> Option<Lateness> {
-        let (counts, worst) = self.shared.lateness.get(output.slot())?.load();
-        Some(Lateness {
-            p99: percentile(&counts, 99, worst)?,
-            worst,
-        })
-    }
-
-    /// The time from a send to the frame that carries it, for 95 of 100 commands, so
-    /// far: counted once per output, when that output's next frame is handed over.
-    /// `None` before the first frame that carried a command.
-    pub fn send_to_frame_p95(&self) -> Option<Duration> {
-        let (counts, worst) = self.shared.latency.load();
-        percentile(&counts, 95, worst)
+    /// A picture that carries every command sent before this call. Waits for it, about
+    /// two wakes.
+    pub fn fresh(&mut self) -> &Snapshot {
+        self.reader.fresh()
     }
 }
 
@@ -392,45 +341,6 @@ impl Drop for Engine {
     }
 }
 
-/// Times counted in a histogram, and the latest one exactly: the histogram's last bucket
-/// holds everything later. Written by the tick thread, read by anyone.
-struct Times<const N: usize> {
-    counts: [AtomicU64; N],
-    /// In nanoseconds.
-    worst: AtomicU64,
-}
-
-impl<const N: usize> Times<N> {
-    const fn new() -> Self {
-        Self {
-            counts: [const { AtomicU64::new(0) }; N],
-            worst: AtomicU64::new(0),
-        }
-    }
-
-    fn count(&self, time: Duration) {
-        if let Some(count) = self.counts.get(bucket::<N>(time)) {
-            count.fetch_add(1, Ordering::Relaxed);
-        }
-        let nanos = u64::try_from(time.as_nanos()).unwrap_or(u64::MAX);
-        self.worst.fetch_max(nanos, Ordering::Relaxed);
-    }
-
-    /// Starts afresh. Counts made meanwhile by the tick thread may stay.
-    fn clear(&self) {
-        for count in &self.counts {
-            count.store(0, Ordering::Relaxed);
-        }
-        self.worst.store(0, Ordering::Relaxed);
-    }
-
-    fn load(&self) -> (Histogram<N>, Duration) {
-        let counts = self.counts.each_ref().map(|n| n.load(Ordering::Relaxed));
-        let worst = Duration::from_nanos(self.worst.load(Ordering::Relaxed));
-        (counts, worst)
-    }
-}
-
 /// What the tick thread owns. Every buffer is made before it starts.
 struct Ticker {
     shared: Arc<Shared>,
@@ -438,8 +348,9 @@ struct Ticker {
     retired: rtrb::Producer<Box<dyn Device>>,
     /// By output number, beside `State::outputs`.
     devices: [Option<Box<dyn Device>>; MAX_OUTPUTS],
-    /// The held levels: the state's universes.
-    held: Vec<Levels>,
+    /// The state, the held levels and what was counted: what readers get a copy of.
+    now: Box<Snapshot>,
+    hand: Hand,
     /// The frame that goes out.
     out: Vec<Levels>,
     /// When the commands were sent, until each output carried them.
@@ -507,20 +418,21 @@ fn ring(n: u64) -> usize {
 }
 
 impl Ticker {
-    /// The real-time loop, an action: reads the clock, waits, hands frames over,
-    /// publishes. The logic is in `engine-core`. Nothing here may lock, allocate, block,
-    /// log or call out. Returns itself, so its devices are freed by whoever joins it.
+    /// The real-time loop, an action: reads the clock, waits, hands frames over and
+    /// the snapshot. The logic is in `engine-core`. Nothing here may lock, allocate,
+    /// block, log or call out. Returns itself, so its devices are freed by whoever joins it.
     fn run(mut self, priority: Priority) -> Self {
-        let mut state = State::new(priority);
+        self.now.state = State::new(priority);
         while !self.shared.stop.load(Ordering::Relaxed) {
             // Sleep, then spin the last millisecond: a sleep can wake late, a spin cannot.
-            let wake = next_wake(&state);
+            let wake = next_wake(&self.now.state);
             thread::sleep(sleep_before(wake, self.start.elapsed()));
             while self.start.elapsed() < wake {
                 hint::spin_loop();
             }
             let now = self.start.elapsed();
-            state = self.apply(state, Command::Tick { now });
+            self.apply(Command::Tick { now });
+            let asked = self.hand.asked();
 
             // Apply the waiting commands right before the frame: a press is in the next one.
             let mut applied = 0;
@@ -528,24 +440,26 @@ impl Ticker {
                 let Ok(sent) = self.commands.pop() else {
                     break;
                 };
-                state = self.apply(state, sent.command);
+                self.apply(sent.command);
                 self.swap(sent.command, sent.device);
                 self.carried.applied(sent.at);
                 applied += 1;
             }
 
-            frame(&state, &self.held, now, &mut self.out);
+            frame(&self.now.state, self.now.universes(), now, &mut self.out);
             let mut serve = [None; MAX_OUTPUTS];
-            for (slot, number) in serve.iter_mut().zip(due(&state, now)) {
+            for (slot, number) in serve.iter_mut().zip(due(&self.now.state, now)) {
                 *slot = Some(number);
             }
             for number in serve.into_iter().flatten() {
-                state = self.serve(state, number, now);
-                let (handed, latency) = (self.start.elapsed(), &self.shared.latency);
+                self.serve(number, now);
+                let (handed, now) = (self.start.elapsed(), &mut self.now);
                 self.carried
-                    .handed(number.slot(), handed, |time| latency.count(time));
+                    .handed(number.slot(), handed, |time| now.carried(time));
             }
-            self.publish(&state, applied > 0);
+            if let Some(asked) = asked {
+                self.hand.fill(asked, &self.now);
+            }
         }
         self
     }
@@ -573,66 +487,31 @@ impl Ticker {
             // The queue has room for every device a wake can retire (see `start`).
             let _ = self.retired.push(old);
         }
-        if let Some(lateness) = self.shared.lateness.get(output.slot()) {
-            lateness.clear();
-        }
+        self.now.attached(output.slot());
     }
 
     /// Hands a due output its run of universes and counts what happened.
-    fn serve(&mut self, state: State, number: OutputNumber, now: Duration) -> State {
+    fn serve(&mut self, number: OutputNumber, now: Duration) {
         let slot = number.slot();
-        let Some(Some(output)) = state.outputs.get(slot) else {
-            return state;
+        let Some(Some(output)) = self.now.state.outputs.get(slot).copied() else {
+            return;
         };
-        if let Some(lateness) = self.shared.lateness.get(slot) {
-            lateness.count(now.saturating_sub(output.due));
-        }
+        let late = now.saturating_sub(output.due);
+        self.now.late(slot, late);
         let outcome = match self.devices.get_mut(slot) {
             Some(Some(device)) => device.take(output.universes.of(&self.out)),
             _ => Outcome::Failed,
         };
-        self.apply(
-            state,
-            Command::Handed {
-                output: number,
-                outcome,
-            },
-        )
+        self.apply(Command::Handed {
+            output: number,
+            outcome,
+        });
     }
 
-    fn apply(&mut self, state: State, command: Command) -> State {
-        let (state, effect) = update(state, &mut self.held, command);
-        if let Some(effect) = effect {
+    fn apply(&mut self, command: Command) {
+        if let Some(effect) = self.now.update(command) {
             match effect {}
         }
-        state
-    }
-
-    /// The writer side of the seqlock: readers retry while `version` is odd or moved.
-    /// The levels are written only when commands changed them.
-    fn publish(&self, state: &State, levels: bool) {
-        let shared = &self.shared;
-        let version = shared.version.load(Ordering::Relaxed);
-        shared
-            .version
-            .store(version.wrapping_add(1), Ordering::Relaxed);
-        fence(Ordering::Release);
-        shared.blackout.store(state.blackout, Ordering::Relaxed);
-        for (words, output) in shared.outputs.iter().zip(&state.outputs) {
-            for (word, value) in words.iter().zip(to_words(output.as_ref())) {
-                word.store(value, Ordering::Relaxed);
-            }
-        }
-        if levels {
-            let held = self.held.iter().flat_map(|universe| universe.0.iter());
-            for (cell, level) in shared.levels.iter().zip(held) {
-                cell.store(*level, Ordering::Relaxed);
-            }
-        }
-        shared
-            .version
-            .store(version.wrapping_add(2), Ordering::Release);
-        shared.frame.store(state.frame, Ordering::Relaxed);
     }
 }
 

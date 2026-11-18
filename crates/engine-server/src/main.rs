@@ -10,7 +10,6 @@ use engine::{Engine, MAX_OUTPUTS, OutputNumber, State, Universes};
 use std::fs::{File, TryLockError};
 use std::net::SocketAddr;
 use std::process::exit;
-use std::sync::Arc;
 
 const USAGE: &str = "usage: bossylights-engine [--listen 127.0.0.1:7744] [--universes 4]";
 
@@ -46,17 +45,18 @@ async fn main() {
         eprintln!("bossylights-engine: the tick thread did not start: {error}");
         exit(1);
     });
-    let engine = Arc::new(engine);
     println!(
         "bossylights-engine listening on http://{}, {} universes",
         settings.listen,
         settings.universes.count()
     );
-    if let Err(error) = engine_server::serve(listener, Arc::clone(&engine), sender).await {
-        eprintln!("bossylights-engine: {error}");
-        exit(1);
-    }
-    eprint!("{}", report(&engine));
+    let mut engine = engine_server::serve(listener, engine, sender)
+        .await
+        .unwrap_or_else(|error| {
+            eprintln!("bossylights-engine: {error}");
+            exit(1);
+        });
+    eprint!("{}", report(&mut engine));
 }
 
 /// Holds the lock of `port` for as long as the process runs, or says who has it.
@@ -73,12 +73,13 @@ fn lock(port: u16) -> Result<File, String> {
 }
 
 /// What the engine measured, one line each: the frames, then every output's lateness.
-fn report(engine: &Engine) -> String {
-    let State { frame, outputs, .. } = engine.query();
+fn report(engine: &mut Engine) -> String {
+    let picture = engine.fresh();
+    let State { frame, outputs, .. } = picture.state;
     let lines = (1..=MAX_OUTPUTS).filter_map(|n| {
         let number = OutputNumber::try_from(u8::try_from(n).ok()?).ok()?;
         let output = outputs.get(number.slot()).copied().flatten()?;
-        let lateness = engine.lateness(number)?;
+        let lateness = picture.lateness(number)?;
         let c = output.counters;
         Some(format!(
             "output {n}: lateness p99 {} us, worst {} us, accepted {}, dropped {}, failed {}\n",

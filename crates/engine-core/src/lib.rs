@@ -25,8 +25,8 @@ pub use channel::{
 };
 pub use kinds::{Color, OutputKind};
 pub use output::{
-    Counters, GIVE_UP, MAX_OUTPUTS, OFF_BEAT, OUTPUT_WORDS, Outcome, Output, OutputNumber, Rate,
-    Run, RunNumbers, Status, from_words, to_words,
+    Counters, GIVE_UP, MAX_OUTPUTS, OFF_BEAT, Outcome, Output, OutputNumber, Rate, Run,
+    RunNumbers, Status,
 };
 
 use core::convert::Infallible;

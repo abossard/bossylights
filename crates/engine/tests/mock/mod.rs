@@ -1,6 +1,6 @@
 //! A device written in a test, through the same door every output kind uses: the
 //! `Device` trait and `Sender::attach`. It takes every frame, counts it and keeps the
-//! last one (up to two universes) in atomics.
+//! last one (up to two universes) in atomics, and the first channel of each frame.
 
 #![allow(dead_code, reason = "each test binary uses only part of it")]
 
@@ -12,20 +12,31 @@ use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
+/// Frames whose first channel is kept: the last this many.
+const HISTORY: usize = 4096;
+
 pub struct Heard {
     frames: AtomicU64,
     levels: [AtomicU8; 2 * ADDRESSES],
+    /// The first channel of frame `n` (counted from 1) at `n % HISTORY`.
+    history: [AtomicU8; HISTORY],
 }
 
 impl Heard {
     pub fn frames(&self) -> u64 {
-        self.frames.load(Ordering::Relaxed)
+        self.frames.load(Ordering::Acquire)
     }
 
     /// The level of a channel in the last frame, counted from 1 within the run.
     pub fn level(&self, universe: u16, address: u16) -> u8 {
         let at = usize::from(universe - 1) * ADDRESSES + usize::from(address - 1);
         self.levels[at].load(Ordering::Relaxed)
+    }
+
+    /// The first channel of frame `n`, counted from 1, if it is one of the last kept.
+    pub fn first_channel_of(&self, n: u64) -> Option<u8> {
+        let kept = (1..=self.frames()).contains(&n) && self.frames() - n < HISTORY as u64;
+        kept.then(|| self.history[(n % HISTORY as u64) as usize].load(Ordering::Relaxed))
     }
 
     /// Waits until two more frames arrived: the one that may have been computed while
@@ -57,7 +68,10 @@ impl Device for Mock {
         for (cell, level) in self.0.levels.iter().zip(levels) {
             cell.store(*level, Ordering::Relaxed);
         }
-        self.0.frames.fetch_add(1, Ordering::Relaxed);
+        let n = self.0.frames.load(Ordering::Relaxed) + 1;
+        let first = frame.first().map_or(0, |universe| universe.0[0]);
+        self.0.history[(n % HISTORY as u64) as usize].store(first, Ordering::Relaxed);
+        self.0.frames.store(n, Ordering::Release);
         Outcome::Accepted
     }
 }
@@ -73,6 +87,7 @@ pub fn attach(
     let heard = Arc::new(Heard {
         frames: AtomicU64::new(0),
         levels: [const { AtomicU8::new(0) }; 2 * ADDRESSES],
+        history: [const { AtomicU8::new(0) }; HISTORY],
     });
     let output = OutputNumber::try_from(output).unwrap();
     let run = run.check(universes).unwrap();

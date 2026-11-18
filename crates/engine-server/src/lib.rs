@@ -20,7 +20,9 @@ use axum::http::header::{ACCESS_CONTROL_ALLOW_ORIGIN, ORIGIN};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use engine::{API_VERSION, ChannelLevel, Engine, Levels, Refusal, Reply, Request, Sender, changes};
+use engine::{
+    API_VERSION, ChannelLevel, Engine, Refusal, Reply, Request, Sender, Snapshot, changes,
+};
 use std::io;
 use std::sync::Arc;
 use tokio::net::TcpListener;
@@ -28,13 +30,19 @@ use tokio::sync::{Mutex, watch};
 use tokio::time::MissedTickBehavior;
 
 /// Serves the API on `listener` until a client sends `Stop`. Then every connection is
-/// closed and this returns. The caller still holds the engine: it reports and drops it.
-pub async fn serve(listener: TcpListener, engine: Arc<Engine>, sender: Sender) -> io::Result<()> {
+/// closed and this returns the engine: the caller reports and drops it.
+pub async fn serve(
+    listener: TcpListener,
+    mut engine: Engine,
+    sender: Sender,
+) -> io::Result<Engine> {
     let (stop, mut stopped) = watch::channel(false);
+    let (painted, pictures) = watch::channel(Arc::new(*engine.latest()));
+    let reader = tokio::spawn(read(engine, painted, stop.subscribe()));
     let api = Arc::new(Api {
-        engine,
         sender: Mutex::new(sender),
         stop,
+        pictures,
     });
     let any = || [(ACCESS_CONTROL_ALLOW_ORIGIN, "*")];
     let routes = Router::new()
@@ -44,27 +52,47 @@ pub async fn serve(listener: TcpListener, engine: Arc<Engine>, sender: Sender) -
             get(move || async move { (any(), API_VERSION.to_string()) }),
         )
         .route("/api", get(connect))
-        .with_state(api);
-    axum::serve(listener, routes)
+        .with_state(Arc::clone(&api));
+    let served = axum::serve(listener, routes)
         .with_graceful_shutdown(async move {
             let _ = stopped.wait_for(|stop| *stop).await;
         })
-        .await
+        .await;
+    api.stop.send_replace(true);
+    let engine = reader.await.map_err(io::Error::other)?;
+    served.map(|()| engine)
 }
 
 struct Api {
-    engine: Arc<Engine>,
     /// The queue has one producer; connections take turns. The tick thread never sees
     /// this lock.
     sender: Mutex<Sender>,
     /// Turns true once, on `Stop`. Every connection and the server watch it.
     stop: watch::Sender<bool>,
+    /// The newest snapshot, one per frame, the same for every connection.
+    pictures: watch::Receiver<Arc<Snapshot>>,
 }
 
-/// What a subscribed connection sent last.
-struct Subscription {
-    frame: u64,
-    universes: Vec<Levels>,
+/// The one reader of the engine: takes the newest snapshot twice a beat and shares it
+/// when it is of a new frame. Until `Stop`, then it gives the engine back.
+async fn read(
+    mut engine: Engine,
+    painted: watch::Sender<Arc<Snapshot>>,
+    mut stopped: watch::Receiver<bool>,
+) -> Engine {
+    let mut poll = tokio::time::interval(engine::BEAT / 2);
+    poll.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    loop {
+        tokio::select! {
+            _ = stopped.wait_for(|stop| *stop) => return engine,
+            _ = poll.tick() => {
+                let picture = engine.latest();
+                if picture.state.frame != painted.borrow().state.frame {
+                    painted.send_replace(Arc::new(*picture));
+                }
+            }
+        }
+    }
 }
 
 /// The web pages that may open the API, and why. A browser always sends the page's
@@ -90,13 +118,11 @@ async fn connect(
 }
 
 /// One connection: answers each request; once subscribed, sends what changed with every
-/// new frame. Reads from outside the tick thread, so it never waits on a client.
+/// new snapshot. Never waits on the tick thread, the tick thread never waits on a client.
 async fn talk(mut socket: WebSocket, api: Arc<Api>) {
-    let count = usize::from(api.engine.universes().count());
-    let mut now = vec![Levels::ZERO; count];
-    let mut subscription = None;
-    let mut poll = tokio::time::interval(engine::BEAT / 2);
-    poll.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    let mut pictures = api.pictures.clone();
+    // What a subscribed connection sent last.
+    let mut subscription: Option<Arc<Snapshot>> = None;
     let mut stopped = api.stop.subscribe();
     loop {
         let reply = tokio::select! {
@@ -105,12 +131,14 @@ async fn talk(mut socket: WebSocket, api: Arc<Api>) {
                 return;
             }
             message = socket.recv() => match message {
-                Some(Ok(Message::Text(text))) => answer(&api, &text, &mut subscription, &mut now).await,
+                Some(Ok(Message::Text(text))) => answer(&api, &text, &mut pictures, &mut subscription).await,
                 Some(Ok(Message::Binary(_))) => json(&Reply::Refused { reason: Refusal::NotACommand }),
                 Some(Ok(Message::Ping(_) | Message::Pong(_))) => None,
                 Some(Ok(Message::Close(_)) | Err(_)) | None => return,
             },
-            _ = poll.tick(), if subscription.is_some() => changed(&api, &mut subscription, &mut now),
+            Ok(()) = pictures.changed(), if subscription.is_some() => {
+                changed(&mut pictures, &mut subscription)
+            }
         };
         if let Some(reply) = reply
             && socket.send(Message::text(reply)).await.is_err()
@@ -123,8 +151,8 @@ async fn talk(mut socket: WebSocket, api: Arc<Api>) {
 async fn answer(
     api: &Api,
     text: &str,
-    subscription: &mut Option<Subscription>,
-    now: &mut [Levels],
+    pictures: &mut watch::Receiver<Arc<Snapshot>>,
+    subscription: &mut Option<Arc<Snapshot>>,
 ) -> Option<String> {
     let Ok(request) = serde_json::from_str::<Request>(text) else {
         return json(&Reply::Refused {
@@ -136,49 +164,41 @@ async fn answer(
             let sent = api.sender.lock().await.send(command);
             json(&sent.map_or_else(|reason| Reply::Refused { reason }, |()| Reply::Accepted))
         }
-        Request::Query => {
-            let state = api.engine.read(now);
-            json(&Reply::Picture {
-                state,
-                universes: now,
-            })
-        }
+        Request::Query => picture(&pictures.borrow()),
         Request::Stop => {
             api.stop.send_replace(true);
             json(&Reply::Stopping)
         }
         Request::Subscribe => {
-            let state = api.engine.read(now);
-            *subscription = Some(Subscription {
-                frame: state.frame,
-                universes: now.to_vec(),
-            });
-            json(&Reply::Picture {
-                state,
-                universes: now,
-            })
+            let now = Arc::clone(&pictures.borrow_and_update());
+            let reply = picture(&now);
+            *subscription = Some(now);
+            reply
         }
     }
 }
 
-/// `Changed` when a new frame was computed since the last message, else nothing.
+fn picture(now: &Snapshot) -> Option<String> {
+    json(&Reply::Picture {
+        state: now.state,
+        universes: now.universes(),
+    })
+}
+
+/// `Changed`: the channels that differ from the last snapshot this connection sent.
 fn changed(
-    api: &Api,
-    subscription: &mut Option<Subscription>,
-    now: &mut [Levels],
+    pictures: &mut watch::Receiver<Arc<Snapshot>>,
+    subscription: &mut Option<Arc<Snapshot>>,
 ) -> Option<String> {
     let last = subscription.as_mut()?;
-    let state = api.engine.read(now);
-    if state.frame == last.frame {
-        return None;
-    }
-    let channels: Vec<ChannelLevel> = changes(&last.universes, now).collect();
-    last.frame = state.frame;
-    last.universes.copy_from_slice(now);
-    json(&Reply::Changed {
-        state,
+    let now = Arc::clone(&pictures.borrow_and_update());
+    let channels: Vec<ChannelLevel> = changes(last.universes(), now.universes()).collect();
+    let reply = json(&Reply::Changed {
+        state: now.state,
         channels: &channels,
-    })
+    });
+    *last = now;
+    reply
 }
 
 /// A reply is plain numbers and names: this does not fail.

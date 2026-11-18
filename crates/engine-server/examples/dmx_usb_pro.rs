@@ -86,7 +86,7 @@ fn number(n: u8) -> Result<OutputNumber, String> {
 fn run(port: &str, check: &str) -> Result<bool, String> {
     let adapter = outputs::dmx_usb_pro::adapter_of(port)
         .map_err(|e| format!("not a DMX USB Pro port: {e}"))?;
-    let (engine, mut sender) = Engine::start(Universes::ONE).map_err(|e| e.to_string())?;
+    let (mut engine, mut sender) = Engine::start(Universes::ONE).map_err(|e| e.to_string())?;
     let run = RunNumbers { first: 1, count: 1 }
         .check(Universes::ONE)
         .map_err(|r| format!("{r:?}"))?;
@@ -109,7 +109,7 @@ fn run(port: &str, check: &str) -> Result<bool, String> {
     println!("adapter {adapter} at 44 a second, a second output at 60 a second.");
 
     let mut watch = Watch {
-        engine: &engine,
+        engine: &mut engine,
         started: Instant::now(),
         steps: 0,
         level: 0,
@@ -130,7 +130,7 @@ fn run(port: &str, check: &str) -> Result<bool, String> {
 
 /// Watches the engine, prints what changed, and keeps channel 1 moving.
 struct Watch<'a> {
-    engine: &'a Engine,
+    engine: &'a mut Engine,
     started: Instant,
     steps: u32,
     level: u8,
@@ -154,7 +154,7 @@ impl Watch<'_> {
                 value: self.level,
             });
         }
-        let state = self.engine.query();
+        let state = self.engine.fresh().state;
         self.events(&state);
         state
     }
@@ -228,7 +228,7 @@ fn counters(output: Option<engine::Output>) -> Counters {
 fn ten_minutes(watch: &mut Watch, sender: &mut engine::Sender) -> bool {
     println!("10 minutes. Nothing to do; a line every 30 s.");
     let end = Duration::from_secs(600);
-    let mut state = watch.engine.query();
+    let mut state = watch.engine.fresh().state;
     let mut shown = 0;
     while watch.started.elapsed() < end {
         state = watch.tick(sender);
@@ -241,7 +241,7 @@ fn ten_minutes(watch: &mut Watch, sender: &mut engine::Sender) -> bool {
     let [pro, _] = outputs(&state).map(counters);
     let lateness = OutputNumber::try_from(1)
         .ok()
-        .and_then(|n| watch.engine.lateness(n));
+        .and_then(|n| watch.engine.fresh().lateness(n));
     println!("{BELL}\nresult after 600 s:");
     println!("  adapter: {}", describe(state.outputs[0]));
     println!("  other:   {}", describe(state.outputs[1]));
@@ -274,7 +274,7 @@ fn hands_on(watch: &mut Watch, sender: &mut engine::Sender, step: Step) -> bool 
         CALM.as_secs()
     );
     let calm_until = watch.started.elapsed() + CALM;
-    let mut state = watch.engine.query();
+    let mut state = watch.engine.fresh().state;
     let mut ran = false;
     while watch.started.elapsed() < calm_until {
         state = watch.tick(sender);

@@ -1,7 +1,8 @@
 //! Runs the engine with DDP outputs that send to a receiver on this machine, at 60 and 44
 //! a second in turn. Prints, in microseconds, the worst p99 lateness of the outputs, the
 //! worst lateness of the outputs, then the intervals off by more than 2 ms on all of them
-//! together. Each output's numbers go to stderr. The scorecard reads it.
+//! together. Each output's numbers go to stderr. A reader takes a snapshot on every frame,
+//! as the server does. The scorecard reads it.
 //!
 //! | Run | Outputs, universes each | For | Command |
 //! |---|---|---|---|
@@ -9,15 +10,15 @@
 //! | at the limits the API allows | 16, 64 | 30 s | `cargo run -q --release -p engine-server --example lateness -- limits` |
 
 use engine::{
-    Color, Command, Engine, MAX_OUTPUTS, MAX_UNIVERSES, OutputKind, OutputNumber, Rate,
-    RunNumbers, Universes,
+    Color, Command, Engine, MAX_OUTPUTS, MAX_UNIVERSES, OutputKind, OutputNumber, Rate, RunNumbers,
+    Universes,
 };
 use std::net::{SocketAddr, UdpSocket};
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// How many outputs, how many universes each, for how long.
 struct Setup {
@@ -61,7 +62,7 @@ fn main() -> ExitCode {
 
 fn run(setup: &Setup) -> Result<String, String> {
     let universes = Universes::new(setup.universes).ok_or("universes")?;
-    let (engine, mut sender) = Engine::start(universes).map_err(|e| e.to_string())?;
+    let (mut engine, mut sender) = Engine::start(universes).map_err(|e| e.to_string())?;
     let (address, stop) = drain().map_err(|e| e.to_string())?;
     let rates = [Rate::Sixty, Rate::FortyFour].into_iter().cycle();
     let numbers: Vec<_> = (1..=setup.outputs)
@@ -84,13 +85,23 @@ fn run(setup: &Setup) -> Result<String, String> {
             .send(command)
             .map_err(|r| format!("refused: {r:?}"))?;
     }
-    thread::sleep(setup.run);
-    let state = engine.query();
+    // A reader on every frame: it asks again as soon as a picture is back.
+    let (started, mut seen, mut pictures) = (Instant::now(), 0, 0_u64);
+    while started.elapsed() < setup.run {
+        let frame = engine.latest().state.frame;
+        if frame != seen {
+            (seen, pictures) = (frame, pictures + 1);
+        }
+        thread::sleep(Duration::from_millis(1));
+    }
+    eprintln!("snapshots read: {pictures}, frames: {seen}");
+    let picture = *engine.fresh();
+    let state = picture.state;
     stop.store(true, Ordering::Relaxed);
     let (mut p99, mut worst, mut off) = (Duration::ZERO, Duration::ZERO, 0);
     for number in numbers {
         let number = number?;
-        let lateness = engine.lateness(number).ok_or("no frame")?;
+        let lateness = picture.lateness(number).ok_or("no frame")?;
         let output = state
             .outputs
             .get(number.slot())

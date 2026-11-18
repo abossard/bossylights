@@ -5,7 +5,6 @@ use engine::{Engine, Universes};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use std::net::SocketAddr;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
@@ -21,11 +20,11 @@ async fn connect() -> Socket {
 }
 
 /// A served engine: its address, a connection, and the server's task.
-async fn start() -> (SocketAddr, Socket, JoinHandle<std::io::Result<()>>) {
+async fn start() -> (SocketAddr, Socket, JoinHandle<std::io::Result<Engine>>) {
     let (engine, sender) = Engine::start(Universes::new(2).unwrap()).unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
-    let served = tokio::spawn(engine_server::serve(listener, Arc::new(engine), sender));
+    let served = tokio::spawn(engine_server::serve(listener, engine, sender));
     (address, open(address).await, served)
 }
 
@@ -310,7 +309,7 @@ async fn stop_answers_stopping_closes_every_connection_and_ends_the_server() {
     let ended = tokio::time::timeout(Duration::from_secs(2), served)
         .await
         .expect("the server ends within 2 s");
-    assert!(matches!(ended, Ok(Ok(()))), "{ended:?}");
+    assert!(matches!(ended, Ok(Ok(_))), "the server ended with an error");
     assert!(TcpStream::connect(address).await.is_err(), "nobody listens");
 }
 

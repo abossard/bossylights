@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 const RUN: Duration = Duration::from_secs(10);
 
 fn main() -> ExitCode {
-    let Ok((engine, mut sender)) = Engine::start(Universes::ONE) else {
+    let Ok((mut engine, mut sender)) = Engine::start(Universes::ONE) else {
         eprintln!("send_to_frame: the engine did not start");
         return ExitCode::FAILURE;
     };
@@ -49,7 +49,7 @@ fn main() -> ExitCode {
         }
     }
     thread::sleep(Duration::from_millis(100)); // the last frame
-    match engine.send_to_frame_p95() {
+    match engine.fresh().send_to_frame_p95() {
         Some(p95) => {
             println!("{}", p95.as_micros());
             ExitCode::SUCCESS

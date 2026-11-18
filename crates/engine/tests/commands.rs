@@ -2,7 +2,7 @@ mod mock;
 
 use engine::{
     ChannelNumbers, Command, Engine, Levels, OutputKind, OutputNumber, QUEUE, Rate, Refusal,
-    RunNumbers, Sender, Status, Universes,
+    RunNumbers, Sender, Snapshot, Status, Universes,
 };
 use mock::Heard;
 use std::sync::{Arc, mpsc};
@@ -65,17 +65,16 @@ fn a_command_reaches_the_frame_and_the_state() {
         ),
     ];
     for (commands, universe, address, held, out) in cases {
-        let (engine, mut sender, first) = start();
+        let (mut engine, mut sender, first) = start();
         for command in &commands {
             assert_eq!(sender.send(*command), Ok(()), "{command:?}");
         }
         first.two_more_frames();
         assert_eq!(first.level(universe, address), out, "{commands:?} out");
-        let mut universes = [Levels::ZERO; 2];
-        engine.read(&mut universes);
-        let level = universes[usize::from(universe - 1)].0[usize::from(address - 1)];
+        let picture = engine.fresh();
+        let level = picture.universes()[usize::from(universe - 1)].0[usize::from(address - 1)];
         assert_eq!(level, held, "{commands:?} held");
-        assert!(engine.send_to_frame_p95().is_some(), "the send was timed");
+        assert!(picture.send_to_frame_p95().is_some(), "the send was timed");
     }
 }
 
@@ -95,15 +94,14 @@ fn a_command_that_cannot_be_right_is_refused_and_changes_nothing() {
             Refusal::NotACommand,
         ),
     ];
-    let (engine, mut sender, first) = start();
-    let before = engine.query();
+    let (mut engine, mut sender, _first) = start();
+    let before = engine.fresh().state;
     for (command, reason) in cases {
         assert_eq!(sender.send(command), Err(reason), "{command:?}");
     }
-    first.two_more_frames();
-    let mut universes = [Levels::ZERO; 2];
-    let state = engine.read(&mut universes);
-    assert_eq!(universes, [Levels::ZERO; 2]);
+    let picture = engine.fresh();
+    let state = picture.state;
+    assert_eq!(picture.universes(), [Levels::ZERO; 2]);
     assert!(!state.blackout);
     assert_eq!(state.outputs[1], None, "no second output");
     assert_eq!(
@@ -131,7 +129,7 @@ fn outputs_are_attached_changed_and_removed() {
         (vec![Step::Remove], None),
     ];
     for (steps, rate) in cases {
-        let (engine, mut sender, first) = start();
+        let (mut engine, mut sender, first) = start();
         let mut heard = None;
         for step in &steps {
             match *step {
@@ -148,7 +146,8 @@ fn outputs_are_attached_changed_and_removed() {
         assert_eq!(sender.send(set(2, 1, 77)), Ok(()));
         first.two_more_frames();
         first.two_more_frames(); // a mock at 30 a second had a frame too
-        let state = engine.query();
+        let picture = engine.fresh();
+        let state = picture.state;
         let third = state.outputs[2];
         assert_eq!(third.map(|o| o.rate), rate, "{steps:?}");
         if let (Some(third), Some(heard)) = (third, &heard) {
@@ -156,7 +155,7 @@ fn outputs_are_attached_changed_and_removed() {
             assert!(third.counters.accepted > 0, "{steps:?}");
             assert!(heard.frames() > 0, "{steps:?}");
             assert_eq!(heard.level(1, 1), 77, "universe 2 of the frame");
-            assert!(engine.lateness(output(3)).is_some(), "{steps:?}");
+            assert!(picture.lateness(output(3)).is_some(), "{steps:?}");
         }
         let one = state.outputs[0].expect("output 1 stays");
         assert_eq!((one.status, one.rate), (Status::Running, Rate::Sixty));
@@ -188,7 +187,8 @@ fn after_the_last_output_is_removed_a_command_still_lands_and_the_engine_stops()
         &[(1, Rate::Sixty), (2, Rate::FortyFour)],
     ];
     for outputs in cases {
-        let (engine, mut sender) = Engine::start(Universes::ONE).expect("the tick thread starts");
+        let (mut engine, mut sender) =
+            Engine::start(Universes::ONE).expect("the tick thread starts");
         for &(number, rate) in outputs {
             mock::attach(&mut sender, Universes::ONE, number, run(1, 1), rate);
         }
@@ -199,21 +199,17 @@ fn after_the_last_output_is_removed_a_command_still_lands_and_the_engine_stops()
             };
             assert_eq!(sender.send(remove), Ok(()), "{outputs:?}");
         }
-        let wait_until = |what: &str, done: &dyn Fn(&Engine) -> bool| {
+        let mut wait_until = |what: &str, done: &dyn Fn(&Snapshot) -> bool| {
             let started = Instant::now();
-            while !done(&engine) {
+            while !done(engine.latest()) {
                 assert!(started.elapsed() < guard, "{outputs:?}: {what}"); // guard
                 thread::sleep(Duration::from_millis(1)); // poll
             }
         };
-        let removed = |engine: &Engine| engine.query().outputs.iter().all(Option::is_none);
+        let removed = |picture: &Snapshot| picture.state.outputs.iter().all(Option::is_none);
         wait_until("the outputs were never removed", &removed);
         assert_eq!(sender.send(set(1, 1, 42)), Ok(()), "{outputs:?}");
-        let landed = |engine: &Engine| {
-            let mut universes = [Levels::ZERO];
-            engine.read(&mut universes);
-            universes[0].0[0] == 42
-        };
+        let landed = |picture: &Snapshot| picture.universes()[0].0[0] == 42;
         wait_until("the command never landed", &landed);
         let (stopped, wait) = mpsc::channel();
         thread::spawn(move || {
