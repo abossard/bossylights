@@ -16,3 +16,6 @@ the Apache License 2.0 (`COPYING` in the repository root, copied here as
 | `Elation-EVC-MH.qxf` | Elation | a moving head with 16-bit pan and tilt |
 | `XStatic-X-240Bar-RGB.qxf` | XStatic | a pixel bar, 8 pixels |
 | `JB-Systems-Lounge-Laser-DMX.qxf` | JB_Systems | a laser |
+| `Cameo-CLBARL10RGBA.qxf` | Cameo | a name with brackets, for search |
+| `Lanta-Fireball-P64s.qxf` | Lanta | a name with a longer word than the query, for search |
+| `American-DJ-Ultra-Bar-6.qxf` | American_DJ | a name one typo from the query, for search |

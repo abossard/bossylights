@@ -297,10 +297,13 @@ fn search_finds_by_maker_and_model_ignoring_case_and_small_typos() {
         "Elation-EVC-MH.qxf",
         "XStatic-X-240Bar-RGB.qxf",
         "JB-Systems-Lounge-Laser-DMX.qxf",
+        "Cameo-CLBARL10RGBA.qxf",
+        "Lanta-Fireball-P64s.qxf",
+        "American-DJ-Ultra-Bar-6.qxf",
     ]
     .map(read)
     .into();
-    let cases: [(&str, &[&str]); 11] = [
+    let cases: [(&str, &[&str]); 15] = [
         ("elation", &["Elation EVC MH"]),
         ("ELATION evc", &["Elation EVC MH"]),
         ("evc mh", &["Elation EVC MH"]),
@@ -316,6 +319,21 @@ fn search_finds_by_maker_and_model_ignoring_case_and_small_typos() {
             &["Generic Generic RGBW", "Generic Generic RGB"],
         ),
         ("x-240", &["XStatic X-240Bar RGB"]),
+        ("clbar10rgba", &["Cameo LED Colour Bar RGBA (CLBAR10RGBA)"]),
+        (
+            "(clbar10rgba)",
+            &["Cameo LED Colour Bar RGBA (CLBAR10RGBA)"],
+        ),
+        ("clbar", &["Cameo LED Colour Bar RGBA (CLBAR10RGBA)"]),
+        (
+            "par",
+            &[
+                "Showtec Par 64 100W COB UV",
+                "Lanta Fireball P64s Slimline LED Parcan",
+                "American DJ Ultra Bar 6",
+                "Cameo LED Colour Bar RGBA (CLBAR10RGBA)",
+            ],
+        ),
         ("zzzz", &[]),
         ("", &[]),
     ];

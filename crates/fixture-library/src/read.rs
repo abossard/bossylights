@@ -37,7 +37,13 @@ pub fn parse(file: &str, bytes: &[u8]) -> Result<Fixture, Error> {
     };
     let text = core::str::from_utf8(bytes).map_err(|_| failed(None, Problem::NotText))?;
     if bytes.len() > MOST_BYTES {
-        return Err(failed(None, Problem::TooLarge { bytes: bytes.len(), most: MOST_BYTES }));
+        return Err(failed(
+            None,
+            Problem::TooLarge {
+                bytes: bytes.len(),
+                most: MOST_BYTES,
+            },
+        ));
     }
     if let Some(line) = declarations_at(text) {
         return Err(failed(Some(line), Problem::Declarations));

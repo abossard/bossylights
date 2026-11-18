@@ -164,7 +164,10 @@ fn a_file_that_could_grow_when_read_is_an_error_before_it_is_read() {
 fn a_doctype_without_declarations_is_read() {
     let cases = [
         ("bare", format!("{BARE}{BODY}")),
-        ("with a public id", format!("<!DOCTYPE FixtureDefinition PUBLIC \"-//x[y]\" \"x.dtd\">\n{BODY}")),
+        (
+            "with a public id",
+            format!("<!DOCTYPE FixtureDefinition PUBLIC \"-//x[y]\" \"x.dtd\">\n{BODY}"),
+        ),
         ("no doctype", BODY.to_string()),
     ];
     for (name, source) in cases {
