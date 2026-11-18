@@ -1,0 +1,135 @@
+// In/Out: the clock, the outputs, and the list of what was mapped with Learn.
+import { off, works, type Cell, type SituationId } from "../situations.ts";
+import { button, change, choice, control, field, remove, select, toggle, NOT_A_BUTTON, NOT_A_LIST, no, type Control, type Row } from "../spec.ts";
+
+const LOCKED = off("Locked while LIVE is on");
+const LIVE_IS_ON = off("LIVE is on");
+const ROW = no("It belongs to one row of a list that changes");
+
+/** A control of one row of the Mappings table. The lock holds mappings, as it holds the layout. */
+const MAPPING: Partial<Record<SituationId, Cell>> = { lock: LOCKED, empty: works("Works. Top bar controls can be mapped before any light is patched") };
+const mapping = (row: Omit<Row, "screen" | "kind" | "part">): Control =>
+  control({ learn: ROW, ...row, screen: "In/Out", part: "Mappings", kind: "edit", in: { ...MAPPING, ...row.in } });
+
+export const INOUT: Control[] = [
+  control({
+    id: "inout.clock.feed",
+    name: "Clock feed",
+    screen: "In/Out",
+    part: "Clock",
+    from: ["inout/Screen/button"],
+    kit: "Choice",
+    kind: "setting",
+    does: "Picks what drives the beat: Tap, Audio, MIDI clock, VirtualDJ or Timecode. Each says its tempo and how sure it is",
+    sends: ["SetClockFeed"],
+    gestures: choice("The beat follows that feed"),
+    in: {
+      "live-on": works("Works mid-show. The beat jumps to the new feed at once"),
+      song: works("Works. VirtualDJ gives the tempo of the song that plays"),
+      "no-song": works("Works. VirtualDJ has no tempo without a song: the last tempo stays"),
+    },
+    first: change("A feed with no signal can be picked, and then nothing drives the beat. It is off and says 'No signal'"),
+    states: ["picked", "not picked", "off: no signal"],
+  }),
+  control({
+    id: "inout.clock.tap",
+    name: "Tap, on In/Out",
+    screen: "In/Out",
+    part: "Clock",
+    from: ["inout/Screen/tap"],
+    kit: "Button",
+    kind: "play",
+    does: "The same as Tap in the top bar",
+    sends: ["TapTempo"],
+    gestures: button("One tap"),
+    first: remove("Two controls for one thing. Tap is in the top bar on every screen, right above this one. The Tap feed says 'Tap in the top bar'"),
+  }),
+  control({
+    id: "inout.out.test",
+    name: "Test an output",
+    screen: "In/Out",
+    part: "Out",
+    from: ["inout/Screen/testing"],
+    kit: "Toggle",
+    kind: "play",
+    does: "Every channel of that output at half for three seconds, then back. To see that the cable works",
+    sends: ["TestOutput"],
+    gestures: toggle("Starts the test", "nothing: it ends by itself after three seconds"),
+    in: {
+      "live-on": LIVE_IS_ON,
+      lock: LIVE_IS_ON,
+      recording: LIVE_IS_ON,
+      autopilot: LIVE_IS_ON,
+      holding: works("Works. For three seconds the test covers what you hold, then it is back"),
+      empty: works("Works. An output can be tested before any light is patched"),
+      "output-lost": off("Fix the connection first"),
+    },
+    feedback: { screen: "The button says 'Testing' and the line above it says what happens, at once", controller: "None" },
+    learn: no("A test is started on screen, looking at the lights"),
+    first: change("It works while LIVE is on: one press and the whole room is at half, mid-show. It is off then and says 'LIVE is on'"),
+    states: ["Test", "Testing", "off"],
+  }),
+  mapping({
+    id: "inout.mapping.edit",
+    name: "Edit a mapping",
+    from: ["inout/Screen/button#2"],
+    kit: "Toggle",
+    does: "Turns device, number and feedback of that row into fields. Pressed again as 'Done', they are text again",
+    ui: "which row is being edited",
+    gestures: toggle("Opens the row to edit", "the row is text again"),
+    undo: no("Opening a row changes nothing"),
+    states: ["Edit", "Done"],
+  }),
+  mapping({
+    id: "inout.mapping.device",
+    name: "Mapping device",
+    from: ["inout/Screen/device-for"],
+    kit: "Select",
+    does: "Which controller the mapping listens to. There while the row is edited",
+    sends: ["UpdateMapping"],
+    gestures: select("the mapping listens to that device"),
+    learn: NOT_A_LIST,
+  }),
+  mapping({
+    id: "inout.mapping.message",
+    name: "Note or controller number",
+    from: ["inout/Screen/note-or-controller-number-for"],
+    kit: "TextField",
+    does: "The note or controller number the mapping listens to. There while the row is edited. An empty field keeps the old one",
+    sends: ["UpdateMapping"],
+    gestures: field("a note or a controller number", "Enter or leaving the field saves, Escape puts the old one back"),
+    learn: NOT_A_BUTTON,
+    first: change("Free text for something that has a shape: 'Note 36', 'CC 48'. Text that is not one of the two is refused and the field says so"),
+  }),
+  mapping({
+    id: "inout.mapping.feedback",
+    name: "Mapping feedback",
+    from: ["inout/Screen/lights-up"],
+    kit: "Toggle",
+    does: "The hardware control lights up with the state of the control on screen, or not. There while the row is edited",
+    sends: ["UpdateMapping"],
+    gestures: toggle("The hardware control lights up", "it stays dark"),
+    states: ["Lights up", "None"],
+  }),
+  mapping({
+    id: "inout.mapping.test",
+    name: "Test a mapping",
+    from: ["inout/Screen/test"],
+    kit: "Button",
+    does: "Shows that the mapping is alive: the hardware control lights and the line under the table says what was sent. The control on screen does not fire",
+    sends: ["TestMapping"],
+    gestures: button("Tests the mapping"),
+    in: { lock: works("Works. A test changes nothing and fires nothing") },
+    undo: no("A test changes nothing"),
+    states: ["Test", "Sent"],
+  }),
+  mapping({
+    id: "inout.mapping.remove",
+    name: "Remove a mapping",
+    from: ["inout/Screen/remove"],
+    kit: "Button",
+    does: "Removes the mapping. The control on screen loses its paper square",
+    sends: ["RemoveMapping"],
+    gestures: button("Removes the mapping"),
+  }),
+];

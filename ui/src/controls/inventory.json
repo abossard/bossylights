@@ -1,0 +1,4410 @@
+[
+ {
+  "key": "app/App/nowstrip",
+  "file": "App.tsx",
+  "tag": "NowStrip",
+  "label": "",
+  "role": "",
+  "gestures": [],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "go"
+  ],
+  "component": "App",
+  "region": "",
+  "line": 24
+ },
+ {
+  "key": "kit/Button/button",
+  "file": "kit/Button.tsx",
+  "tag": "button",
+  "label": "…",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [],
+  "component": "Button",
+  "region": "",
+  "line": 20,
+  "spreads": true
+ },
+ {
+  "key": "kit/Fader/div",
+  "file": "kit/Fader.tsx",
+  "tag": "div",
+  "label": "…",
+  "role": "slider",
+  "gestures": [
+   "drag",
+   "keyboard",
+   "press and hold"
+  ],
+  "sends": [],
+  "passes": [
+   "onChange"
+  ],
+  "ui": [],
+  "component": "Fader",
+  "region": "",
+  "line": 67
+ },
+ {
+  "key": "kit/List/button",
+  "file": "kit/List.tsx",
+  "tag": "button",
+  "label": "…",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [
+   "onSelect"
+  ],
+  "ui": [],
+  "component": "List",
+  "region": "",
+  "line": 58
+ },
+ {
+  "key": "kit/NowStrip/now-strip-what-you-hold",
+  "file": "kit/NowStrip.tsx",
+  "tag": "button",
+  "label": "Now strip: what you hold, what the show plays, what the autopilot plays. Open the Console.",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [
+   "onActivate"
+  ],
+  "ui": [],
+  "component": "NowStrip",
+  "region": "",
+  "line": 22
+ },
+ {
+  "key": "kit/Pad/running",
+  "file": "kit/Pad.tsx",
+  "tag": "button",
+  "label": "…, running: … | …, off, still held until Release | …",
+  "role": "",
+  "gestures": [
+   "long press",
+   "press",
+   "press and hold"
+  ],
+  "sends": [],
+  "passes": [
+   "onChange",
+   "onUp"
+  ],
+  "ui": [],
+  "component": "Pad",
+  "region": "",
+  "line": 66
+ },
+ {
+  "key": "kit/Region/note-on",
+  "file": "kit/Region.tsx",
+  "tag": "button",
+  "label": "Note on …",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "review.openRegion"
+  ],
+  "component": "Region",
+  "region": "",
+  "line": 34
+ },
+ {
+  "key": "kit/RigView/g",
+  "file": "kit/RigView.tsx",
+  "tag": "g",
+  "label": "… | …",
+  "role": "",
+  "gestures": [
+   "keyboard",
+   "press",
+   "press and hold"
+  ],
+  "sends": [],
+  "passes": [
+   "onChange",
+   "onFixture"
+  ],
+  "ui": [],
+  "component": "RigView",
+  "region": "",
+  "line": 160
+ },
+ {
+  "key": "kit/Segmented/div",
+  "file": "kit/Segmented.tsx",
+  "tag": "div",
+  "label": "…",
+  "role": "radiogroup",
+  "gestures": [
+   "keyboard"
+  ],
+  "sends": [],
+  "passes": [
+   "onChange",
+   "options"
+  ],
+  "ui": [],
+  "component": "Segmented",
+  "region": "",
+  "line": 31
+ },
+ {
+  "key": "kit/Segmented/button",
+  "file": "kit/Segmented.tsx",
+  "tag": "button",
+  "label": "…",
+  "role": "radio",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [
+   "onChange"
+  ],
+  "ui": [],
+  "component": "Segmented",
+  "region": "",
+  "line": 39
+ },
+ {
+  "key": "kit/Table/button",
+  "file": "kit/Table.tsx",
+  "tag": "button",
+  "label": "…",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [
+   "onRowClick"
+  ],
+  "ui": [],
+  "component": "Table",
+  "region": "",
+  "line": 55
+ },
+ {
+  "key": "kit/Tabs/div",
+  "file": "kit/Tabs.tsx",
+  "tag": "div",
+  "label": "…",
+  "role": "tablist",
+  "gestures": [
+   "keyboard"
+  ],
+  "sends": [],
+  "passes": [
+   "items",
+   "onChange"
+  ],
+  "ui": [],
+  "component": "Tabs",
+  "region": "",
+  "line": 37
+ },
+ {
+  "key": "kit/Tabs/button",
+  "file": "kit/Tabs.tsx",
+  "tag": "button",
+  "label": "…",
+  "role": "tab",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [
+   "onChange"
+  ],
+  "ui": [],
+  "component": "Tabs",
+  "region": "",
+  "line": 40
+ },
+ {
+  "key": "kit/XYPad/div",
+  "file": "kit/XYPad.tsx",
+  "tag": "div",
+  "label": "…",
+  "role": "slider",
+  "gestures": [
+   "drag",
+   "keyboard",
+   "press and hold"
+  ],
+  "sends": [],
+  "passes": [
+   "onChange"
+  ],
+  "ui": [],
+  "component": "XYPad",
+  "region": "",
+  "line": 39
+ },
+ {
+  "key": "review/ReviewPanel/close",
+  "file": "review/ReviewPanel.tsx",
+  "tag": "Button",
+  "label": "Close",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "review.setActiveRegion",
+   "review.setPanelOpen"
+  ],
+  "component": "ReviewPanel",
+  "region": "",
+  "line": 37
+ },
+ {
+  "key": "review/ReviewPanel/a",
+  "file": "review/ReviewPanel.tsx",
+  "tag": "a",
+  "label": "# …",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [],
+  "component": "ReviewPanel",
+  "region": "",
+  "line": 52
+ },
+ {
+  "key": "review/ReviewPanel/button",
+  "file": "review/ReviewPanel.tsx",
+  "tag": "Button",
+  "label": "…",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "review.get",
+   "setReviews"
+  ],
+  "component": "ReviewPanel",
+  "region": "",
+  "line": 66
+ },
+ {
+  "key": "review/ReviewPanel/of-5",
+  "file": "review/ReviewPanel.tsx",
+  "tag": "Button",
+  "label": "… of 5",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "review.get",
+   "setReviews"
+  ],
+  "component": "ReviewPanel",
+  "region": "",
+  "line": 82
+ },
+ {
+  "key": "review/ReviewPanel/what-works-what-does-not",
+  "file": "review/ReviewPanel.tsx",
+  "tag": "textarea",
+  "label": "What works, what does not, what is missing",
+  "role": "",
+  "gestures": [
+   "type or pick"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "setReviews"
+  ],
+  "component": "ReviewPanel",
+  "region": "",
+  "line": 99
+ },
+ {
+  "key": "review/ReviewPanel/input-checkbox",
+  "file": "review/ReviewPanel.tsx",
+  "tag": "input[checkbox]",
+  "label": "",
+  "role": "",
+  "gestures": [
+   "type or pick"
+  ],
+  "sends": [
+   "setLightsConnected"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "ReviewPanel",
+  "region": "",
+  "line": 118
+ },
+ {
+  "key": "review/ReviewPanel/input-checkbox#2",
+  "file": "review/ReviewPanel.tsx",
+  "tag": "input[checkbox]",
+  "label": "",
+  "role": "",
+  "gestures": [
+   "type or pick"
+  ],
+  "sends": [
+   "setCuedDeckLoaded"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "ReviewPanel",
+  "region": "",
+  "line": 126
+ },
+ {
+  "key": "review/ReviewPanel/comment-mode",
+  "file": "review/ReviewPanel.tsx",
+  "tag": "Button",
+  "label": "Comment mode",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "review.setActiveRegion",
+   "review.setCommentMode",
+   "review.setPanelOpen"
+  ],
+  "component": "ReviewPanel",
+  "region": "",
+  "line": 140
+ },
+ {
+  "key": "review/ReviewPanel/no-note-yet",
+  "file": "review/ReviewPanel.tsx",
+  "tag": "button",
+  "label": "… No note yet",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "setActiveRegion",
+   "setPanelOpen"
+  ],
+  "component": "ReviewPanel",
+  "region": "",
+  "line": 151
+ },
+ {
+  "key": "review/ReviewPanel/what-should-change-in-this",
+  "file": "review/ReviewPanel.tsx",
+  "tag": "textarea",
+  "label": "What should change in this region",
+  "role": "",
+  "gestures": [
+   "type or pick"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "setReviews"
+  ],
+  "component": "ReviewPanel",
+  "region": "",
+  "line": 170
+ },
+ {
+  "key": "review/ReviewPanel/back-to-regions",
+  "file": "review/ReviewPanel.tsx",
+  "tag": "Button",
+  "label": "Back to regions | Done",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "review.commentMode",
+   "review.setActiveRegion",
+   "review.setPanelOpen"
+  ],
+  "component": "ReviewPanel",
+  "region": "",
+  "line": 181
+ },
+ {
+  "key": "review/ReviewScreen/copy-as-markdown",
+  "file": "review/ReviewScreen.tsx",
+  "tag": "Button",
+  "label": "Copy as Markdown",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "review.get",
+   "setMessage"
+  ],
+  "component": "ReviewScreen",
+  "region": "",
+  "line": 30
+ },
+ {
+  "key": "review/ReviewScreen/export",
+  "file": "review/ReviewScreen.tsx",
+  "tag": "Button",
+  "label": "Export",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "review.get",
+   "setMessage",
+   "setTimeout"
+  ],
+  "component": "ReviewScreen",
+  "region": "",
+  "line": 31
+ },
+ {
+  "key": "review/ReviewScreen/table",
+  "file": "review/ReviewScreen.tsx",
+  "tag": "Table",
+  "label": "",
+  "role": "",
+  "gestures": [],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "go",
+   "review.setPanelOpen"
+  ],
+  "component": "ReviewScreen",
+  "region": "",
+  "line": 36
+ },
+ {
+  "key": "console/AutoLaneControls/autopilot",
+  "file": "screens/console/AutoLaneControls.tsx",
+  "tag": "button",
+  "label": "Autopilot …",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "setAutopilot"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "AutoLaneControls",
+  "region": "",
+  "line": 8
+ },
+ {
+  "key": "console/AutoLaneControls/autopilot-style",
+  "file": "screens/console/AutoLaneControls.tsx",
+  "tag": "select",
+  "label": "Autopilot style",
+  "role": "",
+  "gestures": [
+   "type or pick"
+  ],
+  "sends": [
+   "setAutopilot"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "AutoLaneControls",
+  "region": "",
+  "line": 17
+ },
+ {
+  "key": "console/ConsoleGrid/by-arrow-keys-move-shift",
+  "file": "screens/console/Console.tsx",
+  "tag": "div",
+  "label": "…, … by …. Arrow keys move, Shift and arrows resize, Delete removes.",
+  "role": "group",
+  "gestures": [
+   "keyboard",
+   "press and hold"
+  ],
+  "sends": [
+   "record"
+  ],
+  "passes": [],
+  "ui": [
+   "setPages"
+  ],
+  "component": "ConsoleGrid",
+  "region": "",
+  "line": 226
+ },
+ {
+  "key": "console/ConsoleGrid/remove",
+  "file": "screens/console/Console.tsx",
+  "tag": "button",
+  "label": "Remove …",
+  "role": "",
+  "gestures": [
+   "press",
+   "press and hold"
+  ],
+  "sends": [
+   "record"
+  ],
+  "passes": [],
+  "ui": [
+   "setPages"
+  ],
+  "component": "ConsoleGrid",
+  "region": "",
+  "line": 237
+ },
+ {
+  "key": "console/ConsoleGrid/span",
+  "file": "screens/console/Console.tsx",
+  "tag": "span",
+  "label": "",
+  "role": "",
+  "gestures": [
+   "press and hold"
+  ],
+  "sends": [
+   "record"
+  ],
+  "passes": [],
+  "ui": [
+   "setPages"
+  ],
+  "component": "ConsoleGrid",
+  "region": "",
+  "line": 248
+ },
+ {
+  "key": "console/ConsoleGrid/edit-surface",
+  "file": "screens/console/Console.tsx",
+  "tag": "Button",
+  "label": "Edit surface",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [],
+  "component": "ConsoleGrid",
+  "region": "",
+  "line": 263
+ },
+ {
+  "key": "console/WidgetDrawer/button",
+  "file": "screens/console/Console.tsx",
+  "tag": "button",
+  "label": "…",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "record"
+  ],
+  "passes": [],
+  "ui": [
+   "setMessage",
+   "setPages"
+  ],
+  "component": "WidgetDrawer",
+  "region": "",
+  "line": 285
+ },
+ {
+  "key": "console/Items/button",
+  "file": "screens/console/index.tsx",
+  "tag": "button",
+  "label": "…",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "releaseHold",
+   "stopLook"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "Items",
+  "region": "",
+  "line": 63
+ },
+ {
+  "key": "console/Running/unfold-running",
+  "file": "screens/console/index.tsx",
+  "tag": "button",
+  "label": "Unfold Running | Fold Running",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "folded",
+   "setFolded"
+  ],
+  "component": "Running",
+  "region": "running",
+  "line": 79
+ },
+ {
+  "key": "console/Running/release-all",
+  "file": "screens/console/index.tsx",
+  "tag": "Button",
+  "label": "Release all",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "releaseAll"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "Running",
+  "region": "running",
+  "line": 100
+ },
+ {
+  "key": "console/Screen/console-pages",
+  "file": "screens/console/index.tsx",
+  "tag": "Tabs",
+  "label": "Console pages",
+  "role": "",
+  "gestures": [
+   "type or pick"
+  ],
+  "sends": [
+   "record"
+  ],
+  "passes": [],
+  "ui": [
+   "setPageId",
+   "setPages"
+  ],
+  "component": "Screen",
+  "region": "pages",
+  "line": 168
+ },
+ {
+  "key": "console/Screen/surprise-me",
+  "file": "screens/console/index.tsx",
+  "tag": "Button",
+  "label": "Surprise me",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "surprise"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "Screen",
+  "region": "pages",
+  "line": 179
+ },
+ {
+  "key": "console/Screen/edit-surface",
+  "file": "screens/console/index.tsx",
+  "tag": "Button",
+  "label": "Edit surface",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [],
+  "component": "Screen",
+  "region": "pages",
+  "line": 180
+ },
+ {
+  "key": "console/Screen/done-editing",
+  "file": "screens/console/index.tsx",
+  "tag": "Button",
+  "label": "Done editing",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [],
+  "component": "Screen",
+  "region": "pages",
+  "line": 190
+ },
+ {
+  "key": "console/LookPad/pad",
+  "file": "screens/console/widgets.tsx",
+  "tag": "Pad",
+  "label": "…",
+  "role": "",
+  "gestures": [
+   "press and hold"
+  ],
+  "sends": [
+   "hold",
+   "lookState",
+   "release",
+   "start",
+   "stop"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "LookPad",
+  "region": "",
+  "line": 78
+ },
+ {
+  "key": "console/CueList/back",
+  "file": "screens/console/widgets.tsx",
+  "tag": "Button",
+  "label": "Back",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "start",
+   "stop"
+  ],
+  "passes": [],
+  "ui": [
+   "setAt"
+  ],
+  "component": "CueList",
+  "region": "",
+  "line": 120
+ },
+ {
+  "key": "console/CueList/go",
+  "file": "screens/console/widgets.tsx",
+  "tag": "Button",
+  "label": "Go",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "start",
+   "stop"
+  ],
+  "passes": [],
+  "ui": [
+   "setAt"
+  ],
+  "component": "CueList",
+  "region": "",
+  "line": 123
+ },
+ {
+  "key": "console/SpeedDial/speed",
+  "file": "screens/console/widgets.tsx",
+  "tag": "Segmented",
+  "label": "Speed",
+  "role": "",
+  "gestures": [
+   "type or pick"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "setSpeed"
+  ],
+  "component": "SpeedDial",
+  "region": "",
+  "line": 136
+ },
+ {
+  "key": "console/WidgetBody/fader",
+  "file": "screens/console/widgets.tsx",
+  "tag": "Fader",
+  "label": "…",
+  "role": "",
+  "gestures": [
+   "type or pick"
+  ],
+  "sends": [
+   "setFader",
+   "setMaster"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "WidgetBody",
+  "region": "",
+  "line": 173
+ },
+ {
+  "key": "console/WidgetBody/movers-position",
+  "file": "screens/console/widgets.tsx",
+  "tag": "XYPad",
+  "label": "Movers position",
+  "role": "",
+  "gestures": [
+   "type or pick"
+  ],
+  "sends": [
+   "setXY"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "WidgetBody",
+  "region": "",
+  "line": 185
+ },
+ {
+  "key": "console/WidgetBody/fader#2",
+  "file": "screens/console/widgets.tsx",
+  "tag": "Fader",
+  "label": "…",
+  "role": "",
+  "gestures": [
+   "type or pick"
+  ],
+  "sends": [
+   "setFader",
+   "setMaster"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "WidgetBody",
+  "region": "",
+  "line": 197
+ },
+ {
+  "key": "dmx/Screen/universes",
+  "file": "screens/dmx/index.tsx",
+  "tag": "Tabs",
+  "label": "Universes",
+  "role": "",
+  "gestures": [
+   "type or pick"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "setUniverse"
+  ],
+  "component": "Screen",
+  "region": "universes",
+  "line": 106
+ },
+ {
+  "key": "dmx/Screen/patched-only",
+  "file": "screens/dmx/index.tsx",
+  "tag": "Button",
+  "label": "Patched only",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "setPatchedOnly"
+  ],
+  "component": "Screen",
+  "region": "universes",
+  "line": 127
+ },
+ {
+  "key": "dmx/Screen/changing",
+  "file": "screens/dmx/index.tsx",
+  "tag": "Button",
+  "label": "Changing",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "setChangingOnly"
+  ],
+  "component": "Screen",
+  "region": "universes",
+  "line": 130
+ },
+ {
+  "key": "dmx/Screen/channel",
+  "file": "screens/dmx/index.tsx",
+  "tag": "button",
+  "label": "Channel …, …, …",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "setSelected"
+  ],
+  "component": "Screen",
+  "region": "channels",
+  "line": 180
+ },
+ {
+  "key": "dmx/Screen/channel#2",
+  "file": "screens/dmx/index.tsx",
+  "tag": "Fader",
+  "label": "Channel …",
+  "role": "",
+  "gestures": [
+   "type or pick"
+  ],
+  "sends": [
+   "holdChannel"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "Screen",
+  "region": "channel",
+  "line": 241
+ },
+ {
+  "key": "dmx/Screen/zero",
+  "file": "screens/dmx/index.tsx",
+  "tag": "Button",
+  "label": "Zero",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "holdChannel"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "Screen",
+  "region": "channel",
+  "line": 250
+ },
+ {
+  "key": "dmx/Screen/full",
+  "file": "screens/dmx/index.tsx",
+  "tag": "Button",
+  "label": "Full",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "holdChannel"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "Screen",
+  "region": "channel",
+  "line": 251
+ },
+ {
+  "key": "dmx/Screen/release",
+  "file": "screens/dmx/index.tsx",
+  "tag": "Button",
+  "label": "Release",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "releaseChannel"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "Screen",
+  "region": "channel",
+  "line": 252
+ },
+ {
+  "key": "dmx/Screen/held-by-hand",
+  "file": "screens/dmx/index.tsx",
+  "tag": "List",
+  "label": "Held by hand",
+  "role": "",
+  "gestures": [],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "setSelected",
+   "setUniverse"
+  ],
+  "component": "Screen",
+  "region": "held",
+  "line": 264
+ },
+ {
+  "key": "dmx/Screen/release-channel",
+  "file": "screens/dmx/index.tsx",
+  "tag": "Button",
+  "label": "Release channel …",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "releaseChannel"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "Screen",
+  "region": "held",
+  "line": 278
+ },
+ {
+  "key": "dmx/Screen/release-all",
+  "file": "screens/dmx/index.tsx",
+  "tag": "Button",
+  "label": "Release all",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "releaseAllChannels"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "Screen",
+  "region": "held",
+  "line": 284
+ },
+ {
+  "key": "dmx/Screen/table",
+  "file": "screens/dmx/index.tsx",
+  "tag": "Table",
+  "label": "",
+  "role": "",
+  "gestures": [],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "setUniverse"
+  ],
+  "component": "Screen",
+  "region": "output",
+  "line": 292
+ },
+ {
+  "key": "dmx/Screen/brightness-among-equals",
+  "file": "screens/dmx/index.tsx",
+  "tag": "Segmented",
+  "label": "Brightness among equals",
+  "role": "",
+  "gestures": [
+   "type or pick"
+  ],
+  "sends": [
+   "setRule"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "Screen",
+  "region": "who-wins",
+  "line": 326
+ },
+ {
+  "key": "dmx/Screen/manual-control-ends",
+  "file": "screens/dmx/index.tsx",
+  "tag": "Segmented",
+  "label": "Manual control ends",
+  "role": "",
+  "gestures": [
+   "type or pick"
+  ],
+  "sends": [
+   "setRule"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "Screen",
+  "region": "who-wins",
+  "line": 340
+ },
+ {
+  "key": "dmx/Screen/when-a-show-or-autopilot",
+  "file": "screens/dmx/index.tsx",
+  "tag": "Segmented",
+  "label": "When a show or autopilot look ends",
+  "role": "",
+  "gestures": [
+   "type or pick"
+  ],
+  "sends": [
+   "setRule"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "Screen",
+  "region": "who-wins",
+  "line": 354
+ },
+ {
+  "key": "how/Screen/pad",
+  "file": "screens/how/index.tsx",
+  "tag": "Pad",
+  "label": "…",
+  "role": "",
+  "gestures": [
+   "press and hold"
+  ],
+  "sends": [
+   "hold",
+   "lookState",
+   "release",
+   "start",
+   "stop"
+  ],
+  "passes": [],
+  "ui": [
+   "setChips",
+   "setDots"
+  ],
+  "component": "Screen",
+  "region": "try",
+  "line": 189
+ },
+ {
+  "key": "how/Screen/master",
+  "file": "screens/how/index.tsx",
+  "tag": "Fader",
+  "label": "Master",
+  "role": "",
+  "gestures": [
+   "type or pick"
+  ],
+  "sends": [
+   "setMaster"
+  ],
+  "passes": [],
+  "ui": [
+   "setDots"
+  ],
+  "component": "Screen",
+  "region": "try",
+  "line": 199
+ },
+ {
+  "key": "how/Screen/stop-recording",
+  "file": "screens/how/index.tsx",
+  "tag": "Button",
+  "label": "Stop recording | Record",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "setChips",
+   "setRecording"
+  ],
+  "component": "Screen",
+  "region": "try",
+  "line": 209
+ },
+ {
+  "key": "how/Screen/stop-replay",
+  "file": "screens/how/index.tsx",
+  "tag": "Button",
+  "label": "Stop replay | Replay on Show",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "setReplay"
+  ],
+  "passes": [],
+  "ui": [
+   "setDots",
+   "setReplaying"
+  ],
+  "component": "Screen",
+  "region": "try",
+  "line": 219
+ },
+ {
+  "key": "how/Screen/release",
+  "file": "screens/how/index.tsx",
+  "tag": "Button",
+  "label": "Release",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "releaseAll"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "Screen",
+  "region": "try",
+  "line": 222
+ },
+ {
+  "key": "how/Screen/walk",
+  "file": "screens/how/index.tsx",
+  "tag": "Segmented",
+  "label": "Walk",
+  "role": "",
+  "gestures": [
+   "type or pick"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "setDots",
+   "setStep",
+   "setWalk"
+  ],
+  "component": "Screen",
+  "region": "walks",
+  "line": 264
+ },
+ {
+  "key": "how/Screen/back",
+  "file": "screens/how/index.tsx",
+  "tag": "Button",
+  "label": "Back",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "setDots",
+   "setStep"
+  ],
+  "component": "Screen",
+  "region": "walks",
+  "line": 289
+ },
+ {
+  "key": "how/Screen/again",
+  "file": "screens/how/index.tsx",
+  "tag": "Button",
+  "label": "Again",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "setDots",
+   "setStep"
+  ],
+  "component": "Screen",
+  "region": "walks",
+  "line": 295
+ },
+ {
+  "key": "how/Screen/start",
+  "file": "screens/how/index.tsx",
+  "tag": "Button",
+  "label": "Start | Next",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "setDots",
+   "setStep"
+  ],
+  "component": "Screen",
+  "region": "walks",
+  "line": 300
+ },
+ {
+  "key": "inout/Screen/button",
+  "file": "screens/inout/index.tsx",
+  "tag": "button",
+  "label": "… | none … % sure",
+  "role": "radio",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "setClockFeed",
+   "setTempo"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "Screen",
+  "region": "clock",
+  "line": 138
+ },
+ {
+  "key": "inout/Screen/tap",
+  "file": "screens/inout/index.tsx",
+  "tag": "Button",
+  "label": "Tap",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "tap"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "Screen",
+  "region": "clock",
+  "line": 167
+ },
+ {
+  "key": "inout/Screen/testing",
+  "file": "screens/inout/index.tsx",
+  "tag": "Button",
+  "label": "Testing | Test",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "setTesting"
+  ],
+  "component": "Screen",
+  "region": "out",
+  "line": 187
+ },
+ {
+  "key": "inout/Screen/device-for",
+  "file": "screens/inout/index.tsx",
+  "tag": "select",
+  "label": "Device for …",
+  "role": "",
+  "gestures": [
+   "type or pick"
+  ],
+  "sends": [
+   "updateMapping"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "Screen",
+  "region": "mappings",
+  "line": 222
+ },
+ {
+  "key": "inout/Screen/note-or-controller-number-for",
+  "file": "screens/inout/index.tsx",
+  "tag": "input[text]",
+  "label": "Note or controller number for …",
+  "role": "",
+  "gestures": [
+   "type or pick"
+  ],
+  "sends": [
+   "updateMapping"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "Screen",
+  "region": "mappings",
+  "line": 233
+ },
+ {
+  "key": "inout/Screen/lights-up",
+  "file": "screens/inout/index.tsx",
+  "tag": "Button",
+  "label": "Lights up | None",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "updateMapping"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "Screen",
+  "region": "mappings",
+  "line": 248
+ },
+ {
+  "key": "inout/Screen/button#2",
+  "file": "screens/inout/index.tsx",
+  "tag": "Button",
+  "label": "…",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "setEditing"
+  ],
+  "component": "Screen",
+  "region": "mappings",
+  "line": 260
+ },
+ {
+  "key": "inout/Screen/test",
+  "file": "screens/inout/index.tsx",
+  "tag": "Button",
+  "label": "Test …",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "setTested"
+  ],
+  "component": "Screen",
+  "region": "mappings",
+  "line": 263
+ },
+ {
+  "key": "inout/Screen/remove",
+  "file": "screens/inout/index.tsx",
+  "tag": "Button",
+  "label": "Remove …",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "removeMapping"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "Screen",
+  "region": "mappings",
+  "line": 266
+ },
+ {
+  "key": "looks/Autopilot/rules-in-use",
+  "file": "screens/looks/Autopilot.tsx",
+  "tag": "button",
+  "label": "… rules In use",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "setMarked",
+   "setStyleId"
+  ],
+  "component": "Autopilot",
+  "region": "styles",
+  "line": 23
+ },
+ {
+  "key": "looks/Autopilot/new-style",
+  "file": "screens/looks/Autopilot.tsx",
+  "tag": "Button",
+  "label": "New style",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "addStyle"
+  ],
+  "passes": [],
+  "ui": [
+   "setStyleId"
+  ],
+  "component": "Autopilot",
+  "region": "styles",
+  "line": 34
+ },
+ {
+  "key": "looks/Autopilot/input-text",
+  "file": "screens/looks/Autopilot.tsx",
+  "tag": "input[text]",
+  "label": "",
+  "role": "",
+  "gestures": [
+   "type or pick"
+  ],
+  "sends": [
+   "renameStyle",
+   "state"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "Autopilot",
+  "region": "rules",
+  "line": 42
+ },
+ {
+  "key": "looks/Autopilot/in-use",
+  "file": "screens/looks/Autopilot.tsx",
+  "tag": "Button",
+  "label": "In use | Use this style",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "setAutopilot",
+   "state"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "Autopilot",
+  "region": "rules",
+  "line": 44
+ },
+ {
+  "key": "looks/Autopilot/delete-style",
+  "file": "screens/looks/Autopilot.tsx",
+  "tag": "Button",
+  "label": "Delete style",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "deleteStyle",
+   "state"
+  ],
+  "passes": [],
+  "ui": [
+   "setStyleId"
+  ],
+  "component": "Autopilot",
+  "region": "rules",
+  "line": 47
+ },
+ {
+  "key": "looks/Autopilot/when-song-section",
+  "file": "screens/looks/Autopilot.tsx",
+  "tag": "select",
+  "label": "When: song section",
+  "role": "",
+  "gestures": [
+   "type or pick"
+  ],
+  "sends": [
+   "setStyleRule",
+   "state"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "Autopilot",
+  "region": "rules",
+  "line": 63
+ },
+ {
+  "key": "looks/Autopilot/pick-one-look-from-this",
+  "file": "screens/looks/Autopilot.tsx",
+  "tag": "select",
+  "label": "Pick one look from this group",
+  "role": "",
+  "gestures": [
+   "type or pick"
+  ],
+  "sends": [
+   "setStyleRule",
+   "state"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "Autopilot",
+  "region": "rules",
+  "line": 68
+ },
+ {
+  "key": "looks/Autopilot/fit-how-it-lines-up",
+  "file": "screens/looks/Autopilot.tsx",
+  "tag": "select",
+  "label": "Fit: how it lines up with the music",
+  "role": "",
+  "gestures": [
+   "type or pick"
+  ],
+  "sends": [
+   "setStyleRule",
+   "state"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "Autopilot",
+  "region": "rules",
+  "line": 74
+ },
+ {
+  "key": "looks/Autopilot/remove-the-rule-for",
+  "file": "screens/looks/Autopilot.tsx",
+  "tag": "button",
+  "label": "Remove the rule for …, …",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "removeRule",
+   "state"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "Autopilot",
+  "region": "rules",
+  "line": 77
+ },
+ {
+  "key": "looks/Autopilot/add-a-rule",
+  "file": "screens/looks/Autopilot.tsx",
+  "tag": "Button",
+  "label": "Add a rule",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "addRule",
+   "state"
+  ],
+  "passes": [],
+  "ui": [
+   "setMarked"
+  ],
+  "component": "Autopilot",
+  "region": "rules",
+  "line": 86
+ },
+ {
+  "key": "looks/Autopilot/button",
+  "file": "screens/looks/Autopilot.tsx",
+  "tag": "Button",
+  "label": "…",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "toggleGroup"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "Autopilot",
+  "region": "limits",
+  "line": 98
+ },
+ {
+  "key": "looks/Autopilot/how-wild",
+  "file": "screens/looks/Autopilot.tsx",
+  "tag": "Fader",
+  "label": "How wild",
+  "role": "",
+  "gestures": [
+   "type or pick"
+  ],
+  "sends": [
+   "setAutopilot"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "Autopilot",
+  "region": "limits",
+  "line": 107
+ },
+ {
+  "key": "looks/Autopilot/never-dark-what-plays-when",
+  "file": "screens/looks/Autopilot.tsx",
+  "tag": "select",
+  "label": "Never dark: what plays when nothing else does",
+  "role": "",
+  "gestures": [
+   "type or pick"
+  ],
+  "sends": [
+   "setNeverDark"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "Autopilot",
+  "region": "limits",
+  "line": 112
+ },
+ {
+  "key": "looks/Connections/button",
+  "file": "screens/looks/Connections.tsx",
+  "tag": "button",
+  "label": "…",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [
+   "onOpen"
+  ],
+  "ui": [],
+  "component": "Connections",
+  "region": "connections",
+  "line": 55
+ },
+ {
+  "key": "looks/Connections/button#2",
+  "file": "screens/looks/Connections.tsx",
+  "tag": "button",
+  "label": "…: …",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [],
+  "component": "Connections",
+  "region": "connections",
+  "line": 69
+ },
+ {
+  "key": "looks/Connections/button#3",
+  "file": "screens/looks/Connections.tsx",
+  "tag": "button",
+  "label": "…: …",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "jumpTo"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "Connections",
+  "region": "connections",
+  "line": 81
+ },
+ {
+  "key": "looks/Library/pointermove",
+  "file": "screens/looks/Library.tsx",
+  "tag": "window",
+  "label": "pointermove",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "measureOf",
+   "setEntry"
+  ],
+  "passes": [
+   "onSelect"
+  ],
+  "ui": [
+   "setDrag"
+  ],
+  "component": "Library",
+  "region": "",
+  "line": 63
+ },
+ {
+  "key": "looks/Library/pointerup",
+  "file": "screens/looks/Library.tsx",
+  "tag": "window",
+  "label": "pointerup",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "addToGroup",
+   "measureOf",
+   "setEntry"
+  ],
+  "passes": [
+   "onSelect"
+  ],
+  "ui": [
+   "setDrag",
+   "setTimeout"
+  ],
+  "component": "Library",
+  "region": "",
+  "line": 64
+ },
+ {
+  "key": "looks/Library/fold-back",
+  "file": "screens/looks/Library.tsx",
+  "tag": "Button",
+  "label": "Fold back | Widen",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [
+   "onWide"
+  ],
+  "ui": [],
+  "component": "Library",
+  "region": "library",
+  "line": 77
+ },
+ {
+  "key": "looks/Library/search-the-library",
+  "file": "screens/looks/Library.tsx",
+  "tag": "input[text]",
+  "label": "Search the library",
+  "role": "",
+  "gestures": [
+   "type or pick"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "setQuery"
+  ],
+  "component": "Library",
+  "region": "library",
+  "line": 84
+ },
+ {
+  "key": "looks/Library/type",
+  "file": "screens/looks/Library.tsx",
+  "tag": "Segmented",
+  "label": "Type",
+  "role": "",
+  "gestures": [
+   "type or pick"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "setKind"
+  ],
+  "component": "Library",
+  "region": "library",
+  "line": 85
+ },
+ {
+  "key": "looks/Library/new-group",
+  "file": "screens/looks/Library.tsx",
+  "tag": "Button",
+  "label": "New group",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "addGroup"
+  ],
+  "passes": [],
+  "ui": [
+   "setRenaming"
+  ],
+  "component": "Library",
+  "region": "library",
+  "line": 97
+ },
+ {
+  "key": "looks/Library/button",
+  "file": "screens/looks/Library.tsx",
+  "tag": "button",
+  "label": "…",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "folded",
+   "setFolded"
+  ],
+  "component": "Library",
+  "region": "library",
+  "line": 116
+ },
+ {
+  "key": "looks/Library/save",
+  "file": "screens/looks/Library.tsx",
+  "tag": "form",
+  "label": "Save",
+  "role": "",
+  "gestures": [],
+  "sends": [
+   "renameGroup"
+  ],
+  "passes": [],
+  "ui": [
+   "setRenaming"
+  ],
+  "component": "Library",
+  "region": "library",
+  "line": 125
+ },
+ {
+  "key": "looks/Library/new-name-for",
+  "file": "screens/looks/Library.tsx",
+  "tag": "input[text]",
+  "label": "New name for …",
+  "role": "",
+  "gestures": [
+   "type or pick"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [],
+  "component": "Library",
+  "region": "library",
+  "line": 133
+ },
+ {
+  "key": "looks/Library/save#2",
+  "file": "screens/looks/Library.tsx",
+  "tag": "Button",
+  "label": "Save",
+  "role": "",
+  "gestures": [],
+  "sends": [],
+  "passes": [],
+  "ui": [],
+  "component": "Library",
+  "region": "library",
+  "line": 134
+ },
+ {
+  "key": "looks/Library/rename",
+  "file": "screens/looks/Library.tsx",
+  "tag": "button",
+  "label": "Rename …",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "setRenaming"
+  ],
+  "component": "Library",
+  "region": "library",
+  "line": 140
+ },
+ {
+  "key": "looks/Library/delete-its-looks-stay-in",
+  "file": "screens/looks/Library.tsx",
+  "tag": "button",
+  "label": "Delete …. Its looks stay in the library.",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "deleteGroup"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "Library",
+  "region": "library",
+  "line": 145
+ },
+ {
+  "key": "looks/Library/b",
+  "file": "screens/looks/Library.tsx",
+  "tag": "button",
+  "label": "… b",
+  "role": "",
+  "gestures": [
+   "press",
+   "press and hold"
+  ],
+  "sends": [],
+  "passes": [
+   "onOpen"
+  ],
+  "ui": [],
+  "component": "Library",
+  "region": "library",
+  "line": 157
+ },
+ {
+  "key": "looks/PatternEditor/button",
+  "file": "screens/looks/PatternEditor.tsx",
+  "tag": "button",
+  "label": "…",
+  "role": "radio",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "setPattern"
+  ],
+  "passes": [
+   "pattern"
+  ],
+  "ui": [],
+  "component": "PatternEditor",
+  "region": "",
+  "line": 24
+ },
+ {
+  "key": "looks/PatternEditor/shorter",
+  "file": "screens/looks/PatternEditor.tsx",
+  "tag": "Button",
+  "label": "Shorter",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "setPattern"
+  ],
+  "passes": [
+   "pattern"
+  ],
+  "ui": [],
+  "component": "PatternEditor",
+  "region": "",
+  "line": 35
+ },
+ {
+  "key": "looks/PatternEditor/longer",
+  "file": "screens/looks/PatternEditor.tsx",
+  "tag": "Button",
+  "label": "Longer",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "setPattern"
+  ],
+  "passes": [
+   "pattern"
+  ],
+  "ui": [],
+  "component": "PatternEditor",
+  "region": "",
+  "line": 40
+ },
+ {
+  "key": "looks/PatternEditor/its-own-colours",
+  "file": "screens/looks/PatternEditor.tsx",
+  "tag": "select",
+  "label": "Its own colours …",
+  "role": "",
+  "gestures": [
+   "type or pick"
+  ],
+  "sends": [
+   "setPattern"
+  ],
+  "passes": [
+   "pattern"
+  ],
+  "ui": [],
+  "component": "PatternEditor",
+  "region": "",
+  "line": 50
+ },
+ {
+  "key": "looks/PatternEditor/runs-on",
+  "file": "screens/looks/PatternEditor.tsx",
+  "tag": "Segmented",
+  "label": "Runs on",
+  "role": "",
+  "gestures": [
+   "type or pick"
+  ],
+  "sends": [
+   "setPattern"
+  ],
+  "passes": [
+   "pattern"
+  ],
+  "ui": [],
+  "component": "PatternEditor",
+  "region": "",
+  "line": 66
+ },
+ {
+  "key": "looks/SequenceEditor/button",
+  "file": "screens/looks/SequenceEditor.tsx",
+  "tag": "button",
+  "label": "…",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [
+   "onSelect"
+  ],
+  "ui": [],
+  "component": "SequenceEditor",
+  "region": "",
+  "line": 88
+ },
+ {
+  "key": "looks/SequenceEditor/open",
+  "file": "screens/looks/SequenceEditor.tsx",
+  "tag": "Button",
+  "label": "Open …",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [
+   "onOpen"
+  ],
+  "ui": [],
+  "component": "SequenceEditor",
+  "region": "",
+  "line": 92
+ },
+ {
+  "key": "looks/SequenceEditor/starts-at-beat-arrows-move",
+  "file": "screens/looks/SequenceEditor.tsx",
+  "tag": "div",
+  "label": "…: starts at beat …, …. Arrows move it, Shift and arrows change the width.",
+  "role": "slider",
+  "gestures": [
+   "keyboard",
+   "press and hold"
+  ],
+  "sends": [
+   "measureOf",
+   "setEntry"
+  ],
+  "passes": [
+   "onSelect"
+  ],
+  "ui": [],
+  "component": "SequenceEditor",
+  "region": "",
+  "line": 101
+ },
+ {
+  "key": "looks/SequenceEditor/span",
+  "file": "screens/looks/SequenceEditor.tsx",
+  "tag": "span",
+  "label": "",
+  "role": "",
+  "gestures": [
+   "press and hold"
+  ],
+  "sends": [
+   "measureOf",
+   "setEntry"
+  ],
+  "passes": [
+   "onSelect"
+  ],
+  "ui": [],
+  "component": "SequenceEditor",
+  "region": "",
+  "line": 120
+ },
+ {
+  "key": "looks/SequenceEditor/narrower",
+  "file": "screens/looks/SequenceEditor.tsx",
+  "tag": "Button",
+  "label": "Narrower",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "setEntry"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "SequenceEditor",
+  "region": "",
+  "line": 146
+ },
+ {
+  "key": "looks/SequenceEditor/wider",
+  "file": "screens/looks/SequenceEditor.tsx",
+  "tag": "Button",
+  "label": "Wider",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "setEntry"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "SequenceEditor",
+  "region": "",
+  "line": 150
+ },
+ {
+  "key": "looks/SequenceEditor/speed",
+  "file": "screens/looks/SequenceEditor.tsx",
+  "tag": "Segmented",
+  "label": "Speed",
+  "role": "",
+  "gestures": [
+   "type or pick"
+  ],
+  "sends": [
+   "setEntry"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "SequenceEditor",
+  "region": "",
+  "line": 157
+ },
+ {
+  "key": "looks/SequenceEditor/loop-or-once",
+  "file": "screens/looks/SequenceEditor.tsx",
+  "tag": "Segmented",
+  "label": "Loop or once",
+  "role": "",
+  "gestures": [
+   "type or pick"
+  ],
+  "sends": [
+   "setEntry"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "SequenceEditor",
+  "region": "",
+  "line": 170
+ },
+ {
+  "key": "looks/SequenceEditor/spread-across-fixtures",
+  "file": "screens/looks/SequenceEditor.tsx",
+  "tag": "Fader",
+  "label": "Spread across fixtures",
+  "role": "",
+  "gestures": [
+   "type or pick"
+  ],
+  "sends": [
+   "setEntry"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "SequenceEditor",
+  "region": "",
+  "line": 184
+ },
+ {
+  "key": "looks/SequenceEditor/transition",
+  "file": "screens/looks/SequenceEditor.tsx",
+  "tag": "Fader",
+  "label": "Transition",
+  "role": "",
+  "gestures": [
+   "type or pick"
+  ],
+  "sends": [
+   "setEntry"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "SequenceEditor",
+  "region": "",
+  "line": 190
+ },
+ {
+  "key": "looks/Card/clear",
+  "file": "screens/looks/StepEditor.tsx",
+  "tag": "Button",
+  "label": "Clear",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [
+   "onClear"
+  ],
+  "ui": [],
+  "component": "Card",
+  "region": "",
+  "line": 14
+ },
+ {
+  "key": "looks/Card/set",
+  "file": "screens/looks/StepEditor.tsx",
+  "tag": "Button",
+  "label": "Set …",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [
+   "onSet"
+  ],
+  "ui": [],
+  "component": "Card",
+  "region": "",
+  "line": 24
+ },
+ {
+  "key": "looks/StepEditor/button",
+  "file": "screens/looks/StepEditor.tsx",
+  "tag": "Button",
+  "label": "…",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "setStep"
+  ],
+  "passes": [
+   "step"
+  ],
+  "ui": [],
+  "component": "StepEditor",
+  "region": "",
+  "line": 47
+ },
+ {
+  "key": "looks/StepEditor/colour",
+  "file": "screens/looks/StepEditor.tsx",
+  "tag": "Card",
+  "label": "Colour",
+  "role": "",
+  "gestures": [],
+  "sends": [
+   "setStep"
+  ],
+  "passes": [
+   "step"
+  ],
+  "ui": [],
+  "component": "StepEditor",
+  "region": "",
+  "line": 54
+ },
+ {
+  "key": "looks/StepEditor/remove-colour",
+  "file": "screens/looks/StepEditor.tsx",
+  "tag": "button",
+  "label": "Remove colour …",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "setStep"
+  ],
+  "passes": [
+   "step"
+  ],
+  "ui": [],
+  "component": "StepEditor",
+  "region": "",
+  "line": 58
+ },
+ {
+  "key": "looks/StepEditor/add",
+  "file": "screens/looks/StepEditor.tsx",
+  "tag": "button",
+  "label": "Add …",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "setStep"
+  ],
+  "passes": [
+   "step"
+  ],
+  "ui": [],
+  "component": "StepEditor",
+  "region": "",
+  "line": 75
+ },
+ {
+  "key": "looks/StepEditor/position",
+  "file": "screens/looks/StepEditor.tsx",
+  "tag": "Card",
+  "label": "Position",
+  "role": "",
+  "gestures": [],
+  "sends": [
+   "setStep"
+  ],
+  "passes": [
+   "step"
+  ],
+  "ui": [],
+  "component": "StepEditor",
+  "region": "",
+  "line": 88
+ },
+ {
+  "key": "looks/StepEditor/position#2",
+  "file": "screens/looks/StepEditor.tsx",
+  "tag": "XYPad",
+  "label": "Position",
+  "role": "",
+  "gestures": [
+   "type or pick"
+  ],
+  "sends": [
+   "setStep"
+  ],
+  "passes": [
+   "step"
+  ],
+  "ui": [],
+  "component": "StepEditor",
+  "region": "",
+  "line": 89
+ },
+ {
+  "key": "looks/StepEditor/gobo",
+  "file": "screens/looks/StepEditor.tsx",
+  "tag": "Card",
+  "label": "Gobo",
+  "role": "",
+  "gestures": [],
+  "sends": [
+   "setStep"
+  ],
+  "passes": [
+   "step"
+  ],
+  "ui": [],
+  "component": "StepEditor",
+  "region": "",
+  "line": 95
+ },
+ {
+  "key": "looks/StepEditor/button#2",
+  "file": "screens/looks/StepEditor.tsx",
+  "tag": "button",
+  "label": "…",
+  "role": "radio",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "setStep"
+  ],
+  "passes": [
+   "step"
+  ],
+  "ui": [],
+  "component": "StepEditor",
+  "region": "",
+  "line": 99
+ },
+ {
+  "key": "looks/StepEditor/dimmer",
+  "file": "screens/looks/StepEditor.tsx",
+  "tag": "Card",
+  "label": "Dimmer",
+  "role": "",
+  "gestures": [],
+  "sends": [
+   "setStep"
+  ],
+  "passes": [
+   "step"
+  ],
+  "ui": [],
+  "component": "StepEditor",
+  "region": "",
+  "line": 107
+ },
+ {
+  "key": "looks/StepEditor/dimmer#2",
+  "file": "screens/looks/StepEditor.tsx",
+  "tag": "Fader",
+  "label": "Dimmer",
+  "role": "",
+  "gestures": [
+   "type or pick"
+  ],
+  "sends": [
+   "setStep"
+  ],
+  "passes": [
+   "step"
+  ],
+  "ui": [],
+  "component": "StepEditor",
+  "region": "",
+  "line": 108
+ },
+ {
+  "key": "looks/StepEditor/spin",
+  "file": "screens/looks/StepEditor.tsx",
+  "tag": "Card",
+  "label": "Spin",
+  "role": "",
+  "gestures": [],
+  "sends": [
+   "setStep"
+  ],
+  "passes": [
+   "step"
+  ],
+  "ui": [],
+  "component": "StepEditor",
+  "region": "",
+  "line": 112
+ },
+ {
+  "key": "looks/StepEditor/spin#2",
+  "file": "screens/looks/StepEditor.tsx",
+  "tag": "Fader",
+  "label": "Spin",
+  "role": "",
+  "gestures": [
+   "type or pick"
+  ],
+  "sends": [
+   "setStep"
+  ],
+  "passes": [
+   "step"
+  ],
+  "ui": [],
+  "component": "StepEditor",
+  "region": "",
+  "line": 113
+ },
+ {
+  "key": "looks/Screen/part-of-the-looks-screen",
+  "file": "screens/looks/index.tsx",
+  "tag": "Segmented",
+  "label": "Part of the Looks screen",
+  "role": "",
+  "gestures": [
+   "type or pick"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "setPart"
+  ],
+  "component": "Screen",
+  "region": "",
+  "line": 71
+ },
+ {
+  "key": "looks/Screen/library",
+  "file": "screens/looks/index.tsx",
+  "tag": "Library",
+  "label": "",
+  "role": "",
+  "gestures": [],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "setPath",
+   "setWide"
+  ],
+  "component": "Screen",
+  "region": "",
+  "line": 84
+ },
+ {
+  "key": "looks/Screen/button",
+  "file": "screens/looks/index.tsx",
+  "tag": "button",
+  "label": "…",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "setPath"
+  ],
+  "component": "Screen",
+  "region": "editor",
+  "line": 98
+ },
+ {
+  "key": "looks/Screen/back-to",
+  "file": "screens/looks/index.tsx",
+  "tag": "Button",
+  "label": "Back to …",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "setPath"
+  ],
+  "component": "Screen",
+  "region": "editor",
+  "line": 114
+ },
+ {
+  "key": "looks/Screen/remove-from",
+  "file": "screens/looks/index.tsx",
+  "tag": "button",
+  "label": "Remove from …",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "item",
+   "removeFromGroup"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "Screen",
+  "region": "editor",
+  "line": 125
+ },
+ {
+  "key": "looks/Screen/add-to-a-group",
+  "file": "screens/looks/index.tsx",
+  "tag": "select",
+  "label": "Add to a group",
+  "role": "",
+  "gestures": [
+   "type or pick"
+  ],
+  "sends": [
+   "addToGroup",
+   "item"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "Screen",
+  "region": "editor",
+  "line": 133
+ },
+ {
+  "key": "looks/Screen/sequenceeditor",
+  "file": "screens/looks/index.tsx",
+  "tag": "SequenceEditor",
+  "label": "",
+  "role": "",
+  "gestures": [],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "setPath",
+   "setSelectedEntry"
+  ],
+  "component": "Screen",
+  "region": "editor",
+  "line": 149
+ },
+ {
+  "key": "looks/Screen/try-on-lights",
+  "file": "screens/looks/index.tsx",
+  "tag": "Pad",
+  "label": "Try on lights",
+  "role": "",
+  "gestures": [
+   "press and hold"
+  ],
+  "sends": [
+   "hold",
+   "item",
+   "lookState",
+   "release",
+   "start",
+   "stop"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "Screen",
+  "region": "about",
+  "line": 168
+ },
+ {
+  "key": "looks/Screen/put-on-console",
+  "file": "screens/looks/index.tsx",
+  "tag": "Button",
+  "label": "Put on Console",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "item",
+   "putOnConsole"
+  ],
+  "passes": [],
+  "ui": [
+   "setConsoleMsg"
+  ],
+  "component": "Screen",
+  "region": "about",
+  "line": 172
+ },
+ {
+  "key": "looks/Screen/connections",
+  "file": "screens/looks/index.tsx",
+  "tag": "Connections",
+  "label": "",
+  "role": "",
+  "gestures": [],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "setApTarget",
+   "setPart",
+   "setPath",
+   "setWide"
+  ],
+  "component": "Screen",
+  "region": "",
+  "line": 186
+ },
+ {
+  "key": "modules/Node/g",
+  "file": "screens/modules/index.tsx",
+  "tag": "g",
+  "label": "…",
+  "role": "button",
+  "gestures": [
+   "keyboard",
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "setSelected"
+  ],
+  "component": "Node",
+  "region": "",
+  "line": 79
+ },
+ {
+  "key": "modules/Screen/trace-a-press",
+  "file": "screens/modules/index.tsx",
+  "tag": "Button",
+  "label": "Trace a press",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "setTrace"
+  ],
+  "component": "Screen",
+  "region": "map",
+  "line": 114
+ },
+ {
+  "key": "modules/Screen/button",
+  "file": "screens/modules/index.tsx",
+  "tag": "Button",
+  "label": "…",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "go"
+  ],
+  "component": "Screen",
+  "region": "card",
+  "line": 209
+ },
+ {
+  "key": "modules/Screen/the-author-s-lean",
+  "file": "screens/modules/index.tsx",
+  "tag": "button",
+  "label": "… the author's lean",
+  "role": "radio",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "review.answerOf",
+   "review.setChoice"
+  ],
+  "component": "Screen",
+  "region": "questions",
+  "line": 243
+ },
+ {
+  "key": "modules/Screen/your-words-on",
+  "file": "screens/modules/index.tsx",
+  "tag": "input[text]",
+  "label": "Your words on: …",
+  "role": "",
+  "gestures": [
+   "type or pick"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "review.setAnswerText"
+  ],
+  "component": "Screen",
+  "region": "questions",
+  "line": 260
+ },
+ {
+  "key": "patch/AddFlow/leave-for-now",
+  "file": "screens/patch/AddFlow.tsx",
+  "tag": "Button",
+  "label": "Leave for now",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "setFlow"
+  ],
+  "component": "AddFlow",
+  "region": "",
+  "line": 127
+ },
+ {
+  "key": "patch/AddFlow/search-the-fixture-library",
+  "file": "screens/patch/AddFlow.tsx",
+  "tag": "input[text]",
+  "label": "Search the fixture library",
+  "role": "",
+  "gestures": [
+   "type or pick"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "setFlow"
+  ],
+  "component": "AddFlow",
+  "region": "",
+  "line": 147
+ },
+ {
+  "key": "patch/AddFlow/button",
+  "file": "screens/patch/AddFlow.tsx",
+  "tag": "button",
+  "label": "…",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "setFlow"
+  ],
+  "component": "AddFlow",
+  "region": "",
+  "line": 158
+ },
+ {
+  "key": "patch/AddFlow/button#2",
+  "file": "screens/patch/AddFlow.tsx",
+  "tag": "button",
+  "label": "…",
+  "role": "radio",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "setFlow"
+  ],
+  "component": "AddFlow",
+  "region": "",
+  "line": 178
+ },
+ {
+  "key": "patch/AddFlow/address-down",
+  "file": "screens/patch/AddFlow.tsx",
+  "tag": "Button",
+  "label": "Address down",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "setFlow"
+  ],
+  "component": "AddFlow",
+  "region": "",
+  "line": 201
+ },
+ {
+  "key": "patch/AddFlow/address-up",
+  "file": "screens/patch/AddFlow.tsx",
+  "tag": "Button",
+  "label": "Address up",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "setFlow"
+  ],
+  "component": "AddFlow",
+  "region": "",
+  "line": 212
+ },
+ {
+  "key": "patch/AddFlow/yes-that-is-this-one",
+  "file": "screens/patch/AddFlow.tsx",
+  "tag": "Button",
+  "label": "Yes, that is this one",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "addFixture"
+  ],
+  "passes": [
+   "onDone"
+  ],
+  "ui": [
+   "setFlow"
+  ],
+  "component": "AddFlow",
+  "region": "",
+  "line": 236
+ },
+ {
+  "key": "patch/AddFlow/nothing-flashed",
+  "file": "screens/patch/AddFlow.tsx",
+  "tag": "Button",
+  "label": "Nothing flashed",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "setFlow",
+   "setHint"
+  ],
+  "component": "AddFlow",
+  "region": "",
+  "line": 239
+ },
+ {
+  "key": "patch/AddFlow/back",
+  "file": "screens/patch/AddFlow.tsx",
+  "tag": "Button",
+  "label": "Back",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "setFlow",
+   "setHint"
+  ],
+  "component": "AddFlow",
+  "region": "",
+  "line": 252
+ },
+ {
+  "key": "patch/AddFlow/start-over",
+  "file": "screens/patch/AddFlow.tsx",
+  "tag": "Button",
+  "label": "Start over",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "setFlow"
+  ],
+  "component": "AddFlow",
+  "region": "",
+  "line": 261
+ },
+ {
+  "key": "patch/AddFlow/next-address",
+  "file": "screens/patch/AddFlow.tsx",
+  "tag": "Button",
+  "label": "Next: address",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "freeAddress"
+  ],
+  "passes": [],
+  "ui": [
+   "setFlow"
+  ],
+  "component": "AddFlow",
+  "region": "",
+  "line": 265
+ },
+ {
+  "key": "patch/AddFlow/next-flash-it",
+  "file": "screens/patch/AddFlow.tsx",
+  "tag": "Button",
+  "label": "Next: flash it",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "setFlow"
+  ],
+  "component": "AddFlow",
+  "region": "",
+  "line": 270
+ },
+ {
+  "key": "patch/Screen/pointermove",
+  "file": "screens/patch/index.tsx",
+  "tag": "window",
+  "label": "pointermove",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "reorderFixture"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "Screen",
+  "region": "",
+  "line": 134
+ },
+ {
+  "key": "patch/Screen/pointerup",
+  "file": "screens/patch/index.tsx",
+  "tag": "window",
+  "label": "pointerup",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [],
+  "component": "Screen",
+  "region": "",
+  "line": 135
+ },
+ {
+  "key": "patch/Screen/search-universes",
+  "file": "screens/patch/index.tsx",
+  "tag": "input[text]",
+  "label": "Search universes",
+  "role": "",
+  "gestures": [
+   "type or pick"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "setQuery"
+  ],
+  "component": "Screen",
+  "region": "universes",
+  "line": 154
+ },
+ {
+  "key": "patch/Screen/universes-to-x",
+  "file": "screens/patch/index.tsx",
+  "tag": "button",
+  "label": "Universes … to …, … x …",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "open",
+   "setOpen",
+   "setPanelId",
+   "setUniverse"
+  ],
+  "component": "Screen",
+  "region": "universes",
+  "line": 160
+ },
+ {
+  "key": "patch/Screen/universe-pixels",
+  "file": "screens/patch/index.tsx",
+  "tag": "button",
+  "label": "Universe … pixels | … lights · … of 512",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "setUniverse"
+  ],
+  "component": "Screen",
+  "region": "universes",
+  "line": 185
+ },
+ {
+  "key": "patch/Screen/continue-adding-step-of-4",
+  "file": "screens/patch/index.tsx",
+  "tag": "Button",
+  "label": "Continue adding (step … of 4) | Add lights",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "setFlow",
+   "setSide"
+  ],
+  "component": "Screen",
+  "region": "universes",
+  "line": 213
+ },
+ {
+  "key": "patch/Screen/add-a-pixel-panel",
+  "file": "screens/patch/index.tsx",
+  "tag": "Button",
+  "label": "Add a pixel panel",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "setSide"
+  ],
+  "component": "Screen",
+  "region": "universes",
+  "line": 217
+ },
+ {
+  "key": "patch/Screen/pixels-to",
+  "file": "screens/patch/index.tsx",
+  "tag": "button",
+  "label": "…, pixels … to …",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "setPanelId"
+  ],
+  "component": "Screen",
+  "region": "grid",
+  "line": 234
+ },
+ {
+  "key": "patch/Screen/drag-or-use-arrow-keys",
+  "file": "screens/patch/index.tsx",
+  "tag": "button",
+  "label": "…, …. Drag or use arrow keys to give it another address.",
+  "role": "",
+  "gestures": [
+   "keyboard",
+   "press",
+   "press and hold"
+  ],
+  "sends": [
+   "setAddress",
+   "setIdentify"
+  ],
+  "passes": [],
+  "ui": [
+   "setPanelId",
+   "setSelectedId"
+  ],
+  "component": "Screen",
+  "region": "grid",
+  "line": 256
+ },
+ {
+  "key": "patch/Screen/drag-to-change-the-order",
+  "file": "screens/patch/index.tsx",
+  "tag": "span",
+  "label": "Drag to change the order",
+  "role": "",
+  "gestures": [
+   "press and hold"
+  ],
+  "sends": [
+   "reorderFixture",
+   "setIdentify"
+  ],
+  "passes": [],
+  "ui": [
+   "setPanelId",
+   "setSelectedId"
+  ],
+  "component": "Screen",
+  "region": "fixtures",
+  "line": 310
+ },
+ {
+  "key": "patch/Screen/button",
+  "file": "screens/patch/index.tsx",
+  "tag": "button",
+  "label": "… · …",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "setIdentify"
+  ],
+  "passes": [],
+  "ui": [
+   "setPanelId",
+   "setSelectedId",
+   "setUniverse"
+  ],
+  "component": "Screen",
+  "region": "fixtures",
+  "line": 316
+ },
+ {
+  "key": "patch/Screen/move-earlier",
+  "file": "screens/patch/index.tsx",
+  "tag": "button",
+  "label": "Move … earlier",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "reorderFixture"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "Screen",
+  "region": "fixtures",
+  "line": 329
+ },
+ {
+  "key": "patch/Screen/move-later",
+  "file": "screens/patch/index.tsx",
+  "tag": "button",
+  "label": "Move … later",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "reorderFixture"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "Screen",
+  "region": "fixtures",
+  "line": 334
+ },
+ {
+  "key": "patch/Screen/addflow",
+  "file": "screens/patch/index.tsx",
+  "tag": "AddFlow",
+  "label": "",
+  "role": "",
+  "gestures": [],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "setSelectedId",
+   "setUniverse"
+  ],
+  "component": "Screen",
+  "region": "details",
+  "line": 352
+ },
+ {
+  "key": "patch/Screen/address-down",
+  "file": "screens/patch/index.tsx",
+  "tag": "Button",
+  "label": "Address down",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "setAddress"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "Screen",
+  "region": "details",
+  "line": 385
+ },
+ {
+  "key": "patch/Screen/address-up",
+  "file": "screens/patch/index.tsx",
+  "tag": "Button",
+  "label": "Address up",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "setAddress"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "Screen",
+  "region": "details",
+  "line": 394
+ },
+ {
+  "key": "patch/Screen/move-to-no-free",
+  "file": "screens/patch/index.tsx",
+  "tag": "Button",
+  "label": "Move to no free",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "freeAddress",
+   "setAddress"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "Screen",
+  "region": "details",
+  "line": 407
+ },
+ {
+  "key": "patch/Screen/stop-flashing",
+  "file": "screens/patch/index.tsx",
+  "tag": "Button",
+  "label": "Stop flashing | Flash it, to find it in the room",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "setIdentify"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "Screen",
+  "region": "details",
+  "line": 418
+ },
+ {
+  "key": "patch/Screen/universe-pixels-to-channels",
+  "file": "screens/patch/index.tsx",
+  "tag": "button",
+  "label": "Universe … pixels … to …, … channels",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "setUniverse"
+  ],
+  "component": "Screen",
+  "region": "details",
+  "line": 438
+ },
+ {
+  "key": "patch/Screen/add-a-pixel-panel-name",
+  "file": "screens/patch/index.tsx",
+  "tag": "form",
+  "label": "Add a pixel panel Name Columns Rows Wiring Pixel type Colour order … Start universe … pixels, … per universe, need … universe | universes: … to … |. Add the panel",
+  "role": "",
+  "gestures": [],
+  "sends": [
+   "addPanel",
+   "firstFreeUniverse"
+  ],
+  "passes": [],
+  "ui": [
+   "setPanelId",
+   "setSide",
+   "setUniverse"
+  ],
+  "component": "Screen",
+  "region": "details",
+  "line": 453
+ },
+ {
+  "key": "patch/Screen/input-text",
+  "file": "screens/patch/index.tsx",
+  "tag": "input[text]",
+  "label": "",
+  "role": "",
+  "gestures": [
+   "type or pick"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "setPp"
+  ],
+  "component": "Screen",
+  "region": "details",
+  "line": 467
+ },
+ {
+  "key": "patch/Screen/input-text#2",
+  "file": "screens/patch/index.tsx",
+  "tag": "input[text]",
+  "label": "",
+  "role": "",
+  "gestures": [
+   "type or pick"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "setPp"
+  ],
+  "component": "Screen",
+  "region": "details",
+  "line": 472
+ },
+ {
+  "key": "patch/Screen/input-text#3",
+  "file": "screens/patch/index.tsx",
+  "tag": "input[text]",
+  "label": "",
+  "role": "",
+  "gestures": [
+   "type or pick"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "setPp"
+  ],
+  "component": "Screen",
+  "region": "details",
+  "line": 476
+ },
+ {
+  "key": "patch/Screen/wiring",
+  "file": "screens/patch/index.tsx",
+  "tag": "Segmented",
+  "label": "Wiring",
+  "role": "",
+  "gestures": [
+   "type or pick"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "setPp"
+  ],
+  "component": "Screen",
+  "region": "details",
+  "line": 480
+ },
+ {
+  "key": "patch/Screen/pixel-type",
+  "file": "screens/patch/index.tsx",
+  "tag": "Segmented",
+  "label": "Pixel type",
+  "role": "",
+  "gestures": [
+   "type or pick"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "setPp"
+  ],
+  "component": "Screen",
+  "region": "details",
+  "line": 495
+ },
+ {
+  "key": "patch/Screen/select",
+  "file": "screens/patch/index.tsx",
+  "tag": "select",
+  "label": "…",
+  "role": "",
+  "gestures": [
+   "type or pick"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "setPp"
+  ],
+  "component": "Screen",
+  "region": "details",
+  "line": 507
+ },
+ {
+  "key": "patch/Screen/input-text#4",
+  "file": "screens/patch/index.tsx",
+  "tag": "input[text]",
+  "label": "",
+  "role": "",
+  "gestures": [
+   "type or pick"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "setPp"
+  ],
+  "component": "Screen",
+  "region": "details",
+  "line": 514
+ },
+ {
+  "key": "patch/Screen/add-the-panel",
+  "file": "screens/patch/index.tsx",
+  "tag": "Button",
+  "label": "Add the panel",
+  "role": "",
+  "gestures": [],
+  "sends": [],
+  "passes": [],
+  "ui": [],
+  "component": "Screen",
+  "region": "details",
+  "line": 520
+ },
+ {
+  "key": "songs/Screen/search-songs",
+  "file": "screens/songs/index.tsx",
+  "tag": "input[text]",
+  "label": "Search songs",
+  "role": "",
+  "gestures": [
+   "type or pick"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "setQuery"
+  ],
+  "component": "Screen",
+  "region": "library",
+  "line": 180
+ },
+ {
+  "key": "songs/Screen/button",
+  "file": "screens/songs/index.tsx",
+  "tag": "button",
+  "label": "…",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "setFilter"
+  ],
+  "component": "Screen",
+  "region": "library",
+  "line": 184
+ },
+ {
+  "key": "songs/Screen/song-library",
+  "file": "screens/songs/index.tsx",
+  "tag": "List",
+  "label": "Song library",
+  "role": "",
+  "gestures": [],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "setMessage",
+   "setRenaming",
+   "setSongId"
+  ],
+  "component": "Screen",
+  "region": "library",
+  "line": 191
+ },
+ {
+  "key": "songs/Screen/follows",
+  "file": "screens/songs/index.tsx",
+  "tag": "Segmented",
+  "label": "Follows",
+  "role": "",
+  "gestures": [
+   "type or pick"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "setFollows"
+  ],
+  "component": "Screen",
+  "region": "song",
+  "line": 246
+ },
+ {
+  "key": "songs/Screen/stop-listening",
+  "file": "screens/songs/index.tsx",
+  "tag": "Button",
+  "label": "Stop listening",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "setListen"
+  ],
+  "component": "Screen",
+  "region": "song",
+  "line": 259
+ },
+ {
+  "key": "songs/Screen/play-from",
+  "file": "screens/songs/index.tsx",
+  "tag": "Button",
+  "label": "Play from …",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "currentSong",
+   "sectionsOf",
+   "songPos"
+  ],
+  "passes": [],
+  "ui": [
+   "setListen"
+  ],
+  "component": "Screen",
+  "region": "song",
+  "line": 264
+ },
+ {
+  "key": "songs/Screen/sections-look-right",
+  "file": "screens/songs/index.tsx",
+  "tag": "Button",
+  "label": "Sections look right",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "markReviewed"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "Screen",
+  "region": "song",
+  "line": 281
+ },
+ {
+  "key": "songs/Screen/button#2",
+  "file": "screens/songs/index.tsx",
+  "tag": "button",
+  "label": "…",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "setChosen"
+  ],
+  "component": "Screen",
+  "region": "song",
+  "line": 307
+ },
+ {
+  "key": "songs/Screen/edge-between-and-at",
+  "file": "screens/songs/index.tsx",
+  "tag": "span",
+  "label": "Edge between … and …, at …",
+  "role": "slider",
+  "gestures": [
+   "keyboard",
+   "press and hold"
+  ],
+  "sends": [
+   "moveSectionEdge",
+   "sectionsOf",
+   "songLength"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "Screen",
+  "region": "song",
+  "line": 322
+ },
+ {
+  "key": "songs/Screen/muted",
+  "file": "screens/songs/index.tsx",
+  "tag": "button",
+  "label": "Muted | Mute",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "recordedOf",
+   "setRecordedMuted"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "Screen",
+  "region": "song",
+  "line": 353
+ },
+ {
+  "key": "songs/Screen/undo-last-pass",
+  "file": "screens/songs/index.tsx",
+  "tag": "button",
+  "label": "Undo last pass",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "undoLastPass"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "Screen",
+  "region": "song",
+  "line": 356
+ },
+ {
+  "key": "songs/Screen/clear",
+  "file": "screens/songs/index.tsx",
+  "tag": "button",
+  "label": "Clear",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "clearRecorded"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "Screen",
+  "region": "song",
+  "line": 359
+ },
+ {
+  "key": "songs/Screen/muted#2",
+  "file": "screens/songs/index.tsx",
+  "tag": "button",
+  "label": "Muted | Mute",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "setShowMuted"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "Screen",
+  "region": "song",
+  "line": 400
+ },
+ {
+  "key": "songs/Screen/button#3",
+  "file": "screens/songs/index.tsx",
+  "tag": "button",
+  "label": "…",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "setChosen"
+  ],
+  "component": "Screen",
+  "region": "song",
+  "line": 409
+ },
+ {
+  "key": "songs/Screen/save",
+  "file": "screens/songs/index.tsx",
+  "tag": "form",
+  "label": "Save",
+  "role": "",
+  "gestures": [],
+  "sends": [
+   "currentSong",
+   "renameSection",
+   "sectionsOf",
+   "songPos"
+  ],
+  "passes": [],
+  "ui": [
+   "setRenaming"
+  ],
+  "component": "Screen",
+  "region": "song",
+  "line": 446
+ },
+ {
+  "key": "songs/Screen/section-name",
+  "file": "screens/songs/index.tsx",
+  "tag": "input[text]",
+  "label": "Section name",
+  "role": "",
+  "gestures": [
+   "type or pick"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [],
+  "component": "Screen",
+  "region": "song",
+  "line": 455
+ },
+ {
+  "key": "songs/Screen/save#2",
+  "file": "screens/songs/index.tsx",
+  "tag": "Button",
+  "label": "Save",
+  "role": "",
+  "gestures": [],
+  "sends": [],
+  "passes": [],
+  "ui": [],
+  "component": "Screen",
+  "region": "song",
+  "line": 456
+ },
+ {
+  "key": "songs/Screen/cancel",
+  "file": "screens/songs/index.tsx",
+  "tag": "Button",
+  "label": "Cancel | Rename",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "setRenaming"
+  ],
+  "component": "Screen",
+  "region": "song",
+  "line": 462
+ },
+ {
+  "key": "songs/Screen/split",
+  "file": "screens/songs/index.tsx",
+  "tag": "Button",
+  "label": "Split",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "currentSong",
+   "sectionsOf",
+   "songPos",
+   "splitSection"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "Screen",
+  "region": "song",
+  "line": 463
+ },
+ {
+  "key": "songs/Screen/merge-with-next",
+  "file": "screens/songs/index.tsx",
+  "tag": "Button",
+  "label": "Merge with next",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "currentSong",
+   "mergeSections",
+   "sectionsOf",
+   "songPos"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "Screen",
+  "region": "song",
+  "line": 464
+ },
+ {
+  "key": "songs/Screen/fill-empty-sections",
+  "file": "screens/songs/index.tsx",
+  "tag": "Button",
+  "label": "Fill empty sections",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "fillEmptySections"
+  ],
+  "passes": [],
+  "ui": [
+   "setMessage"
+  ],
+  "component": "Screen",
+  "region": "song",
+  "line": 467
+ },
+ {
+  "key": "songs/Screen/remove",
+  "file": "screens/songs/index.tsx",
+  "tag": "button",
+  "label": "Remove …",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "currentSong",
+   "sectionLooksOf",
+   "sectionsOf",
+   "setSectionLooks",
+   "songPos"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "Screen",
+  "region": "song",
+  "line": 488
+ },
+ {
+  "key": "songs/Screen/add-to",
+  "file": "screens/songs/index.tsx",
+  "tag": "button",
+  "label": "Add … to …",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "currentSong",
+   "sectionLooksOf",
+   "sectionsOf",
+   "setSectionLooks",
+   "songPos"
+  ],
+  "passes": [],
+  "ui": [
+   "setMessage"
+  ],
+  "component": "Screen",
+  "region": "looks",
+  "line": 527
+ },
+ {
+  "key": "shell/LiveSwitch/live-is-on-the-night",
+  "file": "shell/LiveSwitch.tsx",
+  "tag": "button",
+  "label": "LIVE is on: the night is running | LIVE is off: preparing",
+  "role": "switch",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "setLive",
+   "state"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "LiveSwitch",
+  "region": "",
+  "line": 29
+ },
+ {
+  "key": "shell/LiveSwitch/button",
+  "file": "shell/LiveSwitch.tsx",
+  "tag": "button",
+  "label": "…: …",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "toggleIndicator"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "LiveSwitch",
+  "region": "",
+  "line": 46
+ },
+ {
+  "key": "shell/LiveSwitch/no-lights-connected",
+  "file": "shell/LiveSwitch.tsx",
+  "tag": "button",
+  "label": "No lights connected",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [],
+  "component": "LiveSwitch",
+  "region": "",
+  "line": 61
+ },
+ {
+  "key": "shell/Status/tap-the-tempo",
+  "file": "shell/TopBar.tsx",
+  "tag": "Button",
+  "label": "Tap the tempo",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "tap"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "Status",
+  "region": "",
+  "line": 18
+ },
+ {
+  "key": "shell/Status/blackout-on",
+  "file": "shell/TopBar.tsx",
+  "tag": "Button",
+  "label": "Blackout on | Blackout",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "setBlackout"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "Status",
+  "region": "",
+  "line": 30
+ },
+ {
+  "key": "shell/Status/undo",
+  "file": "shell/TopBar.tsx",
+  "tag": "Button",
+  "label": "Undo … | Nothing to undo",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "undo"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "Status",
+  "region": "",
+  "line": 38
+ },
+ {
+  "key": "shell/TopBar/workspaces",
+  "file": "shell/TopBar.tsx",
+  "tag": "Tabs",
+  "label": "Workspaces",
+  "role": "",
+  "gestures": [
+   "type or pick"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [],
+  "component": "TopBar",
+  "region": "",
+  "line": 67
+ },
+ {
+  "key": "shell/TopBar/review-this-screen",
+  "file": "shell/TopBar.tsx",
+  "tag": "Button",
+  "label": "Review this screen …",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "review.panelOpen",
+   "review.setPanelOpen"
+  ],
+  "component": "TopBar",
+  "region": "",
+  "line": 73
+ },
+ {
+  "key": "shell/TopBar/done",
+  "file": "shell/TopBar.tsx",
+  "tag": "Button",
+  "label": "Done",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "review.setActiveRegion",
+   "review.setCommentMode"
+  ],
+  "component": "TopBar",
+  "region": "",
+  "line": 89
+ },
+ {
+  "key": "shell/LearnBar/document",
+  "file": "shell/learn.tsx",
+  "tag": "document",
+  "label": "…",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "learn.setStep",
+   "learn.setTarget",
+   "learn.step"
+  ],
+  "component": "LearnBar",
+  "region": "",
+  "line": 69
+ },
+ {
+  "key": "shell/LearnBar/cancel",
+  "file": "shell/learn.tsx",
+  "tag": "Button",
+  "label": "Cancel",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "learn.setStep",
+   "learn.setTarget"
+  ],
+  "component": "LearnBar",
+  "region": "",
+  "line": 104
+ },
+ {
+  "key": "shell/LearnBar/button",
+  "file": "shell/learn.tsx",
+  "tag": "Button",
+  "label": "…: …",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "addMapping"
+  ],
+  "passes": [],
+  "ui": [
+   "learn.setMessage",
+   "learn.setStep",
+   "learn.setTarget",
+   "learn.target",
+   "setTimeout"
+  ],
+  "component": "LearnBar",
+  "region": "",
+  "line": 112
+ },
+ {
+  "key": "shell/LearnBar/cancel#2",
+  "file": "shell/learn.tsx",
+  "tag": "Button",
+  "label": "Cancel",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "learn.setStep",
+   "learn.setTarget"
+  ],
+  "component": "LearnBar",
+  "region": "",
+  "line": 118
+ },
+ {
+  "key": "shell/LearnButton/learn",
+  "file": "shell/learn.tsx",
+  "tag": "Button",
+  "label": "Learn",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [],
+  "passes": [],
+  "ui": [
+   "learn.setMessage",
+   "learn.setStep",
+   "learn.step"
+  ],
+  "component": "LearnButton",
+  "region": "",
+  "line": 133
+ },
+ {
+  "key": "shell/installShortcuts/keydown",
+  "file": "shell/shortcuts.ts",
+  "tag": "window",
+  "label": "keydown",
+  "role": "",
+  "gestures": [
+   "keyboard"
+  ],
+  "sends": [
+   "setBlackoutHold",
+   "undo"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "installShortcuts",
+  "region": "",
+  "line": 10
+ },
+ {
+  "key": "shell/installShortcuts/keyup",
+  "file": "shell/shortcuts.ts",
+  "tag": "window",
+  "label": "keyup",
+  "role": "",
+  "gestures": [
+   "keyboard"
+  ],
+  "sends": [
+   "setBlackoutHold"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "installShortcuts",
+  "region": "",
+  "line": 29
+ },
+ {
+  "key": "shell/installShortcuts/blur",
+  "file": "shell/shortcuts.ts",
+  "tag": "window",
+  "label": "blur",
+  "role": "",
+  "gestures": [
+   "press"
+  ],
+  "sends": [
+   "setBlackoutHold"
+  ],
+  "passes": [],
+  "ui": [],
+  "component": "installShortcuts",
+  "region": "",
+  "line": 35
+ }
+]

@@ -57,8 +57,8 @@ for (const [source, expected] of importCases) {
   });
 }
 
-const FILES = { "api.ts": "data", "machine.ts": "calc", "engine.ts": "engine", "main.tsx": "view" };
-const LAYERS = { data: [], calc: ["data"], engine: ["calc", "data"], view: ["engine", "calc", "data"] };
+const FILES = { "api.ts": "data", "machine.ts": "calc", "engine.ts": "engine", "main.tsx": "view", "kit/": "kit" };
+const LAYERS = { data: [], calc: ["data"], engine: ["calc", "data"], view: ["engine", "calc", "data", "kit"], kit: ["kit", "data"] };
 
 // [ui files and their sources, violations]
 const uiCases = [
@@ -67,6 +67,13 @@ const uiCases = [
   [{ "engine.ts": `import "./main";` }, ["engine.ts (engine) -> main.tsx (view) is not an allowed edge"]],
   [{ "extra.ts": "" }, ["ui file extra.ts is not on the list"]],
   [{ "main.tsx": `import "./gone";` }, ["main.tsx imports ./gone, which is not on the list"]],
+  // a folder on the list covers every file in it
+  [{ "kit/a.ts": `import "./b.ts"; import "../api";`, "kit/b.ts": "" }, []],
+  [{ "kit/deep/c.tsx": `import "../a";`, "kit/a.ts": "" }, []],
+  [{ "main.tsx": `import "./kit/a";`, "kit/a.ts": "" }, []],
+  [{ "kit/a.ts": `import "../engine";` }, ["kit/a.ts (kit) -> engine.ts (engine) is not an allowed edge"]],
+  [{ "kit/a.ts": `import "./gone";` }, ["kit/a.ts imports ./gone, which is not on the list"]],
+  [{ "other/a.ts": "" }, ["ui file other/a.ts is not on the list"]],
 ];
 for (const [sources, expected] of uiCases) {
   test(`ui ${Object.keys(sources).join(", ")}`, () => {
