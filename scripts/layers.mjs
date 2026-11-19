@@ -8,18 +8,21 @@
  * |--------|-----|-------|------------------|
  * | core   | no  | no    | all              |
  * | calc   | no  | yes   | all              |
+ * | tick   | yes | yes   | all              |
  * | action | yes | yes   | workspace crates |
  *
- * core runs per tick. calc holds calculations that need the heap.
+ * core runs per tick. calc holds calculations that need the heap. tick is an action
+ * whose code runs on the tick thread: an outside dependency there could lock, allocate
+ * or log (docs/coding.md, rule 7), so each is listed.
  */
 export const CRATES = {
   "engine-core": { kind: "core", deps: ["serde"] },
   "fixture-library": { kind: "calc", deps: ["roxmltree", "serde"] }, // QLC+ fixture definitions in, a model out. Reads no files
   rig: { kind: "calc", deps: ["engine-core", "fixture-library"] }, // a mode at an address becomes writers: only it knows an address belongs to a fixture
   "show-file": { kind: "calc", deps: ["engine-core", "fixture-library", "rig", "serde", "serde_json"] }, // the patch as a show file's text and back, checked as the commands check. Reads no files
-  "rt-thread": { kind: "action", deps: ["engine-core"] }, // the only unsafe: asks for real-time priority
-  outputs: { kind: "action", deps: ["engine-core"] }, // opens devices, takes frames: only it knows bytes
-  engine: { kind: "action", deps: ["engine-core", "rt-thread", "outputs", "rig", "fixture-library"] }, // the front owns the patch: it checks a patch against the library and compiles writers
+  "rt-thread": { kind: "tick", deps: ["engine-core", "libc"] }, // the only unsafe: asks for real-time priority
+  outputs: { kind: "tick", deps: ["engine-core", "nix", "rtrb", "serialport"] }, // opens devices, takes frames: only it knows bytes
+  engine: { kind: "tick", deps: ["engine-core", "rt-thread", "outputs", "rig", "fixture-library", "rtrb"] }, // the front owns the patch: it checks a patch against the library and compiles writers
   "engine-server": { kind: "action", deps: ["engine", "engine-core", "fixture-library", "show-file"] }, // reads the fixture folder, answers the library, opens and saves the show file
   shell: { kind: "action", deps: ["engine-core"] }, // knows the API version it speaks, nothing more
 };
@@ -65,7 +68,7 @@ export function crateViolations(name, deps, crates) {
 /** What is wrong with a crate's source for its kind: core and calc have no std, core no alloc. */
 export function sourceViolations(name, kind, source) {
   const violations = [];
-  if (kind !== "action" && !NO_STD.test(source)) violations.push(`${name} has std: it needs #![no_std]`);
+  if ((kind === "core" || kind === "calc") && !NO_STD.test(source)) violations.push(`${name} has std: it needs #![no_std]`);
   if (kind === "core" && ALLOC.test(source)) {
     violations.push(`${name} has alloc: no \`extern crate alloc\` in a core crate`);
   }

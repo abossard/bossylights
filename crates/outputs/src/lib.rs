@@ -20,7 +20,7 @@
     clippy::indexing_slicing
 )]
 
-pub mod ddp;
+mod ddp;
 pub mod dmx_usb_pro;
 
 pub use engine_core::{Adapter, Color, Levels, Outcome, OutputKind, Rate, Refusal, Run};

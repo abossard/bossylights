@@ -15,7 +15,7 @@ use crate::{
     EngineCommand, Histogram, LATENCY_BUCKETS, LATENESS_BUCKETS, Levels, MAX_LIGHTS, MAX_OUTPUTS,
     MAX_UNIVERSES, OutputNumber, Priority, State, Universes, bucket, percentile, update,
 };
-use engine_core::{ChannelSet, Effect, Light};
+use engine_core::{ChannelSet, Light};
 use std::thread;
 use std::time::Duration;
 
@@ -99,13 +99,11 @@ impl Snapshot {
     }
 
     /// The only change to the state, the held levels and the held values per light: through `engine_core::update`.
-    pub(crate) fn update(&mut self, command: EngineCommand) -> Option<Effect> {
+    pub(crate) fn update(&mut self, command: EngineCommand) {
         let count = usize::from(self.universes.count());
         let held = self.held.get_mut(..count).unwrap_or_default();
         let holds = self.holds.get_mut(..count).unwrap_or_default();
-        let (state, effect) = update(self.state, held, holds, &mut self.lights, command);
-        self.state = state;
-        effect
+        self.state = update(self.state, held, holds, &mut self.lights, command);
     }
 
     /// A frame of `output` was handed over this late.

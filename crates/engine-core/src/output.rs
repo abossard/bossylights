@@ -4,7 +4,7 @@
 //!
 //! ```text
 //! [*] -> NotFound --accepted--> Connecting --accepted--> Running --failed--> Reconnecting --accepted--> Running
-//!                               Connecting --failed----------------------->  Reconnecting --gave up--> NotFound
+//!                               Connecting --failed----------------------->  Reconnecting
 //! ```
 //!
 //! "Accepted" is the device's word: a device that must be found accepts only once it is.
@@ -19,8 +19,6 @@ use serde::{Deserialize, Serialize};
 pub const MAX_OUTPUTS: usize = 16;
 /// An interval further than this from the output's period is off its beat.
 pub const OFF_BEAT: Duration = Duration::from_millis(2);
-/// Failures in a row while reconnecting before an output counts as not found.
-pub const GIVE_UP: u16 = 100;
 
 /// Which output, 1 to [`MAX_OUTPUTS`] as a client counts. Anything else does not parse.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
@@ -131,10 +129,12 @@ impl Run {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub enum Status {
+    /// No frame accepted since the output was set. Served like any other status: it
+    /// stays so the user tells a device never seen from one lost (`Reconnecting`).
     NotFound,
     Connecting,
     Running,
-    /// Sends failed; `failures` in a row so far.
+    /// Sends failed; `failures` in a row so far, counted up to `u16::MAX`.
     Reconnecting {
         failures: u16,
     },
@@ -162,11 +162,8 @@ impl Status {
             (Self::Connecting | Self::Running, Outcome::Failed) => {
                 Self::Reconnecting { failures: 1 }
             }
-            (Self::Reconnecting { failures }, Outcome::Failed) if failures + 1 >= GIVE_UP => {
-                Self::NotFound
-            }
             (Self::Reconnecting { failures }, Outcome::Failed) => Self::Reconnecting {
-                failures: failures + 1,
+                failures: failures.saturating_add(1),
             },
             (Self::NotFound, Outcome::Failed) => Self::NotFound,
             (state, Outcome::Dropped) => state,
@@ -271,8 +268,7 @@ mod tests {
             (R(1), Accepted, Running),
             (R(1), Dropped, R(1)),
             (R(1), Failed, R(2)),
-            (R(GIVE_UP - 2), Failed, R(GIVE_UP - 1)),
-            (R(GIVE_UP - 1), Failed, NotFound), // gave up
+            (R(u16::MAX), Failed, R(u16::MAX)), // keeps looking, never wraps
         ];
         for (state, outcome, next) in table {
             assert_eq!(state.after(outcome), next, "{state:?} + {outcome:?}");

@@ -6,6 +6,7 @@ const CRATES = {
   core: { kind: "core", deps: ["serde"] },
   calc: { kind: "calc", deps: ["core"] },
   app: { kind: "action", deps: ["core"] },
+  tick: { kind: "tick", deps: ["core", "rtrb"] },
 };
 const dep = (name, workspace = true) => ({ name, workspace });
 
@@ -17,6 +18,9 @@ const crateCases = [
   ["calc", [dep("app")], ["calc -> app is not an allowed edge"]],
   ["app", [dep("core"), dep("tokio", false)], []],
   ["app", [dep("calc")], ["app -> calc is not an allowed edge"]],
+  ["tick", [dep("core"), dep("rtrb", false)], []],
+  ["tick", [dep("core"), dep("log", false)], ["tick -> log is not an allowed edge"]], // an outside dependency counts too
+  ["tick", [dep("calc")], ["tick -> calc is not an allowed edge"]],
   ["new", [], ["crate new is not on the list"]],
 ];
 for (const [name, deps, expected] of crateCases) {
@@ -35,6 +39,7 @@ const sourceCases = [
   ["calc", "#![no_std]\nextern crate alloc;", []],
   ["calc", "use std::fs;", ["x has std: it needs #![no_std]"]],
   ["action", "use std::fs;", []],
+  ["tick", "use std::thread;", []],
 ];
 for (const [kind, source, expected] of sourceCases) {
   test(`${kind} source ${JSON.stringify(source)}`, () => {

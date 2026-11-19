@@ -35,14 +35,13 @@
 
 pub use engine_core::{
     ADDRESSES, API_VERSION, Adapter, BEAT, BestEffort, ChannelLevel, ChannelNumbers, Color,
-    Command, Counters, Grouped, Levels, MAX_LIGHTS, MAX_OUTPUTS, MAX_UNIVERSES, Member, MemberList,
-    Members, Outcome, Output, OutputKind, OutputNumber, Patched, Priority, Project, ProjectOutput,
-    Rate, Refusal, Reply, Request, Run, RunNumbers, State, Status, Target, Text, Universes,
-    changes,
+    Command, Counters, Grouped, Levels, MAX_OUTPUTS, MAX_UNIVERSES, Member, MemberList, Members,
+    Outcome, Output, OutputKind, OutputNumber, Patched, Priority, Project, ProjectOutput, Rate,
+    Refusal, Reply, Request, Run, RunNumbers, State, Status, Target, Text, Universes, changes,
 };
-pub use engine_core::{
-    EngineCommand, Histogram, LATENCY_BUCKETS, LATENESS_BUCKETS, bucket, due, frame, next_wake,
-    percentile, sleep_before, update, wait,
+use engine_core::{
+    EngineCommand, Histogram, LATENCY_BUCKETS, LATENESS_BUCKETS, MAX_LIGHTS, bucket, due, frame,
+    percentile, update, wait,
 };
 pub use fixture_library::Fixture;
 pub use rig::Patch;
@@ -681,7 +680,6 @@ impl Ticker {
                 self.now.holds(),
                 self.now.lights(),
                 &self.writers,
-                now,
                 &mut self.out,
             );
             let mut serve = [None; MAX_OUTPUTS];
@@ -771,9 +769,7 @@ impl Ticker {
     }
 
     fn apply(&mut self, command: EngineCommand) {
-        if let Some(effect) = self.now.update(command) {
-            match effect {}
-        }
+        self.now.update(command);
     }
 }
 

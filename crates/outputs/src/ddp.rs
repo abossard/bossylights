@@ -19,9 +19,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-pub const HEADER: usize = 10;
+const HEADER: usize = 10;
 /// Data bytes per packet: 480 RGB or 360 RGBW pixels, as WLED expects.
-pub const MAX_DATA: usize = 1440;
+const MAX_DATA: usize = 1440;
 const VERSION: u8 = 0x40;
 const PUSH: u8 = 0x01;
 const DESTINATION: u8 = 1;
@@ -35,7 +35,7 @@ const REOPEN_EVERY: Duration = Duration::from_millis(500);
 
 /// What a failed send means.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Fault {
+enum Fault {
     /// The link is busy: the frame is dropped, nothing is wrong.
     Busy,
     /// The host answers that nothing listens or the device cannot be reached.
@@ -60,7 +60,7 @@ const HOST_DOWN: i32 = 64;
 const HOST_DOWN: i32 = -1;
 
 /// The table of send errors. A calculation.
-pub fn fault(error: &io::Error) -> Fault {
+fn fault(error: &io::Error) -> Fault {
     match error.raw_os_error() {
         Some(NO_BUFFERS) => return Fault::Busy,
         Some(HOST_DOWN) => return Fault::DeviceNotThere,
@@ -177,7 +177,7 @@ struct Shared {
 /// A DDP output: a connected, non-blocking UDP socket and one packet's buffer. A broken
 /// socket is replaced by one the socket thread opens, and dropped there, off the output
 /// thread.
-pub struct Ddp {
+pub(crate) struct Ddp {
     link: Box<dyn Link>,
     color: Color,
     sequence: u8,
@@ -192,7 +192,7 @@ pub struct Ddp {
 
 impl Ddp {
     /// Opens a socket to `address`. Off the output thread.
-    pub fn open(address: SocketAddrV4, color: Color) -> io::Result<Self> {
+    pub(crate) fn open(address: SocketAddrV4, color: Color) -> io::Result<Self> {
         if address.port() == 0 {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "no port"));
         }
@@ -321,12 +321,12 @@ impl Device for Ddp {
 }
 
 /// The next sequence number: 1 to 15, then 1 again. 0 means "no sequence" to WLED.
-pub fn next_sequence(sequence: u8) -> u8 {
+fn next_sequence(sequence: u8) -> u8 {
     sequence % 15 + 1
 }
 
 /// The bytes of whole pixels in `channels` channels.
-pub fn data_length(channels: usize, color: Color) -> usize {
+fn data_length(channels: usize, color: Color) -> usize {
     let size = match color {
         Color::Rgb => 3,
         Color::Rgbw => 4,
@@ -335,7 +335,7 @@ pub fn data_length(channels: usize, color: Color) -> usize {
 }
 
 /// The packets for `total` bytes: offset, length, and whether it is the last.
-pub fn packets(total: usize) -> impl Iterator<Item = (usize, usize, bool)> {
+fn packets(total: usize) -> impl Iterator<Item = (usize, usize, bool)> {
     (0..total).step_by(MAX_DATA).map(move |offset| {
         let length = MAX_DATA.min(total - offset);
         (offset, length, offset + length == total)
@@ -343,13 +343,7 @@ pub fn packets(total: usize) -> impl Iterator<Item = (usize, usize, bool)> {
 }
 
 /// The header of one packet.
-pub fn header(
-    sequence: u8,
-    color: Color,
-    offset: usize,
-    length: usize,
-    last: bool,
-) -> [u8; HEADER] {
+fn header(sequence: u8, color: Color, offset: usize, length: usize, last: bool) -> [u8; HEADER] {
     let kind = match color {
         Color::Rgb => 0x0B,
         Color::Rgbw => 0x1B,
@@ -361,7 +355,7 @@ pub fn header(
 }
 
 /// Copies the channels from `offset` of the frame's stream into `out`.
-pub fn channels(frame: &[Levels], offset: usize, out: &mut [u8]) {
+fn channels(frame: &[Levels], offset: usize, out: &mut [u8]) {
     let stream = frame.iter().flat_map(|universe| universe.0.iter());
     for (byte, level) in out.iter_mut().zip(stream.skip(offset)) {
         *byte = *level;

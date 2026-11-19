@@ -30,20 +30,20 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 /// The adapter's USB identity: an FTDI chip that calls itself "DMX USB PRO".
-pub const VENDOR: u16 = 0x0403;
-pub const PRODUCT: u16 = 0x6001;
-pub const NAME: &str = "DMX USB PRO";
+const VENDOR: u16 = 0x0403;
+const PRODUCT: u16 = 0x6001;
+const NAME: &str = "DMX USB PRO";
 /// The link from the USB chip to the widget is a real UART. 44 frames need 22.8 kB/s;
 /// 57 600 baud queued frames minutes behind, out of sight. 500 000 is about 2x headroom.
-pub const BAUD: u32 = 500_000;
+const BAUD: u32 = 500_000;
 /// One "send DMX" message.
 pub const MESSAGE: usize = 4 + 1 + ADDRESSES + 1;
 /// The time the link takes for one message, 11 bits a byte, plus a quarter. A frame
 /// that comes sooner is dropped instead of queued.
-pub const LINK_TIME: Duration =
+const LINK_TIME: Duration =
     Duration::from_nanos(MESSAGE as u64 * 11 * 1_000_000_000 * 5 / (BAUD as u64 * 4));
 /// How often the port thread looks for a lost adapter.
-pub const LOOK_EVERY: Duration = Duration::from_millis(500);
+const LOOK_EVERY: Duration = Duration::from_millis(500);
 /// How often an idle port thread checks whether it should stop.
 const WATCH_EVERY: Duration = Duration::from_millis(100);
 /// How long the port thread waits for a full driver queue before it tries again.
@@ -51,10 +51,10 @@ const QUEUE_FULL: Duration = Duration::from_millis(1);
 /// How long a port may take no byte before it counts as lost. Half a second: a busy
 /// machine or a USB hiccup can hold the queue for a few messages without the adapter
 /// being gone, and a person sees a stall within about that time anyway.
-pub const STALLED_FOR: Duration = Duration::from_millis(500);
+const STALLED_FOR: Duration = Duration::from_millis(500);
 
 /// Writes the message for a frame into `out`: the first 512 channels of the run.
-pub fn message(frame: &[Levels], out: &mut [u8; MESSAGE]) {
+fn message(frame: &[Levels], out: &mut [u8; MESSAGE]) {
     let [lsb, msb] = ((ADDRESSES + 1) as u16).to_le_bytes();
     let (head, rest) = out.split_at_mut(5);
     head.copy_from_slice(&[0x7E, 6, lsb, msb, 0]);

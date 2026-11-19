@@ -37,8 +37,7 @@ pub use library::{
     Text,
 };
 pub use output::{
-    Counters, GIVE_UP, MAX_OUTPUTS, OFF_BEAT, Outcome, Output, OutputNumber, Rate, Run, RunNumbers,
-    Status,
+    Counters, MAX_OUTPUTS, OFF_BEAT, Outcome, Output, OutputNumber, Rate, Run, RunNumbers, Status,
 };
 pub use patch::{
     Grouped, Layout, Member, MemberList, Members, PatchCommand, Patched, Pixels, Target,
@@ -299,44 +298,36 @@ impl LightChange {
     }
 }
 
-/// What must happen outside after an update, as data. None exist yet.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Effect {}
-
-/// The only place state changes: state and command in, new state and effects out.
-/// `universes` are the levels of the raw channels, `holds` which of them are held (a
-/// channel not held is at 0), `lights` the held values per light: buffers the caller
-/// owns; a command changes them in place. At most one effect, so nothing
-/// allocates. A command that needs more widens this to a fixed-size array, never to a
-/// `Vec`.
+/// The only place state changes: state and command in, new state out. `universes` are
+/// the levels of the raw channels, `holds` which of them are held (a channel not held is
+/// at 0), `lights` the held values per light: buffers the caller owns; a command changes
+/// them in place, so nothing allocates. No command needs anything done outside yet: the
+/// first that does returns it as data beside the state, never in a `Vec`.
 pub fn update(
     state: State,
     universes: &mut [Levels],
     holds: &mut [ChannelSet],
     lights: &mut [Light],
     command: EngineCommand,
-) -> (State, Option<Effect>) {
+) -> State {
     match command {
-        EngineCommand::Tick { now } => (
-            State {
-                frame: state.frame.wrapping_add(1),
-                now,
-                // Only a due beat moves on: a wake for an output must not push it ahead.
-                beat: if now < state.beat {
-                    state.beat
-                } else {
-                    next_frame(state.beat, now, BEAT)
-                },
-                ..state
+        EngineCommand::Tick { now } => State {
+            frame: state.frame.wrapping_add(1),
+            now,
+            // Only a due beat moves on: a wake for an output must not push it ahead.
+            beat: if now < state.beat {
+                state.beat
+            } else {
+                next_frame(state.beat, now, BEAT)
             },
-            None,
-        ),
+            ..state
+        },
         EngineCommand::Handed { output, outcome } => {
             let mut outputs = state.outputs;
             if let Some(Some(handed)) = outputs.get_mut(output.slot()) {
                 *handed = handed.handed(outcome, state.now);
             }
-            (State { outputs, ..state }, None)
+            State { outputs, ..state }
         }
         EngineCommand::Attach {
             output,
@@ -348,42 +339,39 @@ pub fn update(
             if let Some(slot) = outputs.get_mut(output.slot()) {
                 *slot = Some(Output::new(run, rate, due));
             }
-            (State { outputs, ..state }, None)
+            State { outputs, ..state }
         }
         EngineCommand::RemoveOutput { output } => {
             let mut outputs = state.outputs;
             if let Some(slot) = outputs.get_mut(output.slot()) {
                 *slot = None;
             }
-            (State { outputs, ..state }, None)
+            State { outputs, ..state }
         }
         EngineCommand::SetChannel { channel, value } => {
             if let Some(level) = channel.level(universes) {
                 *level = value;
                 channel.mark(holds, true);
             }
-            (state, None)
+            state
         }
         EngineCommand::ReleaseChannel { channel } => {
             if let Some(level) = channel.level(universes) {
                 *level = 0;
             }
             channel.mark(holds, false);
-            (state, None)
+            state
         }
         EngineCommand::ReleaseAll => {
             universes.fill(Levels::ZERO);
             holds.fill(ChannelSet::NONE);
-            (state, None)
+            state
         }
-        EngineCommand::Blackout { on } => (
-            State {
-                blackout: on,
-                ..state
-            },
-            None,
-        ),
-        EngineCommand::Writers | EngineCommand::Runs { .. } => (state, None),
+        EngineCommand::Blackout { on } => State {
+            blackout: on,
+            ..state
+        },
+        EngineCommand::Writers | EngineCommand::Runs { .. } => state,
         EngineCommand::SetIntensity {
             lights: run,
             intensity,
@@ -391,7 +379,7 @@ pub fn update(
             for light in run.of(lights) {
                 light.intensity = intensity;
             }
-            (state, None)
+            state
         }
         EngineCommand::SetColour {
             lights: run,
@@ -407,13 +395,13 @@ pub fn update(
                     ..*light
                 };
             }
-            (state, None)
+            state
         }
         EngineCommand::ReleaseIntensity { lights: run } => {
             for light in run.of(lights) {
                 light.intensity = Light::DARK.intensity;
             }
-            (state, None)
+            state
         }
         EngineCommand::ReleaseColour { lights: run } => {
             for light in run.of(lights) {
@@ -422,26 +410,25 @@ pub fn update(
                     ..Light::DARK
                 };
             }
-            (state, None)
+            state
         }
         EngineCommand::Darken { lights: run } => {
             run.of(lights).fill(Light::DARK);
-            (state, None)
+            state
         }
     }
 }
 
-/// The levels that go out at `_at` (since the engine started), written into `out`, a
-/// buffer the caller owns. It resolves and mixes, nothing else: what the `writers` make
-/// of the `lights`, the raw channels held (`universes` at `holds`), the blackout. `mix`
-/// decides each channel. No level depends on time yet; effects will.
+/// The levels that go out now, written into `out`, a buffer the caller owns. It
+/// resolves and mixes, nothing else: what the `writers` make of the `lights`, the raw
+/// channels held (`universes` at `holds`), the blackout. `mix` decides each channel. No
+/// level depends on time yet: the first that does takes the time as an argument.
 pub fn frame(
     state: &State,
     universes: &[Levels],
     holds: &[ChannelSet],
     lights: &[Light],
     writers: &[Writer],
-    _at: Duration,
     out: &mut [Levels],
 ) {
     let mut lit = [ChannelSet::NONE; MAX_UNIVERSES as usize];
@@ -467,7 +454,7 @@ pub fn frame(
 }
 
 /// How many frames late the tick may fall before it gives up catching up.
-pub const MAX_BEHIND: u32 = 10;
+const MAX_BEHIND: u32 = 10;
 
 /// When the frame after `due` is due. A late frame is made up at once, so the rate
 /// holds when the OS oversleeps. Far behind (the machine slept), it starts over from now.
@@ -485,7 +472,7 @@ pub fn next_frame(due: Duration, now: Duration, period: Duration) -> Duration {
 pub const BEAT: Duration = Duration::from_nanos(1_000_000_000 / 44);
 
 /// When the engine wakes next: when the first output is due, or on the beat if none is set.
-pub fn next_wake(state: &State) -> Duration {
+fn next_wake(state: &State) -> Duration {
     state
         .outputs
         .iter()
@@ -519,7 +506,7 @@ pub fn due(state: &State, now: Duration) -> impl Iterator<Item = OutputNumber> +
 
 /// The output thread sleeps until this long before a frame is due, then spins: a
 /// sleep can wake late, a spin cannot. Measured in spike #23.
-pub const SPIN: Duration = Duration::from_millis(1);
+const SPIN: Duration = Duration::from_millis(1);
 
 /// How long to sleep at `now` before spinning until `due`. All times since the engine started.
 pub fn sleep_before(due: Duration, now: Duration) -> Duration {
@@ -538,7 +525,7 @@ pub fn wait(state: &State, now: Duration) -> (Duration, Option<Duration>) {
 }
 
 /// Times are counted in buckets this wide.
-pub const BUCKET: Duration = Duration::from_micros(100);
+const BUCKET: Duration = Duration::from_micros(100);
 /// Buckets for tick lateness: 25 ms, about one frame. The last one holds everything later.
 pub const LATENESS_BUCKETS: usize = 251;
 /// Buckets for the time from a send to its frame: 50 ms, about two frames.
@@ -713,7 +700,7 @@ mod tests {
         ];
         for (state, (mut universes, mut holds), command, after, raw_after) in cases {
             let result = update(state, &mut universes, &mut holds, &mut [], command);
-            assert_eq!(result, (after, None), "{command:?}");
+            assert_eq!(result, after, "{command:?}");
             assert_eq!((universes, holds), raw_after, "{command:?}");
         }
     }
@@ -787,7 +774,7 @@ mod tests {
             let (mut universes, mut holds) = raw(&[(1, 1, 5)]);
             assert_eq!(
                 update(CALM, &mut universes, &mut holds, &mut lights, command),
-                (CALM, None),
+                CALM,
                 "{command:?}"
             );
             assert_eq!(lights, after, "{command:?}");
@@ -829,10 +816,7 @@ mod tests {
             channel: channel(2, 1),
             value: 9,
         };
-        assert_eq!(
-            update(CALM, &mut one, &mut holds, &mut [], command),
-            (CALM, None)
-        );
+        assert_eq!(update(CALM, &mut one, &mut holds, &mut [], command), CALM);
         assert_eq!((one, holds), ([Levels::ZERO], [ChannelSet::NONE]));
     }
 
@@ -963,15 +947,7 @@ mod tests {
         for (row, state, raw_held, writers, expected) in cases {
             let (universes, holds) = raw(raw_held);
             let mut out = held(&[(1, 9, 9)]); // whatever was there before
-            frame(
-                &state,
-                &universes,
-                &holds,
-                &red,
-                writers,
-                Duration::ZERO,
-                &mut out,
-            );
+            frame(&state, &universes, &holds, &red, writers, &mut out);
             assert_eq!(out, expected, "{row}");
         }
     }
@@ -1014,10 +990,9 @@ mod tests {
                 &mut [],
                 &mut [],
                 EngineCommand::Tick { now },
-            )
-            .0;
+            );
             for command in at(ms) {
-                state = update(state, &mut universes, &mut [], &mut [], command).0;
+                state = update(state, &mut universes, &mut [], &mut [], command);
             }
             let served: Vec<u8> = due(&state, now).map(|n| n.slot() as u8 + 1).collect();
             for &number in &served {
@@ -1025,7 +1000,7 @@ mod tests {
                     output: output(number),
                     outcome: Outcome::Accepted,
                 };
-                state = update(state, &mut universes, &mut [], &mut [], handed).0;
+                state = update(state, &mut universes, &mut [], &mut [], handed);
             }
             wakes.push((ms, served));
         }
@@ -1171,16 +1146,14 @@ mod tests {
             &mut [],
             &mut [],
             set_output(1, Rate::Sixty),
-        )
-        .0;
+        );
         state = update(
             state,
             &mut universes,
             &mut [],
             &mut [],
             set_output(2, Rate::Thirty),
-        )
-        .0;
+        );
         // the machine slept for a second
         let now = Duration::from_secs(1);
         state = update(
@@ -1189,8 +1162,7 @@ mod tests {
             &mut [],
             &mut [],
             EngineCommand::Tick { now },
-        )
-        .0;
+        );
         let served: Vec<_> = due(&state, now).collect();
         assert_eq!(served, vec![output(1), output(2)]);
         for number in served {
@@ -1198,7 +1170,7 @@ mod tests {
                 output: number,
                 outcome: Outcome::Accepted,
             };
-            state = update(state, &mut universes, &mut [], &mut [], handed).0;
+            state = update(state, &mut universes, &mut [], &mut [], handed);
         }
         assert_eq!(next_wake(&state), now + Rate::Sixty.period());
         let thirty = state.outputs[1].unwrap();
@@ -1238,8 +1210,7 @@ mod tests {
             &mut [],
             &mut [],
             set_output(1, Rate::Sixty),
-        )
-        .0;
+        );
         let with_output = State {
             outputs: with_output.outputs.map(|o| o.map(|o| Output { due, ..o })),
             ..with_output
