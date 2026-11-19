@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { mutantsReport, parseArgs, suitesOf, testSummary } from "./verify.mjs";
+import { logPath, mutantsReport, parseArgs, suitesOf, testSummary } from "./verify.mjs";
 
 const run = (command, args, cwd, options = {}) =>
   spawnSync(command, args, { cwd, encoding: "utf8", maxBuffer: 1 << 28, ...options });
@@ -26,6 +26,7 @@ if (sha.status !== 0) {
 }
 const commit = sha.stdout.trim();
 const dir = mkdtempSync(join(tmpdir(), "bossylights-verify-"));
+const logDir = mkdtempSync(join(tmpdir(), "bossylights-verify-logs-")); // kept: it outlives the copy
 let failed = false;
 try {
   const archive = spawnSync("sh", ["-c", `git archive ${commit} | tar -x -C ${dir}`], { stdio: "inherit" });
@@ -36,7 +37,11 @@ try {
   const suites = suitesOf(JSON.parse(readFileSync(join(dir, "package.json"), "utf8")).scripts.test);
   const results = suites.map((suite) => {
     const r = run("npm", ["run", suite], dir, { env });
-    return { suite, ok: r.status === 0, output: `${r.stdout}\n${r.stderr}` };
+    const output = `${r.stdout}\n${r.stderr}${r.error ? `\nerror: ${r.error.message}` : ""}`;
+    const log = logPath(logDir, suite);
+    writeFileSync(log, output);
+    const status = r.status ?? 1; // killed by a signal or not started: status is null
+    return { suite, ok: status === 0, status, log, output: r.signal ? `${output}\nsignal: ${r.signal}` : output };
   });
   failed = results.some((r) => !r.ok);
   console.log(testSummary(commit.slice(0, 7), results));

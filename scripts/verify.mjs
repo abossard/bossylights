@@ -13,19 +13,26 @@ export function parseArgs(argv) {
   return { commit: rest[0], mutants };
 }
 
-/** First line of a suite's output that says why it failed, or the last line when none does. */
-export function firstFailure(output) {
+/** First line of a suite's output that says why it failed. With none, a non-zero exit points at the log; else the last line. */
+export function firstFailure(output, status = 0, log = "the log") {
   const lines = output.split("\n").map((l) => l.trim()).filter(Boolean);
-  const hit = lines.find((l) => /(^error|\bFAILED\b|\bfailed\b|✖|not ok|^\d+\) )/i.test(l));
-  return (hit ?? lines.at(-1) ?? "no output").slice(0, 160);
+  const hit = lines.find((l) => /(^error|^signal:|\bsignal:|\bpanicked\b|\bFAILED\b|\b[1-9]\d* failed\b|✖|not ok|^\d+\) )/.test(l));
+  if (hit) return hit.slice(0, 160);
+  if (status !== 0) return `exit ${status}, see ${log}`;
+  return (lines.at(-1) ?? "no output").slice(0, 160);
 }
 
-/** results: [{ suite, ok, output }]. At most one line per suite plus one for the first failure. */
+/** results: [{ suite, ok, status, log, output }]. One line per suite (with its log file) plus one for the first failure. */
 export function testSummary(commit, results) {
-  const lines = results.map(({ suite, ok }) => `${ok ? "pass" : "FAIL"}  ${suite}`);
+  const lines = results.map(({ suite, ok, log }) => `${ok ? "pass" : "FAIL"}  ${suite}  ${log}`);
   const failed = results.find((r) => !r.ok);
-  if (failed) lines.push(`first failure (${failed.suite}): ${firstFailure(failed.output)}`);
+  if (failed) lines.push(`first failure (${failed.suite}): ${firstFailure(failed.output, failed.status, failed.log)}`);
   return [`verify ${commit}: ${failed ? "FAILED" : "all suites passed"}`, ...lines].join("\n");
+}
+
+/** The log file of a suite inside the log folder: "test:rust" becomes "<dir>/test-rust.log". */
+export function logPath(dir, suite) {
+  return `${dir}/${suite.replace(/[^A-Za-z0-9._-]/g, "-")}.log`;
 }
 
 /** cargo-mutants' outcomes.json as caught, missed (file:line), timeouts. Missed lines are always listed. */
