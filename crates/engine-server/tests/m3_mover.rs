@@ -88,12 +88,13 @@ async fn play(socket: &mut Socket, look: u16, values: &Value) -> Value {
     started["Started"]["play"].clone()
 }
 
-/// The frames handed over to the adapter (output 1) since the engine started, and how
-/// many of them were dropped.
+/// The frames handed over to the adapter (output 1) since the engine started, by when
+/// each was due, how many of them were dropped, and what came of each.
 #[derive(Default)]
 struct Handed {
-    frames: usize,
+    dues: Vec<Duration>,
     dropped: usize,
+    came: Vec<(Duration, Outcome)>,
 }
 
 impl Handed {
@@ -104,16 +105,19 @@ impl Handed {
         loop {
             for event in wakes.events() {
                 match event {
-                    Event::Handed { output, .. } if output.slot() == 0 => self.frames += 1,
+                    Event::Handed { output, due, .. } if output.slot() == 0 => self.dues.push(due),
                     Event::Came {
                         output,
-                        outcome: Outcome::Dropped,
-                        ..
-                    } if output.slot() == 0 => self.dropped += 1,
+                        outcome,
+                        due,
+                    } if output.slot() == 0 => {
+                        self.dropped += usize::from(outcome == Outcome::Dropped);
+                        self.came.push((due, outcome));
+                    }
                     Event::Handed { .. } | Event::Came { .. } => {}
                 }
             }
-            if heard.lock().unwrap().len() + self.dropped >= self.frames {
+            if heard.lock().unwrap().len() + self.dropped >= self.dues.len() {
                 return;
             }
             assert!(
@@ -214,20 +218,32 @@ async fn a_gobo_cuts_to_its_slot_and_a_colour_not_on_the_wheel_is_refused() {
         json!({"Refused": {"reason": {"Unsupported": {"light": 1, "property": "Gobo"}}}})
     );
 
-    // Gobo 2 (24), then Gobo 7 (74), the later start winning: the first frame handed over
-    // after the second start shows 74, and every frame heard between shows one slot or
-    // the other, never a byte on the way
+    // Gobo 2 (24), then Gobo 7 (74), the later start winning: the first frame due after
+    // the second start is taken by the adapter and shows 74, and every frame heard between
+    // shows one slot or the other, never a byte on the way
     play(&mut socket, 1, &json!({"gobo": {"wheel": 1, "slot": 3}})).await;
     let from = until_dmx(&heard, &[(7, 24)]).await;
     let mut handed = Handed::default();
     block_in_place(|| wakes.hold()).unwrap();
     handed.drain(&mut wakes, &heard).await;
     let before = heard.lock().unwrap().len();
+    let handed_before = handed.dues.len();
     play(&mut socket, 2, &json!({"gobo": {"wheel": 1, "slot": 8}})).await;
-    while heard.lock().unwrap().len() == before {
+    // what came of the first frame due after the second start is written in a later wake
+    let first = loop {
         block_in_place(|| wakes.wake()).unwrap();
         handed.drain(&mut wakes, &heard).await;
-    }
+        if let Some(&due) = handed.dues.get(handed_before)
+            && let Some(&(_, outcome)) = handed.came.iter().find(|(came, _)| *came == due)
+        {
+            break outcome;
+        }
+    };
+    assert_eq!(
+        first,
+        Outcome::Accepted,
+        "the first frame due after the second start"
+    );
     assert_eq!(
         heard.lock().unwrap()[before][6],
         74,

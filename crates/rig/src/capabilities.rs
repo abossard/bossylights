@@ -12,7 +12,7 @@
 //! | colour wheel | a colour channel with at least one static colour (`ColorMacro`) |
 //! | gobo wheel | a gobo channel with at least one gobo that does not shake |
 //! | neutral slot | white, or a range without a preset named open, white, no function, no colour or off. It shows white |
-//! | bypass | a range without a preset that is neutral or names the mix (RGB, CMY, mix), else white: a static white can be a fixed white that overrides the mix |
+//! | bypass | a range without a preset that is neutral, or starts the channel and names the mix (RGB, CMY, mix) and no effect (random, cycle, fast, slow, speed, sound, music), else white: a static white can be a fixed white that overrides the mix |
 //! | slot byte | the lower midpoint of its range: 20 to 29 is 24 |
 //!
 //! A light refuses a colour or a gobo when it has a wheel for it but no slot that shows it
@@ -260,19 +260,25 @@ fn neutral(channel: &fixture_library::Channel) -> Option<u8> {
 }
 
 /// The byte where a hybrid's colour wheel lets the mix through: a range without a preset
-/// that is neutral or names the mix, else its neutral slot.
+/// that is neutral or lets the mix through, else its neutral slot.
 fn bypass(channel: &fixture_library::Channel) -> Option<u8> {
-    const MIXES: [&str; 3] = ["rgb", "cmy", "mix"];
     channel
         .ranges
         .iter()
-        .find(|range| {
-            let label = range.label.to_ascii_lowercase();
-            range.does.is_none()
-                && (is_neutral(range) || MIXES.iter().any(|mix| label.contains(mix)))
-        })
+        .find(|range| is_neutral(range) || lets_the_mix_through(range))
         .map(midpoint)
         .or_else(|| neutral(channel))
+}
+
+/// A range without a preset at the start of its channel that names the mix (RGB, CMY,
+/// mix) and no effect: "Colors adjustable via RGBW", not "Random color CMY, fast" at 244
+/// or "CYM mixing from slow to fast".
+fn lets_the_mix_through(range: &Range) -> bool {
+    const MIXES: [&str; 3] = ["rgb", "cmy", "mix"];
+    const EFFECTS: [&str; 7] = ["random", "cycle", "fast", "slow", "speed", "sound", "music"];
+    let label = range.label.to_ascii_lowercase();
+    let names = |words: &[&str]| words.iter().any(|word| label.contains(word));
+    range.does.is_none() && range.min == 0 && names(&MIXES) && !names(&EFFECTS)
 }
 
 const WHITE: Rgb = Rgb {

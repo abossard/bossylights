@@ -3,11 +3,11 @@
 
 mod common;
 
-use common::{at, light, lights, mode};
+use common::{all, at, light, lights, mode};
 use engine_core::{
     Gobo, Levels, Light, LightRun, Position, Property, Refusal, Rgb, Universes, resolve,
 };
-use fixture_library::Mode;
+use fixture_library::{Byte, Does, Function, Mode};
 use rig::{Rigged, Unfit, compile, supports};
 
 const FULL: u16 = u16::MAX;
@@ -72,7 +72,7 @@ fn each_property_goes_to_its_channels() {
     let x4 = mode("GLP-Impression-X4.qxf", "Normal");
     let platinum = mode("Elation-Platinum-Spot-5R.qxf", "Basic");
     let mac = mode("Martin-MAC-2000-Wash.qxf", "8-bit with Color Wheel 2");
-    let cases: [Case; 15] = [
+    let cases: [Case; 16] = [
         (
             &elation,
             aimed,
@@ -105,6 +105,15 @@ fn each_property_goes_to_its_channels() {
             &[(5, 3), (6, 255)],
         ),
         (&x4, Light::DARK, &[(5, 3)]),
+        // CMY beside a wheel: open white at 0, not "Random color CMY, fast" at 244
+        (
+            &mac,
+            Light {
+                intensity: Some(FULL),
+                ..shows(Some(RED), None)
+            },
+            &[(3, 0), (4, 255), (5, 255), (7, 0)],
+        ),
         // an open range without a preset is slot 1, before Gobo 1
         (&platinum, shows(None, Some(gobo(2, 1))), &[(6, 3)]),
         (&platinum, shows(None, Some(gobo(2, 2))), &[(6, 11)]),
@@ -304,4 +313,83 @@ fn a_hybrid_binds_its_companions_to_neutral_or_is_refused() {
         });
         assert_eq!(found, expected, "{names:?} {colour:?}");
     }
+}
+
+/// Every hybrid of the test definitions, red held: the byte each colour wheel holds and
+/// the range it is in. Never a range that moves the wheel or picks a colour of its own.
+#[test]
+fn each_hybrid_holds_its_wheel_where_the_mix_goes_through() {
+    let mixing = [
+        Function::Red,
+        Function::Green,
+        Function::Blue,
+        Function::White,
+        Function::Cyan,
+        Function::Magenta,
+        Function::Yellow,
+    ];
+    let is_wheel = |c: &&fixture_library::Channel| {
+        c.byte == Byte::Coarse
+            && c.function == Function::ColorWheel
+            && c.ranges
+                .iter()
+                .any(|r| matches!(r.does, Some(Does::Color(_))))
+    };
+    let red = Light {
+        intensity: Some(FULL),
+        colour: Some(RED),
+        ..Light::DARK
+    };
+    // (file, mode, channel from 1, byte, the label of its range)
+    let x4 = "GLP-Impression-X4.qxf";
+    let mac = "Martin-MAC-2000-Wash.qxf";
+    let adj = "American-DJ-Ultra-Bar-6.qxf";
+    let mix = "Colors adjustable via RGBW";
+    let expected: &[(&str, &str, usize, u8, &str)] = &[
+        // no bypass: a static white
+        (adj, "6 Channels mode", 4, 221, "White"),
+        (adj, "8 Channels mode", 4, 221, "White"),
+        (x4, "Normal", 5, 3, mix),
+        (x4, "Compress", 5, 3, mix),
+        // wheel 1 open at 0, not "Random color CMY, fast" at 244 to 247
+        (mac, "8-bit with Color Wheel 2", 7, 0, "White"),
+        (mac, "8-bit with Color Wheel 2", 8, 249, "No function"),
+        (mac, "8-bit with Dimmer Wheel", 7, 0, "White"),
+        (mac, "16-bit with Color Wheel 2", 7, 0, "White"),
+        (mac, "16-bit with Color Wheel 2", 8, 249, "No function"),
+        (mac, "16-bit with Dimmer Wheel", 7, 0, "White"),
+        ("XStatic-X-240Bar-RGB.qxf", "7 Channel", 5, 59, "White"),
+    ];
+    let mut found = Vec::new();
+    for (file, fixture) in all() {
+        for mode in &fixture.modes {
+            let channels = &mode.channels;
+            if !channels.iter().any(|c| mixing.contains(&c.function))
+                || !channels.iter().any(|c| is_wheel(&c))
+            {
+                continue;
+            }
+            let mut out = [Levels::ZERO];
+            resolve(&[red], &rigged(mode).writers, &mut out);
+            for (index, channel) in channels.iter().enumerate().filter(|(_, c)| is_wheel(c)) {
+                let byte = out[0].0[index];
+                let range = channel
+                    .ranges
+                    .iter()
+                    .find(|r| (r.min..=r.max).contains(&byte));
+                found.push((
+                    file.clone(),
+                    mode.name.clone(),
+                    index + 1,
+                    byte,
+                    range.map_or(String::new(), |r| r.label.clone()),
+                ));
+            }
+        }
+    }
+    let expected: Vec<_> = expected
+        .iter()
+        .map(|&(f, m, c, b, l)| (f.to_string(), m.to_string(), c, b, l.to_string()))
+        .collect();
+    assert_eq!(found, expected);
 }
