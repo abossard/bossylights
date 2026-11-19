@@ -88,12 +88,23 @@ fn main() {
         });
 }
 
-/// The lock that keeps one window per engine address. It goes with the process, however it ends.
+/// The lock that keeps one window per engine. It goes with the process, however it ends.
 fn one_window(address: SocketAddr) -> Option<File> {
-    let name = format!("bossylights-{}-{}.lock", address.ip(), address.port());
-    let file = File::create(std::env::temp_dir().join(name)).ok()?;
+    let file = File::create(std::env::temp_dir().join(lock_name(address))).ok()?;
     file.try_lock().ok()?;
     Some(file)
+}
+
+/// The lock file of the engine at `address`. Every address of this machine reaches the
+/// same engine on a port (one on 0.0.0.0 answers on 127.0.0.1 and on the LAN address), so
+/// they share a name. An address of another machine has its own. A calculation but for
+/// asking the system whether the address is ours.
+fn lock_name(address: SocketAddr) -> String {
+    if std::net::TcpListener::bind((address.ip(), 0)).is_ok() {
+        format!("bossylights-local-{}.lock", address.port())
+    } else {
+        format!("bossylights-{}-{}.lock", address.ip(), address.port())
+    }
 }
 
 /// Which engine the window talks to, if any. A calculation.
@@ -397,6 +408,21 @@ mod tests {
                 "the lock stays held after the window is gone"
             );
             thread::yield_now();
+        }
+    }
+
+    #[test]
+    fn every_address_of_this_machine_is_one_engine_for_the_lock() {
+        // (address, address, same engine). 192.0.2.1 is reserved, no machine here has it.
+        let cases = [
+            ("127.0.0.1:7744", "0.0.0.0:7744", true),
+            ("127.0.0.1:7744", "127.0.0.1:7745", false),
+            ("127.0.0.1:7744", "192.0.2.1:7744", false),
+            ("192.0.2.1:7744", "192.0.2.2:7744", false),
+        ];
+        for (a, b, same) in cases {
+            let (a, b) = (a.parse().unwrap(), b.parse().unwrap());
+            assert_eq!(lock_name(a) == lock_name(b), same, "{a} and {b}");
         }
     }
 
