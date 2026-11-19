@@ -26,13 +26,46 @@ Why cheaper models are safe for the routine: the rules are held by the compiler,
 
 ## The loop (orchestrator)
 
+```mermaid
+flowchart LR
+  P["Pick<br/>+ pre-check"] --> B["Brief<br/>modules it owns"] --> W["Worker<br/>in the trunk"] --> H["Hand-over comment,<br/>SendMessage,<br/>clear self"]
+  W -- "push main" --> V["Verify<br/>clean copy"] --> C["Close"] --> P
+  H --> V
+```
+
 | Step | How |
 |---|---|
 | 1. Pick | the lowest open `ready-for-agent` issue with no open blocker |
-| 2. Brief | the criteria from the issue, what is out of scope, the rules. One ticket per worker turn |
-| 3. Verify | never trust a report. Run `npm test` and `npm run scorecard`. Drive the feature by hand. Break each new rule on purpose and see its check fail. Compare numbers with raw result files |
-| 4. Close | tick the boxes, close with a table of evidence, note what was not verified |
-| 5. Next | hand over the next ticket. Stop only for a decision of the owner |
+| 2. Pre-check | can every box pass with this ticket's own commands? Does a box need a rule of who wins, or allow a state that cannot come out right? Settle it (or ask the owner) before the worker builds |
+| 3. Brief | the criteria from the issue, out of scope, the modules the worker owns (see "Work isolation"), the end of the slice (below). One ticket per worker. Send it only when `list_events` shows the worker empty |
+| 4. Verify | never trust a report. In a clean copy of the pushed commit: `npm test`, `npm run scorecard`. Drive the feature by hand. Break each new rule on purpose and see its check fail. Compare numbers with raw result files |
+| 5. Close | tick the boxes, close with a table of evidence, note what was not verified |
+| 6. Next | hand over the next ticket. Stop only for a decision of the owner |
+
+| A worker's slice ends with, in this order | Why |
+|---|---|
+| 1. a hand-over comment on the issue: done, evidence, next, pitfalls | the next session starts from the issue, not from a chat |
+| 2. `SendMessage` to the orchestrator: the commit and three lines | a chat answer reaches nobody: workers sat idle for hours |
+| 3. `clear_session "self"` | the worker is empty for its next brief, no round trip |
+
+| The orchestrator wakes on | |
+|---|---|
+| a worker's message | the normal path |
+| a new commit on `main` | a watch polls `origin/main` every minute: a push with no message still gets verified |
+| a busy worker gone idle without a message | checked on every wake: a worker that stopped before pushing is nudged |
+
+## Work isolation: modules, not worktrees
+
+Workers share one checkout of `main`. The design keeps them apart: a slice that needs a separate worktree points at a seam in the wrong place.
+
+| Rule | How |
+|---|---|
+| A worker owns modules | the brief names the crates, files or folders it may write. Two workers never own the same file |
+| New file over a shared edit | a new command family, test table or fake goes into a file of its own, wired in by one line |
+| Hotspots get one owner at a time | `engine-core` `Command` and `api`, `scripts/layers.mjs`, `engine-server/src/lib.rs`. When two slices need one, they run one after the other, or the first splits it so each owns a part |
+| Plan slices along seams | before running two slices in parallel, list the files each will touch. An overlap means sequence them or cut the seam first |
+| Stage only your own | `git diff --cached --stat`, `git commit -m ... -- <paths>`, `git apply --cached` for your hunks in a file with others' edits. Before a push, `git log origin/main..` shows only your commits |
+| One worktree remains | the orchestrator's clean copy for verifying a pushed commit (`git worktree add --detach`, removed after) |
 
 | Stays with the owner | |
 |---|---|
@@ -48,7 +81,14 @@ Why cheaper models are safe for the routine: the rules are held by the compiler,
 | Waiting for CI slows every ticket | nobody waits for CI. Run locally what CI runs (`npm test`), push, move on. CI is a backstop, read later |
 | A serial link looked on time and was minutes behind | count what the device accepted |
 | A capture of a hidden window was blank | a hidden web view does not draw. Say what was not seen |
-| Sessions share one checkout | one writer at a time. Stage with explicit paths. Never stash another session's work |
+| Sessions share one checkout | one writer per file. Stage with explicit paths. Never stash another session's work |
+| Workers ended with a chat answer, the orchestrator never heard | the slice ends with `SendMessage`, and the orchestrator watches `main` |
+| A brief arrived before a worker's clear, the clear was lost | the worker clears itself at the end of a slice; brief only an empty worker |
+| A worker's question was answered while it kept building, the answer came too late | the pre-check settles rules before the brief; a worker that asks waits for the answer on that box |
+| A push carried another worker's commit | `git log origin/main..` before every push |
+| e2e ports (7798, 7799, 5299) clash between sessions | rerun on "already in use" |
+| The orchestrator's own check used another target folder, e2e found no binary | verify with the default target folder |
+| "Allow it and flag it" was overruled | a command that would make an invalid project is refused, and so is a later command that would break it |
 
 ## Milestones and gates
 
