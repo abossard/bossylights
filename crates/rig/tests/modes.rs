@@ -3,7 +3,7 @@
 mod common;
 
 use common::{all, at, light, lights, mode, say};
-use engine_core::{Refusal, Universes, Writer};
+use engine_core::{Levels, Light, Refusal, Universes, Writer, resolve};
 use rig::{Unfit, compile};
 
 #[test]
@@ -230,5 +230,54 @@ fn every_channel_is_written_once() {
             let all: Vec<u16> = (1..).take(mode.channels.len()).collect();
             assert_eq!(written, all, "{file} {}", mode.name);
         }
+    }
+}
+
+/// A dimmer two heads name (14 modes of the QLC+ library, GLP JDC1 among them): each head
+/// is a light with its own writer on it, and the Mixer decides between them.
+#[test]
+fn a_channel_two_heads_name_is_written_by_both() {
+    const SHARED: &str = r#"<?xml version="1.0"?>
+<FixtureDefinition xmlns="http://www.qlcplus.org/FixtureDefinition">
+ <Manufacturer>Test</Manufacturer><Model>Shared</Model><Type>LED Bar (Pixels)</Type>
+ <Channel Name="Dimmer" Preset="IntensityDimmer"/>
+ <Mode Name="Shared">
+  <Channel Number="0">Dimmer</Channel>
+  <Head><Channel>0</Channel></Head>
+  <Head><Channel>0</Channel></Head>
+ </Mode>
+</FixtureDefinition>"#;
+    const FULL: Light = Light {
+        intensity: u16::MAX,
+        red: u16::MAX,
+        green: u16::MAX,
+        blue: u16::MAX,
+    };
+    let fixture = fixture_library::parse("shared.qxf", SHARED.as_bytes()).unwrap();
+    let rigged = compile(
+        &fixture.modes[0],
+        at(37),
+        light(0),
+        Universes::ONE,
+        lights(),
+    )
+    .unwrap();
+    assert_eq!(rigged.lights, 2, "each head is a light");
+    assert_eq!(
+        rigged.writers.iter().map(say).collect::<Vec<_>>(),
+        ["37 light 0: intensity", "37 light 1: intensity"]
+    );
+    // (heads shown, byte 37)
+    let cases = [
+        ([Light::DARK, Light::DARK], 0),
+        ([Light::DARK, FULL], 255),
+        ([FULL, FULL], 255),
+        // the later head wins: mix row 48, decision 48 open
+        ([FULL, Light::DARK], 0),
+    ];
+    for (shown, expected) in cases {
+        let mut out = [Levels::ZERO];
+        resolve(&shown, &rigged.writers, &mut out);
+        assert_eq!(out[0].0[36], expected, "{shown:?}");
     }
 }
