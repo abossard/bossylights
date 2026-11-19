@@ -6,6 +6,7 @@ One row per run, written by the orchestrator after verifying (step 4c of `orches
 |---|---|---|---|---|---|---|---|---|
 | 2026-11-19 | #181 `SetMixRules` over the file cap, pilot 1 (built on 5ae0048, old sandbox) | build | astra, high | 274 | 44 (6) | 2.48M / 2.42M / 5.9k | no: `main` had moved, `Command::StartLook` gained `when`, the new test no longer compiled | stale base. 8 of 10 `show` tests could not start (port bind denied) |
 | 2026-11-19 | #181 same task, pilot 2 (built on 9c6ea02, new sandbox) | build | astra, high | 501 | 46 (3) | 2.95M / 2.87M / 9.5k | yes, all 5 suites (applied on f2f3f46) | break (`fits()` removed) fails the new test; all 10 `show` tests ran in the sandbox. Landed as 0d3a641 |
+| 2026-11-19 | review of #169 at dc16e07 (first run through `npm run codex -- review`) | review | astra, ultra | 463 | 75 (8) | 6.90M / 6.76M / 14.7k | n/a | 7 findings, 6 proved red in its copy (core, engine and DMX tests): a tempo change on a crossing skips a bar, a due DMX frame keeps the old colour after a feed edit, a cancelled wait reopens an adapter, a kept play starts in the future, generation zero removes a sounding look, the m3_tempo flake remains; plus a press compiling under the sender lock. The repro tests were thrown away with the copy (see #184) |
 
 ## Reading the ledger
 

@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bossylights progress</title>
+<style>
+  /* Live from the GitHub issues of the repo: open this file in a browser, it refreshes itself. */
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --fg: #1b2230; --mute: #5d6879; --line: #dde2ea;
+    --done: #1f9d62; --work: #d98a00; --wait: #7c5cd6; --todo: #8a93a3; --bad: #d4452f;
+    --done-bg: #e3f5ec; --work-bg: #fdf0d4; --wait-bg: #ece7fa; --todo-bg: #eceef2;
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1420; --card: #171e2d; --fg: #e6eaf2; --mute: #98a3b8; --line: #2a3448;
+      --done: #3ec88a; --work: #f0b13a; --wait: #a58cf0; --todo: #7d879a; --bad: #f2735f;
+      --done-bg: #12372a; --work-bg: #3b2d0c; --wait-bg: #2a2150; --todo-bg: #232b3c;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.45 system-ui, sans-serif; }
+  main { max-width: 1180px; margin: 0 auto; padding: 20px 16px 48px; display: grid; gap: 16px; }
+  header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 16px; justify-content: space-between; }
+  h1 { font-size: 22px; margin: 0; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--mute); margin: 0 0 10px; }
+  .meta { color: var(--mute); font-size: 12px; }
+  .meta b { color: var(--fg); font-weight: 600; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; min-width: 0; }
+  .grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+  a { color: inherit; }
+  .num { font-variant-numeric: tabular-nums; }
+  /* M3 chain */
+  .chain { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)); }
+  .step { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--todo-bg); text-decoration: none; display: block; }
+  .step b { display: block; font-size: 12px; color: var(--mute); font-weight: 600; }
+  .step span { display: block; font-size: 13px; margin: 2px 0 4px; }
+  .step small { font-family: var(--mono); font-size: 11px; color: var(--mute); }
+  .step.done { background: var(--done-bg); border-color: var(--done); }
+  .step.work { background: var(--work-bg); border-color: var(--work); }
+  .step.wait { background: var(--wait-bg); border-color: var(--wait); }
+  .bar { display: flex; height: 12px; border-radius: 6px; overflow: hidden; background: var(--todo-bg); margin: 10px 0 4px; }
+  .bar i { display: block; height: 100%; }
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--mute); }
+  .legend i { display: inline-block; width: 9px; height: 9px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+  /* stats */
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 10px; }
+  .stat { padding: 10px 12px; border-radius: 8px; background: var(--todo-bg); }
+  .stat b { font-size: 24px; display: block; line-height: 1.1; }
+  .stat span { font-size: 12px; color: var(--mute); }
+  /* lists */
+  ul.list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+  ul.list li { display: flex; gap: 8px; align-items: baseline; min-width: 0; }
+  ul.list a { text-decoration: none; overflow-wrap: anywhere; }
+  ul.list a:hover { text-decoration: underline; }
+  .id { font-family: var(--mono); font-size: 11px; color: var(--mute); flex: none; }
+  .chip { font-size: 11px; padding: 1px 7px; border-radius: 99px; background: var(--todo-bg); color: var(--mute); flex: none; }
+  .chip.agent { background: var(--work-bg); color: var(--work); }
+  .chip.human { background: var(--wait-bg); color: var(--wait); }
+  .chip.task { background: var(--todo-bg); }
+  .when { margin-left: auto; font-size: 11px; color: var(--mute); flex: none; padding-left: 6px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { text-align: left; padding: 5px 8px 5px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--mute); }
+  .scroll { overflow-x: auto; }
+  svg text { fill: var(--mute); font-size: 10px; }
+  .err { color: var(--bad); }
+  .empty { color: var(--mute); font-style: italic; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Bossylights progress</h1>
+    <div class="meta" id="status">loading from GitHub…</div>
+  </header>
+
+  <section class="card">
+    <h2>Milestone M3, looks and who wins</h2>
+    <div class="chain" id="chain"></div>
+    <div class="bar" id="m3bar"></div>
+    <div class="legend" id="m3legend"></div>
+  </section>
+
+  <div class="grid">
+    <section class="card">
+      <h2>All issues</h2>
+      <div class="stats" id="stats"></div>
+      <div class="bar" id="allbar"></div>
+      <div class="legend" id="alllegend"></div>
+    </section>
+    <section class="card">
+      <h2>Closed per day, last 14 days</h2>
+      <div id="spark"></div>
+    </section>
+  </div>
+
+  <section class="card">
+    <h2>Workers and next wake (from the orchestrator state, #147)</h2>
+    <div class="scroll" id="workers"><span class="empty">loading…</span></div>
+  </section>
+
+  <div class="grid">
+    <section class="card">
+      <h2>Ready for an agent</h2>
+      <ul class="list" id="ready"></ul>
+    </section>
+    <section class="card">
+      <h2>Waits for the owner</h2>
+      <ul class="list" id="human"></ul>
+    </section>
+  </div>
+
+  <div class="grid">
+    <section class="card">
+      <h2>Follow-ups and tasks, open</h2>
+      <ul class="list" id="tasks"></ul>
+    </section>
+    <section class="card">
+      <h2>Recently closed</h2>
+      <ul class="list" id="closed"></ul>
+    </section>
+  </div>
+</main>
+<script>
+(() => {
+  const REPO = "abossard/bossylights";
+  const EVERY = 3 * 60 * 1000;           // unauthenticated limit is 60 calls an hour: 3 pages every 3 minutes fits
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+  const names = (i) => i.labels.map((l) => l.name);
+  const has = (i, n) => names(i).includes(n);
+  const ago = (iso) => {
+    const m = Math.max(0, Math.round((Date.now() - new Date(iso)) / 60000));
+    return m < 60 ? `${m} min` : m < 1440 ? `${Math.round(m / 60)} h` : `${Math.round(m / 1440)} d`;
+  };
+  const link = (i) => `<a href="${i.html_url}" target="_blank" rel="noopener">${esc(i.title)}</a>`;
+  const row = (i, chips = "", when = "") =>
+    `<li><span class="id">#${i.number}</span>${link(i)}${chips}${when ? `<span class="when">${when}</span>` : ""}</li>`;
+  const chipFor = (i) =>
+    has(i, "ready-for-agent") ? '<span class="chip agent">agent</span>'
+    : has(i, "ready-for-human") ? '<span class="chip human">owner</span>'
+    : has(i, "kind:task") ? '<span class="chip task">task</span>' : "";
+
+  async function getAll() {
+    const out = [];
+    for (let page = 1; page <= 6; page++) {
+      const r = await fetch(`https://api.github.com/repos/${REPO}/issues?state=all&per_page=100&page=${page}`, { headers: { Accept: "application/vnd.github+json" } });
+      if (!r.ok) throw new Error(`GitHub answered ${r.status}` + (r.status === 403 ? " (rate limit: wait a few minutes)" : ""));
+      const batch = (await r.json()).filter((i) => !i.pull_request);
+      out.push(...batch);
+      if (batch.length < 100 && out.length) break;
+    }
+    return out;
+  }
+
+  const stateOf = (issue, byNum) => {
+    if (issue.state === "closed") return "done";
+    return "todo";
+  };
+
+  function drawChain(issues, workerText) {
+    const t = issues
+      .map((i) => ({ i, m: /^M3 T(\d)/.exec(i.title) }))
+      .filter((x) => x.m)
+      .sort((a, b) => a.m[1] - b.m[1]);
+    // in work: named in the workers table of #147 (any "#NNN" in its text)
+    const inWork = new Set([...workerText.matchAll(/#(\d{2,4})/g)].map((m) => Number(m[1])));
+    let done = 0, work = 0, todo = 0;
+    $("chain").innerHTML = t.map(({ i, m }) => {
+      const s = i.state === "closed" ? "done" : inWork.has(i.number) ? "work" : "todo";
+      s === "done" ? done++ : s === "work" ? work++ : todo++;
+      const label = { done: "done", work: "in work", todo: "waiting" }[s];
+      return `<a class="step ${s}" href="${i.html_url}" target="_blank" rel="noopener"><b>T${m[1]}, ${label}</b><span>${esc(i.title.replace(/^M3 T\d,? ?:? ?/, ""))}</span><small>#${i.number}</small></a>`;
+    }).join("") || '<span class="empty">no M3 tickets found</span>';
+    const n = Math.max(1, t.length);
+    $("m3bar").innerHTML = `<i style="width:${(done / n) * 100}%;background:var(--done)"></i><i style="width:${(work / n) * 100}%;background:var(--work)"></i>`;
+    $("m3legend").innerHTML = `<span><i style="background:var(--done)"></i>done ${done}</span><span><i style="background:var(--work)"></i>in work ${work}</span><span><i style="background:var(--todo)"></i>waiting ${todo}</span><span class="num">${t.length} tickets</span>`;
+  }
+
+  function drawStats(issues) {
+    const open = issues.filter((i) => i.state === "open");
+    const closed = issues.filter((i) => i.state === "closed");
+    const day = Date.now() - 864e5;
+    const c24 = closed.filter((i) => new Date(i.closed_at) > day).length;
+    const agent = open.filter((i) => has(i, "ready-for-agent")).length;
+    const human = open.filter((i) => has(i, "ready-for-human")).length;
+    $("stats").innerHTML = [
+      [open.length, "open"], [closed.length, "closed"], [c24, "closed in 24 h"], [agent, "ready for agent"], [human, "wait for owner"],
+    ].map(([n, l]) => `<div class="stat"><b class="num">${n}</b><span>${l}</span></div>`).join("");
+    const total = Math.max(1, issues.length);
+    $("allbar").innerHTML = `<i style="width:${(closed.length / total) * 100}%;background:var(--done)"></i><i style="width:${(agent / total) * 100}%;background:var(--work)"></i><i style="width:${(human / total) * 100}%;background:var(--wait)"></i>`;
+    $("alllegend").innerHTML = `<span><i style="background:var(--done)"></i>closed ${Math.round((closed.length / total) * 100)}%</span><span><i style="background:var(--work)"></i>ready for agent</span><span><i style="background:var(--wait)"></i>wait for owner</span>`;
+  }
+
+  function drawSpark(issues) {
+    const days = [];
+    for (let k = 13; k >= 0; k--) { const d = new Date(); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - k); days.push(d); }
+    const counts = days.map((d) => issues.filter((i) => i.closed_at && new Date(i.closed_at) >= d && new Date(i.closed_at) < new Date(+d + 864e5)).length);
+    const max = Math.max(1, ...counts), W = 560, H = 120, bw = W / 14;
+    $("spark").innerHTML = `<svg viewBox="0 0 ${W} ${H + 20}" width="100%" role="img" aria-label="issues closed per day">` +
+      counts.map((c, k) => {
+        const h = Math.round((c / max) * (H - 18));
+        const x = k * bw + 4;
+        return `<rect x="${x}" y="${H - h}" width="${bw - 8}" height="${h}" rx="3" fill="var(--done)" opacity="${k === 13 ? 1 : 0.75}"/>` +
+          `<text x="${x + (bw - 8) / 2}" y="${H - h - 4}" text-anchor="middle">${c || ""}</text>` +
+          `<text x="${x + (bw - 8) / 2}" y="${H + 13}" text-anchor="middle">${days[k].getDate()}</text>`;
+      }).join("") + "</svg>";
+  }
+
+  function drawLists(issues) {
+    const open = issues.filter((i) => i.state === "open");
+    const fill = (id, list, chips) => {
+      $(id).innerHTML = list.length ? list.map((i) => row(i, chips ? chipFor(i) : "", ago(i.updated_at))).join("") : '<li class="empty">nothing</li>';
+    };
+    fill("ready", open.filter((i) => has(i, "ready-for-agent")).sort((a, b) => a.number - b.number), false);
+    fill("human", open.filter((i) => has(i, "ready-for-human")).sort((a, b) => a.number - b.number), false);
+    fill("tasks", open.filter((i) => has(i, "kind:task") && !has(i, "ready-for-human") && !has(i, "ready-for-agent") && !has(i, "orchestrator")).sort((a, b) => b.number - a.number).slice(0, 12), false);
+    $("closed").innerHTML = issues.filter((i) => i.state === "closed").sort((a, b) => new Date(b.closed_at) - new Date(a.closed_at)).slice(0, 12)
+      .map((i) => row(i, "", ago(i.closed_at))).join("");
+  }
+
+  function parseWorkers(body) {
+    const sec = /## Workers\s+([\s\S]*?)(?:\n## |\n*$)/.exec(body || "");
+    if (!sec) return { html: '<span class="empty">no Workers table in #147</span>', text: "" };
+    const lines = sec[1].split("\n").filter((l) => l.trim().startsWith("|") && !/^\|\s*-/.test(l.trim()));
+    const cells = lines.map((l) => l.trim().replace(/^\||\|$/g, "").split("|").map((c) => c.trim()));
+    const head = cells.shift() || [];
+    const linkify = (t) => esc(t).replace(/#(\d{2,4})/g, `<a href="https://github.com/${REPO}/issues/$1" target="_blank" rel="noopener">#$1</a>`);
+    return {
+      text: sec[1],
+      html: `<table><thead><tr>${head.map((h) => `<th>${esc(h)}</th>`).join("")}</tr></thead><tbody>${cells.map((r) => `<tr>${r.map((c) => `<td>${linkify(c)}</td>`).join("")}</tr>`).join("")}</tbody></table>`,
+    };
+  }
+
+  async function refresh() {
+    try {
+      const issues = await getAll();
+      const state = issues.find((i) => i.number === 147);
+      const w = parseWorkers(state && state.body);
+      $("workers").innerHTML = w.html;
+      drawChain(issues, w.text);
+      drawStats(issues);
+      drawSpark(issues);
+      drawLists(issues);
+      $("status").innerHTML = `<b>${issues.length}</b> issues, updated <b>${new Date().toLocaleTimeString()}</b>, refreshes every 3 min · <a href="https://github.com/${REPO}/issues" target="_blank" rel="noopener">GitHub</a>`;
+    } catch (e) {
+      $("status").innerHTML = `<span class="err">${esc(e.message)}</span>, retrying in 3 min`;
+    }
+  }
+  refresh();
+  setInterval(refresh, EVERY);
+})();
+</script>
+</body>
+</html>
