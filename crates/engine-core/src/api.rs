@@ -14,8 +14,8 @@
 
 use crate::library::{Failure, FixtureKind, Library, Match, ModeChannels, Text};
 use crate::{
-    ChannelLevel, Command, Grouped, HeldLight, Levels, Patched, PlayId, Project, Saved, ShowFile,
-    State,
+    ChannelLevel, Command, Grouped, HeldLight, Levels, Patched, PlayId, Project, Property, Saved,
+    ShowFile, State,
 };
 use serde::{Deserialize, Serialize};
 
@@ -185,4 +185,8 @@ pub enum Refusal {
     TooManyLooks { most: u16 },
     /// Every play slot is taken. Release a play first.
     PlayFull,
+    /// Light `light` (counted from 1) has a wheel for `property` but no slot that shows
+    /// the value: black on a wheel without black. Or a fixture mixes colour beside a
+    /// colour wheel that has no neutral slot to hold.
+    Unsupported { light: u16, property: Property },
 }

@@ -11,6 +11,11 @@
 //! |---|---|
 //! | intensity | how bright |
 //! | red, green, blue | its colour, one part |
+//! | pan, tilt | its position, one part |
+//! | zoom | how wide |
+//!
+//! A colour on a wheel and a gobo are choices, not amounts: a [`Writer::Picks`] shows the
+//! byte of the slot the light holds, never one between two slots.
 //!
 //! A part nothing holds shows the definition's default: its writers write the default of
 //! their channel, not a value of the light.
@@ -20,7 +25,7 @@
 
 use crate::channel::{Channel, ChannelSet, Levels, MAX_UNIVERSES};
 use crate::mix::{Want, mix};
-use crate::property::{Light, Rgb};
+use crate::property::{Gobo, Light, Rgb};
 use serde::Serialize;
 
 /// The most lights an engine can have: 64 universes of 170 RGB pixels and more.
@@ -156,6 +161,32 @@ pub enum Writer {
         at: Place,
         unheld: u16,
     },
+    /// A channel of slots, a wheel: the value of the first of the `slots` slot writers
+    /// right after it whose choice its light holds, else `unheld`, the default of its
+    /// channel. A change of choice cuts to the new slot.
+    Picks {
+        light: LightNumber,
+        at: Channel,
+        slots: u8,
+        unheld: u8,
+    },
+    /// One slot of the [`Writer::Picks`] before it: its channel shows `value` while the
+    /// light holds `colour`, exactly. Writes nothing of its own.
+    ColourSlot { colour: Rgb, value: u8 },
+    /// One slot of the [`Writer::Picks`] before it: its channel shows `value` while the
+    /// light holds `gobo`. Writes nothing of its own.
+    GoboSlot { gobo: Gobo, value: u8 },
+}
+
+impl Writer {
+    /// The value of a slot writer while `light` holds its choice. `None` for any other.
+    pub fn slot(&self, light: &Light) -> Option<u8> {
+        match *self {
+            Self::ColourSlot { colour, value } => (light.colour == Some(colour)).then_some(value),
+            Self::GoboSlot { gobo, value } => (light.gobo == Some(gobo)).then_some(value),
+            Self::Fixed { .. } | Self::Takes { .. } | Self::Picks { .. } => None,
+        }
+    }
 }
 
 /// Where a value of 16 bits goes.
@@ -178,6 +209,7 @@ pub enum Place {
 /// | red beside white | red, less shared |
 /// | white | shared: the part red, green and blue all have |
 /// | cyan | red, falling: full less red |
+/// | pan, tilt, zoom | pan, tilt, zoom, falling when the channel runs the other way |
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Take {
     pub of: Part,
@@ -204,6 +236,9 @@ impl Take {
             Part::Green => light.colour.map(|c| c.green),
             Part::Blue => light.colour.map(|c| c.blue),
             Part::Shared => light.colour.map(Rgb::shared),
+            Part::Pan => light.position.map(|p| p.pan),
+            Part::Tilt => light.position.map(|p| p.tilt),
+            Part::Zoom => light.zoom,
         }?;
         let shared = light.colour.map_or(0, Rgb::shared);
         let less = match self.less {
@@ -230,6 +265,9 @@ pub enum Part {
     Blue,
     /// The smallest of red, green and blue: the part all three have.
     Shared,
+    Pan,
+    Tilt,
+    Zoom,
 }
 
 /// What is taken off the part.
@@ -281,9 +319,28 @@ pub(crate) fn write(
     out: &mut [Levels],
     lit: &mut [ChannelSet],
 ) {
-    for writer in writers {
+    for (index, writer) in writers.iter().enumerate() {
         match *writer {
             Writer::Fixed { at, value } => put(at, Want::Default(value), out, lit),
+            Writer::Picks {
+                light,
+                at,
+                slots,
+                unheld,
+            } => {
+                let Some(light) = lights.get(usize::from(light.0)) else {
+                    continue;
+                };
+                let first = index + 1;
+                let picked = writers
+                    .get(first..first + usize::from(slots))
+                    .unwrap_or_default()
+                    .iter()
+                    .find_map(|slot| slot.slot(light));
+                let want = picked.map_or(Want::Default(unheld), Want::Light);
+                put(at, want, out, lit);
+            }
+            Writer::ColourSlot { .. } | Writer::GoboSlot { .. } => {}
             Writer::Takes {
                 light,
                 take,
@@ -341,6 +398,18 @@ mod tests {
         }
     }
 
+    /// Pan 0x1234, tilt 0x5678, zoom half, no intensity.
+    fn aimed() -> Light {
+        Light {
+            position: Some(crate::Position {
+                pan: 0x1234,
+                tilt: 0x5678,
+            }),
+            zoom: Some(HALF),
+            ..Light::DARK
+        }
+    }
+
     fn take(of: Part, less: Less, scale: Scale, sense: Sense) -> Take {
         Take {
             of,
@@ -353,7 +422,7 @@ mod tests {
     #[test]
     fn a_take_is_a_part_less_scaled_turned() {
         use Less::{Nothing, Shared as LessShared};
-        use Part::{Blue, Green, Intensity, Red, Shared};
+        use Part::{Blue, Green, Intensity, Pan, Red, Shared, Tilt, Zoom};
         use Scale::{ByIntensity, Whole};
         use Sense::{Falling, Rising};
         let orange = (FULL, HALF, 0x1000);
@@ -450,6 +519,13 @@ mod tests {
                 None,
             ),
             (take(Shared, Nothing, Whole, Rising), Light::DARK, None),
+            // pan and tilt travel together, zoom on its own; neither dims
+            (take(Pan, Nothing, Whole, Rising), aimed(), Some(0x1234)),
+            (take(Tilt, Nothing, Whole, Rising), aimed(), Some(0x5678)),
+            (take(Zoom, Nothing, Whole, Rising), aimed(), Some(HALF)),
+            (take(Zoom, Nothing, Whole, Falling), aimed(), Some(0x7fff)),
+            (take(Pan, Nothing, Whole, Rising), light(FULL, grey), None),
+            (take(Zoom, Nothing, Whole, Rising), light(FULL, grey), None),
             // intensity not held scales as 0
             (
                 take(Red, Nothing, ByIntensity, Rising),
@@ -551,6 +627,96 @@ mod tests {
             resolve(&lights, &writers, &mut out);
             assert_eq!(out[0].0[..6], expected, "{writers:?}");
             assert!(out[0].0[6..].iter().all(|&b| b == 7), "{writers:?}");
+        }
+    }
+
+    #[test]
+    fn a_wheel_shows_the_slot_its_light_holds_else_its_default() {
+        let red = Rgb {
+            red: FULL,
+            green: 0,
+            blue: 0,
+        };
+        let green = Rgb {
+            red: 0,
+            green: FULL,
+            blue: 0,
+        };
+        let gobo = |slot| Gobo { wheel: 1, slot };
+        let holds = |colour, gobo| Light {
+            colour,
+            gobo,
+            ..Light::DARK
+        };
+        let picks = |at, slots| Writer::Picks {
+            light: number(0),
+            at: channel(at),
+            slots,
+            unheld: 3,
+        };
+        let colours = [
+            picks(1, 2),
+            Writer::ColourSlot {
+                colour: red,
+                value: 7,
+            },
+            Writer::ColourSlot {
+                colour: green,
+                value: 12,
+            },
+        ];
+        let gobos = [
+            picks(2, 2),
+            Writer::GoboSlot {
+                gobo: gobo(1),
+                value: 4,
+            },
+            Writer::GoboSlot {
+                gobo: gobo(3),
+                value: 24,
+            },
+        ];
+        let both: Vec<Writer> = colours.iter().chain(&gobos).copied().collect();
+        // a slot past the count of its Picks, and a slot without one: nothing
+        let short = [
+            picks(1, 1),
+            colours[1],
+            colours[2],
+            Writer::Fixed {
+                at: channel(3),
+                value: 9,
+            },
+            colours[2],
+        ];
+        let dim = Rgb { red: HALF, ..red };
+        // (writers, the light, bytes 1 to 3, `out` holding 0)
+        let cases = [
+            (both.clone(), holds(Some(red), Some(gobo(3))), [7, 24, 0]),
+            (both.clone(), holds(Some(green), Some(gobo(1))), [12, 4, 0]),
+            // nothing held: the default
+            (both.clone(), Light::DARK, [3, 3, 0]),
+            // held, but not a slot: the default, never a slot nearby
+            (both.clone(), holds(Some(dim), Some(gobo(2))), [3, 3, 0]),
+            (
+                both.clone(),
+                holds(None, Some(Gobo { wheel: 2, slot: 3 })),
+                [3, 3, 0],
+            ),
+            (short.to_vec(), holds(Some(red), None), [7, 0, 9]),
+            (short.to_vec(), holds(Some(green), None), [3, 0, 9]),
+            (colours[1..].to_vec(), holds(Some(red), None), [0, 0, 0]),
+        ];
+        for (writers, light, expected) in cases {
+            let mut out = [Levels::ZERO];
+            resolve(&[light], &writers, &mut out);
+            assert_eq!(out[0].0[..3], expected, "{light:?} {writers:?}");
+            assert!(out[0].0[3..].iter().all(|&b| b == 0), "{writers:?}");
+        }
+        // a change of gobo cuts to the new slot: the very next frame, nothing between
+        let mut out = [Levels::ZERO];
+        for (gobo, byte) in [(gobo(1), 4), (gobo(3), 24), (gobo(1), 4)] {
+            resolve(&[holds(None, Some(gobo))], &gobos, &mut out);
+            assert_eq!(out[0].0[1], byte, "{gobo:?}");
         }
     }
 

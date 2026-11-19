@@ -65,6 +65,7 @@ fn library() -> Vec<Fixture> {
 fn address(writer: &Writer) -> u16 {
     let channel = match *writer {
         Writer::Fixed { at, .. }
+        | Writer::Picks { at, .. }
         | Writer::Takes {
             at: Place::Byte(at),
             ..
@@ -73,6 +74,9 @@ fn address(writer: &Writer) -> u16 {
             at: Place::Pair { coarse, .. },
             ..
         } => coarse,
+        Writer::ColourSlot { .. } | Writer::GoboSlot { .. } => {
+            unreachable!("the test definitions have no wheels")
+        }
     };
     let two = Universes::new(2).unwrap();
     (1..=2)

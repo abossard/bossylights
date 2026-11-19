@@ -42,8 +42,10 @@ fn owners(writers: &[Writer]) -> String {
     writers
         .iter()
         .map(|w| match w {
-            Writer::Takes { light, .. } => light.index().to_string(),
-            Writer::Fixed { .. } => "-".to_string(),
+            Writer::Takes { light, .. } | Writer::Picks { light, .. } => light.index().to_string(),
+            Writer::Fixed { .. } | Writer::ColourSlot { .. } | Writer::GoboSlot { .. } => {
+                "-".to_string()
+            }
         })
         .collect::<Vec<_>>()
         .join(" ")

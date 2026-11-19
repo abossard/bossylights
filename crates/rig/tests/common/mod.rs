@@ -94,7 +94,9 @@ pub fn address(channel: Channel) -> u16 {
         .expect("a channel of universe 1")
 }
 
-/// A writer in words: `37 = 8`, `38 light 0: intensity`, `38+39 light 0: red - shared`.
+/// A writer in words: `37 = 8`, `38 light 0: intensity`, `38+39 light 0: red - shared`,
+/// a wheel `42 light 0: 8 slots, else 0` and each slot after it, `  #ff0000 = 7`,
+/// `  gobo 1/3 = 24`.
 pub fn say(writer: &Writer) -> String {
     match *writer {
         Writer::Fixed { at, value } => format!("{} = {value}", address(at)),
@@ -107,6 +109,25 @@ pub fn say(writer: &Writer) -> String {
             };
             format!("{at} light {}: {}", light.index(), say_take(take))
         }
+        Writer::Picks {
+            light,
+            at,
+            slots,
+            unheld,
+        } => format!(
+            "{} light {}: {slots} slots, else {unheld}",
+            address(at),
+            light.index()
+        ),
+        Writer::ColourSlot { colour, value } => format!(
+            "  #{:02x}{:02x}{:02x} = {value}",
+            colour.red >> 8,
+            colour.green >> 8,
+            colour.blue >> 8
+        ),
+        Writer::GoboSlot { gobo, value } => {
+            format!("  gobo {}/{} = {value}", gobo.wheel, gobo.slot)
+        }
     }
 }
 
@@ -117,6 +138,9 @@ fn say_take(take: Take) -> String {
         Part::Green => "green",
         Part::Blue => "blue",
         Part::Shared => "shared",
+        Part::Pan => "pan",
+        Part::Tilt => "tilt",
+        Part::Zoom => "zoom",
     }
     .to_string();
     if take.less == Less::Shared {

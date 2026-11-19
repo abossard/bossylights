@@ -20,6 +20,8 @@
 //! | red, green, blue | its part of the colour, less the shared part when the light has white, times intensity when it has no dimmer |
 //! | white | the part red, green and blue share, times intensity when no dimmer |
 //! | cyan, magenta, yellow | full less red, green, blue (times intensity when no dimmer) |
+//! | pan, tilt, zoom | its part of the position, the zoom; full less it when the channel runs down |
+//! | a colour or gobo wheel | the slot of the colour or gobo the light holds (`capabilities.rs`) |
 //! | a fine byte | joins the first coarse channel of the light that does the same and has no fine byte yet |
 //! | shutter, strobe | fixed: the value that lets light out |
 //! | anything else | fixed: its default, else 0 |
@@ -42,9 +44,13 @@
 
 extern crate alloc;
 
+mod capabilities;
 mod patch;
 
+pub use capabilities::supports;
 pub use patch::{Limit, Patch, PatchEffect, Placed, Unplaced, Whole};
+
+use capabilities::Wheels;
 
 use alloc::format;
 use alloc::vec;
@@ -53,7 +59,7 @@ use engine_core::{
     ADDRESSES, Channel, ChannelNumbers, Color, Less, LightNumber, Lights, Part, Pixels, Place,
     Refusal, Scale, Sense, Take, Universes, Writer,
 };
-use fixture_library::{Byte, Function, Layout, Mode};
+use fixture_library::{Byte, Direction, Function, Layout, Mode};
 
 /// A mode at an address, compiled.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -104,36 +110,40 @@ pub fn compile(
     let mut writers: Vec<(usize, Writer)> = Vec::new();
     for (channels, number) in of_light.iter().zip(&numbers) {
         let has = Has::of(channels.iter().map(|(_, c)| *c));
-        let mut slots: Vec<Option<Writer>> = channels
+        let wheels = Wheels::of(channels);
+        // the writers of each channel: none yet for a fine byte
+        let mut bound: Vec<Vec<Writer>> = channels
             .iter()
             .map(
                 |&(index, channel)| match (channel.byte, places.get(index)) {
-                    (Byte::Coarse, Some(&place)) => Some(coarse(channel, has, *number, place)),
-                    _ => None,
+                    (Byte::Coarse, Some(&place)) => wheels
+                        .bind(index, channel, *number, place)
+                        .unwrap_or_else(|| Ok(vec![coarse(channel, has, *number, place)])),
+                    (Byte::Coarse | Byte::Fine, _) => Ok(vec![]),
                 },
             )
-            .collect();
+            .collect::<Result<_, _>>()?;
         for (at, &(index, channel)) in channels.iter().enumerate() {
             let (Byte::Fine, Some(&place)) = (channel.byte, places.get(index)) else {
                 continue;
             };
             let joined = channels
                 .iter()
-                .zip(slots.iter_mut())
+                .zip(bound.iter_mut())
                 .filter(|((_, c), _)| c.byte == Byte::Coarse && c.function == channel.function)
-                .any(|(_, slot)| join(slot, place, channel.default));
-            if !joined && let Some(slot) = slots.get_mut(at) {
-                *slot = Some(fixed(channel, place));
+                .any(|(_, writers)| join(writers.first_mut(), place, channel.default));
+            if !joined && let Some(writers) = bound.get_mut(at) {
+                *writers = vec![fixed(channel, place)];
             }
         }
         writers.extend(
             channels
                 .iter()
-                .zip(slots)
-                .filter_map(|(&(index, _), slot)| slot.map(|writer| (index, writer))),
+                .zip(bound)
+                .flat_map(|(&(index, _), bound)| bound.into_iter().map(move |w| (index, w))),
         );
     }
-    // in channel order
+    // in channel order, a wheel's slots right after it (the sort is stable)
     writers.sort_by_key(|&(index, _)| index);
     Ok(Rigged {
         writers: writers.into_iter().map(|(_, writer)| writer).collect(),
@@ -224,7 +234,7 @@ fn strip(pixels: Pixels, color: Color) -> (&'static str, Mode) {
 
 /// Adds `fine`, its default `default`, to a writer that takes a light into one byte.
 /// False for any other.
-fn join(writer: &mut Option<Writer>, fine: Channel, default: Option<u8>) -> bool {
+fn join(writer: Option<&mut Writer>, fine: Channel, default: Option<u8>) -> bool {
     match writer {
         Some(Writer::Takes { at, unheld, .. }) => match *at {
             Place::Byte(coarse) => {
@@ -234,7 +244,13 @@ fn join(writer: &mut Option<Writer>, fine: Channel, default: Option<u8>) -> bool
             }
             Place::Pair { .. } => false,
         },
-        Some(Writer::Fixed { .. }) | None => false,
+        Some(
+            Writer::Fixed { .. }
+            | Writer::Picks { .. }
+            | Writer::ColourSlot { .. }
+            | Writer::GoboSlot { .. },
+        )
+        | None => false,
     }
 }
 
@@ -310,7 +326,7 @@ fn coarse(
     light: LightNumber,
     place: Channel,
 ) -> Writer {
-    match take(&channel.function, has) {
+    match take(&channel.function, channel.direction, has) {
         Some(take) => Writer::Takes {
             light,
             take,
@@ -333,8 +349,9 @@ fn fixed(channel: &fixture_library::Channel, at: Channel) -> Writer {
     }
 }
 
-/// What a channel takes from its light. `None` for what this slice does not write.
-fn take(function: &Function, has: Has) -> Option<Take> {
+/// What a channel takes from its light, `direction` the way its values run. `None` for
+/// what this slice does not write.
+fn take(function: &Function, direction: Option<Direction>, has: Has) -> Option<Take> {
     let scale = if has.dimmer {
         Scale::Whole
     } else {
@@ -356,8 +373,20 @@ fn take(function: &Function, has: Has) -> Option<Take> {
         scale,
         sense: Sense::Falling,
     };
+    let travels = |of| Take {
+        of,
+        less: Less::Nothing,
+        scale: Scale::Whole,
+        sense: match direction {
+            Some(Direction::Down) => Sense::Falling,
+            Some(Direction::Up) | None => Sense::Rising,
+        },
+    };
     let take = match function {
         Function::Dimmer => Take::INTENSITY,
+        Function::Pan => travels(Part::Pan),
+        Function::Tilt => travels(Part::Tilt),
+        Function::Zoom => travels(Part::Zoom),
         Function::Red => primary(Part::Red),
         Function::Green => primary(Part::Green),
         Function::Blue => primary(Part::Blue),
@@ -370,8 +399,8 @@ fn take(function: &Function, has: Has) -> Option<Take> {
         Function::Cyan => filter(Part::Red),
         Function::Magenta => filter(Part::Green),
         Function::Yellow => filter(Part::Blue),
-        // the next slices: colour wheels, pan and tilt, beam, and colours past red, green,
-        // blue and white
+        // the next slices: beam, and colours past red, green, blue and white. Wheels are
+        // bound in `capabilities.rs`
         Function::Amber
         | Function::Uv
         | Function::Indigo
@@ -381,9 +410,6 @@ fn take(function: &Function, has: Has) -> Option<Take> {
         | Function::Lightness
         | Function::Value
         | Function::ColorTemperature
-        | Function::Pan
-        | Function::Tilt
-        | Function::Zoom
         | Function::Focus
         | Function::Iris
         | Function::Frost

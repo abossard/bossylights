@@ -66,7 +66,7 @@ show: ShowFile, channels: Array<ChannelLevel>,
  */
 lights: Array<HeldLight>, } } | { "Found": { fixtures: Array<Match>, } } | { "Fixture": { maker: string, model: string, kind: FixtureKind, modes: Array<ModeChannels>, } } | { "Failures": { failures: Array<Failure>, } };
 
-export type Refusal = "NotACommand" | { "NoSuchUniverse": { universes: number, } } | "NoSuchAddress" | "QueueFull" | "CannotOpen" | "NoSuchFixture" | "Opening" | { "TooManyUniverses": { most: number, } } | "NoSuchMode" | { "PastTheEnd": { channels: number, } } | { "NotStreamed": { first: number, last: number, } } | { "NotSent": { output: number, universe: number, address: number, } } | { "StreamsFixture": { fixture: number, } } | { "Overlaps": { fixture: number, } } | "NoLightsLeft" | "NotPatched" | "NoSuchLight" | "NoSuchGroup" | { "TooManyMembers": { most: number, } } | { "ShowFileFull": { most: number, } } | "NoSuchLook" | { "LookInUse": { look: number, } } | { "TooManyLooks": { most: number, } } | "PlayFull";
+export type Refusal = "NotACommand" | { "NoSuchUniverse": { universes: number, } } | "NoSuchAddress" | "QueueFull" | "CannotOpen" | "NoSuchFixture" | "Opening" | { "TooManyUniverses": { most: number, } } | "NoSuchMode" | { "PastTheEnd": { channels: number, } } | { "NotStreamed": { first: number, last: number, } } | { "NotSent": { output: number, universe: number, address: number, } } | { "StreamsFixture": { fixture: number, } } | { "Overlaps": { fixture: number, } } | "NoLightsLeft" | "NotPatched" | "NoSuchLight" | "NoSuchGroup" | { "TooManyMembers": { most: number, } } | { "ShowFileFull": { most: number, } } | "NoSuchLook" | { "LookInUse": { look: number, } } | { "TooManyLooks": { most: number, } } | "PlayFull" | { "Unsupported": { light: number, property: Property, } };
 
 export type State = { 
 /**
@@ -107,6 +107,8 @@ export type Light = { intensity: number | null, colour: Rgb | null, position: Po
 export type Position = { pan: number, tilt: number, };
 
 export type Gobo = { wheel: number, slot: number, };
+
+export type Property = "Intensity" | "Colour" | "Position" | "Zoom" | "Gobo";
 
 export type Step = { target: Target, values: Light, };
 

@@ -1454,6 +1454,7 @@ mod tests {
                 Light::decl(&config),
                 Position::decl(&config),
                 Gobo::decl(&config),
+                Property::decl(&config),
                 Step::decl(&config),
                 Saved::decl(&config),
                 PlayId::decl(&config),

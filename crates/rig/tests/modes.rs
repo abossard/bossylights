@@ -9,7 +9,7 @@ use rig::{Unfit, compile};
 #[test]
 fn a_mode_at_an_address_becomes_writers() {
     // (definition, mode, lights it makes, writers in words)
-    let cases: [(&str, &str, u16, &[&str]); 8] = [
+    let cases: [(&str, &str, u16, &[&str]); 10] = [
         (
             "Showtec-Par-64-100W-COB-UV.qxf",
             "8 Bit",
@@ -61,8 +61,8 @@ fn a_mode_at_an_address_becomes_writers() {
             ],
         ),
         (
-            // a moving head with a 16-bit dimmer and a shutter: pan, tilt, zoom and the
-            // colour wheel are the next slice, at their default
+            // a moving head with a 16-bit dimmer and a shutter. Its colour presets show no
+            // static colour, so they are no wheel: at their default. Zoom runs big to small
             "Martin-Rush-MH6-Wash.qxf",
             "Standard",
             1,
@@ -74,11 +74,72 @@ fn a_mode_at_an_address_becomes_writers() {
                 "42 light 0: blue - shared",
                 "43 light 0: shared",
                 "44 = 0",
-                "45 = 0",
+                "45 light 0: full - zoom",
+                "46+47 light 0: pan",
+                "48+49 light 0: tilt",
+                "50 = 0",
+            ],
+        ),
+        (
+            // white LEDs, 16-bit pan and tilt, zoom small to big
+            "Elation-EVC-MH.qxf",
+            "12-CH",
+            1,
+            &[
+                "37+38 light 0: pan",
+                "39+40 light 0: tilt",
+                "41 = 0",
+                "42 = 0",
+                "43 light 0: shared × intensity",
+                "44 light 0: shared × intensity",
+                "45 light 0: zoom",
                 "46 = 0",
                 "47 = 0",
                 "48 = 0",
-                "49 = 0",
+            ],
+        ),
+        (
+            // a colour wheel and nothing that mixes: open is white. Two gobo wheels, open
+            // the first slot of each; the shaking gobos and the rotation are no slots.
+            // Pan and tilt fine come last in the mode
+            "Shehds-LED-Spot-100W.qxf",
+            "14 Channel",
+            1,
+            &[
+                "37 light 0: intensity",
+                "38 = 252",
+                "39+48 light 0: pan",
+                "40+49 light 0: tilt",
+                "41 = 0",
+                "42 light 0: 8 slots, else 0",
+                "  #ffffff = 2",
+                "  #ff0000 = 7",
+                "  #00ff00 = 12",
+                "  #0000ff = 17",
+                "  #ffff00 = 22",
+                "  #ff00ff = 27",
+                "  #00ffff = 32",
+                "  #55ff00 = 37",
+                "43 light 0: 8 slots, else 0",
+                "  gobo 1/1 = 4",
+                "  gobo 1/2 = 14",
+                "  gobo 1/3 = 24",
+                "  gobo 1/4 = 34",
+                "  gobo 1/5 = 44",
+                "  gobo 1/6 = 54",
+                "  gobo 1/7 = 64",
+                "  gobo 1/8 = 74",
+                "44 light 0: 7 slots, else 0",
+                "  gobo 2/1 = 4",
+                "  gobo 2/2 = 14",
+                "  gobo 2/3 = 24",
+                "  gobo 2/4 = 34",
+                "  gobo 2/5 = 44",
+                "  gobo 2/6 = 54",
+                "  gobo 2/7 = 64",
+                "45 = 0",
+                "46 = 0",
+                "47 = 0",
                 "50 = 0",
             ],
         ),
@@ -169,15 +230,15 @@ fn the_lights_are_numbered_from_the_first() {
 
 #[test]
 fn a_mode_that_does_not_fit_is_refused() {
-    let martin = mode("Martin-Rush-MH6-Wash.qxf", "Standard"); // 14 channels
+    let martin = mode("Martin-Rush-MH6-Wash.qxf", "Standard"); // 14 channels, 11 writers
     let bar = mode("XStatic-X-240Bar-RGB.qxf", "26 Channel"); // 9 lights
     let two = Universes::new(2).unwrap();
     // (mode, universe, address, first light, result)
     let cases = [
-        (&martin, 1, 499, 0, Ok(13)),
-        (&martin, 2, 499, 0, Ok(13)),
+        (&martin, 1, 499, 0, Ok(11)),
+        (&martin, 2, 499, 0, Ok(11)),
         // past 512 it runs on at the next universe's address 1, but there is no third
-        (&martin, 1, 500, 0, Ok(13)),
+        (&martin, 1, 500, 0, Ok(11)),
         (&martin, 2, 500, 0, Err(Unfit::PastTheEnd { channels: 14 })),
         (
             &martin,
@@ -217,7 +278,10 @@ fn every_channel_is_written_once() {
                 .writers
                 .iter()
                 .flat_map(|writer| match *writer {
-                    Writer::Fixed { at, .. } => vec![common::address(at)],
+                    Writer::Fixed { at, .. } | Writer::Picks { at, .. } => {
+                        vec![common::address(at)]
+                    }
+                    Writer::ColourSlot { .. } | Writer::GoboSlot { .. } => vec![],
                     Writer::Takes { at, .. } => match at {
                         engine_core::Place::Byte(at) => vec![common::address(at)],
                         engine_core::Place::Pair { coarse, fine } => {

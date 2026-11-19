@@ -83,8 +83,9 @@ impl Looks {
 
 /// The plan of `step` in `patch`: its values on each run of lights its target names.
 pub fn compile(step: &Step, patch: &Patch) -> Result<Box<[Entry]>, Refusal> {
-    Ok(patch
-        .runs(step.target)?
+    let runs = patch.runs(step.target)?;
+    rig::supports(patch.writers(), &runs, &step.values)?;
+    Ok(runs
         .into_iter()
         .map(|lights| Entry {
             lights,
