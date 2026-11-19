@@ -433,3 +433,59 @@ fn a_file_under_the_most_whose_patch_is_written_back_over_it_is_not_read() {
     };
     assert_eq!(show_file::read(&packed, &empty()), Err(too_big));
 }
+
+static ENCODED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// The show file's limit, counting each definition it encodes.
+const COUNTING: rig::Limit = rig::Limit {
+    encode: |maker, model, mode| {
+        ENCODED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        (show_file::LIMIT.encode)(maker, model, mode)
+    },
+    ..show_file::LIMIT
+};
+
+#[test]
+fn a_definition_is_encoded_once_when_patched_and_no_change_after_it_encodes_a_mode() {
+    use std::sync::atomic::Ordering::SeqCst;
+    let library = library();
+    let step = |patch: &Patch, command| {
+        let (next, _) = patch.update(command, &library).unwrap();
+        next.unwrap_or_else(|| patch.clone())
+    };
+    let kept = step(&empty().kept_in(COUNTING), par("PAR 1", 1));
+    assert_eq!(ENCODED.load(SeqCst), 1, "patched: encoded once");
+    // (case, command): none encodes, and the file is the file of a patch that was not kept
+    let cases = [
+        (
+            "renamed",
+            PatchCommand::Rename {
+                fixture: 1,
+                name: text("PAR 2"),
+            },
+        ),
+        (
+            "moved",
+            PatchCommand::Move {
+                fixture: 1,
+                at: at(1, 20),
+            },
+        ),
+        (
+            "a group",
+            PatchCommand::SetGroup {
+                name: text("front"),
+                members: Members::new(&[Member::Fixture { fixture: 1 }]).unwrap(),
+            },
+        ),
+    ];
+    let mut patch = kept;
+    for (case, command) in cases {
+        patch = step(&patch, command);
+        assert_eq!(ENCODED.load(SeqCst), 1, "{case}: encoded nothing");
+    }
+    let plain = show_file::write(&patch).unwrap();
+    let same = ["PAR 2", "front"].iter().all(|n| plain.contains(n));
+    assert!(same, "the file has the changes");
+    assert!(show_file::LIMIT.most >= plain.len());
+}

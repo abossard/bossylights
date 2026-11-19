@@ -57,6 +57,7 @@ extern crate alloc;
 use alloc::collections::BTreeMap;
 use alloc::format;
 use alloc::string::{String, ToString};
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::num::{NonZeroU16, NonZeroU32};
 use engine_core::{ChannelNumbers, Member, Members, PatchCommand, Refusal, Text, Unopened};
@@ -83,31 +84,106 @@ pub const VERSION: u32 = 1;
 pub const MOST_BYTES: usize = 64 * 1024 * 1024;
 
 /// The show file to keep a patch in ([`rig::Patch::kept_in`]): a change of the patch
-/// whose file would be over [`MOST_BYTES`] is refused. Each change writes the whole file
-/// once to measure it, off the tick thread, as the save after it does.
+/// whose file would be over [`MOST_BYTES`] is refused. A change sums the lengths of the
+/// parts of its file and encodes none of a mode: each definition is encoded once, when its
+/// fixture is patched ([`encode`]), and kept with the fixture. The save after the change
+/// joins the same parts into the text.
 pub const LIMIT: Limit = Limit {
     most: MOST_BYTES,
-    fits: |patch| write(patch).is_some(),
+    fits: |patch| parts(patch).is_some_and(|parts| parts.len() <= MOST_BYTES),
+    encode,
 };
+
+/// The text of a definition as the file has it, under the key of its mode, indented to sit
+/// in the file.
+fn encode(maker: &str, model: &str, mode: &Mode) -> Option<Arc<str>> {
+    let text = serde_json::to_string_pretty(&Definition { maker, model, mode }).ok()?;
+    Some(Arc::from(text.replace('\n', "\n    ")))
+}
+
+/// The parts of a file: its lines and its modes' texts, before they are joined.
+struct Parts {
+    rows: Vec<String>,
+    groups: Vec<String>,
+    /// Each different mode, sorted by key.
+    modes: Vec<Mode3>,
+}
+
+/// A mode's key, the key as a line of JSON, and its text.
+type Mode3 = (String, String, Arc<str>);
+
+impl Parts {
+    const fn join_len(count: usize, sum: usize) -> usize {
+        if count == 0 {
+            2
+        } else {
+            sum + 6 * (count - 1) + 10
+        }
+    }
+
+    /// The length of the file: the same as `self.text().len()`, without making it.
+    fn len(&self) -> usize {
+        let base = Self::frame("", "", "").len();
+        base + Self::join_len(
+            self.rows.len(),
+            self.rows.iter().map(String::len).sum::<usize>(),
+        ) + Self::join_len(
+            self.groups.len(),
+            self.groups.iter().map(String::len).sum::<usize>(),
+        ) + Self::join_len(
+            self.modes.len(),
+            self.modes
+                .iter()
+                .map(|(_, k, t)| k.len() + 2 + t.len())
+                .sum::<usize>(),
+        )
+    }
+
+    fn frame(patch: &str, groups: &str, modes: &str) -> String {
+        format!(
+            "{{\n  \"version\": {VERSION},\n  \"patch\": {patch},\n  \"groups\": {groups},\n  \"modes\": {modes}\n}}\n",
+        )
+    }
+
+    fn text(&self) -> String {
+        let modes: Vec<String> = self
+            .modes
+            .iter()
+            .map(|(_, k, t)| format!("{k}: {t}"))
+            .collect();
+        Self::frame(
+            &list(&self.rows, '[', ']'),
+            &list(&self.groups, '[', ']'),
+            &list(&modes, '{', '}'),
+        )
+    }
+}
 
 /// The text of `patch`: its fixtures, their modes and its groups. `None` when it would
 /// be over [`MOST_BYTES`]: that file would not open.
 pub fn write(patch: &Patch) -> Option<String> {
+    let parts = parts(patch)?;
+    (parts.len() <= MOST_BYTES).then(|| parts.text())
+}
+
+fn parts(patch: &Patch) -> Option<Parts> {
     // each different mode under its own key, in the order the fixtures name them
-    let mut modes: Vec<(String, Definition<'_>)> = Vec::new();
+    let mut modes: Vec<Mode3> = Vec::new();
     let mut rows = Vec::new();
     for fixture in patch.fixtures() {
-        let mode = patch.mode(fixture.fixture)?;
-        let definition = Definition {
-            maker: fixture.maker,
-            model: fixture.model,
-            mode,
+        let text = match patch.definition_text(fixture.fixture) {
+            Some(text) => Arc::clone(text),
+            None => encode(fixture.maker, fixture.model, patch.mode(fixture.fixture)?)?,
         };
-        let key = match modes.iter().find(|(_, d)| *d == definition) {
-            Some((key, _)) => key.clone(),
+        let same = modes
+            .iter()
+            .find(|(_, _, t)| Arc::ptr_eq(t, &text) || **t == *text)
+            .map(|(key, ..)| key.clone());
+        let key = match same {
+            Some(key) => key,
             None => {
-                let key = free_key(&modes, &definition);
-                modes.push((key.clone(), definition));
+                let key = free_key(&modes, fixture.maker, fixture.model, fixture.mode);
+                modes.push((key.clone(), line(&key)?, text));
                 key
             }
         };
@@ -132,21 +208,12 @@ pub fn write(patch: &Patch) -> Option<String> {
             })
         })
         .collect::<Option<Vec<_>>>()?;
-    modes.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
-    let modes = modes
-        .iter()
-        .map(|(key, definition)| {
-            let text = serde_json::to_string_pretty(definition).ok()?;
-            Some(format!("{}: {}", line(key)?, text.replace('\n', "\n    ")))
-        })
-        .collect::<Option<Vec<_>>>()?;
-    let text = format!(
-        "{{\n  \"version\": {VERSION},\n  \"patch\": {},\n  \"groups\": {},\n  \"modes\": {}\n}}\n",
-        list(&rows, '[', ']'),
-        list(&groups, '[', ']'),
-        list(&modes, '{', '}'),
-    );
-    (text.len() <= MOST_BYTES).then_some(text)
+    modes.sort_unstable_by(|(a, ..), (b, ..)| a.cmp(b));
+    Some(Parts {
+        rows,
+        groups,
+        modes,
+    })
 }
 
 /// The patch of `text`: `empty` with the file's fixtures and groups, or why not. `empty`
@@ -283,14 +350,11 @@ struct DefinitionIn {
 
 /// `maker / model / mode`, with ` (2)`, ` (3)` and on when another mode has it: the
 /// library may have changed between two patches of one fixture.
-fn free_key(modes: &[(String, Definition<'_>)], definition: &Definition<'_>) -> String {
-    let base = format!(
-        "{} / {} / {}",
-        definition.maker, definition.model, definition.mode.name
-    );
+fn free_key(modes: &[Mode3], maker: &str, model: &str, mode: &str) -> String {
+    let base = format!("{maker} / {model} / {mode}");
     let mut key = base.clone();
     let mut n = 2_u32;
-    while modes.iter().any(|(k, _)| *k == key) {
+    while modes.iter().any(|(k, ..)| *k == key) {
         key = format!("{base} ({n})");
         n = n.saturating_add(1);
     }

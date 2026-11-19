@@ -80,11 +80,17 @@ impl Eq for Whole {}
 pub struct Limit {
     pub most: usize,
     pub fits: fn(&Patch) -> bool,
+    /// The file's text of a fixture's definition (maker, model, mode), made once when the
+    /// fixture is patched and kept with it: a change of anything else does not encode it
+    /// again, so `fits` sums what is kept and never encodes a mode.
+    pub encode: fn(&str, &str, &Mode) -> Option<Arc<str>>,
 }
 
 impl PartialEq for Limit {
     fn eq(&self, other: &Self) -> bool {
-        self.most == other.most && core::ptr::fn_addr_eq(self.fits, other.fits)
+        self.most == other.most
+            && core::ptr::fn_addr_eq(self.fits, other.fits)
+            && core::ptr::fn_addr_eq(self.encode, other.encode)
     }
 }
 
@@ -104,6 +110,8 @@ struct Entry {
     maker: String,
     model: String,
     mode: Mode,
+    /// The file's text of its definition, once the patch is kept in a show file.
+    text: Option<Arc<str>>,
     at: ChannelNumbers,
     first: LightNumber,
     lights: u16,
@@ -166,9 +174,21 @@ impl Patch {
     /// This patch, kept in the show file of `limit`: from now on a change whose file
     /// would be over its most bytes is refused.
     #[must_use]
-    pub const fn kept_in(mut self, limit: Limit) -> Self {
+    pub fn kept_in(mut self, limit: Limit) -> Self {
+        for entry in &mut self.fixtures {
+            if entry.text.is_none() {
+                let text = (limit.encode)(&entry.maker, &entry.model, &entry.mode);
+                Arc::make_mut(entry).text = text;
+            }
+        }
         self.limit = Some(limit);
         self
+    }
+
+    /// The file's text of the definition fixture `fixture` is patched from, when it was
+    /// made ([`Limit::encode`]).
+    pub fn definition_text(&self, fixture: u16) -> Option<&Arc<str>> {
+        self.entry(fixture).ok().and_then(|e| e.text.as_ref())
     }
 
     /// The only place the patch changes. `library` is where a patched fixture is looked
@@ -329,6 +349,7 @@ impl Patch {
                 maker: p.maker,
                 model: p.model,
                 mode: p.mode,
+                text: None,
                 at: p.at,
                 first,
                 lights: rigged.lights,
@@ -364,12 +385,16 @@ impl Patch {
         let first = self.free_lights(lights_of(&mode))?;
         let rigged = compile(&mode, at, first, self.universes, self.lights).map_err(refusal)?;
         self.free_channels(number, at, mode.channels.len())?;
+        let text = self
+            .limit
+            .and_then(|limit| (limit.encode)(maker, model, &mode));
         let entry = Entry {
             number,
             name: name.to_string(),
             maker: maker.to_string(),
             model: model.to_string(),
             mode,
+            text,
             at,
             first,
             lights: rigged.lights,
