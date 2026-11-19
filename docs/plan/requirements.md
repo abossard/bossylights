@@ -104,6 +104,15 @@ Origin: **Q** = QLC+ v5 parity, **F** = built in the fork, **N** = new.
 - **f-flow (F)** Flow Console.
 - **f-midi (Q)** MIDI in with learn, auto-connect.
 - **f-feedback (Q)** Pads mirror the screen: color, flash, pulse, beat LED.
+- **f-ctrl-pages (Q, F)** Controller pages: a controller switches between pages, each with its own mapping and its own pad colours (owner, 2026-11-19).
+  - Every pad shows its state in colour: off, on, running-but-not-mine, flashing, pulsing, brightness. Colours come from the controller's profile (palette, modes per MIDI channel), any pad can override them.
+  - A page switch redraws every pad at once: pads with nothing on the new page go dark. No stale LED from the old page.
+  - A page switch never leaves a light stuck: a held flash releases when its pad leaves.
+  - Global pads (page buttons, blackout, tap) stay on every page: a page can inherit pads it does not map (the QLC+ fork's Inherit mode).
+  - Page next, previous and direct buttons come from the profile and work with no setup; the current page is lit.
+  - Pages have names and an order, saved in the show. Several keys may select one page.
+  - A colour picked on screen becomes the nearest colour the pad can show.
+  - Learnt from the QLC+ fork: one feedback path for every widget, profile colour tables, nearest-colour mapping, one-step Launchpad setup. Avoid its gaps: no redraw on a top-level page switch, stale LEDs, stuck flashes, one key per page, OMNI breaking feedback above page 0.
 - **f-profiles (Q)** Controller profiles. QLC+ ships 41, including Launchpad, Launchpad MK2, Mini MK3, Pro, APC20, APC40, APC mini and mk2.
 - **f-osc (Q)** OSC in and out with feedback, published over OSCQuery.
 - **f-web (Q)** Tablet and phone remote.
