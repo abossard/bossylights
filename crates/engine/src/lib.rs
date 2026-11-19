@@ -419,13 +419,6 @@ impl Sender {
         Ok(())
     }
 
-    /// What the engine was asked to be: its outputs and what each sends to.
-    pub fn project(&self) -> Project {
-        self.project
-    }
-
-    /// The patch as it is now.
-    pub fn patch(&self) -> Arc<Patch> {
     /// Takes `patch` in place of the patch, as a show file brings it: made from
     /// [`Sender::patch`], so it has this engine's universes and lights. Its writers go to
     /// the tick thread. Refused as a change of the patch is: nothing changes.
@@ -438,6 +431,13 @@ impl Sender {
         Ok(())
     }
 
+    /// What the engine was asked to be: its outputs and what each sends to.
+    pub fn project(&self) -> Project {
+        self.project
+    }
+
+    /// The patch as it is now.
+    pub fn patch(&self) -> Arc<Patch> {
         Arc::clone(&self.patch)
     }
 
