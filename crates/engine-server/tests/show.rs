@@ -518,6 +518,94 @@ async fn a_step_over_a_patch_that_leaves_the_looks_no_room_is_refused_and_the_fi
 }
 
 #[tokio::test]
+async fn mix_rules_must_fit_before_the_next_frame_or_save() {
+    use engine_core::{Brightness, Command, MixRules, Refusal, ShowFile};
+    use engine_server::show::{Kept, keep, open};
+    use tokio::sync::watch;
+
+    let file = show_file("mix_rules");
+    let (mut first, listen) = engine(&file, true);
+    let mut socket = connect(&listen).await;
+    assert_eq!(
+        patch_once_read(&mut socket, par("PAR 1", 37)).await,
+        json!({"Patched": {"fixture": 1}})
+    );
+    let mut bright = red_step(1, "bright");
+    bright["PutStep"]["step"]["values"]["intensity"] = json!(65535);
+    assert_eq!(command(&mut socket, bright).await, json!("Accepted"));
+    stop(&mut socket, &mut first).await;
+    let text = std::fs::read_to_string(&file).unwrap();
+
+    let full = Err(Refusal::ShowFileFull {
+        most: show_file::LIMIT.most.try_into().unwrap(),
+    });
+    // The latest intensity is zero. Highest would turn the red channel fully on.
+    for (length, reply, red) in [(text.len(), Ok(()), 255), (show_file::MOST_BYTES, full, 0)] {
+        let name = format!("\"name\": \"Red{}\"", "x".repeat(length - text.len()));
+        let opened = text.replacen("\"name\": \"Red\"", &name, 1);
+        assert_eq!(opened.len(), length);
+        std::fs::write(&file, &opened).unwrap();
+
+        let (_engine, mut sender, wakes) = engine::Engine::start_stepped(
+            engine::Universes::new(1).unwrap(),
+            Box::new(outputs::open),
+        )
+        .unwrap();
+        assert_eq!(open(&file, &mut sender), ShowFile::Kept);
+        let original = Kept::of(&sender);
+        wakes.hold().unwrap();
+
+        let udp = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let set = json!({"SetOutput": {
+            "output": 1, "kind": {"Ddp": {"address": udp.local_addr().unwrap().to_string(), "color": "Rgb"}},
+            "universes": {"first": 1, "count": 1}, "rate": null,
+        }});
+        let start = json!({"StartLook": {"look": 1, "rank": "Manual"}});
+        let dark = json!({"SetIntensity": {"target": {"Fixture": {"fixture": 1}}, "intensity": 0}});
+        for command in [set, start, dark] {
+            sender
+                .send(serde_json::from_value(command).unwrap())
+                .unwrap();
+        }
+        wakes.wake().unwrap();
+        until_ddp(&udp, &[0, 0, 0]).await;
+
+        let project = sender.project();
+        let rules = MixRules {
+            brightness: Brightness::Highest,
+            ..MixRules::default()
+        };
+        assert_eq!(
+            sender.send(Command::SetMixRules { rules }),
+            reply,
+            "{length}"
+        );
+        assert_eq!(sender.project(), project);
+        let (patches, changes) = watch::channel(original.clone());
+        assert_eq!(
+            patches.send_if_modified(|kept| kept.follow(&sender)),
+            reply.is_ok()
+        );
+        wakes.wake().unwrap();
+        until_ddp(&udp, &[red, 0, 0]).await;
+        wakes.run();
+
+        // Stop flushes the last revision, as it does in the server.
+        let (state, shown) = watch::channel(ShowFile::Kept);
+        let (_stop, stopped) = watch::channel(true);
+        keep(file.clone(), original, changes, state, stopped).await;
+        assert_eq!(*shown.borrow(), ShowFile::Kept);
+        let saved = std::fs::read_to_string(&file).unwrap();
+        if reply.is_ok() {
+            assert_eq!(saved, opened.replace("\"Latest\"", "\"Highest\""));
+        } else {
+            assert!(saved == opened, "the refused rule changed the file");
+        }
+    }
+    std::fs::remove_file(file).unwrap();
+}
+
+#[tokio::test]
 async fn a_refused_edit_after_a_save_that_failed_leaves_the_file_as_it_was() {
     let file = show_file("refused");
     let (mut running, listen) = engine(&file, true);

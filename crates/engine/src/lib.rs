@@ -445,9 +445,12 @@ impl Base {
             LookCommand::ReleaseAll => Change::ReleaseAll,
             LookCommand::UpdateGrab { grab, value } => Change::UpdateGrab { grab, value },
             LookCommand::EndGrab { grab } => Change::EndGrab { grab },
-            LookCommand::SetMixRules { rules } => Change::Rules {
-                looks: self.looks.with_rules(rules),
-            },
+            LookCommand::SetMixRules { rules } => {
+                self.patch.fits()?;
+                Change::Rules {
+                    looks: self.looks.with_rules(rules),
+                }
+            }
         })
     }
 
