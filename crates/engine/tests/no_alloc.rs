@@ -206,7 +206,7 @@ fn main() {
             "a colour for light {light}"
         );
         if value % 16 == 8 {
-            // the runs of the group: applied in one wake and sent back to be freed
+            // the runs of the group, in place: applied in one wake
             assert!(send(&mut sender, green, &library), "the group goes green");
         }
         if value % 16 == 4 {
@@ -354,6 +354,26 @@ fn main() {
         .step_by(2)
         .filter(|light| light.colour.is_some_and(|c| c.green == u16::MAX))
         .count();
+    // a Manual play live as all is released
+    let start = Command::StartLook {
+        look: 1,
+        rank: Rank::Manual,
+    };
+    assert!(
+        matches!(
+            begin(&mut sender, start, &library),
+            Ok(Begun::Started { .. })
+        ),
+        "look 1 plays"
+    );
+    mock::wait_until("the Manual play never started", || {
+        engine
+            .latest()
+            .state
+            .plays
+            .iter()
+            .any(|play| play.rank == Rank::Manual)
+    });
     // every Manual play, direct hold and raw channel let go: the plans go back
     assert!(
         send(&mut sender, Command::ReleaseAll, &library),

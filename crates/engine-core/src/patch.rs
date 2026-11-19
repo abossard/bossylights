@@ -55,7 +55,7 @@ impl Members {
     /// in place, 4 bytes each: 512 make [`crate::Command`] about 2 KB, moved once per
     /// request, off the tick thread. More are refused at set group
     /// ([`crate::Refusal::TooManyMembers`]), never at set light: a set on a group of any
-    /// size goes to the tick thread as one command.
+    /// size reaches the tick thread in one wake.
     pub const MOST: usize = 512;
 
     /// `None` when there are more than [`Members::MOST`].

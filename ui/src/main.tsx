@@ -31,6 +31,7 @@ function refusalText(refusal: Refusal): string {
   if ("TooManyLooks" in refusal) return `TooManyLooks: at most ${refusal.TooManyLooks.most} looks`;
   if ("Unsupported" in refusal) return `Unsupported: light ${refusal.Unsupported.light} cannot show that ${refusal.Unsupported.property}`;
   if ("OtherProperty" in refusal) return `OtherProperty: the grab holds ${refusal.OtherProperty.property}`;
+  if ("GrabFull" in refusal) return `GrabFull: the live grabs keep at most ${refusal.GrabFull.most} runs`;
   return `TooManyUniverses: this kind takes at most ${refusal.TooManyUniverses.most}`;
 }
 

@@ -333,8 +333,9 @@ pub enum EngineCommand {
     Darken {
         lights: LightRun,
     },
-    /// The runs of a group arrive with this command: each takes `change`, all in the
-    /// same wake, so one frame shows all of them or none. Alone it changes nothing.
+    /// Runs of a group arrive with this command, in place: each takes `change`. A
+    /// group's commands are queued at once, so one frame shows all of them or none. Alone
+    /// it changes nothing.
     Runs {
         change: LightChange,
     },

@@ -5,8 +5,8 @@
 mod mock;
 
 use engine::{
-    Begun, ChannelNumbers, Color, Command, Engine, Fixture, Member, MemberList, Members, QUEUE,
-    Rate, Refusal, RunNumbers, Sender, Target, Text, Universes,
+    Begun, ChannelNumbers, Color, Command, Engine, Fixture, GrabId, Member, MemberList, Members,
+    Property, QUEUE, Rate, Refusal, Rgb, RunNumbers, Sender, Target, Text, Universes, Value,
 };
 use engine_core::Pixels;
 use mock::Heard;
@@ -16,8 +16,15 @@ use std::sync::Arc;
 const GENERIC_RGB: &[u8] =
     include_bytes!("../../fixture-library/tests/definitions/Generic-Generic-RGB.qxf");
 
+/// A Shehds LED Spot 100W: a colour wheel without black.
+const SHEHDS: &[u8] =
+    include_bytes!("../../fixture-library/tests/definitions/Shehds-LED-Spot-100W.qxf");
+
 fn library() -> Vec<Fixture> {
-    vec![fixture_library::parse("Generic-Generic-RGB.qxf", GENERIC_RGB).expect("it reads")]
+    vec![
+        fixture_library::parse("Generic-Generic-RGB.qxf", GENERIC_RGB).expect("it reads"),
+        fixture_library::parse("Shehds-LED-Spot-100W.qxf", SHEHDS).expect("it reads"),
+    ]
 }
 
 fn text(text: &str) -> Text {
@@ -206,4 +213,187 @@ fn a_group_of_more_runs_than_a_wake_takes_lands_in_one_frame_all_or_none() {
             "frame {n} shows {lit} of the group"
         );
     }
+}
+
+/// Sends `command` once the queue has room for it.
+fn queued(sender: &mut Sender, command: Command) -> Result<Option<GrabId>, Refusal> {
+    let started = std::time::Instant::now();
+    loop {
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(10),
+            "the queue drains"
+        );
+        match sender.begin(command, &library()) {
+            Err(Refusal::QueueFull) => std::thread::sleep(std::time::Duration::from_millis(1)), // poll
+            Ok(Begun::Grabbed { grab }) => return Ok(Some(grab)),
+            Ok(_) => return Ok(None),
+            Err(refused) => return Err(refused),
+        }
+    }
+}
+
+fn lights(lights: impl Iterator<Item = u16>) -> Command {
+    let members: Vec<Member> = lights.map(|light| Member::Light { light }).collect();
+    Command::SetGroup {
+        name: text("g"),
+        members: MemberList::Fits(Members::new(&members).unwrap()),
+    }
+}
+
+fn grab_colour(group: &str) -> Command {
+    Command::SetProperty {
+        target: Target::Group { group: text(group) },
+        value: Value::Colour(Rgb {
+            red: u16::MAX,
+            ..Rgb::BLACK
+        }),
+    }
+}
+
+/// How many grabs of `group` are admitted before the first refusal, of `most`.
+fn grabs_until_refused(
+    sender: &mut Sender,
+    most: usize,
+    mut group: impl FnMut(usize) -> Vec<Command>,
+) -> (usize, Option<Refusal>) {
+    for n in 0..most {
+        for command in group(n) {
+            if let Err(refused) = queued(sender, command) {
+                return (n, Some(refused));
+            }
+        }
+    }
+    (most, None)
+}
+
+#[test]
+fn the_live_grabs_stay_bounded_whatever_a_client_grabs() {
+    // 1400 pixels over 9 universes, all but the end's odd lights grabbed again and again
+    let odd = |from: u16, to: u16| (from..=to).step_by(2);
+    let named = |name: &str, lights: Vec<u16>| {
+        let members: Vec<Member> = lights
+            .into_iter()
+            .map(|light| Member::Light { light })
+            .collect();
+        Command::SetGroup {
+            name: text(name),
+            members: MemberList::Fits(Members::new(&members).unwrap()),
+        }
+    };
+    let all = named("all", odd(1, 1023).collect());
+    let low = named("low", odd(1, 511).collect());
+    let high = named("high", odd(513, 1023).collect());
+    let refused = Some(Refusal::GrabFull { most: 16_384 * 5 });
+    // (what, groups made first, the grabs of each round, rounds, admitted, refused)
+    type Round = Box<dyn FnMut(usize) -> Vec<Command>>;
+    type Case = (
+        &'static str,
+        Vec<Command>,
+        Round,
+        usize,
+        usize,
+        Option<Refusal>,
+    );
+    let cases: [Case; 2] = [
+        (
+            // a grab emptied by two later ones, never by one: forgotten all the same
+            "emptied by two",
+            vec![all, low, high],
+            Box::new(|_| vec![grab_colour("all"), grab_colour("low"), grab_colour("high")]),
+            200,
+            200,
+            None,
+        ),
+        (
+            // each a fresh group of 512 runs that keeps one light of its own: the 161st
+            // would keep more runs than every light property held by a grab of its own
+            "each keeps one light",
+            vec![],
+            Box::new(move |n| {
+                let own = 1025 + 2 * u16::try_from(n).unwrap();
+                vec![lights(odd(1, 1021).chain([own])), grab_colour("g")]
+            }),
+            170,
+            160,
+            refused,
+        ),
+    ];
+    for (what, groups, round, rounds, admitted, refusal) in cases {
+        let universes = Universes::new(9).unwrap();
+        let (_engine, mut sender) = Engine::start(universes).unwrap();
+        let run = RunNumbers { first: 1, count: 9 };
+        let _heard = mock::attach(&mut sender, universes, 1, run, Rate::Sixty);
+        let strip = Command::PatchStrip {
+            name: text("Strip"),
+            pixels: Pixels::try_from(1400).unwrap(),
+            color: Color::Rgb,
+            at: at(1, 1),
+        };
+        assert_eq!(send(&mut sender, strip), Ok(Some(1)), "{what}");
+        for group in groups {
+            assert_eq!(send(&mut sender, group), Ok(None), "{what}");
+        }
+        assert_eq!(
+            grabs_until_refused(&mut sender, rounds, round),
+            (admitted, refusal),
+            "{what}"
+        );
+        // a release lets go, and the next grab is admitted
+        let release = Command::ReleaseProperty {
+            target: Target::Fixture { fixture: 1 },
+            property: Property::Colour,
+        };
+        assert_eq!(queued(&mut sender, release), Ok(None), "{what}");
+        assert!(
+            matches!(queued(&mut sender, lights(odd(1, 3))), Ok(None)),
+            "{what}"
+        );
+        let grab = queued(&mut sender, grab_colour("g"));
+        assert!(matches!(grab, Ok(Some(_))), "{what}: {grab:?}");
+    }
+}
+
+#[test]
+fn a_light_let_go_does_not_veto_an_update_of_the_lights_still_held() {
+    let (_engine, mut sender, heard) = start();
+    let shehds = Command::Patch {
+        name: text("Spot"),
+        maker: text("Shehds"),
+        model: text("LED Spot 100W"),
+        mode: text("14 Channel"),
+        at: at(1, 10),
+    };
+    assert_eq!(send(&mut sender, par("PAR", 1, 1)), Ok(Some(1)));
+    assert_eq!(send(&mut sender, shehds), Ok(Some(2)));
+    let both = Command::SetGroup {
+        name: text("both"),
+        members: MemberList::Fits(
+            Members::new(&[
+                Member::Fixture { fixture: 1 },
+                Member::Fixture { fixture: 2 },
+            ])
+            .unwrap(),
+        ),
+    };
+    assert_eq!(send(&mut sender, both), Ok(None));
+    let [full, _] = red(1);
+    assert_eq!(send(&mut sender, full), Ok(None));
+    let Ok(Some(grab)) = queued(&mut sender, grab_colour("both")) else {
+        panic!("red is grabbed");
+    };
+    heard.two_more_frames();
+    assert_eq!(bytes(&heard, 1, 1), [255, 0, 0]);
+    let release = Command::ReleaseProperty {
+        target: Target::Fixture { fixture: 2 },
+        property: Property::Colour,
+    };
+    assert_eq!(send(&mut sender, release), Ok(None));
+    // black, which the spot's wheel cannot show: the PAR alone still holds the grab
+    let black = Command::UpdateGrab {
+        grab,
+        value: Value::Colour(Rgb::BLACK),
+    };
+    assert_eq!(send(&mut sender, black), Ok(None));
+    heard.two_more_frames();
+    assert_eq!(bytes(&heard, 1, 1), [0, 0, 0]);
 }

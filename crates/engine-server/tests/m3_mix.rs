@@ -217,7 +217,7 @@ async fn rank_stop_and_release_decide_each_light_on_dmx() {
     let restarted = start(s, 3, "Manual").await;
     accepted(s, json!({"EndFlash": {"play": manual}})).await;
     accepted(s, json!({"EndFlash": {"play": show}})).await; // Show: not a flash
-    until_dmx(&heard, RED, BLUE).await;
+    then_shows(s, &heard, RED).await; // a frame that carries both
     accepted(s, json!({"EndFlash": {"play": restarted}})).await;
     until_dmx(&heard, GREEN, BLUE).await;
     accepted(s, json!({"ReleaseHold": {"play": show}})).await;

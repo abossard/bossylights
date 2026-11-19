@@ -555,14 +555,33 @@ fn looks_written_and_read_back_are_the_same_looks() {
     }
 }
 
+/// `file`, as written now, as version 1 wrote it: no looks and no rules.
+fn as_version_1(file: &str) -> String {
+    let mut v1 = file.to_string();
+    for (line, to) in [
+        (
+            format!("  \"version\": {},\n", show_file::VERSION),
+            "  \"version\": 1,\n",
+        ),
+        ("  \"looks\": [],\n".to_string(), ""),
+        (
+            format!(
+                "  \"rules\": {},\n",
+                r#"{"brightness":"Latest","manual_end":"UntilRelease","other_end":"Reveal"}"#
+            ),
+            "",
+        ),
+    ] {
+        assert!(v1.contains(&line), "{line} in {file}");
+        v1 = v1.replacen(&line, to, 1);
+    }
+    v1
+}
+
 #[test]
 fn a_file_of_version_1_has_no_looks() {
     let patch = patched(vec![lib(par("PAR 1", 1))]);
-    let v2 = show_file::write(&patch, &Looks::new()).unwrap();
-    let v1 = v2
-        .replacen(r#""version": 2"#, r#""version": 1"#, 1)
-        .replacen("  \"looks\": [],\n", "", 1);
-    assert_ne!(v1, v2);
+    let v1 = as_version_1(&show_file::write(&patch, &Looks::new()).unwrap());
     assert_eq!(show_file::read(&v1, &empty()), Ok((patch, Looks::new())));
 }
 
@@ -605,7 +624,7 @@ fn a_look_the_patch_refuses_is_not_read() {
 }
 
 #[test]
-fn a_file_whose_version_2_is_one_byte_over_the_most_is_not_read() {
+fn a_file_one_byte_over_the_most_is_not_read_in_any_version() {
     let most = show_file::MOST_BYTES;
     let too_big = Err(Unopened::TooBig {
         most: u32::try_from(most).unwrap(),
@@ -615,12 +634,10 @@ fn a_file_whose_version_2_is_one_byte_over_the_most_is_not_read() {
     assert_eq!(at_most.len(), most);
     assert!(read(&at_most, &empty()).is_ok());
     // one byte longer: as it is, and as version 1, which is shorter on disk but is
-    // written back as version 2
+    // written back as the version now
     let over = at_most.replacen("\"name\": \"Red", "\"name\": \"Redx", 1);
     assert_eq!(over.len(), most + 1);
-    let v1 = over
-        .replacen(r#""version": 2"#, r#""version": 1"#, 1)
-        .replacen("  \"looks\": [],\n", "", 1);
+    let v1 = as_version_1(&over);
     assert!(v1.len() <= most, "{}", v1.len());
     assert_eq!(read(&over, &empty()), too_big);
     assert_eq!(read(&v1, &empty()), too_big);

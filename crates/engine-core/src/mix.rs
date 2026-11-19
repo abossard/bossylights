@@ -512,6 +512,11 @@ mod properties {
     /// What light 1 shows with `hold` and `sources` played from slot `first` on, one
     /// slot apart: the slot order is the candidate order.
     fn shown(hold: Held, sources: &[Source], rules: MixRules, first: usize) -> Light {
+        mixed(hold, sources, rules, first).0
+    }
+
+    /// What light 1 shows, as [`shown`], and who won each property.
+    fn mixed(hold: Held, sources: &[Source], rules: MixRules, first: usize) -> (Light, Claims) {
         let run =
             LightRun::new(LightNumber::new(0, Lights::MOST).unwrap(), 1, Lights::MOST).unwrap();
         let mut plays = Plays::NONE;
@@ -538,7 +543,7 @@ mod properties {
             &mut out,
             &mut claims,
         );
-        out[0]
+        (out[0], claims[0])
     }
 
     #[test]
@@ -741,6 +746,50 @@ mod properties {
                 expected,
                 "{row}, reversed"
             );
+        }
+    }
+
+    #[test]
+    fn equal_brightness_is_won_by_the_later_start() {
+        use Rank::{Manual, Show};
+        let equal = vec![play(Show, 1, intensity(100)), play(Show, 2, intensity(100))];
+        // (row, direct hold, plays, rules, the brightness winner's rank and start)
+        let cases = [
+            (
+                "highest, equal",
+                Held::NONE,
+                equal.clone(),
+                HIGHEST,
+                (Show, 2),
+            ),
+            ("latest, equal", Held::NONE, equal, LATEST, (Show, 2)),
+            (
+                "highest, the earlier brighter",
+                Held::NONE,
+                vec![play(Show, 1, intensity(200)), play(Show, 2, intensity(100))],
+                HIGHEST,
+                (Show, 1),
+            ),
+            (
+                "highest, a hold equal to an earlier play",
+                held(intensity(100), 5),
+                vec![play(Manual, 3, intensity(100))],
+                HIGHEST,
+                (Manual, 5),
+            ),
+        ];
+        for (row, hold, sources, rules, (rank, order)) in cases {
+            let won = |sources: &[Source], first| {
+                let (_, claims) = mixed(hold, sources, rules, first);
+                claims[Property::Intensity.index()]
+            };
+            let winner = Some(Claim { rank, order });
+            for first in 0..PLAYS {
+                assert_eq!(won(&sources, first), winner, "{row}, from slot {first}");
+            }
+            let mut reversed = sources.clone();
+            reversed.reverse();
+            assert_eq!(won(&reversed, 0), winner, "{row}, reversed");
         }
     }
 

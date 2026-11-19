@@ -51,6 +51,8 @@ use engine_core::{
 pub use fixture_library::Fixture;
 pub use looks::Looks;
 pub use rig::Patch;
+mod grabs;
+use grabs::Grabs;
 mod snapshot;
 
 use engine_core::{
@@ -79,12 +81,15 @@ pub use wake::{Event, Wakes};
 pub const QUEUE: usize = 256;
 /// The lights of every engine: the buffer of light values has this length.
 const LIGHTS: Lights = Lights::MOST;
-/// Boxes on their way back from the tick thread (devices, writers, runs, plans), and the
+/// Boxes on their way back from the tick thread (devices, writers, plans), and the
 /// plan of each play there, which goes back once when the play ends: its return is kept
 /// for it when it starts. The sender sends nothing that adds one while this many are not
 /// freed yet, so the queue back cannot fill up, and a release needs only a place in the
 /// command queue.
 const RETIRED: usize = QUEUE + MAX_OUTPUTS;
+/// Runs one place of the command queue carries: a change on a group of the most runs
+/// ([`Members::MOST`]) takes 86 places, a third of the queue, all in one wake.
+const RUNS_IN_PLACE: usize = 6;
 /// How often the free thread frees retired devices when nobody wakes it.
 const FREE_EVERY: Duration = Duration::from_millis(100);
 /// How long `SetOutput` waits for the devices on their way back before it opens.
@@ -157,8 +162,8 @@ pub struct Sender {
     plays: [Option<Live>; PLAYS],
     /// The generation of the last play started.
     generation: u32,
-    /// The live grabs, oldest first: those not ended, released or wholly replaced.
-    grabs: Vec<Grab>,
+    /// The live grabs: those that still hold a light.
+    grabs: Grabs,
     /// The generation of the last grab.
     grabbed: u32,
     /// Devices this sender sent the tick thread away from, so far. The free thread
@@ -215,8 +220,8 @@ enum Brings {
     Device(Box<Lane>),
     /// The writers of the patch, for `Writers`.
     Writers(Vec<Writer>),
-    /// The runs of a group, for `Runs`.
-    Runs(Vec<LightRun>),
+    /// Some runs of a group in place, for `Runs`: nothing goes back.
+    Runs([Option<LightRun>; RUNS_IN_PLACE]),
     /// The plan of a play, for `Start` and `Plan`.
     Plan(Box<[Entry]>),
 }
@@ -229,7 +234,6 @@ enum Brings {
 enum Retired {
     Device(Box<Lane>),
     Writers(Vec<Writer>),
-    Runs(Vec<LightRun>),
     Plan(Box<[Entry]>),
 }
 
@@ -451,31 +455,6 @@ impl Base {
     }
 }
 
-/// A grab as the front sent it: the property it holds on the runs it was made on. The
-/// tick thread knows which of their lights it still holds.
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct Grab {
-    grab: GrabId,
-    property: Property,
-    runs: Vec<LightRun>,
-}
-
-/// Whether every light of `runs` is in one of `of`: a joined run, so a run within their
-/// lights is within one of them.
-fn within(runs: &[LightRun], of: &[LightRun]) -> bool {
-    let span = |run: &LightRun| {
-        let first = u32::from(run.first().index());
-        (first, first + u32::from(run.count()))
-    };
-    runs.iter().all(|run| {
-        let (first, end) = span(run);
-        of.iter().any(|of| {
-            let (from, to) = span(of);
-            from <= first && end <= to
-        })
-    })
-}
-
 /// A play as the front sent it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Live {
@@ -571,7 +550,7 @@ impl Engine {
             looks: Arc::new(Looks::new()),
             plays: [None; PLAYS],
             generation: 0,
-            grabs: Vec::new(),
+            grabs: Grabs::new(),
             grabbed: 0,
             retired: 0,
             sent: 0,
@@ -704,7 +683,7 @@ impl Sender {
                     .filter(|live| live.state == PlayState::Playing)
                     .map(|live| live.play)
                     .collect();
-                self.room(playing.len())?;
+                self.room(playing.len(), playing.len())?;
                 for play in playing {
                     self.push(EngineCommand::Plan { play }, Brings::Plan(plan.clone()))?;
                 }
@@ -785,30 +764,27 @@ impl Sender {
                 Begun::Queued
             }
             Change::UpdateGrab { grab, value } => {
-                if let Some(live) = self.grabs.iter().find(|live| live.grab == grab) {
-                    if live.property != value.property() {
-                        return Err(Refusal::OtherProperty {
-                            property: live.property,
-                        });
+                if let Some((property, runs)) = self.grabs.get(grab) {
+                    if property != value.property() {
+                        return Err(Refusal::OtherProperty { property });
                     }
-                    self.patch.supports(&live.runs, value)?;
-                    let runs = live.runs.clone();
-                    self.lights(LightChange::Update { value, grab }, runs)?;
+                    // only the lights it still holds take the value
+                    self.patch.supports(&self.grabs.held(grab), value)?;
+                    let runs = runs.to_vec();
+                    self.lights(LightChange::Update { value, grab }, &runs)?;
                 }
                 Begun::Queued
             }
             Change::EndGrab { grab } => {
-                if let Some(at) = self.grabs.iter().position(|live| live.grab == grab) {
-                    let live = self.grabs.remove(at);
+                if let Some((property, runs)) = self.grabs.get(grab) {
                     let end = LightChange::End {
-                        property: live.property,
+                        property,
                         grab,
                         end: stops(Rank::Manual, self.looks.rules()),
                     };
-                    if let Err(refused) = self.lights(end, live.runs.clone()) {
-                        self.grabs.insert(at, live);
-                        return Err(refused);
-                    }
+                    let runs = runs.to_vec();
+                    self.lights(end, &runs)?;
+                    self.grabs.end(grab);
                 }
                 Begun::Queued
             }
@@ -862,11 +838,13 @@ impl Sender {
         self.free.unpark();
     }
 
-    /// `QueueFull` unless `commands` that each retire a box can all be queued now.
-    fn room(&self, commands: usize) -> Result<(), Refusal> {
+    /// `QueueFull` unless `places` of the command queue are free now and `returns`
+    /// more boxes may go back.
+    fn room(&self, places: usize, returns: usize) -> Result<(), Refusal> {
         let held = self.plays.iter().flatten().count() as u64;
-        if self.commands.slots() < commands
-            || on_their_way(&self.shared, self.retired) + held + commands as u64 > RETIRED as u64
+        if self.commands.slots() < places
+            || returns > 0
+                && on_their_way(&self.shared, self.retired) + held + returns as u64 > RETIRED as u64
         {
             self.free.unpark();
             return Err(Refusal::QueueFull);
@@ -895,8 +873,18 @@ impl Sender {
 
     /// Does what follows a change of the patch: all of it, or none of it.
     fn follow(&mut self, effects: Vec<PatchEffect>) -> Result<Begun, Refusal> {
-        // Every effect sends at most one command, which retires at most one box.
-        self.room(effects.len())?;
+        // Only new writers send a box back; runs travel in place.
+        let places = effects.iter().map(places).sum();
+        let returns = effects
+            .iter()
+            .filter(|effect| matches!(effect, PatchEffect::Writers(_)))
+            .count();
+        self.room(places, returns)?;
+        for effect in &effects {
+            if let PatchEffect::Grab { value, runs } = effect {
+                self.grabs.fits(value.property(), runs)?;
+            }
+        }
         let mut begun = Begun::Queued;
         for effect in effects {
             match effect {
@@ -912,29 +900,25 @@ impl Sender {
                         change: LightChange::Release { property },
                     } = command
                     {
-                        self.released(property, &[lights]);
+                        self.grabs.let_go(Some(property), &[lights]);
+                    }
+                    if let EngineCommand::Darken { lights } = command {
+                        self.grabs.let_go(None, &[lights]); // every property goes
                     }
                 }
                 PatchEffect::Runs { change, runs } => {
-                    let released = runs.clone();
-                    self.push(EngineCommand::Runs { change }, Brings::Runs(runs))?;
+                    self.lights(change, &runs)?;
                     if let LightChange::Release { property } = change {
-                        self.released(property, &released);
+                        self.grabs.let_go(Some(property), &runs);
                     }
                 }
                 PatchEffect::Grab { value, runs } => {
                     let grab = GrabId {
                         generation: self.grabbed.wrapping_add(1),
                     };
-                    self.lights(LightChange::Grab { value, grab }, runs.clone())?;
+                    self.lights(LightChange::Grab { value, grab }, &runs)?;
                     self.grabbed = grab.generation;
-                    // the grabs it wholly replaces hold nothing any more
-                    self.released(value.property(), &runs);
-                    self.grabs.push(Grab {
-                        grab,
-                        property: value.property(),
-                        runs,
-                    });
+                    self.grabs.grab(grab, value.property(), runs);
                     begun = Begun::Grabbed { grab };
                 }
             }
@@ -942,20 +926,31 @@ impl Sender {
         Ok(begun)
     }
 
-    /// Queues `change` on the lights of `runs`, all in one wake.
-    fn lights(&mut self, change: LightChange, runs: Vec<LightRun>) -> Result<(), Refusal> {
-        match runs.as_slice() {
-            [] => Ok(()),
-            [run] => self.push(change.on(*run), Brings::Nothing),
-            [_, _, ..] => self.push(EngineCommand::Runs { change }, Brings::Runs(runs)),
+    /// Queues `change` on the lights of `runs`, all in one wake: the runs travel in
+    /// place, in places of the queue made visible at once, so nothing goes back and it
+    /// needs only those places.
+    fn lights(&mut self, change: LightChange, runs: &[LightRun]) -> Result<(), Refusal> {
+        if let [run] = runs {
+            return self.push(change.on(*run), Brings::Nothing);
         }
-    }
-
-    /// Forgets the grabs of `property` that hold nothing once the lights of `runs` let it
-    /// go.
-    fn released(&mut self, property: Property, runs: &[LightRun]) {
-        self.grabs
-            .retain(|live| !(live.property == property && within(&live.runs, runs)));
+        let places = runs.chunks(RUNS_IN_PLACE);
+        let Ok(chunk) = self.commands.write_chunk_uninit(places.len()) else {
+            return Err(Refusal::QueueFull);
+        };
+        let at = self.clock.now();
+        let sent = chunk.fill_from_iter(places.map(|runs| {
+            let mut in_place = [None; RUNS_IN_PLACE];
+            for (place, run) in in_place.iter_mut().zip(runs) {
+                *place = Some(*run);
+            }
+            Sent {
+                command: EngineCommand::Runs { change },
+                at,
+                brings: Brings::Runs(in_place),
+            }
+        }));
+        self.sent += sent as u64;
+        Ok(())
     }
 
     /// Puts the device of `opened` on the tick thread, or says why not.
@@ -1064,7 +1059,7 @@ impl Sender {
 
     /// Queues `command` with what it `brings`. A device `Attach` brings and
     /// `RemoveOutput` send the old one back; `Attach` with no device keeps it. `Writers`
-    /// send the old writers back, `Runs` the runs it brought.
+    /// send the old writers back.
     fn push(&mut self, command: EngineCommand, brings: Brings) -> Result<(), Refusal> {
         // The output this command changes, and whether the device there goes back.
         let (changes, sends_back) = match command {
@@ -1100,10 +1095,7 @@ impl Sender {
         } else {
             matches!(
                 command,
-                EngineCommand::Plan { .. }
-                    | EngineCommand::Release { .. }
-                    | EngineCommand::Writers
-                    | EngineCommand::Runs { .. }
+                EngineCommand::Plan { .. } | EngineCommand::Release { .. } | EngineCommand::Writers
             ) || sends_back && changes.is_some_and(|output| self.project.output(output).is_some())
         };
         // one more box on its way back or held by the tick thread: all but a release
@@ -1130,6 +1122,17 @@ impl Sender {
         }
         self.sent += 1;
         Ok(())
+    }
+}
+
+/// Places of the command queue `effect` takes.
+fn places(effect: &PatchEffect) -> usize {
+    match effect {
+        PatchEffect::Patched { .. } => 0,
+        PatchEffect::Writers(_) | PatchEffect::Send(_) => 1,
+        PatchEffect::Runs { runs, .. } | PatchEffect::Grab { runs, .. } => {
+            runs.len().div_ceil(RUNS_IN_PLACE)
+        }
     }
 }
 
@@ -1360,7 +1363,7 @@ impl Ticker {
     /// old one back to be freed and starts the output's lateness afresh. `Attach` without
     /// a device keeps the one there. For `Writers`: the writers brought take the place of
     /// the old ones, which go back. For `Runs`: each run brought takes the change, in this
-    /// wake, and the runs go back. Others change nothing.
+    /// wake. Others change nothing.
     fn swap(&mut self, command: EngineCommand, brings: Brings) {
         if let EngineCommand::Release { play } = command {
             self.replan(play.slot(), None);
@@ -1387,12 +1390,10 @@ impl Ticker {
             Brings::Writers(writers) => (None, Some(writers)),
             Brings::Runs(runs) => {
                 if let EngineCommand::Runs { change } = command {
-                    for run in &runs {
-                        self.apply(change.on(*run));
+                    for run in runs.into_iter().flatten() {
+                        self.apply(change.on(run));
                     }
                 }
-                // The queue has room for every box a wake can retire (see `start`).
-                let _ = self.retired.push(Retired::Runs(runs));
                 return;
             }
         };
@@ -1577,80 +1578,271 @@ mod tests {
         }
     }
 
+    /// The first nine channels of what an attached device was handed last.
+    struct Heard {
+        frames: AtomicU64,
+        levels: [std::sync::atomic::AtomicU8; 9],
+    }
+
+    struct Hears(Arc<Heard>);
+
+    impl Device for Hears {
+        fn take(&mut self, frame: &[Levels]) -> Outcome {
+            let levels = frame.iter().flat_map(|universe| universe.0.iter());
+            for (cell, level) in self.0.levels.iter().zip(levels) {
+                cell.store(*level, Ordering::Relaxed);
+            }
+            self.0.frames.fetch_add(1, Ordering::Release);
+            Outcome::Accepted
+        }
+    }
+
+    impl Heard {
+        /// The channels of a frame made after every command sent so far was applied.
+        fn after(&self, engine: &mut Engine, sender: &Sender) -> [u8; 9] {
+            let started = Instant::now();
+            while engine.fresh().applied() < sender.sent() {
+                assert!(
+                    started.elapsed() < Duration::from_secs(5),
+                    "the tick applies"
+                );
+            }
+            let frames = self.frames.load(Ordering::Acquire);
+            // the frame being made as it was applied may be handed next: two on
+            while self.frames.load(Ordering::Acquire) < frames + 2 {
+                assert!(started.elapsed() < Duration::from_secs(5), "frames go out");
+                thread::sleep(Duration::from_millis(1)); // poll
+            }
+            self.levels
+                .each_ref()
+                .map(|level| level.load(Ordering::Relaxed))
+        }
+    }
+
+    /// A gesture that lets go of what is held, sent with every play slot taken and no
+    /// return free.
+    #[derive(Clone, Copy, Debug)]
+    enum Gesture {
+        ReleaseHold,
+        StopLook,
+        EndFlash,
+        ReleaseProperty(Target),
+        EndGrab,
+        ReleaseAll,
+    }
+
     #[test]
     #[expect(
         clippy::unwrap_used,
         clippy::panic,
-        reason = "a test that cannot set itself up fails"
+        clippy::too_many_lines,
+        reason = "a test that cannot set itself up fails; one table"
     )]
     fn with_reclamation_stalled_every_release_needs_only_a_place_in_the_queue() {
-        let (mut engine, mut sender) = Engine::start(Universes::new(1).unwrap()).unwrap();
-        let red = engine_core::Step {
-            target: engine_core::Target::Fixture { fixture: 1 },
-            values: Light {
-                colour: Some(Rgb::BLACK),
-                ..Light::DARK
-            },
+        // a strip of three pixels: every play red on the middle one, a grab green on the
+        // grabbed lights
+        let one = Target::Light { light: 1 };
+        let ends = Target::Group {
+            group: Text::new("ends").unwrap(),
         };
-        let library = [fixture_library::parse(
-            "Generic-Generic-RGB.qxf",
-            include_bytes!("../../fixture-library/tests/definitions/Generic-Generic-RGB.qxf"),
-        )
-        .unwrap()];
-        let patch = Command::Patch {
-            name: Text::new("PAR").unwrap(),
-            maker: Text::new("Generic").unwrap(),
-            model: Text::new("Generic RGB").unwrap(),
-            mode: Text::new("RGB").unwrap(),
-            at: ChannelNumbers {
-                universe: 1,
-                address: 1,
-            },
-        };
-        assert!(sender.begin(patch, &library).is_ok());
-        // every play slot taken, each by its own look
-        let mut plays = Vec::new();
-        for look in 1..=PLAYS as u16 {
-            sender
-                .send(Command::PutStep {
-                    look,
-                    name: Text::new("s").unwrap(),
-                    step: red,
-                })
+        let (red, green, dark) = ([255, 0, 0], [0, 255, 0], [0, 0, 0]);
+        let frame = |pixels: [[u8; 3]; 3]| -> [u8; 9] { pixels.concat().try_into().unwrap() };
+        // (Manual end, grabbed, gesture, DMX after, plays after)
+        let cases = [
+            (
+                ManualEnd::UntilRelease,
+                one,
+                Gesture::ReleaseHold,
+                frame([green, dark, dark]),
+                0,
+            ),
+            (
+                ManualEnd::UntilRelease,
+                one,
+                Gesture::StopLook,
+                frame([green, red, dark]),
+                PLAYS,
+            ),
+            (
+                ManualEnd::UntilStop,
+                one,
+                Gesture::StopLook,
+                frame([green, dark, dark]),
+                0,
+            ),
+            (
+                ManualEnd::UntilRelease,
+                one,
+                Gesture::EndFlash,
+                frame([green, dark, dark]),
+                0,
+            ),
+            (
+                ManualEnd::UntilRelease,
+                one,
+                Gesture::ReleaseProperty(one),
+                frame([dark, red, dark]),
+                PLAYS,
+            ),
+            (
+                ManualEnd::UntilRelease,
+                ends,
+                Gesture::ReleaseProperty(ends),
+                frame([dark, red, dark]),
+                PLAYS,
+            ),
+            (
+                ManualEnd::UntilStop,
+                one,
+                Gesture::EndGrab,
+                frame([dark, red, dark]),
+                PLAYS,
+            ),
+            (
+                ManualEnd::UntilStop,
+                ends,
+                Gesture::EndGrab,
+                frame([dark, red, dark]),
+                PLAYS,
+            ),
+            (
+                ManualEnd::UntilRelease,
+                ends,
+                Gesture::ReleaseAll,
+                frame([dark, dark, dark]),
+                0,
+            ),
+        ];
+        for (manual_end, grabbed, gesture, expected, plays_after) in cases {
+            let case = format!("{manual_end:?} {grabbed:?} {gesture:?}");
+            let (mut engine, mut sender) = Engine::start(Universes::new(1).unwrap()).unwrap();
+            let heard = Arc::new(Heard {
+                frames: AtomicU64::new(0),
+                levels: Default::default(),
+            });
+            let run = RunNumbers { first: 1, count: 1 }
+                .check(sender.universes)
                 .unwrap();
-            match sender.begin(
-                Command::StartLook {
+            let output = OutputNumber::try_from(1).unwrap();
+            sender
+                .attach(
+                    output,
+                    Box::new(Hears(Arc::clone(&heard))),
+                    run,
+                    Rate::Sixty,
+                )
+                .unwrap();
+            let strip = Command::PatchStrip {
+                name: Text::new("strip").unwrap(),
+                pixels: engine_core::Pixels::try_from(3).unwrap(),
+                color: Color::Rgb,
+                at: ChannelNumbers {
+                    universe: 1,
+                    address: 1,
+                },
+            };
+            assert!(sender.begin(strip, &[]).is_ok(), "{case}");
+            let group = Command::SetGroup {
+                name: Text::new("ends").unwrap(),
+                members: MemberList::Fits(
+                    Members::new(&[Member::Light { light: 1 }, Member::Light { light: 3 }])
+                        .unwrap(),
+                ),
+            };
+            sender.send(group).unwrap();
+            let rules = MixRules {
+                manual_end,
+                ..MixRules::default()
+            };
+            sender.send(Command::SetMixRules { rules }).unwrap();
+            let full = Command::SetIntensity {
+                target: Target::Fixture { fixture: 1 },
+                intensity: u16::MAX,
+            };
+            sender.send(full).unwrap();
+            let step = engine_core::Step {
+                target: Target::Light { light: 2 },
+                values: Light {
+                    colour: Some(Rgb {
+                        red: u16::MAX,
+                        ..Rgb::BLACK
+                    }),
+                    ..Light::DARK
+                },
+            };
+            let mut plays = Vec::new();
+            for look in 1..=PLAYS as u16 {
+                let name = Text::new("s").unwrap();
+                sender.send(Command::PutStep { look, name, step }).unwrap();
+                let start = Command::StartLook {
                     look,
                     rank: Rank::Manual,
-                },
-                &[],
-            ) {
-                Ok(Begun::Started { play }) => plays.push(play),
-                _ => panic!("look {look} plays"),
+                };
+                match sender.begin(start, &[]) {
+                    Ok(Begun::Started { play }) => plays.push(play),
+                    _ => panic!("look {look} plays"),
+                }
             }
-        }
-        engine.shared.stalled.store(true, Ordering::Release);
-        // restarts send old plans back that are never freed, until no more may go
-        let restart = Command::StartLook {
-            look: 1,
-            rank: Rank::Manual,
-        };
-        while once_drained(&mut engine, &mut sender, restart).is_ok() {}
-        assert_eq!(
-            sender.send(restart),
-            Err(Refusal::QueueFull),
-            "the returns are full"
-        );
-        assert_eq!(sender.send(Command::Blackout { on: true }), Ok(()));
-        // every play still releases: its return was kept for it when it started
-        let restarted = PlayId::new(0, sender.generation).unwrap();
-        for play in std::iter::once(restarted).chain(plays.into_iter().skip(1)) {
+            let grab = Command::SetColour {
+                target: grabbed,
+                red: 0,
+                green: u16::MAX,
+                blue: 0,
+            };
+            let Ok(Begun::Grabbed { grab }) = sender.begin(grab, &[]) else {
+                panic!("{case}: grabbed");
+            };
+            let held = if matches!(grabbed, Target::Group { .. }) {
+                frame([green, red, green])
+            } else {
+                frame([green, red, dark])
+            };
+            assert_eq!(heard.after(&mut engine, &sender), held, "{case}: before");
+            engine.shared.stalled.store(true, Ordering::Release);
+            // restarts send old plans back that are never freed, until no more may go
+            let restart = Command::StartLook {
+                look: 1,
+                rank: Rank::Manual,
+            };
+            while once_drained(&mut engine, &mut sender, restart).is_ok() {}
             assert_eq!(
-                once_drained(&mut engine, &mut sender, Command::ReleaseHold { play }),
-                Ok(()),
-                "{play:?} releases"
+                sender.send(restart),
+                Err(Refusal::QueueFull),
+                "{case}: the returns are full"
             );
+            *plays.first_mut().unwrap() = PlayId::new(0, sender.generation).unwrap();
+            let commands: Vec<Command> = match gesture {
+                Gesture::ReleaseHold => plays
+                    .iter()
+                    .map(|&play| Command::ReleaseHold { play })
+                    .collect(),
+                Gesture::StopLook => plays
+                    .iter()
+                    .map(|&play| Command::StopLook { play })
+                    .collect(),
+                Gesture::EndFlash => plays
+                    .iter()
+                    .map(|&play| Command::EndFlash { play })
+                    .collect(),
+                Gesture::ReleaseProperty(target) => vec![Command::ReleaseProperty {
+                    target,
+                    property: Property::Colour,
+                }],
+                Gesture::EndGrab => vec![Command::EndGrab { grab }],
+                Gesture::ReleaseAll => vec![Command::ReleaseAll],
+            };
+            for command in commands {
+                assert_eq!(
+                    once_drained(&mut engine, &mut sender, command),
+                    Ok(()),
+                    "{case}: {command:?}"
+                );
+            }
+            assert_eq!(heard.after(&mut engine, &sender), expected, "{case}: after");
+            let state = &engine.fresh().state;
+            let left = (0..PLAYS).filter(|&slot| state.plays.has(slot)).count();
+            assert_eq!(left, plays_after, "{case}: plays");
+            engine.shared.stalled.store(false, Ordering::Release);
         }
-        engine.shared.stalled.store(false, Ordering::Release);
     }
 }
