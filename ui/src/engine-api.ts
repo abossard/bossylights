@@ -49,7 +49,7 @@ groups: Array<Grouped> | null,
  */
 show: ShowFile, channels: Array<ChannelLevel>, } } | { "Found": { fixtures: Array<Match>, } } | { "Fixture": { maker: string, model: string, kind: FixtureKind, modes: Array<ModeChannels>, } } | { "Failures": { failures: Array<Failure>, } };
 
-export type Refusal = "NotACommand" | { "NoSuchUniverse": { universes: number, } } | "NoSuchAddress" | "QueueFull" | "CannotOpen" | "NoSuchFixture" | "Opening" | { "TooManyUniverses": { most: number, } } | "NoSuchMode" | { "PastTheEnd": { channels: number, } } | { "NotStreamed": { first: number, last: number, } } | { "StreamsFixture": { fixture: number, } } | "NoLightsLeft" | "NotPatched" | "NoSuchLight" | "NoSuchGroup" | { "TooManyMembers": { most: number, } };
+export type Refusal = "NotACommand" | { "NoSuchUniverse": { universes: number, } } | "NoSuchAddress" | "QueueFull" | "CannotOpen" | "NoSuchFixture" | "Opening" | { "TooManyUniverses": { most: number, } } | "NoSuchMode" | { "PastTheEnd": { channels: number, } } | { "NotStreamed": { first: number, last: number, } } | { "StreamsFixture": { fixture: number, } } | "NoLightsLeft" | "NotPatched" | "NoSuchLight" | "NoSuchGroup" | { "TooManyMembers": { most: number, } } | { "ShowFileFull": { most: number, } };
 
 export type State = { 
 /**

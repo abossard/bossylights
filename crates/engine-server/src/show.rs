@@ -11,25 +11,24 @@ use std::sync::Arc;
 use tokio::sync::watch;
 
 /// Opens the show file at `path` into the patch of `sender`. A file that is not there:
-/// the patch stays empty and the first change makes the file. A file that cannot be
-/// opened is left alone, and the patch stays empty. Reads at most one byte over
-/// [`show_file::MOST_BYTES`]: enough for `read` to say the file is too big, never a file
-/// of gigabytes.
+/// the patch stays empty and the first change makes the file. Either way the patch is
+/// kept in the file from now on ([`show_file::LIMIT`]): a change that would not fit in it
+/// is refused. A file that cannot be opened is left alone, and the patch stays empty.
+/// Reads at most one byte over [`show_file::MOST_BYTES`]: enough for `read` to say the
+/// file is too big, never a file of gigabytes.
 pub fn open(path: &Path, sender: &mut Sender) -> ShowFile {
     let mut text = String::new();
     let most = u64::try_from(show_file::MOST_BYTES).unwrap_or(u64::MAX);
-    match File::open(path).and_then(|file| file.take(most + 1).read_to_string(&mut text)) {
-        Ok(_) => {}
-        Err(error) if error.kind() == ErrorKind::NotFound => return ShowFile::Kept,
-        Err(_) => {
-            return ShowFile::LeftAlone {
-                why: Unopened::CannotRead,
-            };
-        }
-    }
-    let opened = show_file::read(&text, &sender.patch()).and_then(|patch| {
+    let empty = sender.patch();
+    let read = match File::open(path).and_then(|file| file.take(most + 1).read_to_string(&mut text))
+    {
+        Ok(_) => show_file::read(&text, &empty),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(Patch::clone(&empty)),
+        Err(_) => Err(Unopened::CannotRead),
+    };
+    let opened = read.and_then(|patch| {
         sender
-            .load(patch)
+            .load(patch.kept_in(show_file::LIMIT))
             .map_err(|reason| Unopened::Refused { reason })
     });
     match opened {

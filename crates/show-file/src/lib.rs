@@ -38,8 +38,10 @@
 //! Reading checks what the commands check: a fixture is placed as patch places it, a
 //! group is set as set group sets it. A file that fails a check is not read at all.
 //!
-//! A file is at most [`MOST_BYTES`] long: one over it is not read, and a patch whose
-//! file would be over it is not written, so the file on disk always opens.
+//! A file is at most [`MOST_BYTES`] long: one over it is not read, and neither is one
+//! whose patch would be written back over it. A patch kept in a file ([`LIMIT`]) refuses
+//! the command that would take its file over it, so every save writes, and the file on
+//! disk always opens.
 
 #![no_std]
 #![forbid(unsafe_code)]
@@ -59,7 +61,7 @@ use alloc::vec::Vec;
 use core::num::{NonZeroU16, NonZeroU32};
 use engine_core::{ChannelNumbers, Member, Members, PatchCommand, Refusal, Text, Unopened};
 use fixture_library::Mode;
-use rig::{Patch, Placed, Unplaced};
+use rig::{Limit, Patch, Placed, Unplaced};
 use serde::{Deserialize, Serialize};
 
 /// The version of the file this engine writes and reads. Raise it with every change an
@@ -69,12 +71,24 @@ pub const VERSION: u32 = 1;
 /// The longest file, in bytes: 64 MiB. Far over any show, so no show meets it, and a file
 /// of gigabytes is not read whole at start.
 ///
-/// | Part of the file | Measured | The most |
+/// No count of the patch has a limit of its own: a mode's size comes from its definition,
+/// and fixtures, modes and groups share the bytes. What holds it is [`LIMIT`]: each
+/// command that changes the patch measures its file, and is refused at one byte over.
+///
+/// | Part of the file | Measured | Fits beside the rest |
 /// |---|---|---|
 /// | a fixture's line, a name of 128 bytes | 244 bytes | 16 384 lines, one per light: 4 MB |
 /// | a mode, pretty | 0.2 to 17 KB (the test definitions) | 3 500 modes of 17 KB beside the lines |
 /// | a group of 512 lights | 14 KB | 4 000 groups beside the lines |
 pub const MOST_BYTES: usize = 64 * 1024 * 1024;
+
+/// The show file to keep a patch in ([`rig::Patch::kept_in`]): a change of the patch
+/// whose file would be over [`MOST_BYTES`] is refused. Each change writes the whole file
+/// once to measure it, off the tick thread, as the save after it does.
+pub const LIMIT: Limit = Limit {
+    most: MOST_BYTES,
+    fits: |patch| write(patch).is_some(),
+};
 
 /// The text of `patch`: its fixtures, their modes and its groups. `None` when it would
 /// be over [`MOST_BYTES`]: that file would not open.
@@ -137,12 +151,15 @@ pub fn write(patch: &Patch) -> Option<String> {
 
 /// The patch of `text`: `empty` with the file's fixtures and groups, or why not. `empty`
 /// is the engine's patch with nothing in it, so the file is checked against its
-/// universes and lights.
+/// universes and lights. A file whose patch would be written back over [`MOST_BYTES`]
+/// (one with less space in it than this engine writes) is too big too: it could not be
+/// saved.
 pub fn read(text: &str, empty: &Patch) -> Result<Patch, Unopened> {
+    let too_big = Unopened::TooBig {
+        most: u32::try_from(MOST_BYTES).unwrap_or(u32::MAX),
+    };
     if text.len() > MOST_BYTES {
-        return Err(Unopened::TooBig {
-            most: u32::try_from(MOST_BYTES).unwrap_or(u32::MAX),
-        });
+        return Err(too_big);
     }
     let Head { version } = serde_json::from_str(text).map_err(broken)?;
     if version.get() > VERSION {
@@ -189,7 +206,7 @@ pub fn read(text: &str, empty: &Patch) -> Result<Patch, Unopened> {
             patch = changed;
         }
     }
-    Ok(patch)
+    write(&patch).map(|_| patch).ok_or(too_big)
 }
 
 /// A fixture as the file has it.

@@ -38,7 +38,7 @@ extern crate alloc;
 
 mod patch;
 
-pub use patch::{Patch, PatchEffect, Placed, Unplaced};
+pub use patch::{Limit, Patch, PatchEffect, Placed, Unplaced};
 
 use alloc::format;
 use alloc::vec;

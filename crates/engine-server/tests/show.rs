@@ -1,7 +1,8 @@
 //! End to end with the engine process and `--show <file>`: patch, stop, start again
 //! without the library: the patch and the groups are there and light up on DDP. A file
 //! the engine cannot open is left alone and the picture says why. A save that cannot be
-//! written leaves the file as it was, and the picture says so until the next save.
+//! written leaves the file as it was, and the picture says so until the next save. A
+//! change that would take the file over its most bytes is refused, and the file kept.
 
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
@@ -421,4 +422,41 @@ async fn a_file_of_a_terabyte_is_not_read_whole_and_left_alone() {
     stop(&mut socket, &mut running).await;
     assert_eq!(std::fs::metadata(&file).unwrap().len(), terabyte);
     let _ = std::fs::remove_dir_all(&folder);
+}
+
+#[tokio::test]
+async fn a_change_that_would_take_the_file_over_the_most_is_refused_and_the_file_kept() {
+    let file = show_file("full");
+    let listen = free_port();
+    let mut first = engine(&listen, &file, true);
+    let mut socket = connect(&listen).await;
+    until_show(&mut socket, &json!("Kept")).await;
+    assert_eq!(
+        patch_once_read(&mut socket, par("PAR 1", 37)).await,
+        json!({"Patched": {"fixture": 1}})
+    );
+    stop(&mut socket, &mut first).await;
+    // the red channel's name longer, so the file is at the most
+    let text = std::fs::read_to_string(&file).unwrap();
+    let most = show_file::MOST_BYTES;
+    let red = "\"name\": \"Red\"";
+    assert!(text.contains(red), "{text}");
+    let longer = format!("\"name\": \"Red{}\"", "x".repeat(most - text.len()));
+    std::fs::write(&file, text.replacen(red, &longer, 1)).unwrap();
+
+    let mut second = engine(&listen, &file, false);
+    let mut socket = connect(&listen).await;
+    until_show(&mut socket, &json!("Kept")).await;
+    let rename = |name: &str| json!({"Rename": {"fixture": 1, "name": name}});
+    let full = json!({"Refused": {"reason": {"ShowFileFull": {"most": most}}}});
+    assert_eq!(command(&mut socket, rename("PAR 12")).await, full);
+    assert_eq!(
+        command(&mut socket, rename("PAR 2")).await,
+        json!("Accepted")
+    );
+    stop(&mut socket, &mut second).await;
+    let saved = std::fs::read_to_string(&file).unwrap();
+    assert_eq!(saved.len(), most);
+    assert!(saved.contains("\"PAR 2\""));
+    let _ = std::fs::remove_file(&file);
 }

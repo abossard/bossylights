@@ -17,6 +17,11 @@
 //!
 //! A show file's fixtures come back with [`Patch::restore`]: each at its own number and
 //! lights, checked as patch checks them, and refused when it has another's number or light.
+//!
+//! A patch kept in a show file ([`Patch::kept_in`]) refuses every change whose file would
+//! be over the file's most bytes ([`Refusal::ShowFileFull`]): the file always holds the
+//! patch. The file's text is the show file's to write (`crates/show-file`), so its
+//! [`Limit`] brings the measure.
 
 use crate::{Unfit, compile, flat, lights_of, strip, unflat};
 use alloc::string::{String, ToString};
@@ -42,7 +47,26 @@ pub struct Patch {
     writers: Vec<Writer>,
     /// In the order they were made. Every member is patched.
     groups: Vec<Group>,
+    /// The show file it is kept in, `None` when it is kept in none.
+    limit: Option<Limit>,
 }
+
+/// The show file a patch is kept in: its most bytes, and whether a patch's file is at
+/// most that long. A calculation of the show file's, brought in so the patch measures
+/// every change without knowing the file's text.
+#[derive(Clone, Copy, Debug)]
+pub struct Limit {
+    pub most: usize,
+    pub fits: fn(&Patch) -> bool,
+}
+
+impl PartialEq for Limit {
+    fn eq(&self, other: &Self) -> bool {
+        self.most == other.most && core::ptr::fn_addr_eq(self.fits, other.fits)
+    }
+}
+
+impl Eq for Limit {}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Group {
@@ -113,12 +137,39 @@ impl Patch {
             fixtures: Vec::new(),
             writers: Vec::new(),
             groups: Vec::new(),
+            limit: None,
         }
     }
 
+    /// This patch, kept in the show file of `limit`: from now on a change whose file
+    /// would be over its most bytes is refused.
+    #[must_use]
+    pub const fn kept_in(mut self, limit: Limit) -> Self {
+        self.limit = Some(limit);
+        self
+    }
+
     /// The only place the patch changes. `library` is where a patched fixture is looked
-    /// up. The new patch is `None` when it stays as it is. On a refusal nothing changed.
+    /// up. The new patch is `None` when it stays as it is. On a refusal nothing changed:
+    /// also when the new patch would not fit in the show file it is kept in.
     pub fn update(
+        &self,
+        command: PatchCommand,
+        library: &[Fixture],
+    ) -> Result<(Option<Self>, Vec<PatchEffect>), Refusal> {
+        let (patch, effects) = self.changed_by(command, library)?;
+        if let (Some(limit), Some(new)) = (self.limit, &patch)
+            && !(limit.fits)(new)
+        {
+            return Err(Refusal::ShowFileFull {
+                most: u32::try_from(limit.most).unwrap_or(u32::MAX),
+            });
+        }
+        Ok((patch, effects))
+    }
+
+    /// What `command` makes of this patch, before the show file is asked.
+    fn changed_by(
         &self,
         command: PatchCommand,
         library: &[Fixture],
@@ -467,6 +518,7 @@ impl Patch {
                 .collect(),
             fixtures,
             groups: self.groups.clone(),
+            limit: self.limit,
         }
     }
 

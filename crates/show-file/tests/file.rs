@@ -376,3 +376,56 @@ fn a_file_of_the_most_bytes_is_written_and_read_and_one_byte_more_is_neither() {
         assert_eq!(show_file::read(&text, &empty()), read, "{case}: read");
     }
 }
+
+#[test]
+fn a_patch_kept_in_its_file_refuses_the_command_that_would_take_the_file_over_the_most() {
+    let most = show_file::MOST_BYTES;
+    let short = show_file::write(&par_with_a_longer_name(0)).unwrap().len();
+    let none = show_file::write(&empty()).unwrap().len();
+    // the file at the most, with the PAR named "PAR 1"
+    let full = par_with_a_longer_name(most - short).kept_in(show_file::LIMIT);
+    let rename = |name: &str| PatchCommand::Rename {
+        fixture: 1,
+        name: text(name),
+    };
+    let refused = Err(Refusal::ShowFileFull {
+        most: u32::try_from(most).unwrap(),
+    });
+    // (case, command, the file's bytes after it, or why refused)
+    let cases = [
+        ("renamed as long: at the most", rename("PAR 2"), Ok(most)),
+        ("renamed one byte longer", rename("PAR 12"), refused),
+        ("renamed one byte shorter", rename("PAR"), Ok(most - 2)),
+        ("a group more", group("front", &[f(1)]), refused),
+        ("a fixture more", par("PAR 2", 4), refused),
+        ("unpatched", PatchCommand::Unpatch { fixture: 1 }, Ok(none)),
+    ];
+    for (case, command, bytes) in cases {
+        let after = full.update(command, &library());
+        let file = after.map(|(patch, _)| {
+            let patch = patch.unwrap();
+            let file = show_file::write(&patch).unwrap();
+            let read = show_file::read(&file, &empty()).unwrap();
+            assert_eq!(read.kept_in(show_file::LIMIT), patch, "{case}: read back");
+            file.len()
+        });
+        assert_eq!(file, bytes, "{case}");
+    }
+}
+
+#[test]
+fn a_file_under_the_most_whose_patch_is_written_back_over_it_is_not_read() {
+    let most = show_file::MOST_BYTES;
+    let short = show_file::write(&par_with_a_longer_name(0)).unwrap().len();
+    let full = show_file::write(&par_with_a_longer_name(most - short)).unwrap();
+    // one byte more in the name, two spaces less before "patch": the file is under the
+    // most, its patch is written one byte over it
+    let packed = full
+        .replacen("xx", "xxx", 1)
+        .replacen("\n  \"patch\"", "\n\"patch\"", 1);
+    assert_eq!(packed.len(), most - 1);
+    let too_big = Unopened::TooBig {
+        most: u32::try_from(most).unwrap(),
+    };
+    assert_eq!(show_file::read(&packed, &empty()), Err(too_big));
+}

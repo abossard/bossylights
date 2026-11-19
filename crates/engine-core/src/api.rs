@@ -150,4 +150,6 @@ pub enum Refusal {
     NoSuchGroup,
     /// A group has at most `most` members ([`crate::Members::MOST`] says why).
     TooManyMembers { most: u16 },
+    /// Then the show file would be longer than its `most` bytes, and would not open.
+    ShowFileFull { most: u32 },
 }
