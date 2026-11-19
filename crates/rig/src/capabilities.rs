@@ -3,7 +3,7 @@
 //!
 //! | Channel of a light | Binding |
 //! |---|---|
-//! | a colour wheel, and the light mixes colour (hybrid) | fixed at its bypass: the colour is mixed. No bypass: refused |
+//! | a colour wheel, and the light mixes colour (hybrid) | fixed at its bypass: the colour is mixed. No bypass: refused, a static white over an added mix (RGB, white) among them |
 //! | a colour wheel, nothing mixes | picks each colour of the light's wheels: its own slot, else its neutral slot. Neither: refused |
 //! | a gobo wheel | picks each gobo of the wheel and open, slot 1 first |
 //!
@@ -12,7 +12,7 @@
 //! | colour wheel | a colour channel with at least one static colour (`ColorMacro`) |
 //! | gobo wheel | a gobo channel with at least one gobo that does not shake |
 //! | neutral slot | white, or a range without a preset named open, white, no function, no colour or off. It shows white |
-//! | bypass | a range without a preset that is neutral, or starts the channel and names the mix (RGB, CMY, mix) and no effect (random, cycle, fast, slow, speed, sound, music), else white: a static white can be a fixed white that overrides the mix |
+//! | bypass | a range without a preset that is neutral, or starts the channel and names the mix (RGB, CMY, mix) and no effect (random, cycle, fast, slow, speed, sound, music). Else, when the light mixes only cyan, magenta and yellow, its white slot: open. Over red, green, blue or white a static white is a fixed white that overrides the mix |
 //! | slot byte | the lower midpoint of its range: 20 to 29 is 24 |
 //!
 //! A light refuses a colour or a gobo when it has a wheel for it but no slot that shows it
@@ -32,6 +32,8 @@ use fixture_library::{Byte, Does, Function, Range};
 pub(crate) struct Wheels {
     /// The light mixes colour: red, green, blue, white, cyan, magenta or yellow.
     mixes: bool,
+    /// The light adds light to mix: red, green, blue or white.
+    adds: bool,
     /// Every colour of the light's colour wheels, each once, in channel and range order.
     colours: Vec<Rgb>,
     /// The mode's channel index of each gobo wheel, wheel 1 first.
@@ -52,6 +54,7 @@ impl Wheels {
         }
         Self {
             mixes: coarse().any(|(_, c)| mixes(&c.function)),
+            adds: coarse().any(|(_, c)| adds(&c.function)),
             colours,
             gobos: coarse()
                 .filter(|(_, c)| c.function == Function::Gobo && !gobo_slots(c).is_empty())
@@ -77,7 +80,7 @@ impl Wheels {
             ));
             if self.mixes {
                 return Some(
-                    bypass(channel)
+                    bypass(channel, self.adds)
                         .map(|value| vec![Writer::Fixed { at, value }])
                         .ok_or(refused),
                 );
@@ -200,6 +203,14 @@ pub fn supports(writers: &[Writer], runs: &[LightRun], values: &Light) -> Result
     }
 }
 
+/// Whether a channel that does this adds light to a mix.
+fn adds(function: &Function) -> bool {
+    matches!(
+        function,
+        Function::Red | Function::Green | Function::Blue | Function::White
+    )
+}
+
 /// Whether a channel that does this mixes colour.
 fn mixes(function: &Function) -> bool {
     matches!(
@@ -260,14 +271,15 @@ fn neutral(channel: &fixture_library::Channel) -> Option<u8> {
 }
 
 /// The byte where a hybrid's colour wheel lets the mix through: a range without a preset
-/// that is neutral or lets the mix through, else its neutral slot.
-fn bypass(channel: &fixture_library::Channel) -> Option<u8> {
+/// that is neutral or lets the mix through. Else its neutral slot, unless the light `adds`
+/// light to mix: then a static white is a fixed white over the mix, and none.
+fn bypass(channel: &fixture_library::Channel, adds: bool) -> Option<u8> {
     channel
         .ranges
         .iter()
         .find(|range| is_neutral(range) || lets_the_mix_through(range))
         .map(midpoint)
-        .or_else(|| neutral(channel))
+        .or_else(|| neutral(channel).filter(|_| !adds))
 }
 
 /// A range without a preset at the start of its channel that names the mix (RGB, CMY,

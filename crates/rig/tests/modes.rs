@@ -269,11 +269,15 @@ fn a_mode_that_does_not_fit_is_refused() {
 }
 
 /// Every channel of every mode of the test definitions is written by exactly one writer.
+/// A mode refused for a colour it cannot show (`m3_properties`) has no writers.
 #[test]
 fn every_channel_is_written_once() {
     for (file, fixture) in all() {
         for mode in &fixture.modes {
-            let rigged = compile(mode, at(1), light(0), Universes::ONE, lights()).unwrap();
+            let rigged = match compile(mode, at(1), light(0), Universes::ONE, lights()) {
+                Err(Unfit::Refused(Refusal::Unsupported { .. })) => continue,
+                rigged => rigged.unwrap(),
+            };
             let mut written: Vec<u16> = rigged
                 .writers
                 .iter()

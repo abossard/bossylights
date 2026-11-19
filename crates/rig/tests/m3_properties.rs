@@ -251,6 +251,8 @@ fn a_hybrid_binds_its_companions_to_neutral_or_is_refused() {
     let spin_red = wheel("Wheel", "Spin", "#ff0000");
     let open_blue = wheel("Second", "Open", "#0000ff");
     let spin_blue = wheel("Second", "Spin", "#0000ff");
+    let spin_white = wheel("Wheel", "Spin", "#ffffff");
+    let cyan = r#"<Channel Name="Cyan" Preset="IntensityCyan"/>"#;
     let blue = Rgb {
         red: 0,
         green: 0,
@@ -258,7 +260,7 @@ fn a_hybrid_binds_its_companions_to_neutral_or_is_refused() {
     };
     // (channels, mode, colour, bytes 1 and 2, or the refusal)
     type Case<'a> = (String, &'a [&'a str], Rgb, Result<[u8; 2], Unfit>);
-    let cases: [Case; 6] = [
+    let cases: [Case; 8] = [
         // mixes and has a wheel: the wheel holds its neutral slot, the colour is mixed
         (
             format!("{red}{open_red}"),
@@ -278,6 +280,20 @@ fn a_hybrid_binds_its_companions_to_neutral_or_is_refused() {
             &["Red", "Wheel"],
             RED,
             Err(Unfit::Refused(unsupported(1, Property::Colour))),
+        ),
+        // a static white overrides an added mix: refused
+        (
+            format!("{red}{spin_white}"),
+            &["Red", "Wheel"],
+            RED,
+            Err(Unfit::Refused(unsupported(1, Property::Colour))),
+        ),
+        // a CMY mix goes through a white (open) slot
+        (
+            format!("{cyan}{spin_white}"),
+            &["Cyan", "Wheel"],
+            RED,
+            Ok([0, 14]),
         ),
         // two wheels: the one without the colour shows its neutral slot
         (
@@ -340,25 +356,33 @@ fn each_hybrid_holds_its_wheel_where_the_mix_goes_through() {
         colour: Some(RED),
         ..Light::DARK
     };
-    // (file, mode, channel from 1, byte, the label of its range)
+    // (file, mode, channel from 1, its byte and the label of its range, or the refusal)
+    type Row<'a> = (&'a str, &'a str, usize, Result<(u8, &'a str), Unfit>);
     let x4 = "GLP-Impression-X4.qxf";
     let mac = "Martin-MAC-2000-Wash.qxf";
     let adj = "American-DJ-Ultra-Bar-6.qxf";
     let mix = "Colors adjustable via RGBW";
-    let expected: &[(&str, &str, usize, u8, &str)] = &[
-        // no bypass: a static white
-        (adj, "6 Channels mode", 4, 221, "White"),
-        (adj, "8 Channels mode", 4, 221, "White"),
-        (x4, "Normal", 5, 3, mix),
-        (x4, "Compress", 5, 3, mix),
-        // wheel 1 open at 0, not "Random color CMY, fast" at 244 to 247
-        (mac, "8-bit with Color Wheel 2", 7, 0, "White"),
-        (mac, "8-bit with Color Wheel 2", 8, 249, "No function"),
-        (mac, "8-bit with Dimmer Wheel", 7, 0, "White"),
-        (mac, "16-bit with Color Wheel 2", 7, 0, "White"),
-        (mac, "16-bit with Color Wheel 2", 8, 249, "No function"),
-        (mac, "16-bit with Dimmer Wheel", 7, 0, "White"),
-        ("XStatic-X-240Bar-RGB.qxf", "7 Channel", 5, 59, "White"),
+    // RGB beside colour macros without a bypass: a static white would override the mix
+    let refused = || Err(Unfit::Refused(unsupported(1, Property::Colour)));
+    let expected: &[Row] = &[
+        (adj, "6 Channels mode", 4, refused()),
+        (adj, "8 Channels mode", 4, refused()),
+        (x4, "Normal", 5, Ok((3, mix))),
+        (x4, "Compress", 5, Ok((3, mix))),
+        // CMY: wheel 1 open white at 0, not "Random color CMY, fast" at 244 to 247
+        (mac, "8-bit with Color Wheel 2", 7, Ok((0, "White"))),
+        (mac, "8-bit with Color Wheel 2", 8, Ok((249, "No function"))),
+        (mac, "8-bit with Dimmer Wheel", 7, Ok((0, "White"))),
+        (mac, "16-bit with Color Wheel 2", 7, Ok((0, "White"))),
+        (
+            mac,
+            "16-bit with Color Wheel 2",
+            8,
+            Ok((249, "No function")),
+        ),
+        (mac, "16-bit with Dimmer Wheel", 7, Ok((0, "White"))),
+        // 0 to 7 is "OFF/Color": neither neutral nor naming the mix
+        ("XStatic-X-240Bar-RGB.qxf", "7 Channel", 5, refused()),
     ];
     let mut found = Vec::new();
     for (file, fixture) in all() {
@@ -369,27 +393,30 @@ fn each_hybrid_holds_its_wheel_where_the_mix_goes_through() {
             {
                 continue;
             }
-            let mut out = [Levels::ZERO];
-            resolve(&[red], &rigged(mode).writers, &mut out);
+            let held = compile(mode, at(1), light(0), Universes::ONE, lights()).map(|rigged| {
+                let mut out = [Levels::ZERO];
+                resolve(&[red], &rigged.writers, &mut out);
+                out[0]
+            });
             for (index, channel) in channels.iter().enumerate().filter(|(_, c)| is_wheel(c)) {
-                let byte = out[0].0[index];
-                let range = channel
-                    .ranges
-                    .iter()
-                    .find(|r| (r.min..=r.max).contains(&byte));
-                found.push((
-                    file.clone(),
-                    mode.name.clone(),
-                    index + 1,
-                    byte,
-                    range.map_or(String::new(), |r| r.label.clone()),
-                ));
+                let held = held.map(|out| {
+                    let byte = out.0[index];
+                    let range = channel
+                        .ranges
+                        .iter()
+                        .find(|r| (r.min..=r.max).contains(&byte));
+                    (byte, range.map_or(String::new(), |r| r.label.clone()))
+                });
+                found.push((file.clone(), mode.name.clone(), index + 1, held));
             }
         }
     }
     let expected: Vec<_> = expected
         .iter()
-        .map(|&(f, m, c, b, l)| (f.to_string(), m.to_string(), c, b, l.to_string()))
+        .map(|(f, m, c, held)| {
+            let held = (*held).map(|(b, l)| (b, l.to_string()));
+            (f.to_string(), m.to_string(), *c, held)
+        })
         .collect();
     assert_eq!(found, expected);
 }
