@@ -47,14 +47,16 @@ async fn main() {
         eprintln!("bossylights-engine: {problem}\n{USAGE}");
         exit(2);
     });
-    let port = settings.listen.port();
-    // Port 0 is any free port: nothing to lock, and the lock would be shared by everybody.
-    let _lock = (port != 0).then(|| {
+    let locked = |port| {
         lock(port).unwrap_or_else(|problem| {
             eprintln!("bossylights-engine: {problem}");
             exit(1);
         })
-    });
+    };
+    // A port asked for is locked before it is bound: an engine that is stopping still
+    // listens until it lets go. Port 0 is the free port the system gives, locked once known.
+    let asked = settings.listen.port();
+    let early = (asked != 0).then(|| locked(asked));
     let listener = tokio::net::TcpListener::bind(settings.listen)
         .await
         .unwrap_or_else(|error| {
@@ -64,14 +66,18 @@ async fn main() {
             );
             exit(1);
         });
+    let listening = listener.local_addr().unwrap_or_else(|error| {
+        eprintln!("bossylights-engine: no address to listen on: {error}");
+        exit(1);
+    });
+    let _lock = early.unwrap_or_else(|| locked(listening.port()));
     // No outputs yet: a client adds them with `SetOutput`.
     let (engine, sender) = Engine::start(settings.universes).unwrap_or_else(|error| {
         eprintln!("bossylights-engine: the tick thread did not start: {error}");
         exit(1);
     });
     println!(
-        "bossylights-engine listening on http://{}, {} universes",
-        settings.listen,
+        "bossylights-engine listening on http://{listening}, {} universes",
         settings.universes.count()
     );
     let mut engine =

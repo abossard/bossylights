@@ -2,6 +2,11 @@
 //! refused. A counting allocator sees every allocation and free in this process; each
 //! device is opened before the window.
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "the test waits between frames; it is not the output thread"
+)]
+
 #[path = "counting/mod.rs"]
 mod counting;
 
@@ -9,6 +14,8 @@ use outputs::dmx_usb_pro::{DmxUsbPro, never_wait};
 use outputs::{Color, Device, Levels, Outcome, OutputKind};
 use serialport::TTYPort;
 use std::net::{SocketAddr, UdpSocket};
+use std::thread;
+use std::time::{Duration, Instant};
 
 fn main() {
     let receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
@@ -51,14 +58,22 @@ fn main() {
     for (kind, device, expected) in &mut devices {
         let expected = *expected;
         let (allocated, freed) = (counting::allocations(), counting::frees());
-        let given = (0..200).filter(|_| device.take(&frame) == expected).count();
+        // At least 200 frames, and on until the device gave its outcome: the host answers a
+        // send to nobody a little later, later still under load (#175).
+        let started = Instant::now();
+        let (mut frames, mut given) = (0, 0);
+        while frames < 200 || (given == 0 && started.elapsed() < Duration::from_secs(10)) {
+            given += usize::from(device.take(&frame) == expected);
+            frames += 1;
+            thread::sleep(Duration::from_millis(1)); // poll
+        }
         let allocations = counting::allocations() - allocated;
         let frees = counting::frees() - freed;
         assert!(given > 0, "{kind}: never {expected:?}");
         assert_eq!(
             (allocations, frees),
             (0, 0),
-            "{kind}: allocations and frees in 200 frames"
+            "{kind}: allocations and frees in {frames} frames"
         );
     }
     drop(end);

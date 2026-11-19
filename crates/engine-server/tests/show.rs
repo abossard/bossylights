@@ -7,7 +7,6 @@
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader};
-use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::thread;
@@ -17,16 +16,6 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
 type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
-
-/// A port nobody listens on right now.
-fn free_port() -> String {
-    let port = TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port();
-    format!("127.0.0.1:{port}")
-}
 
 /// A show file of this test run, not there yet.
 fn show_file(name: &str) -> PathBuf {
@@ -53,13 +42,16 @@ impl Drop for Running {
     }
 }
 
-/// Starts the engine on `listen` with the show file `show`, and the test definitions when
-/// `library`. Returns once it listens.
-fn engine(listen: &str, show: &Path, library: bool) -> Running {
+/// Starts the engine on a port the system gives with the show file `show`, and the test
+/// definitions when `library`. Returns once it listens, with the address it listens on.
+fn engine(show: &Path, library: bool) -> (Running, String) {
     let definitions =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../fixture-library/tests/definitions");
     let mut command = Command::new(env!("CARGO_BIN_EXE_bossylights-engine"));
-    command.args(["--listen", listen]).arg("--show").arg(show);
+    command
+        .args(["--listen", "127.0.0.1:0"])
+        .arg("--show")
+        .arg(show);
     if library {
         command.arg("--fixtures").arg(definitions);
     }
@@ -74,8 +66,15 @@ fn engine(listen: &str, show: &Path, library: bool) -> Running {
     BufReader::new(running.0.stdout.as_mut().unwrap())
         .read_line(&mut line)
         .unwrap();
-    assert!(line.contains("listening"), "{line}");
-    running
+    (running, listening_on(&line))
+}
+
+/// The address in the engine's "listening on http://<address>, ..." line.
+fn listening_on(line: &str) -> String {
+    line.split_once("listening on http://")
+        .and_then(|(_, rest)| rest.split_once(','))
+        .map(|(address, _)| address.to_string())
+        .unwrap_or_else(|| panic!("not listening: {line}"))
 }
 
 /// Sends `Stop` and waits at most 10 s for the process to end well.
@@ -193,8 +192,7 @@ async fn until_ddp(udp: &UdpSocket, bytes: &[u8]) {
 #[tokio::test]
 async fn patch_stop_start_the_patch_and_groups_are_there_and_light_up_without_the_library() {
     let file = show_file("restart");
-    let listen = free_port();
-    let mut first = engine(&listen, &file, true);
+    let (mut first, listen) = engine(&file, true);
     let mut socket = connect(&listen).await;
     until_show(&mut socket, &json!("Kept")).await;
     assert_eq!(
@@ -222,7 +220,7 @@ async fn patch_stop_start_the_patch_and_groups_are_there_and_light_up_without_th
     assert!(file.exists(), "saved");
     assert!(!saving(&file).exists(), "the new file was renamed");
 
-    let mut second = engine(&listen, &file, false);
+    let (mut second, listen) = engine(&file, false);
     let mut socket = connect(&listen).await;
     let after = until_show(&mut socket, &json!("Kept")).await;
     assert_eq!(after["patch"], before["patch"]);
@@ -283,8 +281,7 @@ async fn a_file_the_engine_cannot_open_is_left_alone_and_the_picture_says_why() 
     for (case, text, why) in cases {
         let file = show_file(case);
         std::fs::write(&file, &text).unwrap();
-        let listen = free_port();
-        let mut running = engine(&listen, &file, false);
+        let (mut running, listen) = engine(&file, false);
         let mut socket = connect(&listen).await;
         let picture = until_show(&mut socket, &json!({"LeftAlone": {"why": why}})).await;
         assert_eq!(picture["patch"], json!([]), "{case}");
@@ -304,8 +301,7 @@ async fn a_file_the_engine_cannot_open_is_left_alone_and_the_picture_says_why() 
 #[tokio::test]
 async fn a_save_that_cannot_be_written_leaves_the_file_as_it_was_until_the_next_save() {
     let file = show_file("not_saved");
-    let listen = free_port();
-    let mut running = engine(&listen, &file, false);
+    let (mut running, listen) = engine(&file, false);
     let mut socket = connect(&listen).await;
     until_show(&mut socket, &json!("Kept")).await;
     assert_eq!(
@@ -372,8 +368,7 @@ async fn a_save_whose_folder_cannot_be_synced_is_not_saved_until_the_next_save()
     let mode = |bits| std::fs::Permissions::from_mode(bits);
     let folder = show_folder("unsynced");
     let file = folder.join("show.json");
-    let listen = free_port();
-    let mut running = engine(&listen, &file, false);
+    let (mut running, listen) = engine(&file, false);
     let mut socket = connect(&listen).await;
     until_show(&mut socket, &json!("Kept")).await;
     assert_eq!(
@@ -414,8 +409,7 @@ async fn a_file_of_a_terabyte_is_not_read_whole_and_left_alone() {
         .unwrap()
         .set_len(terabyte)
         .unwrap();
-    let listen = free_port();
-    let mut running = engine(&listen, &file, false);
+    let (mut running, listen) = engine(&file, false);
     let mut socket = connect(&listen).await;
     let why = json!({"TooBig": {"most": show_file::MOST_BYTES}});
     until_show(&mut socket, &json!({"LeftAlone": {"why": why}})).await;
@@ -427,8 +421,7 @@ async fn a_file_of_a_terabyte_is_not_read_whole_and_left_alone() {
 #[tokio::test]
 async fn a_change_that_would_take_the_file_over_the_most_is_refused_and_the_file_kept() {
     let file = show_file("full");
-    let listen = free_port();
-    let mut first = engine(&listen, &file, true);
+    let (mut first, listen) = engine(&file, true);
     let mut socket = connect(&listen).await;
     until_show(&mut socket, &json!("Kept")).await;
     assert_eq!(
@@ -444,7 +437,7 @@ async fn a_change_that_would_take_the_file_over_the_most_is_refused_and_the_file
     let longer = format!("\"name\": \"Red{}\"", "x".repeat(most - text.len()));
     std::fs::write(&file, text.replacen(red, &longer, 1)).unwrap();
 
-    let mut second = engine(&listen, &file, false);
+    let (mut second, listen) = engine(&file, false);
     let mut socket = connect(&listen).await;
     until_show(&mut socket, &json!("Kept")).await;
     let rename = |name: &str| json!({"Rename": {"fixture": 1, "name": name}});

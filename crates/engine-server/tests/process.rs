@@ -2,20 +2,10 @@
 
 use futures_util::{SinkExt, StreamExt};
 use std::io::{BufRead, BufReader, Read};
-use std::net::TcpListener;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 use tokio_tungstenite::tungstenite::Message;
-
-/// A port nobody listens on right now.
-fn free_port() -> u16 {
-    TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
-}
 
 /// An engine process, killed when the test ends however it ends.
 struct Running(Child);
@@ -38,13 +28,17 @@ fn engine(listen: &str) -> Running {
     )
 }
 
-/// Waits for the "listening" line, so the engine holds its port.
-fn listening(Running(engine): &mut Running) {
+/// Waits for the "listening on http://<address>, ..." line, so the engine holds its port.
+/// The address it listens on.
+fn listening(Running(engine): &mut Running) -> String {
     let mut line = String::new();
     BufReader::new(engine.stdout.as_mut().unwrap())
         .read_line(&mut line)
         .unwrap();
-    assert!(line.contains("listening"), "{line}");
+    line.split_once("listening on http://")
+        .and_then(|(_, rest)| rest.split_once(','))
+        .map(|(address, _)| address.to_string())
+        .unwrap_or_else(|| panic!("not listening: {line}"))
 }
 
 /// The exit status, waiting at most 10 s.
@@ -89,10 +83,10 @@ async fn a_second_engine_on_the_same_port_refuses_to_start_and_says_why() {
     // (first listens on, second listens on): the same port, any address
     let cases = [("127.0.0.1", "127.0.0.1"), ("127.0.0.1", "[::1]")];
     for (first, second) in cases {
-        let port = free_port();
-        let (first, second) = (format!("{first}:{port}"), format!("{second}:{port}"));
-        let mut running = engine(&first);
-        listening(&mut running);
+        let mut running = engine(&format!("{first}:0"));
+        let first = listening(&mut running);
+        let port = first.rsplit_once(':').unwrap().1;
+        let second = format!("{second}:{port}");
 
         let mut refused = engine(&second);
         let status = exited(&mut refused);
@@ -115,9 +109,8 @@ async fn a_second_engine_on_the_same_port_refuses_to_start_and_says_why() {
 
 #[tokio::test]
 async fn stop_ends_the_process_reports_what_it_measured_and_frees_the_port() {
-    let listen = format!("127.0.0.1:{}", free_port());
-    let mut first = engine(&listen);
-    listening(&mut first);
+    let mut first = engine("127.0.0.1:0");
+    let listen = listening(&mut first);
 
     assert_eq!(stop(&listen).await, serde_json::json!("Stopping"));
     let status = exited(&mut first);
@@ -133,9 +126,8 @@ async fn stop_ends_the_process_reports_what_it_measured_and_frees_the_port() {
 
 #[tokio::test]
 async fn an_engine_started_right_after_stop_waits_for_the_port_and_answers() {
-    let listen = format!("127.0.0.1:{}", free_port());
-    let mut first = engine(&listen);
-    listening(&mut first);
+    let mut first = engine("127.0.0.1:0");
+    let listen = listening(&mut first);
 
     assert_eq!(stop(&listen).await, serde_json::json!("Stopping"));
     let mut next = engine(&listen);

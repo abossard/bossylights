@@ -5,7 +5,6 @@
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader};
-use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
@@ -40,34 +39,35 @@ impl Drop for Running {
     }
 }
 
-/// Starts an engine with these extra arguments and connects once it listens.
+/// Starts an engine with these extra arguments on a port the system gives, and connects
+/// once it listens.
 async fn engine(args: &[&str]) -> (Running, Socket) {
-    let listen = format!(
-        "127.0.0.1:{}",
-        TcpListener::bind("127.0.0.1:0")
-            .unwrap()
-            .local_addr()
-            .unwrap()
-            .port()
-    );
     let mut running = Running(
         Command::new(env!("CARGO_BIN_EXE_bossylights-engine"))
-            .args(["--listen", &listen])
+            .args(["--listen", "127.0.0.1:0"])
             .args(args)
             .stdout(Stdio::piped())
             .spawn()
             .unwrap(),
-        listen.clone(),
+        String::new(),
     );
     let mut line = String::new();
     BufReader::new(running.0.stdout.as_mut().unwrap())
         .read_line(&mut line)
         .unwrap();
-    assert!(line.contains("listening"), "{line}");
-    let (socket, _) = tokio_tungstenite::connect_async(format!("ws://{listen}/api"))
+    running.1 = listening_on(&line);
+    let (socket, _) = tokio_tungstenite::connect_async(format!("ws://{}/api", running.1))
         .await
         .unwrap();
     (running, socket)
+}
+
+/// The address in the engine's "listening on http://<address>, ..." line.
+fn listening_on(line: &str) -> String {
+    line.split_once("listening on http://")
+        .and_then(|(_, rest)| rest.split_once(','))
+        .map(|(address, _)| address.to_string())
+        .unwrap_or_else(|| panic!("not listening: {line}"))
 }
 
 async fn next(socket: &mut Socket) -> Value {
