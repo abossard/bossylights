@@ -18,6 +18,9 @@ use engine::{
     ChannelNumbers, Command, Counters, Device, Engine, Levels, Outcome, OutputKind, OutputNumber,
     Rate, RunNumbers, State, Status, Universes,
 };
+#[path = "../src/report_line.rs"]
+mod report_line;
+
 use outputs::dmx_usb_pro::{self, DmxUsbPro, LostWith};
 use std::mem::discriminant;
 use std::process::ExitCode;
@@ -247,11 +250,7 @@ fn ten_minutes(watch: &mut Watch, sender: &mut engine::Sender) -> bool {
     println!("  adapter: {}", describe(state.outputs[0]));
     println!("  other:   {}", describe(state.outputs[1]));
     if let Some(l) = lateness {
-        println!(
-            "  adapter lateness: p99 {} µs, worst {} µs",
-            l.p99.as_micros(),
-            l.worst.as_micros()
-        );
+        println!("  adapter {}", report_line::lateness(l));
     }
     // The criterion is the adapter's; the other output is shown for comparison.
     let passed = pro.off_beat == 0 && pro.dropped == 0 && pro.failed == 0;

@@ -2,37 +2,13 @@
 //! refused. A counting allocator sees every allocation and free in this process; each
 //! device is opened before the window.
 
-#![expect(
-    unsafe_code,
-    reason = "a global allocator can only be written with unsafe"
-)]
+#[path = "counting/mod.rs"]
+mod counting;
 
 use outputs::dmx_usb_pro::{DmxUsbPro, never_wait};
 use outputs::{Color, Device, Levels, Outcome, OutputKind};
 use serialport::TTYPort;
-use std::alloc::{GlobalAlloc, Layout, System};
 use std::net::{SocketAddr, UdpSocket};
-use std::sync::atomic::{AtomicUsize, Ordering};
-
-struct Counting;
-
-static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
-static FREES: AtomicUsize = AtomicUsize::new(0);
-
-unsafe impl GlobalAlloc for Counting {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        ALLOCATIONS.fetch_add(1, Ordering::SeqCst);
-        unsafe { System.alloc(layout) }
-    }
-
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        FREES.fetch_add(1, Ordering::SeqCst);
-        unsafe { System.dealloc(ptr, layout) }
-    }
-}
-
-#[global_allocator]
-static ALLOCATOR: Counting = Counting;
 
 fn main() {
     let receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
@@ -74,13 +50,10 @@ fn main() {
     ];
     for (kind, device, expected) in &mut devices {
         let expected = *expected;
-        let (allocated, freed) = (
-            ALLOCATIONS.load(Ordering::SeqCst),
-            FREES.load(Ordering::SeqCst),
-        );
+        let (allocated, freed) = (counting::allocations(), counting::frees());
         let given = (0..200).filter(|_| device.take(&frame) == expected).count();
-        let allocations = ALLOCATIONS.load(Ordering::SeqCst) - allocated;
-        let frees = FREES.load(Ordering::SeqCst) - freed;
+        let allocations = counting::allocations() - allocated;
+        let frees = counting::frees() - freed;
         assert!(given > 0, "{kind}: never {expected:?}");
         assert_eq!(
             (allocations, frees),

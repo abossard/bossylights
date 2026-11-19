@@ -9,13 +9,15 @@
 #![forbid(unsafe_code)]
 
 use engine::{Counters, Engine, Lateness, MAX_OUTPUTS, OutputNumber, State, Universes};
-use engine_core::OFF_BEAT;
 use std::fs::{File, TryLockError};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::exit;
 use std::thread;
 use std::time::{Duration, Instant};
+
+#[path = "report_line.rs"]
+mod report_line;
 
 const USAGE: &str =
     "usage: bossylights-engine [--listen 127.0.0.1:7744] [--universes 4] [--fixtures <folder>]";
@@ -115,18 +117,9 @@ fn report(engine: &mut Engine) -> String {
     format!("bossylights-engine stopped at frame {frame}\n") + &lines.collect::<String>()
 }
 
-/// One output's line. The 2 ms is [`OFF_BEAT`], the one the counter uses.
+/// One output's line.
 fn line(n: usize, c: Counters, lateness: Lateness) -> String {
-    format!(
-        "output {n}: accepted {}, dropped {}, failed {}, off beat (> {} ms) {}, lateness p99 {} µs, worst {} µs\n",
-        c.accepted,
-        c.dropped,
-        c.failed,
-        OFF_BEAT.as_millis(),
-        c.off_beat,
-        lateness.p99.as_micros(),
-        lateness.worst.as_micros()
-    )
+    format!("output {n}: {}\n", report_line::counts(c, lateness))
 }
 
 fn settings(args: &[String]) -> Result<Settings, String> {
@@ -156,27 +149,4 @@ fn settings(args: &[String]) -> Result<Settings, String> {
         }
     }
     Ok(settings)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn an_output_line_says_off_beat_and_microseconds() {
-        let counters = Counters {
-            accepted: 10,
-            dropped: 2,
-            failed: 3,
-            off_beat: 4,
-        };
-        let lateness = Lateness {
-            p99: Duration::from_micros(120),
-            worst: Duration::from_micros(3500),
-        };
-        assert_eq!(
-            line(1, counters, lateness),
-            "output 1: accepted 10, dropped 2, failed 3, off beat (> 2 ms) 4, lateness p99 120 µs, worst 3500 µs\n"
-        );
-    }
 }

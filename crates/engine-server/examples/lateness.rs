@@ -21,6 +21,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
+#[path = "../src/report_line.rs"]
+mod report_line;
+
 /// How many outputs, how many universes each, for how long, with how many lights patched.
 struct Setup {
     outputs: u8,
@@ -125,15 +128,10 @@ fn run(setup: &Setup) -> Result<String, String> {
             .ok_or("no output")?;
         let c = output.counters;
         eprintln!(
-            "output {} at {}/s: accepted {}, dropped {}, failed {}, off by > 2 ms {}, lateness p99 {} µs, worst {} µs",
+            "output {} at {}/s: {}",
             number.slot() + 1,
             output.rate.per_second(),
-            c.accepted,
-            c.dropped,
-            c.failed,
-            c.off_beat,
-            lateness.p99.as_micros(),
-            lateness.worst.as_micros(),
+            report_line::counts(c, lateness),
         );
         p99 = p99.max(lateness.p99);
         worst = worst.max(lateness.worst);

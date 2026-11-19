@@ -9,45 +9,14 @@
 //! or the reader's. That each real device's `take` allocates nothing is proved in
 //! `crates/outputs/tests/no_alloc.rs`.
 
-#![expect(
-    unsafe_code,
-    reason = "a global allocator can only be written with unsafe"
-)]
-
+#[path = "../../outputs/tests/counting/mod.rs"]
+mod counting;
 mod mock;
 
 use engine::{
     Begun, ChannelNumbers, Command, Engine, Fixture, Rate, RunNumbers, Sender, Target, Text,
     Universes,
 };
-use std::alloc::{GlobalAlloc, Layout, System};
-use std::cell::Cell;
-use std::sync::atomic::{AtomicUsize, Ordering};
-
-struct Counting;
-
-static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
-
-thread_local! {
-    /// True while this thread is the front sending a command: not counted.
-    static SENDING: Cell<bool> = const { Cell::new(false) };
-}
-
-unsafe impl GlobalAlloc for Counting {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        if !SENDING.try_with(Cell::get).unwrap_or(false) {
-            ALLOCATIONS.fetch_add(1, Ordering::SeqCst);
-        }
-        unsafe { System.alloc(layout) }
-    }
-
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        unsafe { System.dealloc(ptr, layout) }
-    }
-}
-
-#[global_allocator]
-static ALLOCATOR: Counting = Counting;
 
 /// 512 lights: Generic RGB in its mode RGB, 170 to a universe.
 const LIGHTS: u16 = 512;
@@ -55,9 +24,7 @@ const UNIVERSES: u16 = 4;
 
 /// Sends `command` as the front, its allocations not counted. Whether it is taken.
 fn send(sender: &mut Sender, command: Command, library: &[Fixture]) -> bool {
-    SENDING.with(|sending| sending.set(true));
-    let begun = sender.begin(command, library);
-    SENDING.with(|sending| sending.set(false));
+    let begun = counting::uncounted(|| sender.begin(command, library));
     matches!(begun, Ok(Begun::Queued | Begun::Patched { .. }))
 }
 
@@ -116,7 +83,7 @@ fn main() {
             .all(|o| o.is_some_and(|o| o.counters.accepted > 0))
     });
 
-    let allocations = ALLOCATIONS.load(Ordering::SeqCst);
+    let allocations = counting::allocations();
     let frame = engine.latest().state.frame;
     let mut pictures = 0;
     for value in 0..=255 {
@@ -156,7 +123,7 @@ fn main() {
         .filter(|light| light.intensity == u16::MAX)
         .count();
     let ticks = state.frame - frame;
-    let new_allocations = ALLOCATIONS.load(Ordering::SeqCst) - allocations;
+    let new_allocations = counting::allocations() - allocations;
     drop(engine);
 
     assert!(ticks >= 5, "too few ticks to prove anything: {ticks}");

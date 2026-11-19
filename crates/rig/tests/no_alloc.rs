@@ -4,36 +4,13 @@
 //! holds only frames. That the engine's own tick allocates nothing is proved in
 //! `crates/engine/tests/no_alloc.rs`.
 
-#![expect(
-    unsafe_code,
-    reason = "a global allocator can only be written with unsafe"
-)]
-
 mod common;
+#[path = "../../outputs/tests/counting/mod.rs"]
+mod counting;
 
 use common::{light, lights, mode};
 use engine_core::{ChannelNumbers, Levels, Light, Universes, Writer, resolve};
 use rig::compile;
-use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::atomic::{AtomicUsize, Ordering};
-
-struct Counting;
-
-static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
-
-unsafe impl GlobalAlloc for Counting {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        ALLOCATIONS.fetch_add(1, Ordering::SeqCst);
-        unsafe { System.alloc(layout) }
-    }
-
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        unsafe { System.dealloc(ptr, layout) }
-    }
-}
-
-#[global_allocator]
-static ALLOCATOR: Counting = Counting;
 
 const UNIVERSES: u16 = 8;
 const LIGHTS: u16 = 512;
@@ -68,7 +45,7 @@ fn main() {
     let mut values = vec![Light::DARK; usize::from(LIGHTS)];
     let mut out = vec![Levels::ZERO; usize::from(UNIVERSES)];
 
-    let allocations = ALLOCATIONS.load(Ordering::SeqCst);
+    let allocations = counting::allocations();
     for frame in 0..FRAMES {
         for (n, value) in (0..).zip(values.iter_mut()) {
             let step = frame.wrapping_mul(97).wrapping_add(n);
@@ -81,7 +58,7 @@ fn main() {
         }
         resolve(&values, &writers, &mut out);
     }
-    let new_allocations = ALLOCATIONS.load(Ordering::SeqCst) - allocations;
+    let new_allocations = counting::allocations() - allocations;
 
     let written = out.iter().flat_map(|u| u.0).filter(|&b| b != 0).count();
     assert!(written > 1_000, "the frames wrote bytes: {written}");
