@@ -84,6 +84,37 @@ const FREE_EVERY: Duration = Duration::from_millis(100);
 /// How long `SetOutput` waits for the devices on their way back before it opens.
 const FREE_WITHIN: Duration = Duration::from_secs(1);
 
+/// Whether `command` is an edit: it changes what the show file keeps (the patch, the
+/// groups, the looks), and its prepare may take long (a patch measures its show file, a
+/// look compiles). A front shared behind a lock prepares an edit without it
+/// ([`Sender::base`]). Every other command is a press: [`Sender::begin`] under the lock,
+/// queued at once for the very next wake.
+pub const fn edits(command: &Command) -> bool {
+    match command {
+        Command::Patch { .. }
+        | Command::PatchStrip { .. }
+        | Command::Move { .. }
+        | Command::Unpatch { .. }
+        | Command::Rename { .. }
+        | Command::SetGroup { .. }
+        | Command::RemoveGroup { .. }
+        | Command::PutStep { .. }
+        | Command::RemoveLook { .. } => true,
+        Command::SetChannel { .. }
+        | Command::ReleaseChannel { .. }
+        | Command::ReleaseAll
+        | Command::Blackout { .. }
+        | Command::SetOutput { .. }
+        | Command::RemoveOutput { .. }
+        | Command::SetIntensity { .. }
+        | Command::SetColour { .. }
+        | Command::ReleaseIntensity { .. }
+        | Command::ReleaseColour { .. }
+        | Command::StartLook { .. }
+        | Command::ReleaseHold { .. } => false,
+    }
+}
+
 /// The running engine: reads its state. Dropping it stops the tick thread.
 pub struct Engine {
     shared: Arc<Shared>,
@@ -335,11 +366,16 @@ impl Base {
 
     fn look(&self, command: LookCommand) -> Result<Change, Refusal> {
         Ok(match command {
-            LookCommand::PutStep { look, name, step } => Change::PutStep {
-                look,
-                looks: self.looks.put(Saved { look, name, step }, &self.patch)?,
-                plan: looks::compile(&step, &self.patch)?,
-            },
+            LookCommand::PutStep { look, name, step } => {
+                // a patch that leaves the looks no room in its show file takes no step:
+                // the save would not fit
+                self.patch.fits()?;
+                Change::PutStep {
+                    look,
+                    looks: self.looks.put(Saved { look, name, step }, &self.patch)?,
+                    plan: looks::compile(&step, &self.patch)?,
+                }
+            }
             LookCommand::RemoveLook { look } => Change::RemoveLook {
                 look,
                 looks: self.looks.remove(look),

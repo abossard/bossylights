@@ -59,6 +59,17 @@ impl Kept {
     fn same(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.patch, &other.patch) && Arc::ptr_eq(&self.looks, &other.looks)
     }
+
+    /// Takes the patch and the looks of `sender` when either is another than kept: whether
+    /// it did.
+    pub fn follow(&mut self, sender: &Sender) -> bool {
+        let now = Self::of(sender);
+        let other = !now.same(self);
+        if other {
+            *self = now;
+        }
+        other
+    }
 }
 
 /// Saves the patch and the looks to `path` after every change, while `state` says the file is saved.

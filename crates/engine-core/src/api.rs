@@ -3,7 +3,7 @@
 //!
 //! | Client sends | Engine answers |
 //! |---|---|
-//! | `{"Send": {"command": ...}}` | `"Accepted"`, `{"Patched": {"fixture": ...}}` for `Patch`, or `{"Refused": {"reason": ...}}` |
+//! | `{"Send": {"command": ...}}` | `"Accepted"`, `{"Patched": {"fixture": ...}}` for `Patch`, or `{"Refused": {"reason": ...}}`. `"Stopping"` once the engine stops: nothing changed |
 //! | `"Query"` | `{"Picture": ...}`: the state, the project, the patch, every level and every held light |
 //! | `"Subscribe"` | `{"Picture": ...}`, then `{"Changed": ...}` for each new frame, with the patch when it changed |
 //! | `"Stop"` | `"Stopping"`, then every connection closes and the engine process ends |

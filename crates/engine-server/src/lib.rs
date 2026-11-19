@@ -96,7 +96,7 @@ pub async fn serve(
             let _ = stopped.wait_for(|stop| *stop).await;
         })
         .await;
-    api.stop.send_replace(true);
+    api.stopping().await;
     if let Some(keeper) = keeper {
         keeper.await.map_err(io::Error::other)?;
     }
@@ -310,7 +310,7 @@ async fn answer(
         }),
         Request::Query => picture(&pictures.borrow()),
         Request::Stop => {
-            api.stop.send_replace(true);
+            api.stopping().await;
             json(&Reply::Stopping)
         }
         Request::Subscribe => {
@@ -331,54 +331,82 @@ async fn answer(
 /// before the client is told `Stale`.
 const PREPARES: usize = 3;
 
-/// Sends `command` to the front, with the library as it is read so far. It is prepared
-/// on a thread of the blocking pool, without the front (a patch measures its show file,
-/// a look compiles), and admitted under it: every other client is answered meanwhile. So
-/// is a device it needs opened. The answer when it is taken.
+/// Sends `command` to the front, with the library as it is read so far. A press is
+/// prepared and admitted under the front at once: no thread hop between it and the next
+/// frame. An edit ([`engine::edits`]) is prepared on a thread of the blocking pool,
+/// without the front (a patch measures its show file, a look compiles), and admitted
+/// under it: every other client is answered meanwhile. So is a device it needs opened.
+/// The answer when it is taken, `Stopping` when the engine stops first: nothing changed.
 async fn send(api: &Api, command: Command) -> Result<Reply<'static>, Refusal> {
     let shelf = Arc::clone(&api.shelf.borrow());
-    let mut begun = Err(Refusal::Stale);
-    for _ in 0..PREPARES {
-        let base = api.sender.lock().await.base();
-        let shelf = Arc::clone(&shelf);
-        let prepared = tokio::task::spawn_blocking(move || base.prepare(command, shelf.fixtures()))
+    let begun = if engine::edits(&command) {
+        edit(api, command, &shelf).await
+    } else {
+        api.changing(|sender| sender.begin(command, shelf.fixtures()))
             .await
-            .map_err(|_| Refusal::QueueFull)?; // the task was cancelled: the engine stops
-        begun = match prepared {
-            Ok(prepared) => api.changing(|sender| sender.admit(prepared)).await,
-            Err(reason) => Err(reason),
-        };
-        if !matches!(begun, Err(Refusal::Stale)) {
-            break;
-        }
-    }
+    };
     match begun {
-        Ok(Begun::Opening(opening)) => {
+        None => Ok(Reply::Stopping),
+        Some(Ok(Begun::Opening(opening))) => {
             match tokio::task::spawn_blocking(move || opening.open()).await {
-                Ok(opened) => api
-                    .changing(|sender| sender.finish(opened))
-                    .await
-                    .map(|()| Reply::Accepted),
+                Ok(opened) => match api.changing(|sender| sender.finish(opened)).await {
+                    None => Ok(Reply::Stopping),
+                    Some(finished) => finished.map(|()| Reply::Accepted),
+                },
                 Err(_) => Err(Refusal::CannotOpen), // the task was cancelled: the engine stops
             }
         }
-        Ok(Begun::Queued) => Ok(Reply::Accepted),
-        Ok(Begun::Patched { fixture }) => Ok(Reply::Patched { fixture }),
-        Ok(Begun::Started { play }) => Ok(Reply::Started { play }),
-        Err(reason) => Err(reason),
+        Some(Ok(Begun::Queued)) => Ok(Reply::Accepted),
+        Some(Ok(Begun::Patched { fixture })) => Ok(Reply::Patched { fixture }),
+        Some(Ok(Begun::Started { play })) => Ok(Reply::Started { play }),
+        Some(Err(reason)) => Err(reason),
     }
 }
 
+/// Prepares the edit `command` on the blocking pool and admits it, again while another
+/// change replaced its base, [`PREPARES`] times at most. `None` once the engine stops.
+async fn edit(api: &Api, command: Command, shelf: &Arc<Shelf>) -> Option<Result<Begun, Refusal>> {
+    let mut begun = Some(Err(Refusal::Stale));
+    for _ in 0..PREPARES {
+        let base = api.sender.lock().await.base();
+        let shelf = Arc::clone(shelf);
+        let prepared =
+            tokio::task::spawn_blocking(move || base.prepare(command, shelf.fixtures())).await;
+        begun = match prepared {
+            Ok(Ok(prepared)) => api.changing(|sender| sender.admit(prepared)).await,
+            Ok(Err(reason)) => Some(Err(reason)),
+            Err(_) => None, // the task was cancelled: the engine stops
+        };
+        if !matches!(begun, Some(Err(Refusal::Stale))) {
+            break;
+        }
+    }
+    begun
+}
+
 impl Api {
-    /// Changes the front with `change`, and tells the reader and the show file the front
-    /// as `change` left it, before another change: each moment is one the engine was in.
-    async fn changing<T>(&self, change: impl FnOnce(&mut Sender) -> T) -> T {
+    /// Changes the front with `change`, and tells the reader the front as `change` left
+    /// it, before another change: each moment is one the engine was in. The show file
+    /// hears only of a change of the patch or the looks: a refusal or a press saves
+    /// nothing. `None` once the engine stops ([`Api::stopping`]): nothing changes then,
+    /// so no change comes after the last save.
+    async fn changing<T>(&self, change: impl FnOnce(&mut Sender) -> T) -> Option<T> {
         let mut sender = self.sender.lock().await;
+        if *self.stop.borrow() {
+            return None;
+        }
         let changed = change(&mut sender);
         // The reader is gone only once the server stops: nobody needs the moment then.
         let _ = self.moments.send(Moment::of(&sender));
-        self.patch.send_replace(show::Kept::of(&sender));
-        changed
+        self.patch.send_if_modified(|kept| kept.follow(&sender));
+        Some(changed)
+    }
+
+    /// Stops the engine: under the front, so every change admitted before is one the
+    /// last save has, and none is admitted after.
+    async fn stopping(&self) {
+        let _front = self.sender.lock().await;
+        self.stop.send_replace(true);
     }
 }
 

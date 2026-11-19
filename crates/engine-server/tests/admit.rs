@@ -3,18 +3,21 @@
 //! while another client's edit is still being prepared. A refused admission, for a stale
 //! base, a full queue or an edit the project refuses, keeps the project, the patch and
 //! the looks (what the show file saves) and the next DMX frame. The tick is stepped, so a
-//! held tick takes no command and a full queue stays full.
+//! held tick takes no command and a full queue stays full. Over `/api`, a press needs no
+//! thread of the blocking pool, and an edit admitted after `Stop` is refused.
 
 mod common;
 
-use common::{Heard, open};
+use common::{Heard, Socket, answer, command, connect, open, send, serve};
 use engine::{
-    Adapter, Begun, ChannelNumbers, Command, Engine, Fixture, Light, OutputKind, OutputNumber,
-    PlayId, QUEUE, Refusal, Rgb, RunNumbers, Sender, Target, Text, Universes, Wakes,
+    Adapter, Begun, ChannelNumbers, Color, Command, Engine, Event, Fixture, Light, OutputKind,
+    OutputNumber, PlayId, QUEUE, Refusal, Rgb, RunNumbers, Sender, Target, Text, Universes, Wakes,
 };
 use engine_core::{PLAYS, Step};
+use serde_json::{Value, json};
+use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 /// The test definition of a Generic RGB, read when the test is built.
@@ -216,7 +219,17 @@ fn a_refused_admission_keeps_the_project_the_looks_and_the_next_frame() {
         name: text("renamed"),
     };
     let save_three = || step(3, GREEN);
-    let cases: [Case; 10] = [
+    // RGB DDP sends 510 channels of universe 1: a PAR at 1:510 would lose two
+    let ddp = || Command::SetOutput {
+        output: OutputNumber::try_from(2).unwrap(),
+        kind: OutputKind::Ddp {
+            address: "127.0.0.1:4048".parse().unwrap(),
+            color: Color::Rgb,
+        },
+        universes: RunNumbers { first: 1, count: 1 },
+        rate: None,
+    };
+    let cases: [Case; 11] = [
         // stale base: another client's edit admitted while this one was prepared
         (
             "a step over a renamed patch",
@@ -240,6 +253,12 @@ fn a_refused_admission_keeps_the_project_the_looks_and_the_next_frame() {
                 },
             },
             Before::Admitted(save_three),
+            Refusal::Stale,
+        ),
+        (
+            "a patch over a new output",
+            |_| par(510),
+            Before::Admitted(ddp),
             Refusal::Stale,
         ),
         // exhausted credits: no place in the queue
@@ -382,4 +401,268 @@ fn with_every_play_slot_taken_a_release_and_a_fresh_start_need_only_room_in_the_
         then(&mut front, play);
         assert_eq!(front.frame(), frame, "{name}");
     }
+}
+
+/// A runtime whose blocking pool has one thread, which [`busy`] can take.
+fn one_blocking_thread() -> tokio::runtime::Runtime {
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .max_blocking_threads(1)
+        .enable_all()
+        .build()
+        .unwrap()
+}
+
+/// Takes the one thread of the blocking pool, as a save, a device opening or another
+/// client's edit being prepared does, until the returned sender is dropped.
+async fn busy() -> std::sync::mpsc::Sender<()> {
+    let (release, gate) = std::sync::mpsc::channel::<()>();
+    let (started, running) = tokio::sync::oneshot::channel();
+    tokio::task::spawn_blocking(move || {
+        let _ = started.send(());
+        let _ = gate.recv();
+    });
+    running.await.unwrap();
+    release
+}
+
+/// A served engine on a stepped clock, its tick held, the frames of its fake DMX USB Pro
+/// in `heard`. A PAR at 1:1 at full held blue, then look 1 red playing as `play`, look 2
+/// green saved.
+struct Served {
+    socket: Socket,
+    wakes: Wakes,
+    heard: Heard,
+    /// The frames handed to the adapter so far.
+    handed: usize,
+    play: PlayId,
+    stop: Arc<AtomicBool>,
+}
+
+impl Drop for Served {
+    fn drop(&mut self) {
+        self.wakes.run();
+        self.stop.store(true, Ordering::Relaxed);
+    }
+}
+
+impl Served {
+    async fn start() -> Self {
+        let heard = Heard::default();
+        let stop = Arc::new(AtomicBool::new(false));
+        let opens = open(Some(Arc::clone(&heard)), Arc::clone(&stop));
+        let (engine, mut sender, wakes) =
+            Engine::start_stepped(Universes::new(1).unwrap(), opens).unwrap();
+        let library = [fixture_library::parse("Generic-Generic-RGB.qxf", GENERIC_RGB).unwrap()];
+        let dmx = Command::SetOutput {
+            output: OutputNumber::try_from(1).unwrap(),
+            kind: OutputKind::DmxUsbPro {
+                adapter: Adapter::FIRST,
+            },
+            universes: RunNumbers { first: 1, count: 1 },
+            rate: None,
+        };
+        let Ok(Begun::Opening(opening)) = sender.begin(dmx, &library) else {
+            panic!("the adapter opens");
+        };
+        sender.finish(opening.open()).unwrap();
+        let fixture = Target::Fixture { fixture: 1 };
+        let setup = [
+            par(1),
+            Command::SetIntensity {
+                target: fixture,
+                intensity: u16::MAX,
+            },
+            Command::SetColour {
+                target: fixture,
+                red: 0,
+                green: 0,
+                blue: u16::MAX,
+            },
+            step(1, RED),
+            step(2, GREEN),
+        ];
+        for command in setup {
+            sender.begin(command, &library).unwrap();
+        }
+        let Ok(Begun::Started { play }) = sender.begin(Command::StartLook { look: 1 }, &library)
+        else {
+            panic!("look 1 plays");
+        };
+        // served while the clock runs: the server's first picture needs a wake
+        let socket = connect(serve(engine, sender, None).await).await;
+        wakes.hold().unwrap();
+        let mut served = Self {
+            socket,
+            wakes,
+            heard,
+            handed: 0,
+            play,
+            stop,
+        };
+        assert_eq!(served.first_frame(), [255, 0, 0], "look 1 plays red");
+        served
+    }
+
+    /// Lets wakes through until one hands the adapter a frame: its bytes at 1:1 to 1:3,
+    /// once on the wire. Every command admitted before is in it.
+    fn first_frame(&mut self) -> [u8; 3] {
+        let before = self.handed;
+        while self.handed == before {
+            self.wakes.wake().unwrap();
+            let events = self.wakes.events();
+            self.handed += events
+                .iter()
+                .filter(|event| matches!(event, Event::Handed { .. }))
+                .count();
+        }
+        let started = Instant::now();
+        loop {
+            let frames = self.heard.lock().unwrap();
+            if let Some(frame) = frames.get(self.handed - 1) {
+                return [frame[0], frame[1], frame[2]];
+            }
+            drop(frames);
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "no frame heard"
+            );
+            std::thread::yield_now();
+        }
+    }
+}
+
+/// The name of a reply: `"Accepted"`, or its one key.
+fn named(reply: &Value) -> String {
+    match reply {
+        Value::String(name) => name.clone(),
+        Value::Object(fields) => fields.keys().next().cloned().unwrap_or_default(),
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::Array(_) => reply.to_string(),
+    }
+}
+
+/// (what, the press, the reply's name, the bytes at 1:1 to 1:3 in the first frame after it)
+type Press = (&'static str, fn(PlayId) -> Value, &'static str, [u8; 3]);
+
+#[test]
+fn a_press_over_the_api_is_in_the_first_frame_after_it_while_the_blocking_pool_is_busy() {
+    let cases: [Press; 5] = [
+        (
+            "a colour, newer than the play",
+            |_| {
+                json!({"SetColour": {"target": {"Fixture": {"fixture": 1}},
+                    "red": 0, "green": 65535, "blue": 0}})
+            },
+            "Accepted",
+            [0, 255, 0],
+        ),
+        (
+            "a channel held",
+            |_| json!({"SetChannel": {"channel": {"universe": 1, "address": 1}, "value": 91}}),
+            "Accepted",
+            [91, 0, 0],
+        ),
+        (
+            "a start of look 2",
+            |_| json!({"StartLook": {"look": 2}}),
+            "Started",
+            [0, 255, 0],
+        ),
+        (
+            "a release of look 1",
+            |play| json!({"ReleaseHold": {"play": play}}),
+            "Accepted",
+            [0, 0, 255],
+        ),
+        (
+            "a blackout",
+            |_| json!({"Blackout": {"on": true}}),
+            "Accepted",
+            [0, 0, 0],
+        ),
+    ];
+    let runtime = one_blocking_thread();
+    for (name, press, reply, frame) in cases {
+        runtime.block_on(async {
+            let mut served = Served::start().await;
+            let release = busy().await;
+            let press = json!({"Send": {"command": press(served.play)}});
+            send(&mut served.socket, &press).await;
+            let answered = tokio::time::timeout(Duration::from_secs(2), answer(&mut served.socket))
+                .await
+                .unwrap_or_else(|_| panic!("{name}: no answer while the blocking pool is busy"));
+            assert_eq!(named(&answered), reply, "{name}: {answered}");
+            assert_eq!(served.first_frame(), frame, "{name}");
+            drop(release);
+            send(&mut served.socket, &json!("Stop")).await;
+        });
+    }
+}
+
+#[test]
+fn an_edit_admitted_after_stop_is_answered_stopping_so_every_accepted_one_is_saved() {
+    let runtime = one_blocking_thread();
+    runtime.block_on(async {
+        let file = std::env::temp_dir().join(format!(
+            "bossylights-admit-{}-stop.json",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&file);
+        let definitions =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../fixture-library/tests/definitions");
+        let (engine, sender) = Engine::start(Universes::new(1).unwrap()).unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let served = tokio::spawn(engine_server::serve(
+            listener,
+            engine,
+            sender,
+            Some(definitions),
+            Some(file.clone()),
+        ));
+        let (mut a, mut b) = (connect(address).await, connect(address).await);
+        let par = json!({"Patch": {
+            "name": "PAR", "maker": "Generic", "model": "Generic RGB", "mode": "RGB",
+            "at": {"universe": 1, "address": 1},
+        }});
+        let started = Instant::now();
+        loop {
+            let reply = command(&mut a, par.clone()).await;
+            if reply != json!({"Refused": {"reason": "NoSuchFixture"}}) {
+                assert_eq!(reply, json!({"Patched": {"fixture": 1}}));
+                break;
+            }
+            assert!(started.elapsed() < Duration::from_secs(10), "no library");
+        }
+        while !std::fs::read_to_string(&file).is_ok_and(|text| text.contains("\"PAR\"")) {
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "the patch not saved"
+            );
+            tokio::task::yield_now().await;
+        }
+        // A's step is prepared on the blocking pool, which is busy: it waits there
+        let release = busy().await;
+        let red = json!({"PutStep": {"look": 1, "name": "red", "step": {
+            "target": {"Fixture": {"fixture": 1}},
+            "values": {"intensity": null, "colour": {"red": 65535, "green": 0, "blue": 0},
+                "position": null, "zoom": null, "gobo": null},
+        }}});
+        send(&mut a, &json!({"Send": {"command": red}})).await;
+        // time for A's connection to reach the pool: nothing to observe it by
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        // B stops the engine: the last save is taken now
+        send(&mut b, &json!("Stop")).await;
+        assert_eq!(answer(&mut b).await, json!("Stopping"));
+        drop(release);
+        let replied = answer(&mut a).await;
+        drop(served.await.unwrap().unwrap());
+        let saved: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        assert_eq!(
+            (replied, saved["looks"].clone()),
+            (json!("Stopping"), json!([])),
+            "an edit admitted after the last save is refused"
+        );
+        let _ = std::fs::remove_file(&file);
+    });
 }

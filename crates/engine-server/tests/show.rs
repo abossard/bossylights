@@ -2,7 +2,8 @@
 //! without the library: the patch and the groups are there and light up on DDP. A file
 //! the engine cannot open is left alone and the picture says why. A save that cannot be
 //! written leaves the file as it was, and the picture says so until the next save. A
-//! change that would take the file over its most bytes is refused, and the file kept.
+//! change that would take the file over its most bytes is refused, and the file kept. So
+//! is a step over a patch that leaves the looks no room. A refused edit saves nothing.
 
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
@@ -455,5 +456,126 @@ async fn a_change_that_would_take_the_file_over_the_most_is_refused_and_the_file
     let saved = std::fs::read_to_string(&file).unwrap();
     assert_eq!(saved.len(), most);
     assert!(saved.contains("\"PAR 2\""));
+    let _ = std::fs::remove_file(&file);
+}
+
+/// A step for fixture 1 in red, saved as look `look` named `name`.
+fn red_step(look: u16, name: &str) -> Value {
+    json!({"PutStep": {"look": look, "name": name, "step": {
+        "target": {"Fixture": {"fixture": 1}},
+        "values": {"intensity": null, "colour": {"red": 65535, "green": 0, "blue": 0},
+            "position": null, "zoom": null, "gobo": null},
+    }}})
+}
+
+#[tokio::test]
+async fn a_step_over_a_patch_that_leaves_the_looks_no_room_is_refused_and_the_file_kept() {
+    let file = show_file("no_room");
+    let (mut first, listen) = engine(&file, true);
+    let mut socket = connect(&listen).await;
+    until_show(&mut socket, &json!("Kept")).await;
+    assert_eq!(
+        patch_once_read(&mut socket, par("PAR 1", 37)).await,
+        json!({"Patched": {"fixture": 1}})
+    );
+    stop(&mut socket, &mut first).await;
+    let text = std::fs::read_to_string(&file).unwrap();
+    let red = "\"name\": \"Red\"";
+    let most = show_file::LIMIT.most;
+    let full = json!({"Refused": {"reason": {"ShowFileFull": {"most": most}}}});
+    // (the file's length, by the red channel's longer name, what the step gets)
+    let cases = [
+        (most, json!("Accepted")),
+        (most + 1, full.clone()),
+        (show_file::MOST_BYTES, full),
+    ];
+    for (length, reply) in cases {
+        let longer = format!("\"name\": \"Red{}\"", "x".repeat(length - text.len()));
+        let opened = text.replacen(red, &longer, 1);
+        std::fs::write(&file, &opened).unwrap();
+        let (mut running, listen) = engine(&file, false);
+        let mut socket = connect(&listen).await;
+        until_show(&mut socket, &json!("Kept")).await;
+        assert_eq!(
+            command(&mut socket, red_step(1, "red")).await,
+            reply,
+            "{length}"
+        );
+        stop(&mut socket, &mut running).await;
+        let saved = std::fs::read_to_string(&file).unwrap();
+        if reply == json!("Accepted") {
+            assert!(saved.contains("\"red\""), "{length}");
+            assert!(saved.len() <= show_file::MOST_BYTES, "{length}");
+        } else {
+            assert!(saved == opened, "{length}: the file kept");
+        }
+    }
+    let _ = std::fs::remove_file(&file);
+}
+
+#[tokio::test]
+async fn a_refused_edit_after_a_save_that_failed_leaves_the_file_as_it_was() {
+    let file = show_file("refused");
+    let (mut running, listen) = engine(&file, true);
+    let mut socket = connect(&listen).await;
+    until_show(&mut socket, &json!("Kept")).await;
+    assert_eq!(
+        patch_once_read(&mut socket, par("PAR 1", 37)).await,
+        json!({"Patched": {"fixture": 1}})
+    );
+    assert_eq!(
+        command(&mut socket, red_step(1, "one")).await,
+        json!("Accepted")
+    );
+    let start = json!({"StartLook": {"look": 1}});
+    assert!(command(&mut socket, start).await.get("Started").is_some());
+    until_saved(&file, "\"one\"").await;
+    let saved = std::fs::read_to_string(&file).unwrap();
+
+    // the new file cannot be made: a folder has its name
+    std::fs::create_dir(saving(&file)).unwrap();
+    assert_eq!(
+        command(&mut socket, red_step(2, "two")).await,
+        json!("Accepted")
+    );
+    until_show(&mut socket, &json!("NotSaved")).await;
+    std::fs::remove_dir(saving(&file)).unwrap();
+    // refused edits and a press: none of them saves look 2
+    let refused = [
+        (
+            json!({"RemoveLook": {"look": 1}}),
+            json!({"Refused": {"reason": {"LookInUse": {"look": 1}}}}),
+        ),
+        (
+            json!({"Unpatch": {"fixture": 1}}),
+            json!({"Refused": {"reason": {"LookInUse": {"look": 1}}}}),
+        ),
+        (
+            json!({"SetChannel": {"channel": {"universe": 1, "address": 1}, "value": 91}}),
+            json!("Accepted"),
+        ),
+    ];
+    for (edit, reply) in refused {
+        assert_eq!(command(&mut socket, edit.clone()).await, reply, "{edit}");
+    }
+    // a save would be on disk well within this
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert!(
+        std::fs::read_to_string(&file).unwrap() == saved,
+        "saved by a refusal or a press"
+    );
+    until_show(&mut socket, &json!("NotSaved")).await;
+
+    // the next accepted edit saves both
+    assert_eq!(
+        command(&mut socket, red_step(3, "three")).await,
+        json!("Accepted")
+    );
+    until_show(&mut socket, &json!("Kept")).await;
+    stop(&mut socket, &mut running).await;
+    let text = std::fs::read_to_string(&file).unwrap();
+    for name in ["\"one\"", "\"two\"", "\"three\""] {
+        assert!(text.contains(name), "{name}: {text}");
+    }
     let _ = std::fs::remove_file(&file);
 }
