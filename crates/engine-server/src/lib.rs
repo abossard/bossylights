@@ -56,10 +56,17 @@ pub async fn serve(
         .map_or(ShowFile::None, |path| show::open(path, &mut sender));
     let (kept, shown) = watch::channel(opened);
     let (moments, taken) = mpsc::unbounded_channel();
-    let (patch, _) = watch::channel(show::Kept::of(&sender));
-    let keeper = show
-        .filter(|_| opened.saves())
-        .map(|path| tokio::spawn(show::keep(path, patch.subscribe(), kept, stop.subscribe())));
+    let saved = show::Kept::of(&sender);
+    let (patch, _) = watch::channel(saved.clone());
+    let keeper = show.filter(|_| opened.saves()).map(|path| {
+        tokio::spawn(show::keep(
+            path,
+            saved,
+            patch.subscribe(),
+            kept,
+            stop.subscribe(),
+        ))
+    });
     let first = Moment::of(&sender);
     // A snapshot of a wake after every command queued so far: taken under `first`.
     let picture = Picture::of(engine.fresh().clone(), &first, &shelf, &shown);
@@ -152,10 +159,12 @@ impl Picture {
     }
 }
 
-/// The front's project and patch once it had queued `sent` commands. A snapshot that
-/// applied exactly `sent` commands was taken under them.
+/// The front's project, patch and looks once a change ended: revision `revision`, after
+/// `sent` commands. A snapshot that read `revision` at its cutoff and applied exactly
+/// `sent` commands was taken under them.
 struct Moment {
     sent: u64,
+    revision: u64,
     project: Project,
     patch: Arc<Patch>,
     looks: Arc<Looks>,
@@ -165,6 +174,7 @@ impl Moment {
     fn of(sender: &Sender) -> Self {
         Self {
             sent: sender.sent(),
+            revision: sender.revision(),
             project: sender.project(),
             patch: sender.patch(),
             looks: sender.looks(),
@@ -172,15 +182,16 @@ impl Moment {
     }
 }
 
-/// The moment a snapshot that applied `applied` commands was taken under, if it is known:
-/// the newest one at exactly `applied`. `None` while the tick is part way through the
-/// commands of one change, or the change is not in `kept` yet. Forgets the moments
-/// older than it: `applied` never goes back.
-fn under(kept: &mut VecDeque<Moment>, applied: u64) -> Option<&Moment> {
-    while kept.get(1).is_some_and(|next| next.sent <= applied) {
+/// The moment a snapshot was taken under, if it is known: the one of the `revision` it
+/// read at its cutoff, with exactly its `applied` commands. `None` while the tick is part
+/// way through the commands of one change, or the change is not in `kept` yet. Forgets
+/// the moments older than it: the revision never goes back.
+fn under(kept: &mut VecDeque<Moment>, applied: u64, revision: u64) -> Option<&Moment> {
+    while kept.get(1).is_some_and(|next| next.revision <= revision) {
         kept.pop_front();
     }
-    kept.front().filter(|moment| moment.sent == applied)
+    kept.front()
+        .filter(|moment| moment.revision == revision && moment.sent == applied)
 }
 
 /// What the front holds besides the engine, as the reader takes it into each picture.
@@ -200,7 +211,7 @@ impl Front {
         while let Ok(moment) = self.moments.try_recv() {
             self.kept.push_back(moment);
         }
-        let moment = under(&mut self.kept, snapshot.applied())?;
+        let moment = under(&mut self.kept, snapshot.applied(), snapshot.revision())?;
         Some(Picture::of(
             snapshot.clone(),
             moment,
@@ -374,7 +385,8 @@ async fn edit(api: &Api, command: Command, shelf: &Arc<Shelf>) -> Option<Result<
             tokio::task::spawn_blocking(move || base.prepare(command, shelf.fixtures())).await;
         begun = match prepared {
             Ok(Ok(prepared)) => api.changing(|sender| sender.admit(prepared)).await,
-            Ok(Err(reason)) => Some(Err(reason)),
+            // refused before the engine stops, or answered `Stopping` as an admitted one is
+            Ok(Err(reason)) => (!*api.stop.borrow()).then_some(Err(reason)),
             Err(_) => None, // the task was cancelled: the engine stops
         };
         if !matches!(begun, Some(Err(Refusal::Stale))) {
@@ -396,6 +408,7 @@ impl Api {
             return None;
         }
         let changed = change(&mut sender);
+        sender.revise();
         // The reader is gone only once the server stops: nobody needs the moment then.
         let _ = self.moments.send(Moment::of(&sender));
         self.patch.send_if_modified(|kept| kept.follow(&sender));
@@ -468,6 +481,7 @@ mod tests {
     use engine::{ChannelNumbers, Light, Rgb, Target, Text, Universes};
     use engine_core::Step;
     use serde_json::Value;
+    use std::io;
 
     /// The test definition of a Generic RGB, read when the test is built.
     const GENERIC_RGB: &[u8] =
@@ -517,6 +531,7 @@ mod tests {
         // as `changing` does: each change, then its moment
         let mut change = |command| {
             let begun = sender.begin(command, &library).unwrap();
+            sender.revise();
             moments.send(Moment::of(&sender)).unwrap();
             begun
         };
@@ -585,30 +600,111 @@ mod tests {
     }
 
     #[test]
-    fn a_snapshot_is_paired_only_with_the_moment_at_exactly_its_applied_commands() {
+    fn a_picture_shows_the_looks_renamed_before_its_cutoff_never_after() {
+        let library = [fixture_library::parse("Generic-Generic-RGB.qxf", GENERIC_RGB).unwrap()];
+        let red = Rgb {
+            red: u16::MAX,
+            green: 0,
+            blue: 0,
+        };
+        let named = |name| Command::PutStep {
+            look: 1,
+            name: Text::new(name).unwrap(),
+            step: Step {
+                target: Target::Fixture { fixture: 1 },
+                values: Light {
+                    colour: Some(red),
+                    ..Light::DARK
+                },
+            },
+        };
+        // (when idle look 1 is renamed from A to B, the name in the picture of that wake)
+        let cases = [("before the wake", "B"), ("at its held cutoff", "A")];
+        for (when, name) in cases {
+            let none: engine::Open = Box::new(|_| Err(io::Error::other("no devices")));
+            let (mut engine, mut sender, wakes) =
+                Engine::start_stepped(Universes::new(1).unwrap(), none).unwrap();
+            let (moments, taken) = mpsc::unbounded_channel();
+            let mut front = Front {
+                shelf: library::start(None),
+                moments: taken,
+                kept: VecDeque::from([Moment::of(&sender)]),
+                show: watch::channel(ShowFile::None).1,
+            };
+            // as `changing` does: each change, then its moment
+            let mut change = |command| {
+                sender.begin(command, &library).unwrap();
+                sender.revise();
+                moments.send(Moment::of(&sender)).unwrap();
+            };
+            change(Command::Patch {
+                name: Text::new("PAR").unwrap(),
+                maker: Text::new("Generic").unwrap(),
+                model: Text::new("Generic RGB").unwrap(),
+                mode: Text::new("RGB").unwrap(),
+                at: ChannelNumbers {
+                    universe: 1,
+                    address: 1,
+                },
+            });
+            change(named("A"));
+            wakes.hold().unwrap();
+            wakes.wake().unwrap(); // the patch applied
+            let _ = engine.latest(); // asks for the next wake's picture
+            if when == "before the wake" {
+                change(named("B"));
+            }
+            wakes.cut().unwrap();
+            if when == "at its held cutoff" {
+                change(named("B"));
+            }
+            wakes.finish().unwrap();
+            let snapshot = engine.latest().clone();
+            let picture = front.picture(&snapshot).expect("its moment is kept");
+            let shown = picture.looks.get(1).map(|saved| saved.name.as_str());
+            assert_eq!(shown, Some(name), "renamed {when}");
+            wakes.run();
+        }
+    }
+
+    #[test]
+    fn a_snapshot_is_paired_only_with_the_moment_of_its_revision_at_exactly_its_applied_commands() {
         let (_engine, sender) = Engine::start(Universes::new(1).unwrap()).unwrap();
-        // (sent of each kept moment, applied, sent of the moment found, sent of those kept after)
+        // (sent of each kept moment, its revision its place; applied and the revision read
+        // at the cutoff; the revision found; the revisions kept after)
         let cases = [
-            (vec![0], 0, Some(0), vec![0]),
-            (vec![0], 1, None, vec![0]), // queued, its moment not here yet
-            (vec![0, 2], 1, None, vec![0, 2]), // part way through one change
-            (vec![0, 2], 2, Some(2), vec![2]),
-            (vec![0, 2, 2], 2, Some(2), vec![2]), // a change that queued nothing: the newest
-            (vec![0, 2, 5], 3, None, vec![2, 5]),
-            (vec![0, 2, 5], 7, None, vec![5]),
+            (vec![0], 0, 0, Some(0), vec![0]),
+            (vec![0], 1, 0, None, vec![0]), // queued, its moment not here yet
+            (vec![0], 0, 1, None, vec![0]), // ended, its moment not here yet
+            (vec![0, 2], 1, 1, None, vec![1]), // part way through one change
+            (vec![0, 2], 2, 1, Some(1), vec![1]),
+            (vec![0, 2, 2], 2, 1, Some(1), vec![1, 2]), // a rename after the cutoff
+            (vec![0, 2, 2], 2, 2, Some(2), vec![2]),    // a rename before it
+            (vec![0, 2, 5], 3, 2, None, vec![2]),
+            (vec![0, 2, 5], 5, 2, Some(2), vec![2]),
         ];
-        for (sents, applied, found, left) in cases {
-            let mut kept: VecDeque<Moment> = sents
-                .iter()
-                .map(|&sent| Moment {
+        for (sents, applied, revision, found, left) in cases {
+            // each revision its own looks: what a picture of it shows
+            let looks: Vec<Arc<Looks>> = sents.iter().map(|_| Arc::new(Looks::new())).collect();
+            let mut kept: VecDeque<Moment> = (0..)
+                .zip(&sents)
+                .zip(&looks)
+                .map(|((revision, &sent), looks)| Moment {
                     sent,
+                    revision,
+                    looks: Arc::clone(looks),
                     ..Moment::of(&sender)
                 })
                 .collect();
-            let moment = under(&mut kept, applied).map(|moment| moment.sent);
-            assert_eq!(moment, found, "{sents:?} at {applied}");
-            let after: Vec<u64> = kept.iter().map(|moment| moment.sent).collect();
-            assert_eq!(after, left, "{sents:?} at {applied}");
+            let case = format!("{sents:?} at {applied}, revision {revision}");
+            let moment = under(&mut kept, applied, revision).map(|moment| {
+                let at = usize::try_from(moment.revision).unwrap();
+                assert!(Arc::ptr_eq(&moment.looks, &looks[at]), "{case}");
+                moment.revision
+            });
+            assert_eq!(moment, found, "{case}");
+            let after: Vec<u64> = kept.iter().map(|moment| moment.revision).collect();
+            assert_eq!(after, left, "{case}");
         }
     }
 }

@@ -7,8 +7,8 @@
 //!
 //! | A change | Refused when |
 //! |---|---|
-//! | save a step | its target names nothing patched, or [`LOOKS`] are saved |
-//! | change the patch or a group | a saved look's target would name nothing, or a play's lights would change |
+//! | save a step | its target names nothing patched or an empty group, or [`LOOKS`] are saved |
+//! | change the patch or a group | a saved look's target would name nothing or no light, or a play's lights would change |
 //! | remove a look | a play uses it |
 
 #![no_std]
@@ -82,8 +82,12 @@ impl Looks {
 }
 
 /// The plan of `step` in `patch`: its values on each run of lights its target names.
+/// `EmptyGroup` when it names no light.
 pub fn compile(step: &Step, patch: &Patch) -> Result<Box<[Entry]>, Refusal> {
     let runs = patch.runs(step.target)?;
+    if runs.is_empty() {
+        return Err(Refusal::EmptyGroup);
+    }
     rig::supports(patch.writers(), &runs, &step.values)?;
     Ok(runs
         .into_iter()

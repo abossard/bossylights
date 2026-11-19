@@ -50,6 +50,8 @@ pub struct Snapshot {
     latency: Times<LATENCY_BUCKETS>,
     /// Commands applied, so far: the first this many the sender queued.
     applied: u64,
+    /// The sender's revision at this wake's cutoff.
+    revision: u64,
 }
 
 /// How late an output's device was handed its frames, so far: on the output's own
@@ -74,6 +76,7 @@ impl Snapshot {
             handed: [0; MAX_OUTPUTS],
             latency: Times::ZERO,
             applied: 0,
+            revision: 0,
         }
     }
 
@@ -126,6 +129,13 @@ impl Snapshot {
         self.applied
     }
 
+    /// The changes the sender ended before this wake's cutoff ([`crate::Sender::revise`]).
+    /// With [`Snapshot::applied`], pairs a snapshot with the project it was taken under:
+    /// a change that queued no command is in it only if it ended before the cutoff.
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
     /// Makes `to` this snapshot without allocating: both have every light.
     pub(crate) fn copy_to(&self, to: &mut Self) {
         let Self {
@@ -139,6 +149,7 @@ impl Snapshot {
             handed,
             latency,
             applied,
+            revision,
         } = self;
         to.state = *state;
         to.universes = *universes;
@@ -151,6 +162,12 @@ impl Snapshot {
         to.handed = *handed;
         to.latency = *latency;
         to.applied = *applied;
+        to.revision = *revision;
+    }
+
+    /// The sender's revision read at this wake's cutoff.
+    pub(crate) fn revised(&mut self, revision: u64) {
+        self.revision = revision;
     }
 
     /// One more command was applied.

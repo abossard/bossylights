@@ -4,6 +4,7 @@
 //! written leaves the file as it was, and the picture says so until the next save. A
 //! change that would take the file over its most bytes is refused, and the file kept. So
 //! is a step over a patch that leaves the looks no room. A refused edit saves nothing.
+//! An edit made before the keeper first looks is saved.
 
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
@@ -577,5 +578,41 @@ async fn a_refused_edit_after_a_save_that_failed_leaves_the_file_as_it_was() {
     for name in ["\"one\"", "\"two\"", "\"three\""] {
         assert!(text.contains(name), "{name}: {text}");
     }
+    let _ = std::fs::remove_file(&file);
+}
+
+/// The test definition of a Generic RGB, read when the test is built.
+const GENERIC_RGB: &[u8] =
+    include_bytes!("../../fixture-library/tests/definitions/Generic-Generic-RGB.qxf");
+
+#[tokio::test]
+async fn an_edit_admitted_before_the_keeper_first_looks_is_saved_on_stop() {
+    use engine_server::show::{Kept, keep};
+    let file = show_file("first-edit");
+    let library = [fixture_library::parse("Generic-Generic-RGB.qxf", GENERIC_RGB).unwrap()];
+    let (_engine, mut sender) = engine::Engine::start(engine::Universes::new(1).unwrap()).unwrap();
+    // as `serve` starts: the file opened, the keeper made
+    let opened = Kept::of(&sender);
+    let (patches, _) = tokio::sync::watch::channel(opened.clone());
+    let (state, _) = tokio::sync::watch::channel(engine_core::ShowFile::Kept);
+    let (stop, _) = tokio::sync::watch::channel(false);
+    let keeper = keep(
+        file.clone(),
+        opened,
+        patches.subscribe(),
+        state,
+        stop.subscribe(),
+    );
+    // a PAR patched before the keeper first runs, then Stop
+    let par = serde_json::from_value(par("PAR", 1)).unwrap();
+    sender.begin(par, &library).unwrap();
+    patches.send_if_modified(|kept| kept.follow(&sender));
+    stop.send_replace(true);
+    keeper.await;
+    let saved = std::fs::read_to_string(&file).unwrap_or_default();
+    assert!(
+        saved.contains("\"PAR\""),
+        "the first edit is saved: {saved:?}"
+    );
     let _ = std::fs::remove_file(&file);
 }

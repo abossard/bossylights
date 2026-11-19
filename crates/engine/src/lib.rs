@@ -416,6 +416,8 @@ struct Shared {
     stop: AtomicBool,
     /// Devices the free thread freed, so far.
     freed: AtomicU64,
+    /// Changes the sender ended, so far ([`Sender::revise`]). A wake reads it at its cutoff.
+    revision: AtomicU64,
 }
 
 impl Engine {
@@ -449,6 +451,7 @@ impl Engine {
         let shared = Arc::new(Shared {
             stop: AtomicBool::new(false),
             freed: AtomicU64::new(0),
+            revision: AtomicU64::new(0),
         });
         let (hand, queues) = snapshot::hand_over();
         let (commands, incoming) = rtrb::RingBuffer::new(QUEUE);
@@ -807,6 +810,20 @@ impl Sender {
         self.sent
     }
 
+    /// Ends a change, once its commands are queued: the project, the patch and the looks
+    /// as they are now are the next revision. A change that queues nothing (a rename of a
+    /// look no play shows) is told apart from the one before by it. A wake reads the
+    /// revision at its cutoff ([`Snapshot::revision`]): a change ended after it is not in
+    /// that snapshot.
+    pub fn revise(&mut self) {
+        self.shared.revision.fetch_add(1, Ordering::Release);
+    }
+
+    /// The changes ended so far ([`Sender::revise`]).
+    pub fn revision(&self) -> u64 {
+        self.shared.revision.load(Ordering::Relaxed)
+    }
+
     /// Queues `command` with what it `brings`. A device `Attach` brings and
     /// `RemoveOutput` send the old one back; `Attach` with no device keeps it. `Writers`
     /// send the old writers back, `Runs` the runs it brought.
@@ -1038,6 +1055,10 @@ impl Ticker {
             // published after it waits for the next wake.
             let asked = self.hand.asked();
             let published = self.commands.slots().min(QUEUE);
+            // read after the commands are counted: a change it counts has all its
+            // commands in this wake, or its moment's commands are more than applied
+            self.now
+                .revised(self.shared.revision.load(Ordering::Acquire));
             let now = self.clock.cutoff(&self.shared.stop);
             self.apply(EngineCommand::Tick { now });
 

@@ -10,8 +10,9 @@ mod common;
 
 use common::{Heard, Socket, answer, command, connect, open, send, serve};
 use engine::{
-    Adapter, Begun, ChannelNumbers, Color, Command, Engine, Event, Fixture, Light, OutputKind,
-    OutputNumber, PlayId, QUEUE, Refusal, Rgb, RunNumbers, Sender, Target, Text, Universes, Wakes,
+    Adapter, Begun, ChannelNumbers, Color, Command, Engine, Event, Fixture, Light, Member,
+    MemberList, Members, OutputKind, OutputNumber, PlayId, QUEUE, Refusal, Rgb, RunNumbers, Sender,
+    Target, Text, Universes, Wakes,
 };
 use engine_core::{PLAYS, Step};
 use serde_json::{Value, json};
@@ -50,6 +51,33 @@ fn step(look: u16, [red, green, blue]: [u16; 3]) -> Command {
             target: Target::Fixture { fixture: 1 },
             values: Light {
                 colour: Some(Rgb { red, green, blue }),
+                ..Light::DARK
+            },
+        },
+    }
+}
+
+/// Group "g" of `members`.
+fn group(members: &[Member]) -> Command {
+    Command::SetGroup {
+        name: text("g"),
+        members: MemberList::Fits(Members::new(members).unwrap()),
+    }
+}
+
+/// Look `look` saved as group "g" in red.
+fn on_group(look: u16) -> Command {
+    Command::PutStep {
+        look,
+        name: text("g"),
+        step: Step {
+            target: Target::Group { group: text("g") },
+            values: Light {
+                colour: Some(Rgb {
+                    red: u16::MAX,
+                    green: 0,
+                    blue: 0,
+                }),
                 ..Light::DARK
             },
         },
@@ -199,11 +227,12 @@ impl Front {
     }
 }
 
-/// Before the refused command: nothing, another client's admitted edit (the base moves
-/// on), a full queue, or every play slot taken.
+/// Before the refused command: nothing, edits taken before its base, another client's
+/// admitted edit (the base moves on), a full queue, or every play slot taken.
 #[derive(Clone, Copy, Debug)]
 enum Before {
     Nothing,
+    Saved(fn() -> Vec<Command>),
     Admitted(fn() -> Command),
     Full,
     PlaysFull,
@@ -229,7 +258,15 @@ fn a_refused_admission_keeps_the_project_the_looks_and_the_next_frame() {
         universes: RunNumbers { first: 1, count: 1 },
         rate: None,
     };
-    let cases: [Case; 11] = [
+    // a PAR at 1:4 alone in group "g", idle look 3 saved on the group
+    let grouped = || {
+        vec![
+            par(4),
+            group(&[Member::Fixture { fixture: 2 }]),
+            on_group(3),
+        ]
+    };
+    let cases: [Case; 14] = [
         // stale base: another client's edit admitted while this one was prepared
         (
             "a step over a renamed patch",
@@ -313,12 +350,36 @@ fn a_refused_admission_keeps_the_project_the_looks_and_the_next_frame() {
             Before::Nothing,
             Refusal::LookInUse { look: 1 },
         ),
+        (
+            "emptying the group of an idle look",
+            |_| group(&[]),
+            Before::Saved(grouped),
+            Refusal::LookInUse { look: 3 },
+        ),
+        (
+            "unpatching the one member of the group of an idle look",
+            |_| Command::Unpatch { fixture: 2 },
+            Before::Saved(grouped),
+            Refusal::LookInUse { look: 3 },
+        ),
+        (
+            "a step on an empty group",
+            |_| on_group(4),
+            Before::Saved(|| vec![group(&[])]),
+            Refusal::EmptyGroup,
+        ),
     ];
     for (name, command, before, refusal) in cases {
         let (mut front, play) = Front::start();
         let command = command(play);
         let prepared = match before {
             Before::Nothing => front.sender.base().prepare(command, &front.library),
+            Before::Saved(edits) => {
+                for edit in edits() {
+                    front.begin(edit).unwrap();
+                }
+                front.sender.base().prepare(command, &front.library)
+            }
             Before::Full => {
                 front.fill();
                 front.sender.base().prepare(command, &front.library)
@@ -601,68 +662,73 @@ fn a_press_over_the_api_is_in_the_first_frame_after_it_while_the_blocking_pool_i
 
 #[test]
 fn an_edit_admitted_after_stop_is_answered_stopping_so_every_accepted_one_is_saved() {
+    // (what, the step's fixture): a step the patch takes, and one it refuses
+    let cases = [("a red step", 1), ("a step of nothing patched", 9)];
     let runtime = one_blocking_thread();
-    runtime.block_on(async {
-        let file = std::env::temp_dir().join(format!(
-            "bossylights-admit-{}-stop.json",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_file(&file);
-        let definitions =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../fixture-library/tests/definitions");
-        let (engine, sender) = Engine::start(Universes::new(1).unwrap()).unwrap();
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let served = tokio::spawn(engine_server::serve(
-            listener,
-            engine,
-            sender,
-            Some(definitions),
-            Some(file.clone()),
-        ));
-        let (mut a, mut b) = (connect(address).await, connect(address).await);
-        let par = json!({"Patch": {
-            "name": "PAR", "maker": "Generic", "model": "Generic RGB", "mode": "RGB",
-            "at": {"universe": 1, "address": 1},
-        }});
-        let started = Instant::now();
-        loop {
-            let reply = command(&mut a, par.clone()).await;
-            if reply != json!({"Refused": {"reason": "NoSuchFixture"}}) {
-                assert_eq!(reply, json!({"Patched": {"fixture": 1}}));
-                break;
+    for (name, fixture) in cases {
+        runtime.block_on(async {
+            let file = std::env::temp_dir().join(format!(
+                "bossylights-admit-{}-stop-{fixture}.json",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_file(&file);
+            let definitions =
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("../fixture-library/tests/definitions");
+            let (engine, sender) = Engine::start(Universes::new(1).unwrap()).unwrap();
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let served = tokio::spawn(engine_server::serve(
+                listener,
+                engine,
+                sender,
+                Some(definitions),
+                Some(file.clone()),
+            ));
+            let (mut a, mut b) = (connect(address).await, connect(address).await);
+            let par = json!({"Patch": {
+                "name": "PAR", "maker": "Generic", "model": "Generic RGB", "mode": "RGB",
+                "at": {"universe": 1, "address": 1},
+            }});
+            let started = Instant::now();
+            loop {
+                let reply = command(&mut a, par.clone()).await;
+                if reply != json!({"Refused": {"reason": "NoSuchFixture"}}) {
+                    assert_eq!(reply, json!({"Patched": {"fixture": 1}}));
+                    break;
+                }
+                assert!(started.elapsed() < Duration::from_secs(10), "no library");
             }
-            assert!(started.elapsed() < Duration::from_secs(10), "no library");
-        }
-        while !std::fs::read_to_string(&file).is_ok_and(|text| text.contains("\"PAR\"")) {
-            assert!(
-                started.elapsed() < Duration::from_secs(10),
-                "the patch not saved"
+            while !std::fs::read_to_string(&file).is_ok_and(|text| text.contains("\"PAR\"")) {
+                assert!(
+                    started.elapsed() < Duration::from_secs(10),
+                    "the patch not saved"
+                );
+                tokio::task::yield_now().await;
+            }
+            // A's step is prepared on the blocking pool, which is busy: it waits there
+            let release = busy().await;
+            let red = json!({"PutStep": {"look": 1, "name": "red", "step": {
+                "target": {"Fixture": {"fixture": fixture}},
+                "values": {"intensity": null, "colour": {"red": 65535, "green": 0, "blue": 0},
+                    "position": null, "zoom": null, "gobo": null},
+            }}});
+            send(&mut a, &json!({"Send": {"command": red}})).await;
+            // time for A's connection to reach the pool: nothing to observe it by
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            // B stops the engine: the last save is taken now
+            send(&mut b, &json!("Stop")).await;
+            assert_eq!(answer(&mut b).await, json!("Stopping"));
+            drop(release);
+            let replied = answer(&mut a).await;
+            drop(served.await.unwrap().unwrap());
+            let saved: Value =
+                serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+            assert_eq!(
+                (replied, saved["looks"].clone()),
+                (json!("Stopping"), json!([])),
+                "{name}: an edit answered after the last save is answered Stopping"
             );
-            tokio::task::yield_now().await;
-        }
-        // A's step is prepared on the blocking pool, which is busy: it waits there
-        let release = busy().await;
-        let red = json!({"PutStep": {"look": 1, "name": "red", "step": {
-            "target": {"Fixture": {"fixture": 1}},
-            "values": {"intensity": null, "colour": {"red": 65535, "green": 0, "blue": 0},
-                "position": null, "zoom": null, "gobo": null},
-        }}});
-        send(&mut a, &json!({"Send": {"command": red}})).await;
-        // time for A's connection to reach the pool: nothing to observe it by
-        tokio::time::sleep(Duration::from_secs(1)).await;
-        // B stops the engine: the last save is taken now
-        send(&mut b, &json!("Stop")).await;
-        assert_eq!(answer(&mut b).await, json!("Stopping"));
-        drop(release);
-        let replied = answer(&mut a).await;
-        drop(served.await.unwrap().unwrap());
-        let saved: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
-        assert_eq!(
-            (replied, saved["looks"].clone()),
-            (json!("Stopping"), json!([])),
-            "an edit admitted after the last save is refused"
-        );
-        let _ = std::fs::remove_file(&file);
-    });
+            let _ = std::fs::remove_file(&file);
+        });
+    }
 }

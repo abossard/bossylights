@@ -72,16 +72,17 @@ impl Kept {
     }
 }
 
-/// Saves the patch and the looks to `path` after every change, while `state` says the file is saved.
+/// Saves the patch and the looks to `path` after every change from `saved` (what the
+/// file holds when the keeper is made), while `state` says the file is saved.
 /// A change made while a save runs is saved after it. Once `stopped`, saves the last
 /// change and ends.
 pub async fn keep(
     path: PathBuf,
+    mut saved: Kept,
     mut patches: watch::Receiver<Kept>,
     state: watch::Sender<ShowFile>,
     mut stopped: watch::Receiver<bool>,
 ) {
-    let mut saved = patches.borrow_and_update().clone();
     loop {
         let stopping = tokio::select! {
             changed = patches.changed() => changed.is_err(),

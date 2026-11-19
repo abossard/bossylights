@@ -192,4 +192,6 @@ pub enum Refusal {
     /// Another change came first: the command was checked against the project, the
     /// patch or the looks as they were before it. Nothing changed. Send it again.
     Stale,
+    /// The group has no members: a saved look's target names at least one light.
+    EmptyGroup,
 }
