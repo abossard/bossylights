@@ -10,6 +10,8 @@
 //! | save a step | its target names nothing patched or an empty group, or [`LOOKS`] are saved |
 //! | change the patch or a group | a saved look's target would name nothing or no light, or a play's lights would change |
 //! | remove a look | a play uses it |
+//!
+//! The Mixer's settings ([`MixRules`]) are saved beside the looks.
 
 #![no_std]
 #![forbid(unsafe_code)]
@@ -25,16 +27,27 @@ extern crate alloc;
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
-use engine_core::{Entry, LOOKS, Refusal, Saved, Step};
+use engine_core::{Entry, LOOKS, MixRules, Refusal, Saved, Step};
 use rig::Patch;
 
-/// The saved looks, by number. A change makes new looks: a reader keeps the ones it has.
+/// The saved looks, by number, and the Mixer's settings. A change makes new looks: a
+/// reader keeps the ones it has.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Looks(BTreeMap<u16, Saved>);
+pub struct Looks(BTreeMap<u16, Saved>, MixRules);
 
 impl Looks {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// The Mixer's settings saved with the looks.
+    pub const fn rules(&self) -> MixRules {
+        self.1
+    }
+
+    /// The looks with `rules` in place of the settings.
+    pub fn with_rules(&self, rules: MixRules) -> Self {
+        Self(self.0.clone(), rules)
     }
 
     /// Every saved look, by number.
@@ -57,14 +70,14 @@ impl Looks {
         compile(&saved.step, patch)?;
         let mut looks = self.0.clone();
         looks.insert(saved.look, saved);
-        Ok(Self(looks))
+        Ok(Self(looks, self.1))
     }
 
     /// The looks without `look`. The caller checks no play uses it.
     pub fn remove(&self, look: u16) -> Self {
         let mut looks = self.0.clone();
         looks.remove(&look);
-        Self(looks)
+        Self(looks, self.1)
     }
 
     /// Whether every saved look still names something in `patch`: `LookInUse` names the

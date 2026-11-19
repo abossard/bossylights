@@ -149,7 +149,7 @@ async fn a_saved_red_step_plays_255_0_0_releases_and_replays_after_a_restart() {
     until_picture(
         &mut socket,
         "/state/plays",
-        &json!([{"play": play, "look": 1}]),
+        &json!([{"play": play, "look": 1, "rank": "Manual", "state": "Playing"}]),
     )
     .await;
     until_picture(&mut socket, "/looks/0/look", &json!(1)).await;

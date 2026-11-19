@@ -88,6 +88,7 @@ fn said(effect: &PatchEffect) -> String {
         | EngineCommand::Sent { .. }
         | EngineCommand::SetChannel { .. }
         | EngineCommand::ReleaseChannel { .. }
+        | EngineCommand::ReleaseChannels
         | EngineCommand::ReleaseAll
         | EngineCommand::Blackout { .. }
         | EngineCommand::Attach { .. }
@@ -96,6 +97,8 @@ fn said(effect: &PatchEffect) -> String {
         | EngineCommand::ReleaseColour { .. }
         | EngineCommand::Runs { .. }
         | EngineCommand::Start { .. }
+        | EngineCommand::Keep { .. }
+        | EngineCommand::Rules { .. }
         | EngineCommand::Plan { .. }
         | EngineCommand::Release { .. }) => format!("{other:?}"),
     };

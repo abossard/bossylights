@@ -3,7 +3,7 @@
 
 export type Request = { "Send": { command: Command, } } | "Query" | "Subscribe" | "Stop" | { "Search": { text: string, } } | { "Fixture": { maker: string, model: string, } } | "Failures";
 
-export type Command = { "SetChannel": { channel: ChannelNumbers, value: number, } } | { "ReleaseChannel": { channel: ChannelNumbers, } } | "ReleaseAll" | { "Blackout": { on: boolean, } } | { "SetOutput": { output: OutputNumber, kind: OutputKind, universes: RunNumbers, rate: Rate | null, } } | { "RemoveOutput": { output: OutputNumber, } } | { "Patch": { name: string, maker: string, model: string, mode: string, at: ChannelNumbers, } } | { "PatchStrip": { name: string, pixels: Pixels, color: Color, at: ChannelNumbers, } } | { "Move": { fixture: number, at: ChannelNumbers, } } | { "Unpatch": { fixture: number, } } | { "Rename": { fixture: number, name: string, } } | { "SetIntensity": { target: Target, intensity: number, } } | { "SetColour": { target: Target, red: number, green: number, blue: number, } } | { "ReleaseIntensity": { target: Target, } } | { "ReleaseColour": { target: Target, } } | { "SetGroup": { name: string, members: Array<Member>, } } | { "RemoveGroup": { name: string, } } | { "PutStep": { look: number, name: string, step: Step, } } | { "RemoveLook": { look: number, } } | { "StartLook": { look: number, } } | { "ReleaseHold": { play: PlayId, } };
+export type Command = { "SetChannel": { channel: ChannelNumbers, value: number, } } | { "ReleaseChannel": { channel: ChannelNumbers, } } | "ReleaseChannels" | "ReleaseAll" | { "Blackout": { on: boolean, } } | { "SetOutput": { output: OutputNumber, kind: OutputKind, universes: RunNumbers, rate: Rate | null, } } | { "RemoveOutput": { output: OutputNumber, } } | { "Patch": { name: string, maker: string, model: string, mode: string, at: ChannelNumbers, } } | { "PatchStrip": { name: string, pixels: Pixels, color: Color, at: ChannelNumbers, } } | { "Move": { fixture: number, at: ChannelNumbers, } } | { "Unpatch": { fixture: number, } } | { "Rename": { fixture: number, name: string, } } | { "SetIntensity": { target: Target, intensity: number, } } | { "SetColour": { target: Target, red: number, green: number, blue: number, } } | { "ReleaseIntensity": { target: Target, } } | { "ReleaseColour": { target: Target, } } | { "SetGroup": { name: string, members: Array<Member>, } } | { "RemoveGroup": { name: string, } } | { "PutStep": { look: number, name: string, step: Step, } } | { "RemoveLook": { look: number, } } | { "StartLook": { look: number, rank?: Rank, } } | { "StopLook": { play: PlayId, } } | { "EndFlash": { play: PlayId, } } | { "ReleaseHold": { play: PlayId, } } | { "SetMixRules": { rules: MixRules, } };
 
 export type ChannelNumbers = { universe: number, address: number, };
 
@@ -86,9 +86,13 @@ blackout: boolean,
  */
 outputs: Array<Output | null>, 
 /**
- * The looks playing, by slot.
+ * The looks playing or kept, by slot.
  */
-plays: Array<Play>, };
+plays: Array<Play>, 
+/**
+ * The Mixer's settings as this frame applies them.
+ */
+rules: MixRules, };
 
 export type Priority = "RealTime" | { "BestEffort": { reason: BestEffort, } };
 
@@ -116,7 +120,19 @@ export type Saved = { look: number, name: string, step: Step, };
 
 export type PlayId = { slot: number, generation: number, };
 
-export type Play = { play: PlayId, look: number, };
+export type Play = { play: PlayId, look: number, rank: Rank, state: PlayState, };
+
+export type Rank = "Autopilot" | "Show" | "Manual";
+
+export type PlayState = "Playing" | "Kept";
+
+export type MixRules = { brightness: Brightness, manual_end: ManualEnd, other_end: OtherEnd, };
+
+export type Brightness = "Latest" | "Highest";
+
+export type ManualEnd = "UntilRelease" | "UntilStop";
+
+export type OtherEnd = "Reveal" | "Stay";
 
 export type Output = { universes: Run, rate: Rate, status: Status, counters: Counters, };
 
@@ -199,4 +215,4 @@ export type ShowFile = "None" | "Kept" | "NotSaved" | { "LeftAlone": { why: Unop
 
 export type Unopened = "CannotRead" | { "Broken": { line: number, column: number, } } | { "Newer": { version: number, } } | { "Taken": { fixture: number, } } | { "Refused": { reason: Refusal, } } | { "TooBig": { most: number, } };
 
-export const API_VERSION = 3;
+export const API_VERSION = 4;

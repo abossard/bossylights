@@ -60,10 +60,21 @@ The list is `ORIGINS` in `crates/engine-server/src/lib.rs`. No pairing or token 
 |---|---|
 | `SetChannel` (universe, address, value) | holds that channel at the value. It wins over the light that writes it, also at 0 |
 | `ReleaseChannel` (universe, address) | lets it go: the light that writes it shows again, else zero |
-| `ReleaseAll` | lets every held channel go |
+| `ReleaseChannels` | lets every held raw channel go |
+| `ReleaseAll` | lets every Manual play, every direct hold (`SetIntensity`, `SetColour`) and every raw channel go. Show, Autopilot and blackout stay (API 4: in API 3 it let only the raw channels go) |
 | `Blackout` (on) | every channel goes out at zero while on, over everything; the held values stay |
 | `SetOutput` (output 1 to 16, kind, universes, rate) | adds or replaces an output. Kind `{"Ddp": {"address": "ip:port", "color": "Rgb" or "Rgbw"}}` or `{"DmxUsbPro": {"adapter": 1}}` (the first ENTTEC DMX USB Pro by USB identity, in the order of their USB serial numbers, when the output first finds one; an adapter not there yet is no error, the output is NotFound until it is plugged in; from then on the output finds that same adapter by its serial, so a lost adapter never comes back as another). Adapters count from 1: 0 is `NotACommand`. Universes `{"first": 1, "count": 3}`, sent as one stream of channels. A DMX USB Pro takes one universe: more is refused with `{"TooManyUniverses": {"most": 1}}`. DDP RGB sends whole pixels: 510 of each universe's 512 channels. Rate `"30"`, `"44"`, `"60"` or `null`: 60 for DDP, 44 for the DMX USB Pro |
 | `RemoveOutput` (output) | removes it. Refused with `{"StreamsFixture": {"fixture": 1}}` when a fixture over more than one universe would be left with no output that streams them all; so is a `SetOutput` that changes the run |
+
+Looks and who wins (`docs/design/looks-slice-3.md`, the Mixer's table in `engine-core/src/mix.rs`): per property of each light, Manual over Show over Autopilot, then the latest start. A direct hold is Manual. The picture's `state.plays` lists each play with its `rank` and `state` (`Playing` or `Kept`), `state.rules` the settings the frame applies.
+
+| Command | Does | Refused |
+|---|---|---|
+| `StartLook` (look, rank `"Manual"`, `"Show"` or `"Autopilot"`, Manual when left out) | answered `{"Started": {"play": {"slot": 0, "generation": 1}}}`. The look at that rank, playing or kept, starts afresh in its slot; another rank plays on its own | `NoSuchLook`, `PlayFull`, `QueueFull` |
+| `StopLook` (play) | Manual: kept (`UntilRelease`) or ended (`UntilStop`). Show, Autopilot: ended (`Reveal`) or kept (`Stay`). Kept or ended: nothing | |
+| `EndFlash` (play) | ends a Manual play at once. Another rank or an ended play: nothing | |
+| `ReleaseHold` (play) | ends a play, playing or kept. Ended: nothing. Needs only a place in the command queue, with every play slot taken | |
+| `SetMixRules` (rules: `brightness` `"Latest"` or `"Highest"`, `manual_end` `"UntilRelease"` or `"UntilStop"`, `other_end` `"Reveal"` or `"Stay"`) | saved with the show. `Highest`: the brightest within the winning rank. A switch to `UntilStop` or `Reveal` ends the kept plays of those ranks | |
 
 The patch: a fixture of the library at an address. The front checks each command against it and the library, compiles the writers (`rig`) and swaps them in on the tick thread as it swaps a device.
 

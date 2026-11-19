@@ -21,8 +21,9 @@ mod counting;
 mod mock;
 
 use engine::{
-    Begun, ChannelNumbers, Color, Command, Engine, Fixture, Light, Member, MemberList, Members,
-    PlayId, Rate, Refusal, Rgb, RunNumbers, Sender, Target, Text, Universes,
+    Begun, Brightness, ChannelNumbers, Color, Command, Engine, Fixture, Light, ManualEnd, Member,
+    MemberList, Members, MixRules, OtherEnd, PlayId, Rank, Rate, Refusal, Rgb, RunNumbers, Sender,
+    Target, Text, Universes,
 };
 use engine_core::{Pixels, Step};
 
@@ -193,7 +194,14 @@ fn main() {
         }
         if value % 16 == 4 {
             // a start, or a fresh start in the play's slot: the old plan goes back
-            let start = begin(&mut sender, Command::StartLook { look: 1 }, &library);
+            let start = begin(
+                &mut sender,
+                Command::StartLook {
+                    look: 1,
+                    rank: Rank::Manual,
+                },
+                &library,
+            );
             let Ok(Begun::Started { play: started }) = start else {
                 panic!("look 1 starts");
             };
@@ -210,6 +218,44 @@ fn main() {
             // released: its plan goes back
             let release = Command::ReleaseHold { play };
             assert!(send(&mut sender, release, &library), "the play is released");
+        }
+        if value % 32 == 28
+            && let Some(play) = play.take()
+        {
+            // a flash let go: its plan goes back
+            let end = Command::EndFlash { play };
+            assert!(send(&mut sender, end, &library), "the flash ends");
+        }
+        if value % 16 == 10 {
+            // the rules change: Stay keeps a stopped Show play, Reveal ends it, and a
+            // change to Reveal ends the one kept: its plan goes back
+            let stay = value % 32 == 10;
+            let rules = MixRules {
+                brightness: if stay {
+                    Brightness::Highest
+                } else {
+                    Brightness::Latest
+                },
+                manual_end: ManualEnd::UntilRelease,
+                other_end: if stay {
+                    OtherEnd::Stay
+                } else {
+                    OtherEnd::Reveal
+                },
+            };
+            assert!(
+                send(&mut sender, Command::SetMixRules { rules }, &library),
+                "the rules change"
+            );
+            let start = Command::StartLook {
+                look: 1,
+                rank: Rank::Show,
+            };
+            let Ok(Begun::Started { play: shown }) = begin(&mut sender, start, &library) else {
+                panic!("look 1 starts at Show");
+            };
+            let stop = Command::StopLook { play: shown };
+            assert!(send(&mut sender, stop, &library), "the Show play stops");
         }
         if value % 16 == 0 {
             // new writers: the tick swaps them in and sends the old ones back
@@ -240,6 +286,24 @@ fn main() {
         .step_by(2)
         .filter(|light| light.colour.is_some_and(|c| c.green == u16::MAX))
         .count();
+    // every Manual play, direct hold and raw channel let go: the plans go back
+    assert!(
+        send(&mut sender, Command::ReleaseAll, &library),
+        "all is released"
+    );
+    let seen = engine.latest().state.frame;
+    mock::wait_until("no frame went by", || {
+        engine.latest().state.frame > seen + 1
+    });
+    assert!(
+        engine
+            .latest()
+            .state
+            .plays
+            .iter()
+            .all(|play| play.rank != Rank::Manual),
+        "no Manual play is left"
+    );
     let ticks = state.frame - frame;
     let new_allocations = counting::allocations() - allocations - attaching;
     let new_tick_frees = counting::tick_frees() - tick_frees;
@@ -261,9 +325,14 @@ fn main() {
         "every light of the group is green"
     );
     assert_eq!(
-        state.plays.iter().map(|p| Some(p.play)).collect::<Vec<_>>(),
-        vec![play],
-        "the last play started still plays"
+        state
+            .plays
+            .iter()
+            .filter(|p| p.rank == Rank::Manual)
+            .map(|p| p.play)
+            .collect::<Vec<_>>(),
+        play.into_iter().collect::<Vec<_>>(),
+        "the last Manual play started and not let go still plays"
     );
     let accepted = state.outputs.map(|o| o.map(|o| o.counters.accepted));
     assert!(

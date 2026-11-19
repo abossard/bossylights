@@ -2,8 +2,9 @@
 //! check of the commands is not read; one change of a fixture is one line.
 
 use engine_core::{
-    ChannelNumbers, Color, Gobo, Light, Lights, Member, Members, PatchCommand, Pixels, Position,
-    Refusal, Rgb, Saved, Target, Text, Universes, Unopened,
+    Brightness, ChannelNumbers, Color, Gobo, Light, Lights, ManualEnd, Member, Members, MixRules,
+    OtherEnd, PatchCommand, Pixels, Position, Refusal, Rgb, Saved, Target, Text, Universes,
+    Unopened,
 };
 use fixture_library::{Fixture, parse};
 use looks::Looks;
@@ -198,7 +199,7 @@ fn a_file_that_fails_a_check_of_the_commands_is_not_read() {
             versioned.as_str(),
             "",
             Unopened::Broken {
-                line: 46,
+                line: 47,
                 column: 1,
             },
         ),
@@ -656,4 +657,31 @@ fn the_longest_look_fits_its_room() {
     };
     let line = serde_json::to_string(&longest).unwrap();
     assert!(line.len() <= show_file::LOOK_MOST, "{}", line.len());
+}
+
+#[test]
+fn the_mixer_settings_are_saved_and_a_file_without_them_has_the_defaults() {
+    let changed = MixRules {
+        brightness: Brightness::Highest,
+        manual_end: ManualEnd::UntilStop,
+        other_end: OtherEnd::Stay,
+    };
+    // (settings saved, the version the file says, whether it has the rules, read back)
+    let cases = [
+        (MixRules::default(), 3, true, MixRules::default()),
+        (changed, 3, true, changed),
+        (changed, 2, false, MixRules::default()),
+        (changed, 1, false, MixRules::default()),
+    ];
+    for (rules, version, kept, back) in cases {
+        let mut file = show_file::write(&empty(), &Looks::new().with_rules(rules)).unwrap();
+        if !kept {
+            let start = file.find("  \"rules\"").unwrap();
+            let end = start + file[start..].find('\n').unwrap() + 1;
+            file.replace_range(start..end, "");
+        }
+        let file = file.replace("\"version\": 3", &format!("\"version\": {version}"));
+        let (_, looks) = show_file::read(&file, &empty()).unwrap();
+        assert_eq!(looks.rules(), back, "{rules:?} in version {version}");
+    }
 }

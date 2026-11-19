@@ -1,4 +1,4 @@
-//! The show file: the patch, the groups and the saved looks as JSON text, and back. A calculation: the
+//! The show file: the patch, the groups, the saved looks and the Mixer's settings as JSON text, and back. A calculation: the
 //! engine process reads and writes the file (`engine-server`).
 //!
 //! ```text
@@ -11,7 +11,7 @@
 //!
 //! ```text
 //! {
-//!   "version": 2,
+//!   "version": 3,
 //!   "patch": [
 //!     {"fixture":1,"name":"PAR 1","mode":"Generic / Generic RGB / RGB","at":{"universe":1,"address":37},"first":1}
 //!   ],
@@ -21,6 +21,7 @@
 //!   "looks": [
 //!     {"look":1,"name":"red","step":{"target":{"Fixture":{"fixture":1}},"values":{"colour":{"red":65535,"green":0,"blue":0}}}}
 //!   ],
+//!   "rules": {"brightness":"Latest","manual_end":"UntilRelease","other_end":"Reveal"},
 //!   "modes": {
 //!     "Generic / Generic RGB / RGB": {
 //!       "maker": "Generic",
@@ -37,6 +38,7 @@
 //! | `patch` | each fixture by number: its name, its mode (a key of `modes`), where, its first light |
 //! | `groups` | in the order they were made, each member a light or a fixture |
 //! | `looks` | each saved look by number: its name and its step. Version 1 has none |
+//! | `rules` | the Mixer's three settings. Versions 1 and 2 have none: the defaults |
 //! | `modes` | each mode a fixture is patched in, with its maker and model, by key |
 //!
 //! Reading checks what the commands check: a fixture is placed as patch places it, a
@@ -65,7 +67,7 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::num::{NonZeroU16, NonZeroU32};
 use engine_core::{
-    ChannelNumbers, LOOKS, Member, Members, PatchCommand, Refusal, Saved, Text, Unopened,
+    ChannelNumbers, LOOKS, Member, Members, MixRules, PatchCommand, Refusal, Saved, Text, Unopened,
 };
 use fixture_library::Mode;
 use looks::Looks;
@@ -74,7 +76,7 @@ use serde::{Deserialize, Serialize};
 
 /// The version of the file this engine writes and reads. Raise it with every change an
 /// engine of the old version would read wrong. An engine never reads a newer file.
-pub const VERSION: u32 = 2;
+pub const VERSION: u32 = 3;
 
 /// The longest file, in bytes: 64 MiB. Far over any show, so no show meets it, and a file
 /// of gigabytes is not read whole at start.
@@ -105,8 +107,13 @@ pub const LIMIT: Limit = Limit {
 /// escaped, and every property given.
 pub const LOOK_MOST: usize = 2048;
 
-/// The room the looks may take: [`LOOKS`] of [`LOOK_MOST`] bytes. A patch leaves it.
-pub const LOOKS_ROOM: usize = LOOKS * (LOOK_MOST + 6);
+/// How much longer the line of the Mixer's settings may be than the defaults' line,
+/// which a patch is measured with.
+pub const RULES_MOST: usize = 128;
+
+/// The room the looks and the Mixer's settings may take: [`LOOKS`] of [`LOOK_MOST`]
+/// bytes and [`RULES_MOST`]. A patch leaves it.
+pub const LOOKS_ROOM: usize = LOOKS * (LOOK_MOST + 6) + RULES_MOST;
 
 /// The text of a definition as the file has it, under the key of its mode, indented to sit
 /// in the file.
@@ -120,6 +127,8 @@ struct Parts {
     rows: Vec<String>,
     groups: Vec<String>,
     looks: Vec<String>,
+    /// The Mixer's settings, one line: the defaults while only the patch is measured.
+    rules: String,
     /// Each different mode, sorted by key.
     modes: Vec<Mode3>,
 }
@@ -138,28 +147,32 @@ impl Parts {
 
     /// The length of the file: the same as `self.text().len()`, without making it.
     fn len(&self) -> usize {
-        let base = Self::frame("", "", "", "").len();
-        base + Self::join_len(
-            self.rows.len(),
-            self.rows.iter().map(String::len).sum::<usize>(),
-        ) + Self::join_len(
-            self.groups.len(),
-            self.groups.iter().map(String::len).sum::<usize>(),
-        ) + Self::join_len(
-            self.looks.len(),
-            self.looks.iter().map(String::len).sum::<usize>(),
-        ) + Self::join_len(
-            self.modes.len(),
-            self.modes
-                .iter()
-                .map(|(_, k, t)| k.len() + 2 + t.len())
-                .sum::<usize>(),
-        )
+        let base = Self::frame("", "", "", "", "").len();
+        base + self.rules.len()
+            + Self::join_len(
+                self.rows.len(),
+                self.rows.iter().map(String::len).sum::<usize>(),
+            )
+            + Self::join_len(
+                self.groups.len(),
+                self.groups.iter().map(String::len).sum::<usize>(),
+            )
+            + Self::join_len(
+                self.looks.len(),
+                self.looks.iter().map(String::len).sum::<usize>(),
+            )
+            + Self::join_len(
+                self.modes.len(),
+                self.modes
+                    .iter()
+                    .map(|(_, k, t)| k.len() + 2 + t.len())
+                    .sum::<usize>(),
+            )
     }
 
-    fn frame(patch: &str, groups: &str, looks: &str, modes: &str) -> String {
+    fn frame(patch: &str, groups: &str, looks: &str, rules: &str, modes: &str) -> String {
         format!(
-            "{{\n  \"version\": {VERSION},\n  \"patch\": {patch},\n  \"groups\": {groups},\n  \"looks\": {looks},\n  \"modes\": {modes}\n}}\n",
+            "{{\n  \"version\": {VERSION},\n  \"patch\": {patch},\n  \"groups\": {groups},\n  \"looks\": {looks},\n  \"rules\": {rules},\n  \"modes\": {modes}\n}}\n",
         )
     }
 
@@ -173,6 +186,7 @@ impl Parts {
             &list(&self.rows, '[', ']'),
             &list(&self.groups, '[', ']'),
             &list(&self.looks, '[', ']'),
+            &self.rules,
             &list(&modes, '{', '}'),
         )
     }
@@ -183,6 +197,7 @@ impl Parts {
 pub fn write(patch: &Patch, looks: &Looks) -> Option<String> {
     let mut parts = parts(patch)?;
     parts.looks = looks.all().iter().map(line).collect::<Option<Vec<_>>>()?;
+    parts.rules = line(&looks.rules())?;
     (parts.len() <= MOST_BYTES).then(|| parts.text())
 }
 
@@ -233,6 +248,7 @@ fn parts(patch: &Patch) -> Option<Parts> {
         rows,
         groups,
         looks: Vec::new(),
+        rules: line(&MixRules::default())?,
         modes,
     })
 }
@@ -262,6 +278,7 @@ pub fn read(text: &str, empty: &Patch) -> Result<(Patch, Looks), Unopened> {
         patch,
         groups,
         looks: saved,
+        rules,
         modes,
     } = serde_json::from_str(text).map_err(broken)?;
     let placed = patch
@@ -297,7 +314,7 @@ pub fn read(text: &str, empty: &Patch) -> Result<(Patch, Looks), Unopened> {
             patch = changed;
         }
     }
-    let mut looks = Looks::new();
+    let mut looks = Looks::new().with_rules(rules);
     for saved in saved {
         let refused = |reason| Unopened::Refused { reason };
         if looks.get(saved.look).is_some() {
@@ -355,6 +372,9 @@ struct File {
     /// Version 1 has none.
     #[serde(default)]
     looks: Vec<Saved>,
+    /// Versions 1 and 2 have none: the defaults.
+    #[serde(default)]
+    rules: MixRules,
     modes: BTreeMap<String, DefinitionIn>,
 }
 

@@ -547,7 +547,10 @@ mod tests {
         };
         change(patch);
         change(step(1, red));
-        let Begun::Started { play } = change(Command::StartLook { look: 1 }) else {
+        let Begun::Started { play } = change(Command::StartLook {
+            look: 1,
+            rank: engine::Rank::Manual,
+        }) else {
             panic!("look 1 plays");
         };
         // revision A: look 1 green, its play takes the new plan. A's snapshot is taken

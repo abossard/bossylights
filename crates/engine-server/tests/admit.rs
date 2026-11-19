@@ -151,7 +151,10 @@ impl Front {
         front.begin(full).unwrap();
         front.begin(step(1, RED)).unwrap();
         front.begin(step(2, GREEN)).unwrap();
-        let Ok(Begun::Started { play }) = front.begin(Command::StartLook { look: 1 }) else {
+        let Ok(Begun::Started { play }) = front.begin(Command::StartLook {
+            look: 1,
+            rank: engine::Rank::Manual,
+        }) else {
             panic!("look 1 plays");
         };
         assert_eq!(front.frame(), [255, 0, 0], "look 1 plays red");
@@ -200,7 +203,10 @@ impl Front {
     fn fill_plays(&mut self) {
         for look in 3..3 + PLAYS as u16 - 1 {
             self.begin(step(look, RED)).unwrap();
-            let started = self.begin(Command::StartLook { look });
+            let started = self.begin(Command::StartLook {
+                look,
+                rank: engine::Rank::Manual,
+            });
             assert!(
                 matches!(started, Ok(Begun::Started { .. })),
                 "look {look} plays"
@@ -276,7 +282,10 @@ fn a_refused_admission_keeps_the_project_the_looks_and_the_next_frame() {
         ),
         (
             "a start over new looks",
-            |_| Command::StartLook { look: 2 },
+            |_| Command::StartLook {
+                look: 2,
+                rank: engine::Rank::Manual,
+            },
             Before::Admitted(save_three),
             Refusal::Stale,
         ),
@@ -307,7 +316,10 @@ fn a_refused_admission_keeps_the_project_the_looks_and_the_next_frame() {
         ),
         (
             "a start",
-            |_| Command::StartLook { look: 2 },
+            |_| Command::StartLook {
+                look: 2,
+                rank: engine::Rank::Manual,
+            },
             Before::Full,
             Refusal::QueueFull,
         ),
@@ -320,7 +332,10 @@ fn a_refused_admission_keeps_the_project_the_looks_and_the_next_frame() {
         // every play slot taken
         (
             "a start of another look",
-            |_| Command::StartLook { look: 2 },
+            |_| Command::StartLook {
+                look: 2,
+                rank: engine::Rank::Manual,
+            },
             Before::PlaysFull,
             Refusal::PlayFull,
         ),
@@ -439,7 +454,10 @@ fn with_every_play_slot_taken_a_release_and_a_fresh_start_need_only_room_in_the_
             |front, play| {
                 let release = front.begin(Command::ReleaseHold { play });
                 assert!(matches!(release, Ok(Begun::Queued)));
-                let started = front.begin(Command::StartLook { look: 2 });
+                let started = front.begin(Command::StartLook {
+                    look: 2,
+                    rank: engine::Rank::Manual,
+                });
                 assert!(matches!(started, Ok(Begun::Started { .. })));
             },
             [0, 255, 0],
@@ -447,7 +465,10 @@ fn with_every_play_slot_taken_a_release_and_a_fresh_start_need_only_room_in_the_
         (
             "a fresh start of look 1 takes its own slot",
             |front, play| {
-                let started = front.begin(Command::StartLook { look: 1 });
+                let started = front.begin(Command::StartLook {
+                    look: 1,
+                    rank: engine::Rank::Manual,
+                });
                 let Ok(Begun::Started { play: again }) = started else {
                     panic!("look 1 starts again: {:?}", started.err());
                 };
@@ -546,8 +567,13 @@ impl Served {
         for command in setup {
             sender.begin(command, &library).unwrap();
         }
-        let Ok(Begun::Started { play }) = sender.begin(Command::StartLook { look: 1 }, &library)
-        else {
+        let Ok(Begun::Started { play }) = sender.begin(
+            Command::StartLook {
+                look: 1,
+                rank: engine::Rank::Manual,
+            },
+            &library,
+        ) else {
             panic!("look 1 plays");
         };
         // served while the clock runs: the server's first picture needs a wake

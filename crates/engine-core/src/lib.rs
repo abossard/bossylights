@@ -19,7 +19,9 @@ mod channel;
 mod kinds;
 mod library;
 mod mix;
-pub use mix::{Held, show, wins};
+pub use mix::{
+    Brightness, Claims, End, Held, ManualEnd, MixRules, OtherEnd, show, stops, unkept, wins,
+};
 use mix::{Want, mix};
 mod output;
 mod patch;
@@ -45,7 +47,9 @@ pub use output::{
 pub use patch::{
     Grouped, Layout, Member, MemberList, Members, PatchCommand, Patched, Pixels, Target,
 };
-pub use playback::{Entry, LOOKS, LookCommand, PLAYS, Play, PlayId, Plays, Saved, Step};
+pub use playback::{
+    Entry, LOOKS, LookCommand, PLAYS, Play, PlayId, PlayState, Plays, Rank, Saved, Step,
+};
 pub use project::{Project, ProjectEffect, ProjectEvent, ProjectOutput};
 pub use property::{Gobo, Light, Position, Property, Rgb};
 pub use resolve::{
@@ -79,9 +83,11 @@ pub struct State {
     #[serde(skip)]
     #[cfg_attr(test, ts(skip))]
     pub beat: Duration,
-    /// The looks playing, by slot.
+    /// The looks playing or kept, by slot.
     #[cfg_attr(test, ts(type = "Array<Play>"))]
     pub plays: Plays,
+    /// The Mixer's settings as this frame applies them.
+    pub rules: MixRules,
     /// The start order the next hold or play takes: a later start wins.
     #[serde(skip)]
     #[cfg_attr(test, ts(skip))]
@@ -99,6 +105,11 @@ impl State {
             now: Duration::ZERO,
             beat: BEAT,
             plays: Plays::NONE,
+            rules: MixRules {
+                brightness: Brightness::Latest,
+                manual_end: ManualEnd::UntilRelease,
+                other_end: OtherEnd::Reveal,
+            },
             order: 1,
         }
     }
@@ -144,7 +155,10 @@ pub enum Command {
     SetChannel { channel: ChannelNumbers, value: u8 },
     /// Let a channel go: the light that writes it shows again, else zero.
     ReleaseChannel { channel: ChannelNumbers },
-    /// Let every channel go.
+    /// Let every raw channel go.
+    ReleaseChannels,
+    /// Let every Manual play, every direct hold and every raw channel go. Show,
+    /// Autopilot, blackout and tempo stay.
     ReleaseAll,
     /// Every channel out at zero while on. The held levels stay and come back when off.
     Blackout { on: bool },
@@ -228,12 +242,27 @@ pub enum Command {
     },
     /// Remove a saved look that no play uses. Nothing happens if there is none.
     RemoveLook { look: u16 },
-    /// Play a saved look at Manual rank: answered `Started` with its play. A look playing
-    /// already starts afresh, as the latest start.
-    StartLook { look: u16 },
-    /// End a play: what it held shows what is underneath in the next frame. An ended
-    /// play is a harmless no-op.
+    /// Play a saved look at `rank`, Manual when not given: answered `Started` with its
+    /// play. The look playing or kept at that rank already starts afresh, as the latest
+    /// start; another rank plays on its own.
+    StartLook {
+        look: u16,
+        #[serde(default)]
+        #[cfg_attr(test, ts(optional = nullable))]
+        rank: Rank,
+    },
+    /// Stop a play under the Mixer's end rule ([`MixRules`]): kept, or ended. A kept or
+    /// ended play is a harmless no-op.
+    StopLook { play: PlayId },
+    /// End a Manual play at once, whatever the end rule: a flash let go. A play of
+    /// another rank, or an ended one, is a harmless no-op.
+    EndFlash { play: PlayId },
+    /// End a play, playing or kept: what it held shows what is underneath in the next
+    /// frame. An ended play is a harmless no-op.
     ReleaseHold { play: PlayId },
+    /// Save the Mixer's three settings at once. Switching to `UntilStop` or `Reveal`
+    /// ends the kept plays of those ranks.
+    SetMixRules { rules: MixRules },
 }
 
 /// What changes the state on the tick thread. The front makes these from a checked
@@ -265,6 +294,9 @@ pub enum EngineCommand {
     ReleaseChannel {
         channel: Channel,
     },
+    ReleaseChannels,
+    /// Every raw channel, every direct hold and every Manual play let go; the plans of
+    /// the plays go back to be freed.
     ReleaseAll,
     Blackout {
         on: bool,
@@ -307,11 +339,21 @@ pub enum EngineCommand {
     Runs {
         change: LightChange,
     },
-    /// `play` of `look` starts in its slot, in place of the play there. Its plan arrives
-    /// with this command and takes the place of the slot's plan.
+    /// `play` of `look` starts at `rank` in its slot, in place of the play there. Its
+    /// plan arrives with this command and takes the place of the slot's plan.
     Start {
         play: PlayId,
         look: u16,
+        rank: Rank,
+    },
+    /// `play` is kept: its values stay at its rank and start.
+    Keep {
+        play: PlayId,
+    },
+    /// The Mixer's settings from this frame on. The kept plays they no longer keep end;
+    /// their plans go back to be freed.
+    Rules {
+        rules: MixRules,
     },
     /// The plan of `play` arrives with this command: the play keeps its start order.
     Plan {
@@ -431,10 +473,18 @@ pub fn update(
             channel.mark(holds, false);
             state
         }
-        EngineCommand::ReleaseAll => {
+        EngineCommand::ReleaseChannels => {
             universes.fill(Levels::ZERO);
             holds.fill(ChannelSet::NONE);
             state
+        }
+        EngineCommand::ReleaseAll => {
+            universes.fill(Levels::ZERO);
+            holds.fill(ChannelSet::NONE);
+            lights.fill(Held::NONE);
+            let mut plays = state.plays;
+            plays.release_where(|play| play.rank == Rank::Manual);
+            State { plays, ..state }
         }
         EngineCommand::Blackout { on } => State {
             blackout: on,
@@ -485,10 +535,24 @@ pub fn update(
             run.of(lights).fill(Held::NONE);
             state
         }
-        EngineCommand::Start { play, look } => {
+        EngineCommand::Start { play, look, rank } => {
             let mut plays = state.plays;
-            plays.start(play, look, state.order);
+            plays.start(play, look, rank, state.order);
             State { plays, ..held }
+        }
+        EngineCommand::Keep { play } => {
+            let mut plays = state.plays;
+            plays.keep(play);
+            State { plays, ..state }
+        }
+        EngineCommand::Rules { rules } => {
+            let mut plays = state.plays;
+            plays.release_where(|play| unkept(play.rank, play.state, rules));
+            State {
+                plays,
+                rules,
+                ..state
+            }
         }
         EngineCommand::Release { play } => {
             let mut plays = state.plays;
@@ -1459,6 +1523,12 @@ mod tests {
                 Saved::decl(&config),
                 PlayId::decl(&config),
                 Play::decl(&config),
+                Rank::decl(&config),
+                PlayState::decl(&config),
+                MixRules::decl(&config),
+                Brightness::decl(&config),
+                ManualEnd::decl(&config),
+                OtherEnd::decl(&config),
                 Output::decl(&config),
                 Run::decl(&config),
                 Status::decl(&config),

@@ -15,7 +15,7 @@ use crate::{
     EngineCommand, Histogram, LATENCY_BUCKETS, LATENESS_BUCKETS, Levels, MAX_LIGHTS, MAX_OUTPUTS,
     MAX_UNIVERSES, OutputNumber, Priority, State, Universes, bucket, percentile, update,
 };
-use engine_core::{ChannelSet, Entry, Held, Light, show};
+use engine_core::{ChannelSet, Claims, Entry, Held, Light, show};
 use std::thread;
 use std::time::Duration;
 
@@ -185,8 +185,15 @@ impl Snapshot {
 
     /// What each light shows now: its direct holds and the plays, `plan` giving each
     /// play's entries by slot.
-    pub(crate) fn show<'a>(&mut self, plan: impl Fn(usize) -> &'a [Entry]) {
-        show(&self.grabs, &self.state.plays, plan, &mut self.lights);
+    pub(crate) fn show<'a>(&mut self, plan: impl Fn(usize) -> &'a [Entry], claims: &mut [Claims]) {
+        show(
+            &self.grabs,
+            &self.state.plays,
+            plan,
+            self.state.rules,
+            &mut self.lights,
+            claims,
+        );
     }
 
     /// A frame of `output` was handed over this late.

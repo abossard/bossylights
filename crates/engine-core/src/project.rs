@@ -119,6 +119,7 @@ impl Project {
     pub fn update(self, event: ProjectEvent) -> Result<(Self, Option<ProjectEffect>), Refusal> {
         let send = |command| Ok((self, Some(ProjectEffect::Send(command))));
         let patch = |command| Ok((self, Some(ProjectEffect::Patch(command))));
+        let look_effect = |command| Ok((self, Some(ProjectEffect::Look(command))));
         let universes = self.universes;
         match event {
             ProjectEvent::Client(command) => match command {
@@ -129,7 +130,7 @@ impl Project {
                 Command::ReleaseChannel { channel } => send(EngineCommand::ReleaseChannel {
                     channel: channel.check(universes)?,
                 }),
-                Command::ReleaseAll => send(EngineCommand::ReleaseAll),
+                Command::ReleaseChannels => send(EngineCommand::ReleaseChannels),
                 Command::Blackout { on } => send(EngineCommand::Blackout { on }),
                 Command::SetOutput {
                     output,
@@ -226,14 +227,14 @@ impl Project {
                     self,
                     Some(ProjectEffect::Look(LookCommand::RemoveLook { look })),
                 )),
-                Command::StartLook { look } => Ok((
-                    self,
-                    Some(ProjectEffect::Look(LookCommand::StartLook { look })),
-                )),
-                Command::ReleaseHold { play } => Ok((
-                    self,
-                    Some(ProjectEffect::Look(LookCommand::ReleaseHold { play })),
-                )),
+                Command::StartLook { look, rank } => {
+                    look_effect(LookCommand::StartLook { look, rank })
+                }
+                Command::StopLook { play } => look_effect(LookCommand::StopLook { play }),
+                Command::EndFlash { play } => look_effect(LookCommand::EndFlash { play }),
+                Command::ReleaseHold { play } => look_effect(LookCommand::ReleaseHold { play }),
+                Command::ReleaseAll => look_effect(LookCommand::ReleaseAll),
+                Command::SetMixRules { rules } => look_effect(LookCommand::SetMixRules { rules }),
                 Command::RemoveOutput { output } => {
                     self.idle(output)?;
                     let project = self.with(output, |slot, _| *slot = None);
@@ -382,7 +383,7 @@ mod tests {
         let name = Text::new("front").unwrap();
         let members =
             Members::new(&[Member::Fixture { fixture: 3 }, Member::Light { light: 1 }]).unwrap();
-        let cases: [(Vec<ProjectEvent>, ProjectEvent, Done, Option<ProjectOutput>); 22] = [
+        let cases: [(Vec<ProjectEvent>, ProjectEvent, Done, Option<ProjectOutput>); 23] = [
             // the patch checks what names a fixture or a light
             (
                 vec![],
@@ -480,8 +481,14 @@ mod tests {
             ),
             (
                 vec![],
+                Client(Command::ReleaseChannels),
+                Ok(Some(ProjectEffect::Send(EngineCommand::ReleaseChannels))),
+                None,
+            ),
+            (
+                vec![],
                 Client(Command::ReleaseAll),
-                Ok(Some(ProjectEffect::Send(EngineCommand::ReleaseAll))),
+                Ok(Some(ProjectEffect::Look(LookCommand::ReleaseAll))),
                 None,
             ),
             (

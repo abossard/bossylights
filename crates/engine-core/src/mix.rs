@@ -13,12 +13,124 @@
 //!
 //! | Between sources of one light property | Winner |
 //! |---|---|
-//! | a direct hold and a play, or two plays | the latest start; absent lets the other through |
+//! | two ranks | Manual over Show over Autopilot. A direct hold is Manual. Zero and black take part |
+//! | one rank | the latest start; [`Brightness::Highest`]: the highest brightness, equal ones by start |
+//! | absent | lets the other through |
 //! | nothing | absent: the writers write the definition's default |
+//!
+//! | A play stops | [`MixRules`] | What is left |
+//! |---|---|---|
+//! | Manual, `StopLook` | [`ManualEnd::UntilRelease`] | kept: its values at its rank and start, until released or started again |
+//! | Manual, `StopLook` | [`ManualEnd::UntilStop`] | nothing: what is underneath shows |
+//! | Show or Autopilot, `StopLook` | [`OtherEnd::Reveal`] | nothing |
+//! | Show or Autopilot, `StopLook` | [`OtherEnd::Stay`] | kept |
+//! | Manual, `EndFlash`; any, `ReleaseHold` | any | nothing |
+//! | kept, rules change to remove it | `UntilStop` for Manual, `Reveal` for the others | nothing |
 
-use crate::playback::{Entry, PLAYS, Play, Plays};
+use crate::playback::{Entry, PlayState, Plays, Rank};
 use crate::property::{Light, Property};
+use serde::{Deserialize, Serialize};
 
+/// The Mixer's three settings, saved with the show. An edit takes effect in the frame
+/// that applies it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct MixRules {
+    pub brightness: Brightness,
+    pub manual_end: ManualEnd,
+    pub other_end: OtherEnd,
+}
+
+/// Between two brightness values of one rank: the latest start, or the highest.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub enum Brightness {
+    #[default]
+    Latest,
+    Highest,
+}
+
+/// What a stopped Manual play leaves.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub enum ManualEnd {
+    /// Its values, until released.
+    #[default]
+    UntilRelease,
+    /// Nothing: the stop ends it.
+    UntilStop,
+}
+
+/// What a stopped Show or Autopilot play leaves.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub enum OtherEnd {
+    /// Nothing: what is underneath shows.
+    #[default]
+    Reveal,
+    /// Its values, at its rank and start, until released or started again.
+    Stay,
+}
+
+/// What a stop leaves of a play.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum End {
+    /// The play is kept: its values stay.
+    Keep,
+    /// The play ends: what is underneath shows.
+    Remove,
+}
+
+/// What `StopLook` leaves of a play at `rank` under `rules`.
+pub const fn stops(rank: Rank, rules: MixRules) -> End {
+    match (rank, rules.manual_end, rules.other_end) {
+        (Rank::Manual, ManualEnd::UntilRelease, _)
+        | (Rank::Show | Rank::Autopilot, _, OtherEnd::Stay) => End::Keep,
+        (Rank::Manual, ManualEnd::UntilStop, _)
+        | (Rank::Show | Rank::Autopilot, _, OtherEnd::Reveal) => End::Remove,
+    }
+}
+
+/// Whether a play at `rank` in `state` is kept and `rules` no longer keep it: switching
+/// to `UntilStop` or `Reveal` clears the stopped holds of those ranks.
+pub const fn unkept(rank: Rank, state: PlayState, rules: MixRules) -> bool {
+    matches!(state, PlayState::Kept) && matches!(stops(rank, rules), End::Remove)
+}
+
+/// Who holds a light's property: a rank and a start order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Claim {
+    rank: Rank,
+    order: u64,
+}
+
+/// Who holds each property of a light this frame, by [`Property::index`]. A buffer of
+/// the caller's, one per light, so [`show`] allocates nothing.
+pub type Claims = [Option<Claim>; Property::ALL.len()];
+
+/// Whether `value` of `property` claimed by `claim` wins over `now`'s, claimed by `over`
+/// (`None`: nobody). Either order of two sources gives the same winner.
+fn beats(
+    property: Property,
+    rules: MixRules,
+    (claim, value): (Claim, &Light),
+    (over, now): (Option<Claim>, &Light),
+) -> bool {
+    let Some(over) = over else {
+        return true;
+    };
+    if claim.rank != over.rank {
+        return claim.rank > over.rank;
+    }
+    if let (Property::Intensity, Brightness::Highest, Some(level), Some(was)) =
+        (property, rules.brightness, value.intensity, now.intensity)
+        && level != was
+    {
+        return level > was;
+    }
+    wins(claim.order, over.order)
+}
 /// A light's direct holds: the values held of it, and the start order each property was
 /// held at.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -56,34 +168,45 @@ pub const fn wins(order: u64, over: u64) -> bool {
     order > over
 }
 
-/// What each light shows this frame, written into `out`: its direct holds, and over them
-/// the values of each play by start order, where the play started later than the hold.
-/// `plan` gives a play's entries by slot. Allocates nothing.
+/// What each light shows this frame, written into `out`: per property, the winner of its
+/// direct holds (Manual) and the plays, playing or kept, under `rules`. `plan` gives a
+/// play's entries by slot; `claims` is the caller's buffer beside `out`. The slot order
+/// of the plays does not matter. Allocates nothing.
 pub fn show<'a>(
     held: &[Held],
     plays: &Plays,
     plan: impl Fn(usize) -> &'a [Entry],
+    rules: MixRules,
     out: &mut [Light],
+    claims: &mut [Claims],
 ) {
-    for (out, held) in out.iter_mut().zip(held) {
+    for ((out, claims), held) in out.iter_mut().zip(claims.iter_mut()).zip(held) {
         *out = held.values;
+        for (claim, property) in claims.iter_mut().zip(Property::ALL) {
+            *claim = held.values.has(property).then(|| Claim {
+                rank: Rank::Manual,
+                order: held.since(property),
+            });
+        }
     }
-    let mut ordered = [None::<Play>; PLAYS];
-    for (slot, play) in ordered.iter_mut().zip(plays.iter()) {
-        *slot = Some(*play);
-    }
-    ordered.sort_unstable_by_key(|play| play.map(|p| p.order));
-    for play in ordered.iter().flatten() {
+    for play in plays.iter() {
+        let claim = Claim {
+            rank: play.rank,
+            order: play.order,
+        };
         for entry in plan(play.play.slot()) {
             let first = usize::from(entry.lights.first().index());
             let run = first..first + usize::from(entry.lights.count());
-            let (Some(out), Some(held)) = (out.get_mut(run.clone()), held.get(run)) else {
+            let (Some(out), Some(claims)) = (out.get_mut(run.clone()), claims.get_mut(run)) else {
                 continue;
             };
-            for (light, held) in out.iter_mut().zip(held) {
-                for property in Property::ALL {
-                    if entry.values.has(property) && wins(play.order, held.since(property)) {
+            for (light, claims) in out.iter_mut().zip(claims) {
+                for (over, property) in claims.iter_mut().zip(Property::ALL) {
+                    if entry.values.has(property)
+                        && beats(property, rules, (claim, &entry.values), (*over, light))
+                    {
                         *light = light.with(property, &entry.values);
+                        *over = Some(claim);
                     }
                 }
             }
@@ -205,7 +328,7 @@ mod tests {
 #[cfg(test)]
 mod properties {
     use super::*;
-    use crate::playback::{PlayId, Plays};
+    use crate::playback::{PLAYS, PlayId, Plays};
     use crate::property::Rgb;
     use crate::resolve::{LightNumber, LightRun, Lights};
 
@@ -214,10 +337,24 @@ mod properties {
         green: 0,
         blue: 0,
     };
+    const GREEN: Rgb = Rgb {
+        red: 0,
+        green: u16::MAX,
+        blue: 0,
+    };
     const BLUE: Rgb = Rgb {
         red: 0,
         green: 0,
         blue: u16::MAX,
+    };
+    const LATEST: MixRules = MixRules {
+        brightness: Brightness::Latest,
+        manual_end: ManualEnd::UntilRelease,
+        other_end: OtherEnd::Reveal,
+    };
+    const HIGHEST: MixRules = MixRules {
+        brightness: Brightness::Highest,
+        ..LATEST
     };
 
     fn colour(rgb: Rgb) -> Light {
@@ -234,6 +371,14 @@ mod properties {
         }
     }
 
+    fn both(level: u16, rgb: Rgb) -> Light {
+        Light {
+            intensity: Some(level),
+            colour: Some(rgb),
+            ..Light::DARK
+        }
+    }
+
     fn held(values: Light, order: u64) -> Held {
         let mut held = Held::NONE;
         for property in Property::ALL {
@@ -244,136 +389,305 @@ mod properties {
         held
     }
 
-    #[test]
-    fn the_latest_start_wins_each_property_and_absent_lets_through() {
+    /// A play of light 1: its rank, its start order, whether it is kept, its values.
+    type Source = (Rank, u64, PlayState, Light);
+
+    const fn play(rank: Rank, order: u64, values: Light) -> Source {
+        (rank, order, PlayState::Playing, values)
+    }
+
+    /// What light 1 shows with `hold` and `sources` played from slot `first` on, one
+    /// slot apart: the slot order is the candidate order.
+    fn shown(hold: Held, sources: &[Source], rules: MixRules, first: usize) -> Light {
         let run =
             LightRun::new(LightNumber::new(0, Lights::MOST).unwrap(), 1, Lights::MOST).unwrap();
-        let both = Light {
-            intensity: Some(9),
-            colour: Some(RED),
-            ..Light::DARK
-        };
-        // (row, direct hold, its order, the play's values (None: no play), its order, shown)
-        let cases = [
-            ("nothing", Held::NONE, None, 0, Light::DARK),
-            ("a hold alone", held(colour(BLUE), 1), None, 0, colour(BLUE)),
+        let mut plays = Plays::NONE;
+        let mut entries = [None; PLAYS];
+        for (n, (rank, order, state, values)) in sources.iter().enumerate() {
+            let slot = (first + n * (PLAYS - 1)) % PLAYS;
+            let id = PlayId::new(slot, 1).unwrap();
+            plays.start(id, 7, *rank, *order);
+            if *state == PlayState::Kept {
+                plays.keep(id);
+            }
+            entries[slot] = Some([Entry {
+                lights: run,
+                values: *values,
+            }]);
+        }
+        let mut out = [Light::DARK];
+        let mut claims = [[None; Property::ALL.len()]];
+        show(
+            &[hold],
+            &plays,
+            |slot| entries[slot].as_ref().map_or(&[][..], |e| &e[..]),
+            rules,
+            &mut out,
+            &mut claims,
+        );
+        out[0]
+    }
+
+    #[test]
+    fn the_mixer_table_row_by_row_in_both_candidate_orders() {
+        use Rank::{Autopilot, Manual, Show};
+        let kept = |rank, order, values| (rank, order, PlayState::Kept, values);
+        // (row, direct hold, plays, rules, shown)
+        let cases: [(&str, Held, Vec<Source>, MixRules, Light); 22] = [
+            ("nothing", Held::NONE, vec![], LATEST, Light::DARK),
             (
-                "a play alone",
-                Held::NONE,
-                Some(colour(RED)),
-                1,
-                colour(RED),
-            ),
-            (
-                "a later play over a hold",
+                "a hold alone",
                 held(colour(BLUE), 1),
-                Some(colour(RED)),
-                2,
-                colour(RED),
-            ),
-            (
-                "a later hold over a play",
-                held(colour(BLUE), 2),
-                Some(colour(RED)),
-                1,
+                vec![],
+                LATEST,
                 colour(BLUE),
             ),
             (
-                "black claims colour",
-                held(colour(BLUE), 1),
-                Some(colour(Rgb::BLACK)),
-                2,
-                colour(Rgb::BLACK),
+                "a play alone",
+                Held::NONE,
+                vec![play(Show, 1, colour(RED))],
+                LATEST,
+                colour(RED),
+            ),
+            // rank: Manual > Show > Autopilot, whatever started last
+            (
+                "Manual over a later Show",
+                Held::NONE,
+                vec![play(Manual, 1, colour(RED)), play(Show, 2, colour(GREEN))],
+                LATEST,
+                colour(RED),
             ),
             (
-                "zero claims intensity",
-                held(intensity(9), 1),
-                Some(intensity(0)),
-                2,
-                intensity(0),
+                "Show over a later Autopilot",
+                Held::NONE,
+                vec![
+                    play(Show, 1, colour(GREEN)),
+                    play(Autopilot, 2, colour(BLUE)),
+                ],
+                LATEST,
+                colour(GREEN),
             ),
             (
-                "absent colour lets the hold through",
+                "Manual over Show over Autopilot",
+                Held::NONE,
+                vec![
+                    play(Autopilot, 3, colour(BLUE)),
+                    play(Manual, 1, colour(RED)),
+                    play(Show, 2, colour(GREEN)),
+                ],
+                LATEST,
+                colour(RED),
+            ),
+            (
+                "a direct hold is Manual: over a later Show",
+                held(colour(RED), 1),
+                vec![play(Show, 2, colour(GREEN))],
+                LATEST,
+                colour(RED),
+            ),
+            // equal rank: the latest start
+            (
+                "two Shows, the later wins",
+                Held::NONE,
+                vec![play(Show, 1, colour(RED)), play(Show, 2, colour(BLUE))],
+                LATEST,
+                colour(BLUE),
+            ),
+            (
+                "a later Manual play over a hold",
                 held(colour(BLUE), 1),
-                Some(intensity(0)),
-                2,
-                Light {
-                    intensity: Some(0),
-                    colour: Some(BLUE),
-                    ..Light::DARK
-                },
+                vec![play(Manual, 2, colour(RED))],
+                LATEST,
+                colour(RED),
+            ),
+            (
+                "a later hold over a Manual play",
+                held(colour(BLUE), 2),
+                vec![play(Manual, 1, colour(RED))],
+                LATEST,
+                colour(BLUE),
             ),
             (
                 "a later hold of one property only",
                 held(intensity(5), 3),
-                Some(both),
-                2,
-                Light {
-                    intensity: Some(5),
-                    colour: Some(RED),
-                    ..Light::DARK
-                },
+                vec![play(Manual, 2, both(9, RED))],
+                LATEST,
+                both(5, RED),
+            ),
+            // zero and black take part, absent lets through
+            (
+                "Manual zero darkens a Show",
+                Held::NONE,
+                vec![
+                    play(Show, 2, both(255, GREEN)),
+                    play(Manual, 1, intensity(0)),
+                ],
+                LATEST,
+                both(0, GREEN),
+            ),
+            (
+                "Manual black claims colour",
+                Held::NONE,
+                vec![
+                    play(Show, 2, colour(GREEN)),
+                    play(Manual, 1, colour(Rgb::BLACK)),
+                ],
+                LATEST,
+                colour(Rgb::BLACK),
+            ),
+            (
+                "absent colour lets the hold through",
+                held(colour(BLUE), 1),
+                vec![play(Manual, 2, intensity(0))],
+                LATEST,
+                both(0, BLUE),
+            ),
+            // brightness: the latest, or the highest within the winning rank
+            (
+                "latest: the later dimmer Show",
+                Held::NONE,
+                vec![play(Show, 1, intensity(200)), play(Show, 2, intensity(100))],
+                LATEST,
+                intensity(100),
+            ),
+            (
+                "highest: the earlier brighter Show",
+                Held::NONE,
+                vec![play(Show, 1, intensity(200)), play(Show, 2, intensity(100))],
+                HIGHEST,
+                intensity(200),
+            ),
+            (
+                "highest: a brighter play over an earlier dimmer hold",
+                held(intensity(100), 5),
+                vec![play(Manual, 3, intensity(200))],
+                HIGHEST,
+                intensity(200),
+            ),
+            (
+                "highest stays in the winning rank",
+                Held::NONE,
+                vec![
+                    play(Autopilot, 1, intensity(255)),
+                    play(Show, 2, intensity(10)),
+                ],
+                HIGHEST,
+                intensity(10),
+            ),
+            (
+                "highest: a dim Manual over a bright Autopilot",
+                Held::NONE,
+                vec![
+                    play(Manual, 1, intensity(10)),
+                    play(Autopilot, 2, intensity(255)),
+                ],
+                HIGHEST,
+                intensity(10),
+            ),
+            (
+                "highest is for brightness only: colour by the latest",
+                Held::NONE,
+                vec![
+                    play(Show, 1, both(200, RED)),
+                    play(Show, 2, both(100, BLUE)),
+                ],
+                HIGHEST,
+                both(200, BLUE),
+            ),
+            // a kept play keeps its rank and start
+            (
+                "a kept Show over a later Autopilot",
+                Held::NONE,
+                vec![
+                    kept(Show, 1, colour(GREEN)),
+                    play(Autopilot, 2, colour(BLUE)),
+                ],
+                LATEST,
+                colour(GREEN),
+            ),
+            (
+                "a kept Show under a later Show",
+                Held::NONE,
+                vec![kept(Show, 1, colour(GREEN)), play(Show, 2, colour(BLUE))],
+                LATEST,
+                colour(BLUE),
             ),
         ];
-        for (row, hold, values, order, shown) in cases {
-            let mut plays = Plays::NONE;
-            let entries = values.map(|values| {
-                [Entry {
-                    lights: run,
-                    values,
-                }]
-            });
-            if entries.is_some() {
-                plays.start(PlayId::new(0, 1).unwrap(), 1, order);
+        for (row, hold, sources, rules, expected) in cases {
+            for first in 0..PLAYS {
+                assert_eq!(
+                    shown(hold, &sources, rules, first),
+                    expected,
+                    "{row}, from slot {first}"
+                );
             }
-            let mut out = [Light::DARK];
-            show(
-                &[hold],
-                &plays,
-                |_| entries.as_ref().map_or(&[][..], |e| &e[..]),
-                &mut out,
+            let mut reversed = sources.clone();
+            reversed.reverse();
+            assert_eq!(
+                shown(hold, &reversed, rules, 0),
+                expected,
+                "{row}, reversed"
             );
-            assert_eq!(out, [shown], "{row}");
         }
     }
 
     #[test]
-    fn between_two_plays_the_later_start_wins_in_either_slot() {
-        let run =
-            LightRun::new(LightNumber::new(0, Lights::MOST).unwrap(), 1, Lights::MOST).unwrap();
-        let red = [Entry {
-            lights: run,
-            values: colour(RED),
-        }];
-        let blue = [Entry {
-            lights: run,
-            values: colour(BLUE),
-        }];
-        // (red's slot and order, blue's slot and order, shown)
+    fn a_stop_keeps_or_removes_by_rank_and_rules() {
+        use Rank::{Autopilot, Manual, Show};
+        let rules = |manual_end, other_end| MixRules {
+            brightness: Brightness::Latest,
+            manual_end,
+            other_end,
+        };
+        // (rank, manual end, other end, what is left)
         let cases = [
-            ((0, 1), (1, 2), BLUE),
-            ((0, 2), (1, 1), RED),
-            ((1, 1), (0, 2), BLUE),
-            ((1, 2), (0, 1), RED),
+            (Manual, ManualEnd::UntilRelease, OtherEnd::Reveal, End::Keep),
+            (Manual, ManualEnd::UntilRelease, OtherEnd::Stay, End::Keep),
+            (Manual, ManualEnd::UntilStop, OtherEnd::Reveal, End::Remove),
+            (Manual, ManualEnd::UntilStop, OtherEnd::Stay, End::Remove),
+            (Show, ManualEnd::UntilRelease, OtherEnd::Reveal, End::Remove),
+            (Show, ManualEnd::UntilStop, OtherEnd::Stay, End::Keep),
+            (
+                Autopilot,
+                ManualEnd::UntilRelease,
+                OtherEnd::Reveal,
+                End::Remove,
+            ),
+            (Autopilot, ManualEnd::UntilStop, OtherEnd::Stay, End::Keep),
         ];
-        for ((red_slot, red_order), (blue_slot, blue_order), shown) in cases {
-            let mut plays = Plays::NONE;
-            plays.start(PlayId::new(red_slot, 1).unwrap(), 1, red_order);
-            plays.start(PlayId::new(blue_slot, 1).unwrap(), 2, blue_order);
-            let mut out = [Light::DARK];
-            show(
-                &[Held::NONE],
-                &plays,
-                |slot| {
-                    if slot == red_slot {
-                        &red[..]
-                    } else {
-                        &blue[..]
-                    }
-                },
-                &mut out,
+        for (rank, manual_end, other_end, end) in cases {
+            assert_eq!(
+                stops(rank, rules(manual_end, other_end)),
+                end,
+                "{rank:?} {manual_end:?} {other_end:?}"
             );
-            assert_eq!(out, [colour(shown)], "red {red_slot} at {red_order}");
+        }
+    }
+
+    #[test]
+    fn new_rules_clear_only_the_kept_plays_they_no_longer_keep() {
+        use Rank::{Autopilot, Manual, Show};
+        let stay_until_stop = MixRules {
+            manual_end: ManualEnd::UntilStop,
+            other_end: OtherEnd::Stay,
+            ..LATEST
+        };
+        // (rank, state, rules, cleared)
+        let cases = [
+            (Manual, PlayState::Kept, LATEST, false),
+            (Manual, PlayState::Kept, stay_until_stop, true),
+            (Manual, PlayState::Playing, stay_until_stop, false),
+            (Show, PlayState::Kept, LATEST, true),
+            (Show, PlayState::Kept, stay_until_stop, false),
+            (Autopilot, PlayState::Kept, LATEST, true),
+            (Autopilot, PlayState::Playing, LATEST, false),
+        ];
+        for (rank, state, rules, cleared) in cases {
+            assert_eq!(
+                unkept(rank, state, rules),
+                cleared,
+                "{rank:?} {state:?} {rules:?}"
+            );
         }
     }
 

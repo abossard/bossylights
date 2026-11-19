@@ -40,18 +40,21 @@ pub use engine_core::{
     Outcome, Output, OutputKind, OutputNumber, Patched, Priority, Project, ProjectOutput, Rate,
     Refusal, Reply, Request, Run, RunNumbers, State, Status, Target, Text, Universes, changes,
 };
+pub use engine_core::{
+    Brightness, Light, ManualEnd, MixRules, OtherEnd, PlayId, PlayState, Rank, Rgb, Saved,
+};
 use engine_core::{
     EngineCommand, Histogram, LATENCY_BUCKETS, LATENESS_BUCKETS, MAX_LIGHTS, bucket, due, frame,
     percentile, update, wait,
 };
-pub use engine_core::{Light, PlayId, Rgb, Saved};
 pub use fixture_library::Fixture;
 pub use looks::Looks;
 pub use rig::Patch;
 mod snapshot;
 
 use engine_core::{
-    Entry, LightRun, Lights, LookCommand, PLAYS, ProjectEffect, ProjectEvent, Writer,
+    Claims, End, Entry, LightRun, Lights, LookCommand, PLAYS, ProjectEffect, ProjectEvent, Writer,
+    stops, unkept,
 };
 use rig::{PatchEffect, Whole};
 
@@ -75,9 +78,11 @@ pub use wake::{Event, Wakes};
 pub const QUEUE: usize = 256;
 /// The lights of every engine: the buffer of light values has this length.
 const LIGHTS: Lights = Lights::MOST;
-/// Devices and writers on their way back from the tick thread. Each applied command
-/// retires at most one; the sender sends no more while this many are not freed yet: it
-/// cannot fill up.
+/// Boxes on their way back from the tick thread (devices, writers, runs, plans), and the
+/// plan of each play there, which goes back once when the play ends: its return is kept
+/// for it when it starts. The sender sends nothing that adds one while this many are not
+/// freed yet, so the queue back cannot fill up, and a release needs only a place in the
+/// command queue.
 const RETIRED: usize = QUEUE + MAX_OUTPUTS;
 /// How often the free thread frees retired devices when nobody wakes it.
 const FREE_EVERY: Duration = Duration::from_millis(100);
@@ -99,9 +104,11 @@ pub const fn edits(command: &Command) -> bool {
         | Command::SetGroup { .. }
         | Command::RemoveGroup { .. }
         | Command::PutStep { .. }
-        | Command::RemoveLook { .. } => true,
+        | Command::RemoveLook { .. }
+        | Command::SetMixRules { .. } => true,
         Command::SetChannel { .. }
         | Command::ReleaseChannel { .. }
+        | Command::ReleaseChannels
         | Command::ReleaseAll
         | Command::Blackout { .. }
         | Command::SetOutput { .. }
@@ -111,6 +118,8 @@ pub const fn edits(command: &Command) -> bool {
         | Command::ReleaseIntensity { .. }
         | Command::ReleaseColour { .. }
         | Command::StartLook { .. }
+        | Command::StopLook { .. }
+        | Command::EndFlash { .. }
         | Command::ReleaseHold { .. } => false,
     }
 }
@@ -276,10 +285,21 @@ enum Change {
     },
     StartLook {
         look: u16,
+        rank: Rank,
         plan: Box<[Entry]>,
+    },
+    StopLook {
+        play: PlayId,
+    },
+    EndFlash {
+        play: PlayId,
     },
     ReleaseHold {
         play: PlayId,
+    },
+    ReleaseAll,
+    Rules {
+        looks: Looks,
     },
 }
 
@@ -380,14 +400,21 @@ impl Base {
                 look,
                 looks: self.looks.remove(look),
             },
-            LookCommand::StartLook { look } => {
+            LookCommand::StartLook { look, rank } => {
                 let saved = self.looks.get(look).ok_or(Refusal::NoSuchLook)?;
                 Change::StartLook {
                     look,
+                    rank,
                     plan: looks::compile(&saved.step, &self.patch)?,
                 }
             }
+            LookCommand::StopLook { play } => Change::StopLook { play },
+            LookCommand::EndFlash { play } => Change::EndFlash { play },
             LookCommand::ReleaseHold { play } => Change::ReleaseHold { play },
+            LookCommand::ReleaseAll => Change::ReleaseAll,
+            LookCommand::SetMixRules { rules } => Change::Rules {
+                looks: self.looks.with_rules(rules),
+            },
         })
     }
 
@@ -409,6 +436,8 @@ impl Base {
 struct Live {
     play: PlayId,
     look: u16,
+    rank: Rank,
+    state: PlayState,
 }
 
 /// Between the threads of the engine. Atomics only.
@@ -418,6 +447,9 @@ struct Shared {
     freed: AtomicU64,
     /// Changes the sender ended, so far ([`Sender::revise`]). A wake reads it at its cutoff.
     revision: AtomicU64,
+    /// A test holds the free thread: what goes back is not freed while set.
+    #[cfg(test)]
+    stalled: AtomicBool,
 }
 
 impl Engine {
@@ -452,6 +484,8 @@ impl Engine {
             stop: AtomicBool::new(false),
             freed: AtomicU64::new(0),
             revision: AtomicU64::new(0),
+            #[cfg(test)]
+            stalled: AtomicBool::new(false),
         });
         let (hand, queues) = snapshot::hand_over();
         let (commands, incoming) = rtrb::RingBuffer::new(QUEUE);
@@ -469,6 +503,8 @@ impl Engine {
             devices: std::array::from_fn(|_| None),
             writers: Vec::new(),
             plans: std::array::from_fn(|_| None),
+            claims: vec![[None; engine_core::Property::ALL.len()]; usize::from(MAX_LIGHTS)]
+                .into_boxed_slice(),
             // `run` puts in the priority, once the thread has it.
             now: Box::new(Snapshot::new(universes, Priority::RealTime)),
             hand,
@@ -597,10 +633,10 @@ impl Sender {
                 effects,
                 moved,
             } => {
-                // a change of the patch never moves a play
+                // a change of the patch never moves a play, playing or kept
                 if let Some(look) = moved
                     .into_iter()
-                    .find(|&look| self.playing(look).next().is_some())
+                    .find(|&look| self.uses(look).next().is_some())
                 {
                     return Err(Refusal::LookInUse { look });
                 }
@@ -611,8 +647,13 @@ impl Sender {
                 begun
             }
             Change::PutStep { look, looks, plan } => {
-                // a play of the look takes the new plan, keeping its start
-                let playing: Vec<PlayId> = self.playing(look).collect();
+                // a play of the look takes the new plan, keeping its start; a kept one
+                // keeps its values
+                let playing: Vec<PlayId> = self
+                    .uses(look)
+                    .filter(|live| live.state == PlayState::Playing)
+                    .map(|live| live.play)
+                    .collect();
                 self.room(playing.len())?;
                 for play in playing {
                     self.push(EngineCommand::Plan { play }, Brings::Plan(plan.clone()))?;
@@ -622,38 +663,81 @@ impl Sender {
                 Begun::Queued
             }
             Change::RemoveLook { look, looks } => {
-                if self.playing(look).next().is_some() {
+                if self.uses(look).next().is_some() {
                     return Err(Refusal::LookInUse { look });
                 }
                 self.looks = Arc::new(looks);
                 Begun::Queued
             }
-            Change::StartLook { look, plan } => {
-                // a fresh start of a playing look takes its slot
+            Change::StartLook { look, rank, plan } => {
+                // a fresh start of the look at this rank, playing or kept, takes its slot
                 let slot = self
                     .plays
                     .iter()
-                    .position(|live| live.is_some_and(|live| live.look == look))
+                    .position(|live| {
+                        live.is_some_and(|live| (live.look, live.rank) == (look, rank))
+                    })
                     .or_else(|| self.plays.iter().position(Option::is_none))
                     .ok_or(Refusal::PlayFull)?;
                 let generation = self.generation.wrapping_add(1);
                 let play = PlayId::new(slot, generation).ok_or(Refusal::PlayFull)?;
-                self.push(EngineCommand::Start { play, look }, Brings::Plan(plan))?;
+                self.push(
+                    EngineCommand::Start { play, look, rank },
+                    Brings::Plan(plan),
+                )?;
                 self.generation = generation;
                 if let Some(live) = self.plays.get_mut(slot) {
-                    *live = Some(Live { play, look });
+                    *live = Some(Live {
+                        play,
+                        look,
+                        rank,
+                        state: PlayState::Playing,
+                    });
                 }
                 Begun::Started { play }
             }
-            Change::ReleaseHold { play } => {
-                let live = self.plays.get(play.slot()).copied().flatten();
-                if live.is_some_and(|live| live.play == play) {
-                    self.push(EngineCommand::Release { play }, Brings::Nothing)?;
-                    self.free.unpark(); // its plan is on its way back
-                    if let Some(live) = self.plays.get_mut(play.slot()) {
-                        *live = None;
+            Change::StopLook { play } => {
+                match self.live(play) {
+                    Some(live) if live.state == PlayState::Playing => {
+                        match stops(live.rank, self.looks.rules()) {
+                            End::Keep => {
+                                self.push(EngineCommand::Keep { play }, Brings::Nothing)?;
+                                if let Some(Some(live)) = self.plays.get_mut(play.slot()) {
+                                    live.state = PlayState::Kept;
+                                }
+                            }
+                            End::Remove => self.release(play)?,
+                        }
                     }
+                    Some(_) | None => {}
                 }
+                Begun::Queued
+            }
+            Change::EndFlash { play } => {
+                if self
+                    .live(play)
+                    .is_some_and(|live| live.rank == Rank::Manual)
+                {
+                    self.release(play)?;
+                }
+                Begun::Queued
+            }
+            Change::ReleaseHold { play } => {
+                if self.live(play).is_some() {
+                    self.release(play)?;
+                }
+                Begun::Queued
+            }
+            Change::ReleaseAll => {
+                self.push(EngineCommand::ReleaseAll, Brings::Nothing)?;
+                self.forget(|live| live.rank == Rank::Manual);
+                Begun::Queued
+            }
+            Change::Rules { looks } => {
+                let rules = looks.rules();
+                self.push(EngineCommand::Rules { rules }, Brings::Nothing)?;
+                self.forget(|live| unkept(live.rank, live.state, rules));
+                self.looks = Arc::new(looks);
                 Begun::Queued
             }
         };
@@ -661,19 +745,49 @@ impl Sender {
         Ok(begun)
     }
 
-    /// The plays of `look`.
-    fn playing(&self, look: u16) -> impl Iterator<Item = PlayId> + '_ {
+    /// The plays of `look`, playing or kept, at any rank.
+    fn uses(&self, look: u16) -> impl Iterator<Item = Live> + '_ {
         self.plays
             .iter()
             .flatten()
+            .copied()
             .filter(move |live| live.look == look)
-            .map(|live| live.play)
+    }
+
+    /// The play `play` names, unless it ended.
+    fn live(&self, play: PlayId) -> Option<Live> {
+        self.plays
+            .get(play.slot())
+            .copied()
+            .flatten()
+            .filter(|live| live.play == play)
+    }
+
+    /// Ends `play`, which is live: its plan goes back.
+    fn release(&mut self, play: PlayId) -> Result<(), Refusal> {
+        self.push(EngineCommand::Release { play }, Brings::Nothing)?;
+        if let Some(live) = self.plays.get_mut(play.slot()) {
+            *live = None;
+        }
+        Ok(())
+    }
+
+    /// Forgets the plays the command just queued ends: their plans go back.
+    fn forget(&mut self, ends: impl Fn(&Live) -> bool) {
+        for slot in &mut self.plays {
+            if slot.is_some_and(|live| ends(&live)) {
+                *slot = None;
+                self.retired += 1;
+            }
+        }
+        self.free.unpark();
     }
 
     /// `QueueFull` unless `commands` that each retire a box can all be queued now.
     fn room(&self, commands: usize) -> Result<(), Refusal> {
+        let held = self.plays.iter().flatten().count() as u64;
         if self.commands.slots() < commands
-            || on_their_way(&self.shared, self.retired) + commands as u64 > RETIRED as u64
+            || on_their_way(&self.shared, self.retired) + held + commands as u64 > RETIRED as u64
         {
             self.free.unpark();
             return Err(Refusal::QueueFull);
@@ -685,6 +799,12 @@ impl Sender {
     /// when one names nothing in the patch. No play uses them yet.
     pub fn load_looks(&mut self, looks: Looks) -> Result<(), Refusal> {
         looks.check(&self.patch)?;
+        self.push(
+            EngineCommand::Rules {
+                rules: looks.rules(),
+            },
+            Brings::Nothing,
+        )?;
         self.looks = Arc::new(looks);
         Ok(())
     }
@@ -697,12 +817,7 @@ impl Sender {
     /// Does what follows a change of the patch: all of it, or none of it.
     fn follow(&mut self, effects: Vec<PatchEffect>) -> Result<Begun, Refusal> {
         // Every effect sends at most one command, which retires at most one box.
-        if self.commands.slots() < effects.len()
-            || on_their_way(&self.shared, self.retired) + effects.len() as u64 > RETIRED as u64
-        {
-            self.free.unpark();
-            return Err(Refusal::QueueFull);
-        }
+        self.room(effects.len())?;
         let mut begun = Begun::Queued;
         for effect in effects {
             match effect {
@@ -839,6 +954,7 @@ impl Sender {
             | EngineCommand::Sent { .. }
             | EngineCommand::SetChannel { .. }
             | EngineCommand::ReleaseChannel { .. }
+            | EngineCommand::ReleaseChannels
             | EngineCommand::ReleaseAll
             | EngineCommand::Blackout { .. }
             | EngineCommand::Writers
@@ -849,23 +965,32 @@ impl Sender {
             | EngineCommand::ReleaseColour { .. }
             | EngineCommand::Darken { .. }
             | EngineCommand::Start { .. }
+            | EngineCommand::Keep { .. }
+            | EngineCommand::Rules { .. }
             | EngineCommand::Plan { .. }
             | EngineCommand::Release { .. } => (None, false),
         };
-        // A start retires the plan of a play in its slot; a new plan or a release, the
-        // play's plan.
-        let retires_plan = if let EngineCommand::Start { play, .. } = command {
+        // What goes back now: a start, the plan of a play in its slot; a new plan or a
+        // release, the play's plan. A plan the tick thread keeps has its return kept from
+        // its start on, so a release takes no more of the queue back: it needs only a
+        // place in the command queue. (ReleaseAll and Rules: their plays go back through
+        // `forget`, kept the same way.)
+        let back = if let EngineCommand::Start { play, .. } = command {
             self.plays.get(play.slot()).copied().flatten().is_some()
         } else {
             matches!(
                 command,
-                EngineCommand::Plan { .. } | EngineCommand::Release { .. }
-            )
+                EngineCommand::Plan { .. }
+                    | EngineCommand::Release { .. }
+                    | EngineCommand::Writers
+                    | EngineCommand::Runs { .. }
+            ) || sends_back && changes.is_some_and(|output| self.project.output(output).is_some())
         };
-        let retires = retires_plan
-            || matches!(command, EngineCommand::Writers | EngineCommand::Runs { .. })
-            || sends_back && changes.is_some_and(|output| self.project.output(output).is_some());
-        if retires && on_their_way(&self.shared, self.retired) >= RETIRED as u64 {
+        // one more box on its way back or held by the tick thread: all but a release
+        let adds = back && !matches!(command, EngineCommand::Release { .. })
+            || matches!(command, EngineCommand::Start { .. });
+        let held = self.plays.iter().flatten().count() as u64;
+        if adds && on_their_way(&self.shared, self.retired) + held >= RETIRED as u64 {
             self.free.unpark();
             free_elsewhere(brings);
             return Err(Refusal::QueueFull);
@@ -879,8 +1004,9 @@ impl Sender {
             free_elsewhere(refused.brings);
             return Err(Refusal::QueueFull);
         }
-        if retires {
+        if back {
             self.retired += 1;
+            self.free.unpark();
         }
         self.sent += 1;
         Ok(())
@@ -934,6 +1060,10 @@ fn on_their_way(shared: &Shared, retired: u64) -> u64 {
 /// and sockets, on a steady beat or when the sender wakes it. Until the engine stops.
 fn free(mut retired: rtrb::Consumer<Retired>, shared: &Shared) {
     loop {
+        #[cfg(test)]
+        while shared.stalled.load(Ordering::Acquire) && !shared.stop.load(Ordering::Relaxed) {
+            thread::park_timeout(Duration::from_millis(1));
+        }
         while let Ok(device) = retired.pop() {
             drop(device);
             shared.freed.fetch_add(1, Ordering::Release);
@@ -969,6 +1099,8 @@ struct Ticker {
     writers: Vec<Writer>,
     /// Each play's plan, by slot, beside `State::plays`.
     plans: [Option<Box<[Entry]>>; PLAYS],
+    /// Who holds each property of each light this frame: the Mixer's buffer.
+    claims: Box<[Claims]>,
     /// The state, the held levels and what was counted: what readers get a copy of.
     now: Box<Snapshot>,
     hand: Hand,
@@ -1074,8 +1206,10 @@ impl Ticker {
             }
 
             let plans = &self.plans;
-            self.now
-                .show(|slot| plans.get(slot).and_then(Option::as_deref).unwrap_or(&[]));
+            self.now.show(
+                |slot| plans.get(slot).and_then(Option::as_deref).unwrap_or(&[]),
+                &mut self.claims,
+            );
             frame(
                 &self.now.state,
                 self.now.universes(),
@@ -1110,6 +1244,15 @@ impl Ticker {
     fn swap(&mut self, command: EngineCommand, brings: Brings) {
         if let EngineCommand::Release { play } = command {
             self.replan(play.slot(), None);
+            return;
+        }
+        if let EngineCommand::ReleaseAll | EngineCommand::Rules { .. } = command {
+            // the plans of the plays it ended go back
+            for slot in 0..PLAYS {
+                if !self.now.state.plays.has(slot) {
+                    self.replan(slot, None);
+                }
+            }
             return;
         }
         let (device, writers) = match brings {
@@ -1287,5 +1430,107 @@ mod tests {
                 "{steps:?}"
             );
         }
+    }
+
+    /// Sends `command` until it is not refused for a full command queue: waits for the
+    /// tick to drain it. What came of it once the queue had room.
+    fn once_drained(
+        engine: &mut Engine,
+        sender: &mut Sender,
+        command: Command,
+    ) -> Result<(), Refusal> {
+        loop {
+            let refused = sender.send(command);
+            if refused != Err(Refusal::QueueFull) {
+                return refused;
+            }
+            let started = Instant::now();
+            while engine.fresh().applied() < sender.sent() {
+                assert!(
+                    started.elapsed() < Duration::from_secs(5),
+                    "the tick drains"
+                );
+            }
+            if sender.commands.slots() == QUEUE {
+                return sender.send(command); // drained: the retirement queue decides
+            }
+        }
+    }
+
+    #[test]
+    #[expect(
+        clippy::unwrap_used,
+        clippy::panic,
+        reason = "a test that cannot set itself up fails"
+    )]
+    fn with_reclamation_stalled_every_release_needs_only_a_place_in_the_queue() {
+        let (mut engine, mut sender) = Engine::start(Universes::new(1).unwrap()).unwrap();
+        let red = engine_core::Step {
+            target: engine_core::Target::Fixture { fixture: 1 },
+            values: Light {
+                colour: Some(Rgb::BLACK),
+                ..Light::DARK
+            },
+        };
+        let library = [fixture_library::parse(
+            "Generic-Generic-RGB.qxf",
+            include_bytes!("../../fixture-library/tests/definitions/Generic-Generic-RGB.qxf"),
+        )
+        .unwrap()];
+        let patch = Command::Patch {
+            name: Text::new("PAR").unwrap(),
+            maker: Text::new("Generic").unwrap(),
+            model: Text::new("Generic RGB").unwrap(),
+            mode: Text::new("RGB").unwrap(),
+            at: ChannelNumbers {
+                universe: 1,
+                address: 1,
+            },
+        };
+        assert!(sender.begin(patch, &library).is_ok());
+        // every play slot taken, each by its own look
+        let mut plays = Vec::new();
+        for look in 1..=PLAYS as u16 {
+            sender
+                .send(Command::PutStep {
+                    look,
+                    name: Text::new("s").unwrap(),
+                    step: red,
+                })
+                .unwrap();
+            match sender.begin(
+                Command::StartLook {
+                    look,
+                    rank: Rank::Manual,
+                },
+                &[],
+            ) {
+                Ok(Begun::Started { play }) => plays.push(play),
+                _ => panic!("look {look} plays"),
+            }
+        }
+        engine.shared.stalled.store(true, Ordering::Release);
+        // restarts send old plans back that are never freed, until no more may go
+        let restart = Command::StartLook {
+            look: 1,
+            rank: Rank::Manual,
+        };
+        while once_drained(&mut engine, &mut sender, restart).is_ok() {}
+        assert_eq!(
+            sender.send(restart),
+            Err(Refusal::QueueFull),
+            "the returns are full"
+        );
+        assert_eq!(sender.send(Command::Blackout { on: true }), Ok(()));
+        // every play still releases: its return was kept for it when it started
+        let restarted = PlayId::new(0, sender.generation).unwrap();
+        for play in std::iter::once(restarted).chain(plays.into_iter().skip(1)) {
+            assert_eq!(
+                once_drained(&mut engine, &mut sender, Command::ReleaseHold { play }),
+                Ok(()),
+                "{play:?} releases"
+            );
+        }
+        engine.shared.stalled.store(false, Ordering::Release);
     }
 }
