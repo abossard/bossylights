@@ -2,10 +2,10 @@
 // `git archive` reads the object store only: the working tree, index and stash stay as they are.
 // The copy is built with the default target folder (CARGO_TARGET_DIR unset) and removed at the end.
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { mutantsSummary, parseArgs, suitesOf, testSummary } from "./verify.mjs";
+import { mutantsReport, parseArgs, suitesOf, testSummary } from "./verify.mjs";
 
 const run = (command, args, cwd, options = {}) =>
   spawnSync(command, args, { cwd, encoding: "utf8", maxBuffer: 1 << 28, ...options });
@@ -48,7 +48,11 @@ try {
     const m = run("cargo", ["mutants", "--no-shuffle", "--in-diff", diffFile], dir, { env });
     const NO_MUTANTS = 0; // exit codes of cargo-mutants: 0 all caught, 2 missed, 3 timeout
     if (![NO_MUTANTS, 2, 3].includes(m.status)) throw new Error(`cargo mutants failed (exit ${m.status}): ${m.stderr.split("\n").filter(Boolean).at(-1)}`);
-    console.log(mutantsSummary(JSON.parse(readFileSync(join(dir, "mutants.out", "outcomes.json"), "utf8"))));
+    const file = join(dir, "mutants.out", "outcomes.json");
+    const outcomes = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : null;
+    const report = mutantsReport({ status: m.status, outcomes, stderr: m.stderr });
+    console.log(report.text);
+    if (!report.ok) failed = true;
   }
 } catch (error) {
   console.error(`verify: ${error.message}`);

@@ -39,3 +39,12 @@ export function mutantsSummary({ caught, missed, timeout, unviable, outcomes }) 
   for (const w of where("Timeout")) lines.push(`  timeout ${w}`);
   return lines.join("\n");
 }
+
+// What the run of cargo-mutants left: its outcomes (or none) and its exit code. Exit 0 with no
+// outcomes file means it found nothing to mutate; any other missing file is a failure.
+export function mutantsReport({ status, outcomes, stderr }) {
+  if (outcomes) return { ok: true, text: mutantsSummary(outcomes) };
+  if (status === 0) return { ok: true, text: "mutants: none in this diff" };
+  const last = stderr.split("\n").filter(Boolean).at(-1) ?? "no output";
+  return { ok: false, text: `mutants: no outcomes file (cargo mutants exit ${status}): ${last}` };
+}

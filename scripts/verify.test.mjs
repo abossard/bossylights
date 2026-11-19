@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { firstFailure, mutantsSummary, parseArgs, suitesOf, testSummary } from "./verify.mjs";
+import { firstFailure, mutantsReport, mutantsSummary, parseArgs, suitesOf, testSummary } from "./verify.mjs";
 
 test("suites are the npm run parts of the test script", () => {
   assert.deepEqual(suitesOf("npm run test:checks && npm run test:rust && npm run test:ui"), ["test:checks", "test:rust", "test:ui"]);
@@ -63,4 +63,12 @@ test("mutants list every missed and timeout line, never the caught ones", () => 
     "  missed  b.rs:7  replace g -> u8 with 1",
     "  timeout c.rs:9  replace h with ()",
   ].join("\n"));
+});
+
+test("no outcomes file: exit 0 is no mutants, any other exit is a failure line", () => {
+  const none = mutantsReport({ status: 0, outcomes: null, stderr: "" });
+  assert.deepEqual(none, { ok: true, text: "mutants: none in this diff" });
+  const bad = mutantsReport({ status: 1, outcomes: null, stderr: "a\nboom\n" });
+  assert.equal(bad.ok, false);
+  assert.match(bad.text, /no outcomes file \(cargo mutants exit 1\): boom/);
 });
