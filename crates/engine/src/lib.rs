@@ -1243,9 +1243,7 @@ impl Opening {
     /// are freed (one may hold the port this opens), then for as long as opening takes.
     pub fn open(mut self) -> Opened {
         let started = Instant::now();
-        while self.devices > self.shared.devices_freed.load(Ordering::Acquire)
-            && started.elapsed() < FREE_WITHIN
-        {
+        while waits(&self.shared, self.devices) && started.elapsed() < FREE_WITHIN {
             self.free.unpark();
             thread::sleep(Duration::from_millis(1));
         }
@@ -1263,6 +1261,11 @@ impl Opening {
             device,
         }
     }
+}
+
+/// Whether one of the `devices` sent away so far is not freed yet: an opening waits.
+fn waits(shared: &Shared, devices: u64) -> bool {
+    devices > shared.devices_freed.load(Ordering::Acquire)
 }
 
 /// Of the `retired` boxes sent back so far, those not freed yet.
@@ -2007,5 +2010,129 @@ mod tests {
             Err(Refusal::LookInUse { look: 1 })
         );
         assert!(engine.fresh().state.plays.has(0));
+    }
+
+    /// A device that takes its time to close: until the test lets it.
+    #[cfg(feature = "test-support")]
+    struct Closing {
+        closing: Arc<AtomicBool>,
+        closes: Arc<AtomicBool>,
+    }
+
+    #[cfg(feature = "test-support")]
+    impl Device for Closing {
+        fn take(&mut self, _frame: &[Levels]) -> Outcome {
+            Outcome::Accepted
+        }
+    }
+
+    #[cfg(feature = "test-support")]
+    impl Drop for Closing {
+        fn drop(&mut self) {
+            self.closing.store(true, Ordering::Release);
+            let started = Instant::now();
+            while !self.closes.load(Ordering::Acquire)
+                && started.elapsed() < Duration::from_secs(10)
+            {
+                thread::sleep(Duration::from_millis(1)); // poll
+            }
+        }
+    }
+
+    #[cfg(feature = "test-support")]
+    #[test]
+    #[expect(
+        clippy::unwrap_used,
+        clippy::panic,
+        reason = "a test that cannot set itself up fails"
+    )]
+    fn an_opening_waits_for_the_device_sent_back_not_for_a_cancelled_plan() {
+        let (closing, closes) = (
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+        );
+        let open: Open = Box::new(|_kind| Err(io::Error::other("the test attaches its device")));
+        let (_engine, mut sender, wakes) =
+            Engine::start_stepped(Universes::new(1).unwrap(), open).unwrap();
+        let output = OutputNumber::try_from(1).unwrap();
+        let run = RunNumbers { first: 1, count: 1 }
+            .check(sender.universes)
+            .unwrap();
+        sender
+            .attach(
+                output,
+                Box::new(Closing {
+                    closing: Arc::clone(&closing),
+                    closes: Arc::clone(&closes),
+                }),
+                run,
+                Rate::Sixty,
+            )
+            .unwrap();
+        let strip = Command::PatchStrip {
+            name: Text::new("strip").unwrap(),
+            pixels: engine_core::Pixels::try_from(1).unwrap(),
+            color: Color::Rgb,
+            at: ChannelNumbers {
+                universe: 1,
+                address: 1,
+            },
+        };
+        assert!(sender.begin(strip, &[]).is_ok());
+        let step = engine_core::Step {
+            target: Target::Light { light: 1 },
+            values: Light::DARK,
+        };
+        let name = Text::new("s").unwrap();
+        sender
+            .send(Command::PutStep {
+                look: 1,
+                name,
+                step,
+            })
+            .unwrap();
+        let rules = MixRules {
+            other_end: OtherEnd::Stay,
+            ..MixRules::default()
+        };
+        sender.send(Command::SetMixRules { rules }).unwrap();
+        // off the grid: the bar is ahead
+        wakes.hold().unwrap();
+        wakes.wake_at(Duration::from_millis(100)).unwrap();
+        let start = Command::StartLook {
+            look: 1,
+            rank: Rank::Show,
+            when: When::Bar,
+        };
+        let Ok(Begun::Started { play }) = sender.begin(start, &[]) else {
+            panic!("look 1 waits");
+        };
+        wakes.wake().unwrap();
+        // stopped and removed before the wake: an opening now has not reaped the cancel
+        sender.send(Command::StopLook { play }).unwrap();
+        sender.send(Command::RemoveOutput { output }).unwrap();
+        // the plan goes back, then the device; the plan is freed, the device closes
+        wakes.wake().unwrap();
+        let started = Instant::now();
+        while !closing.load(Ordering::Acquire) {
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "the device closes"
+            );
+            thread::sleep(Duration::from_millis(1)); // poll
+        }
+        assert!(
+            waits(&sender.shared, sender.devices),
+            "the port is still held"
+        );
+        closes.store(true, Ordering::Release);
+        while waits(&sender.shared, sender.devices) {
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "the device is freed"
+            );
+            thread::sleep(Duration::from_millis(1)); // poll
+        }
+        wakes.run();
     }
 }
