@@ -44,8 +44,8 @@ pub use patch::{
 };
 pub use project::{Project, ProjectEffect, ProjectEvent, ProjectOutput};
 pub use resolve::{
-    Less, Light, LightNumber, LightRun, Lights, MAX_LIGHTS, Part, Place, Rgb, Scale, Sense, Take,
-    Writer, resolve,
+    HeldLight, Less, Light, LightNumber, LightRun, Lights, MAX_LIGHTS, Part, Place, Rgb, Scale,
+    Sense, Take, Writer, held_lights, light_changes, resolve,
 };
 pub use show::{ShowFile, Unopened};
 
@@ -1372,6 +1372,8 @@ mod tests {
                 BestEffort::decl(&config),
                 Levels::decl(&config),
                 ChannelLevel::decl(&config),
+                HeldLight::decl(&config),
+                Rgb::decl(&config),
                 Output::decl(&config),
                 Run::decl(&config),
                 Status::decl(&config),

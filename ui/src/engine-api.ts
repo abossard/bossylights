@@ -35,7 +35,11 @@ groups: Array<Grouped>,
 /**
  * Whether the patch and the groups are kept in a show file.
  */
-show: ShowFile, universes: Array<Levels>, } } | { "Changed": { state: State, project: Project, library: Library, 
+show: ShowFile, universes: Array<Levels>, 
+/**
+ * Every light that holds a part, by number.
+ */
+lights: Array<HeldLight>, } } | { "Changed": { state: State, project: Project, library: Library, 
 /**
  * The whole patch when it changed since the last message, else `None`.
  */
@@ -47,7 +51,12 @@ groups: Array<Grouped> | null,
 /**
  * Whether the patch and the groups are kept in a show file.
  */
-show: ShowFile, channels: Array<ChannelLevel>, } } | { "Found": { fixtures: Array<Match>, } } | { "Fixture": { maker: string, model: string, kind: FixtureKind, modes: Array<ModeChannels>, } } | { "Failures": { failures: Array<Failure>, } };
+show: ShowFile, channels: Array<ChannelLevel>, 
+/**
+ * Every light whose held parts changed, as it holds them now: a part let go is
+ * `None`.
+ */
+lights: Array<HeldLight>, } } | { "Found": { fixtures: Array<Match>, } } | { "Fixture": { maker: string, model: string, kind: FixtureKind, modes: Array<ModeChannels>, } } | { "Failures": { failures: Array<Failure>, } };
 
 export type Refusal = "NotACommand" | { "NoSuchUniverse": { universes: number, } } | "NoSuchAddress" | "QueueFull" | "CannotOpen" | "NoSuchFixture" | "Opening" | { "TooManyUniverses": { most: number, } } | "NoSuchMode" | { "PastTheEnd": { channels: number, } } | { "NotStreamed": { first: number, last: number, } } | { "NotSent": { output: number, universe: number, address: number, } } | { "StreamsFixture": { fixture: number, } } | { "Overlaps": { fixture: number, } } | "NoLightsLeft" | "NotPatched" | "NoSuchLight" | "NoSuchGroup" | { "TooManyMembers": { most: number, } } | { "ShowFileFull": { most: number, } };
 
@@ -76,6 +85,10 @@ export type BestEffort = { "Refused": { code: number, } } | "NotSupported";
 export type Levels = number[];
 
 export type ChannelLevel = { universe: number, address: number, value: number, };
+
+export type HeldLight = { light: number, intensity: number | null, colour: Rgb | null, };
+
+export type Rgb = { red: number, green: number, blue: number, };
 
 export type Output = { universes: Run, rate: Rate, status: Status, counters: Counters, };
 

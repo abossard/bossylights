@@ -20,6 +20,7 @@
 
 use crate::channel::{Channel, ChannelSet, Levels, MAX_UNIVERSES};
 use crate::mix::{Want, mix};
+use serde::Serialize;
 
 /// The most lights an engine can have: 64 universes of 170 RGB pixels and more.
 pub const MAX_LIGHTS: u16 = 16_384;
@@ -117,8 +118,49 @@ impl Light {
     };
 }
 
+/// A light's held parts, as the picture shows them: its number, counted from 1, and each
+/// part's value, `None` where nothing holds it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct HeldLight {
+    pub light: u16,
+    pub intensity: Option<u16>,
+    pub colour: Option<Rgb>,
+}
+
+/// Every light of `lights` that holds a part, by number.
+pub fn held_lights(lights: &[Light]) -> impl Iterator<Item = HeldLight> + '_ {
+    numbered(lights)
+        .filter(|(_, light)| **light != Light::DARK)
+        .map(held)
+}
+
+/// Every light whose held parts differ between `before` and `after`, as `after` holds them.
+pub fn light_changes<'a>(
+    before: &'a [Light],
+    after: &'a [Light],
+) -> impl Iterator<Item = HeldLight> + 'a {
+    numbered(after)
+        .zip(before)
+        .filter(|((_, new), old)| new != old)
+        .map(|(new, _)| held(new))
+}
+
+fn numbered(lights: &[Light]) -> impl Iterator<Item = (u16, &Light)> {
+    (1..=MAX_LIGHTS).zip(lights)
+}
+
+const fn held((light, values): (u16, &Light)) -> HeldLight {
+    HeldLight {
+        light,
+        intensity: values.intensity,
+        colour: values.colour,
+    }
+}
+
 /// A colour, one part of a light.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct Rgb {
     pub red: u16,
     pub green: u16,
@@ -584,6 +626,74 @@ mod tests {
         // (index, valid)
         for (index, valid) in [(0, true), (3, true), (4, false), (u16::MAX, false)] {
             assert_eq!(LightNumber::new(index, four).is_some(), valid, "{index}");
+        }
+    }
+
+    #[test]
+    fn the_picture_shows_the_held_parts_of_each_light_and_what_changed() {
+        let red = Rgb {
+            red: FULL,
+            green: 0,
+            blue: 0,
+        };
+        let coloured = Light {
+            colour: Some(red),
+            ..Light::DARK
+        };
+        let bright = Light {
+            intensity: Some(HALF),
+            ..Light::DARK
+        };
+        let both = light(HALF, (FULL, 0, 0));
+        let shown = |light, values: Light| HeldLight {
+            light,
+            intensity: values.intensity,
+            colour: values.colour,
+        };
+        let dark = Light::DARK;
+        // (before, after, held after, changes)
+        let cases = [
+            (vec![dark, dark], vec![dark, dark], vec![], vec![]),
+            (
+                vec![dark, dark],
+                vec![dark, coloured],
+                vec![shown(2, coloured)],
+                vec![shown(2, coloured)],
+            ),
+            (
+                vec![coloured, dark],
+                vec![both, bright],
+                vec![shown(1, both), shown(2, bright)],
+                vec![shown(1, both), shown(2, bright)],
+            ),
+            (
+                vec![both, coloured],
+                vec![bright, coloured],
+                vec![shown(1, bright), shown(2, coloured)],
+                vec![shown(1, bright)],
+            ),
+            // let go: the light shows nothing held, and changed to nothing
+            (
+                vec![bright, coloured],
+                vec![dark, coloured],
+                vec![shown(2, coloured)],
+                vec![shown(1, dark)],
+            ),
+            // held black is held, not let go
+            (
+                vec![dark],
+                vec![light(0, (0, 0, 0))],
+                vec![shown(1, light(0, (0, 0, 0)))],
+                vec![shown(1, light(0, (0, 0, 0)))],
+            ),
+        ];
+        for (before, after, held, changes) in cases {
+            assert_eq!(held_lights(&after).collect::<Vec<_>>(), held, "{after:?}");
+            assert_eq!(
+                light_changes(&before, &after).collect::<Vec<_>>(),
+                changes,
+                "{before:?} to {after:?}"
+            );
         }
     }
 }

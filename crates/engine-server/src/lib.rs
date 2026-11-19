@@ -28,7 +28,7 @@ use engine::{
     API_VERSION, Begun, ChannelLevel, Command, Engine, Grouped, Patch, Patched, Project, Refusal,
     Reply, Request, Sender, Snapshot, changes,
 };
-use engine_core::{Library, ShowFile};
+use engine_core::{HeldLight, Library, ShowFile, held_lights, light_changes};
 use library::Shelf;
 use std::collections::VecDeque;
 use std::io;
@@ -330,7 +330,10 @@ async fn send(api: &Api, command: Command) -> Result<Option<u16>, Refusal> {
     match begun {
         Ok(Begun::Opening(opening)) => {
             match tokio::task::spawn_blocking(move || opening.open()).await {
-                Ok(opened) => api.changing(|sender| sender.finish(opened)).await.map(|()| None),
+                Ok(opened) => api
+                    .changing(|sender| sender.finish(opened))
+                    .await
+                    .map(|()| None),
                 Err(_) => Err(Refusal::CannotOpen), // the task was cancelled: the engine stops
             }
         }
@@ -354,6 +357,7 @@ impl Api {
 }
 
 fn picture(now: &Picture) -> Option<String> {
+    let lights: Vec<HeldLight> = held_lights(now.snapshot.lights()).collect();
     json(&Reply::Picture {
         state: now.snapshot.state,
         project: now.project,
@@ -362,11 +366,12 @@ fn picture(now: &Picture) -> Option<String> {
         groups: &now.patch.groups(),
         show: now.show,
         universes: now.snapshot.universes(),
+        lights: &lights,
     })
 }
 
-/// `Changed`: the channels that differ from the last picture this connection sent, and
-/// the patch and the groups if the patch is not the one of that picture.
+/// `Changed`: the channels and the lights that differ from the last picture this connection
+/// sent, and the patch and the groups if the patch is not the one of that picture.
 fn changed(
     pictures: &mut watch::Receiver<Arc<Picture>>,
     subscription: &mut Option<Arc<Picture>>,
@@ -375,6 +380,8 @@ fn changed(
     let now = Arc::clone(&pictures.borrow_and_update());
     let channels: Vec<ChannelLevel> =
         changes(last.snapshot.universes(), now.snapshot.universes()).collect();
+    let lights: Vec<HeldLight> =
+        light_changes(last.snapshot.lights(), now.snapshot.lights()).collect();
     let new = !Arc::ptr_eq(&last.patch, &now.patch);
     let fixtures: Option<Vec<Patched>> = new.then(|| now.patch.fixtures());
     let groups: Option<Vec<Grouped>> = new.then(|| now.patch.groups());
@@ -386,6 +393,7 @@ fn changed(
         groups: groups.as_deref(),
         show: now.show,
         channels: &channels,
+        lights: &lights,
     });
     *last = now;
     reply

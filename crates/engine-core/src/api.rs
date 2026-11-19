@@ -4,7 +4,7 @@
 //! | Client sends | Engine answers |
 //! |---|---|
 //! | `{"Send": {"command": ...}}` | `"Accepted"`, `{"Patched": {"fixture": ...}}` for `Patch`, or `{"Refused": {"reason": ...}}` |
-//! | `"Query"` | `{"Picture": ...}`: the state, the project, the patch and every level |
+//! | `"Query"` | `{"Picture": ...}`: the state, the project, the patch, every level and every held light |
 //! | `"Subscribe"` | `{"Picture": ...}`, then `{"Changed": ...}` for each new frame, with the patch when it changed |
 //! | `"Stop"` | `"Stopping"`, then every connection closes and the engine process ends |
 //! | `{"Search": {"text": ...}}` | `{"Found": ...}`: the best matches of the fixture library |
@@ -13,7 +13,7 @@
 //! | anything else | `{"Refused": {"reason": "NotACommand"}}` |
 
 use crate::library::{Failure, FixtureKind, Library, Match, ModeChannels, Text};
-use crate::{ChannelLevel, Command, Grouped, Levels, Patched, Project, ShowFile, State};
+use crate::{ChannelLevel, Command, Grouped, HeldLight, Levels, Patched, Project, ShowFile, State};
 use serde::{Deserialize, Serialize};
 
 /// The version of this API. `GET /version` answers it as text. A client that speaks
@@ -67,7 +67,8 @@ pub enum Reply<'a> {
     Stopping,
     /// The command was not taken. Nothing changed.
     Refused { reason: Refusal },
-    /// The state, the project and the held levels of every universe.
+    /// The state, the project, the held levels of every universe and the held parts of
+    /// every light.
     Picture {
         state: State,
         project: Project,
@@ -79,9 +80,11 @@ pub enum Reply<'a> {
         /// Whether the patch and the groups are kept in a show file.
         show: ShowFile,
         universes: &'a [Levels],
+        /// Every light that holds a part, by number.
+        lights: &'a [HeldLight],
     },
-    /// A new frame: the state, and the channels whose held level changed since the last
-    /// message.
+    /// A new frame: the state, and the channels and the lights whose held values changed
+    /// since the last message.
     Changed {
         state: State,
         project: Project,
@@ -93,6 +96,9 @@ pub enum Reply<'a> {
         /// Whether the patch and the groups are kept in a show file.
         show: ShowFile,
         channels: &'a [ChannelLevel],
+        /// Every light whose held parts changed, as it holds them now: a part let go is
+        /// `None`.
+        lights: &'a [HeldLight],
     },
     /// The answer to `Search`: at most [`MATCHES`], best first. Empty while the library
     /// is not read.
