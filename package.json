@@ -16,7 +16,8 @@
     "test:e2e": "playwright install chromium && playwright test",
     "test:catalog": "playwright install chromium && playwright test -c ui/src/catalog",
     "scorecard": "node scripts/print-scorecard.mjs",
-    "mutants": "node scripts/mutants.mjs"
+    "mutants": "node scripts/mutants.mjs",
+    "verify": "node scripts/verify-run.mjs"
   },
   "dependencies": {
     "solid-js": "1.9.18"
