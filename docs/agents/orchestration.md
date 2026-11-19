@@ -29,7 +29,7 @@ Why cheaper models are safe for the routine: the rules are held by the compiler,
 ```mermaid
 flowchart LR
   P["Pick<br/>+ pre-check"] --> B["Brief<br/>modules it owns"] --> W["Worker<br/>in the trunk"] --> H["Hand-over comment,<br/>SendMessage,<br/>clear self"]
-  W -- "push main" --> V["Verify<br/>clean copy"] --> C["Close"] --> P
+  W -- "push main" --> V["Verify<br/>clean copy"] --> D["Second look<br/>Copilot CLI"] --> C["Close"] --> P
   H --> V
 ```
 
@@ -39,6 +39,7 @@ flowchart LR
 | 2. Pre-check | can every box pass with this ticket's own commands? Does a box need a rule of who wins, or allow a state that cannot come out right? Settle it (or ask the owner) before the worker builds |
 | 3. Brief | the criteria from the issue, out of scope, the modules the worker owns (see "Work isolation"), the end of the slice (below). One ticket per worker. Send it only when `list_events` shows the worker empty |
 | 4. Verify | never trust a report. `npm run verify -- <commit> --mutants`: a clean copy of the pushed commit, every suite of `npm test` with the default target folder, mutants on the commit's diff (missed lines are listed). Then `npm run scorecard`. Drive the feature by hand. Break each new rule on purpose and see its check fail. Compare numbers with raw result files |
+| 4b. Second look | after your own verify, before closing: rubber-duck and verify with the Copilot CLI, strongest model and reasoning, read-only, in the clean copy: `copilot -p "<prompt>" --model gpt-6.2-sol --reasoning-effort max --no-ask-user --allow-all-tools --deny-tool write </dev/null`. The prompt: the issue boxes, the commit, your evidence and your breaks; ask it to find a box not truly met, a test that cannot fail, a rule broken (`docs/coding.md`, `AGENTS.md`), and to argue against your verdict. Its findings are leads: check each yourself; a confirmed one keeps the ticket open or becomes an issue. Name the result in the closing comment |
 | 5. Close | tick the boxes, close with a table of evidence, note what was not verified |
 | 6. Next | hand over the next ticket. Stop only for a decision of the owner |
 
