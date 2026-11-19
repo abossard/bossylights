@@ -32,11 +32,11 @@ pub struct Project {
     #[serde(skip)]
     #[cfg_attr(test, ts(skip))]
     universes: Universes,
-    /// Outputs whose device is being opened. They take no `SetOutput` or `RemoveOutput`
-    /// until it is open or failed.
+    /// The run of each output whose device is being opened. They take no `SetOutput` or
+    /// `RemoveOutput` until it is open or failed.
     #[serde(skip)]
     #[cfg_attr(test, ts(skip))]
-    opening: [bool; MAX_OUTPUTS],
+    opening: [Option<Run>; MAX_OUTPUTS],
 }
 
 /// What an output sends to.
@@ -44,9 +44,9 @@ pub struct Project {
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub enum ProjectOutput {
     /// A device the engine opened for this kind: where it sends is in the kind.
-    Kind { kind: OutputKind },
+    Kind { kind: OutputKind, universes: Run },
     /// A device a test brought itself. Its kind is not known.
-    Attached,
+    Attached { universes: Run },
 }
 
 /// What happens to the project: a client's command, or what came of an effect.
@@ -69,6 +69,7 @@ pub enum ProjectEvent {
     /// A device a test brought takes the place of `output`.
     Attached {
         output: OutputNumber,
+        universes: Run,
     },
 }
 
@@ -107,7 +108,7 @@ impl Project {
         Self {
             outputs: [None; MAX_OUTPUTS],
             universes,
-            opening: [false; MAX_OUTPUTS],
+            opening: [None; MAX_OUTPUTS],
         }
     }
 
@@ -136,14 +137,18 @@ impl Project {
                 } => {
                     let universes = run.check(universes)?;
                     self.idle(output)?;
-                    if self.output(output) == Some(ProjectOutput::Kind { kind }) {
+                    if matches!(self.output(output), Some(ProjectOutput::Kind { kind: was, .. }) if was == kind)
+                    {
                         let keep = ProjectEffect::Keep {
                             output,
                             kind,
                             universes,
                             rate,
                         };
-                        return Ok((self, Some(keep)));
+                        let project = self.with(output, |slot, _| {
+                            *slot = Some(ProjectOutput::Kind { kind, universes });
+                        });
+                        return Ok((project, Some(keep)));
                     }
                     let open = ProjectEffect::Open {
                         output,
@@ -151,7 +156,8 @@ impl Project {
                         universes,
                         rate,
                     };
-                    Ok((self.with(output, |_, opening| *opening = true), Some(open)))
+                    let project = self.with(output, |_, opening| *opening = Some(universes));
+                    Ok((project, Some(open)))
                 }
                 Command::Patch {
                     name,
@@ -209,18 +215,21 @@ impl Project {
             },
             ProjectEvent::Opened { output, kind } => {
                 let project = self.with(output, |slot, opening| {
-                    *slot = Some(ProjectOutput::Kind { kind });
-                    *opening = false;
+                    if let Some(universes) = opening.take() {
+                        *slot = Some(ProjectOutput::Kind { kind, universes });
+                    }
                 });
                 Ok((project, None))
             }
             ProjectEvent::OpenFailed { output } => {
-                Ok((self.with(output, |_, opening| *opening = false), None))
+                Ok((self.with(output, |_, opening| *opening = None), None))
             }
-            ProjectEvent::Attached { output } => {
+            ProjectEvent::Attached { output, universes } => {
                 self.idle(output)?;
                 Ok((
-                    self.with(output, |slot, _| *slot = Some(ProjectOutput::Attached)),
+                    self.with(output, |slot, _| {
+                        *slot = Some(ProjectOutput::Attached { universes });
+                    }),
                     None,
                 ))
             }
@@ -232,11 +241,30 @@ impl Project {
         self.outputs.get(output.slot()).copied().flatten()
     }
 
+    /// Whether one output streams every universe from `first` to `last` as one run. An
+    /// output being opened counts only when both its run and the one it opens with do:
+    /// either may be its run once the device is open or failed.
+    pub fn streams(&self, first: u16, last: u16) -> bool {
+        self.outputs
+            .iter()
+            .zip(&self.opening)
+            .any(|(output, opening)| {
+                let run = match output {
+                    Some(
+                        ProjectOutput::Kind { universes, .. }
+                        | ProjectOutput::Attached { universes },
+                    ) => *universes,
+                    None => return false,
+                };
+                run.covers(first, last) && opening.is_none_or(|next| next.covers(first, last))
+            })
+    }
+
     /// `Opening` while the device of `output` is being opened.
     fn idle(&self, output: OutputNumber) -> Result<(), Refusal> {
         match self.opening.get(output.slot()) {
-            Some(true) => Err(Refusal::Opening),
-            Some(false) | None => Ok(()),
+            Some(Some(_)) => Err(Refusal::Opening),
+            Some(None) | None => Ok(()),
         }
     }
 
@@ -244,7 +272,7 @@ impl Project {
     fn with(
         mut self,
         output: OutputNumber,
-        change: impl FnOnce(&mut Option<ProjectOutput>, &mut bool),
+        change: impl FnOnce(&mut Option<ProjectOutput>, &mut Option<Run>),
     ) -> Self {
         let slot = output.slot();
         if let (Some(kind), Some(opening)) =
@@ -400,7 +428,10 @@ mod tests {
                 vec![set_output(kind)],
                 opened(kind),
                 Ok(None),
-                Some(ProjectOutput::Kind { kind }),
+                Some(ProjectOutput::Kind {
+                    kind,
+                    universes: run,
+                }),
             ),
             (
                 vec![set_output(kind)],
@@ -431,13 +462,19 @@ mod tests {
                     universes: run,
                     rate: Some(Rate::Thirty),
                 })),
-                Some(ProjectOutput::Kind { kind }),
+                Some(ProjectOutput::Kind {
+                    kind,
+                    universes: run,
+                }),
             ),
             (
                 vec![set_output(kind), opened(kind)],
                 set_output(other),
                 Ok(Some(open(other))),
-                Some(ProjectOutput::Kind { kind }),
+                Some(ProjectOutput::Kind {
+                    kind,
+                    universes: run,
+                }),
             ),
             (
                 vec![set_output(kind), opened(kind)],
@@ -449,9 +486,12 @@ mod tests {
             ),
             (
                 vec![set_output(kind), opened(kind)],
-                Attached { output: output(1) },
+                Attached {
+                    output: output(1),
+                    universes: run,
+                },
                 Ok(None),
-                Some(ProjectOutput::Attached),
+                Some(ProjectOutput::Attached { universes: run }),
             ),
         ];
         for (before, event, expected, after) in cases {
@@ -469,6 +509,116 @@ mod tests {
                 project.output(output(1)),
                 after,
                 "{event:?} after {before:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_output_streams_universes_when_its_run_has_them_all() {
+        use ProjectEvent::{Attached, Client, OpenFailed, Opened};
+        let four = Universes::new(4).unwrap();
+        let (kind, other) = (kinds::EXAMPLE, kinds::OTHER);
+        let run = |first, count| RunNumbers { first, count }.check(four).unwrap();
+        let set = |number, kind, first, count| {
+            Client(Command::SetOutput {
+                output: output(number),
+                kind,
+                universes: RunNumbers { first, count },
+                rate: None,
+            })
+        };
+        let opened = |number, kind| Opened {
+            output: output(number),
+            kind,
+        };
+        // (events, first, last, streamed)
+        let cases = [
+            (vec![], 1, 2, false),
+            (vec![set(1, kind, 1, 3), opened(1, kind)], 1, 2, true),
+            (vec![set(1, kind, 1, 3), opened(1, kind)], 2, 3, true),
+            (vec![set(1, kind, 1, 3), opened(1, kind)], 3, 4, false),
+            (vec![set(1, kind, 2, 2), opened(1, kind)], 1, 2, false),
+            // two outputs do not make one run
+            (
+                vec![
+                    set(1, kind, 1, 1),
+                    opened(1, kind),
+                    set(2, kind, 2, 1),
+                    opened(2, kind),
+                ],
+                1,
+                2,
+                false,
+            ),
+            // the same kind keeps its device: the new run counts at once
+            (
+                vec![set(1, kind, 1, 1), opened(1, kind), set(1, kind, 1, 2)],
+                1,
+                2,
+                true,
+            ),
+            // a new output counts once open, not while it opens or when it failed
+            (vec![set(1, kind, 1, 2)], 1, 2, false),
+            (
+                vec![set(1, kind, 1, 2), OpenFailed { output: output(1) }],
+                1,
+                2,
+                false,
+            ),
+            // while another kind opens, the old run or the new one may stay: both must
+            (
+                vec![set(1, kind, 1, 2), opened(1, kind), set(1, other, 1, 1)],
+                1,
+                2,
+                false,
+            ),
+            (
+                vec![set(1, kind, 1, 3), opened(1, kind), set(1, other, 1, 2)],
+                1,
+                2,
+                true,
+            ),
+            (
+                vec![
+                    set(1, kind, 1, 1),
+                    opened(1, kind),
+                    set(1, other, 1, 2),
+                    opened(1, other),
+                ],
+                1,
+                2,
+                true,
+            ),
+            (
+                vec![
+                    Attached {
+                        output: output(1),
+                        universes: run(1, 4),
+                    },
+                ],
+                3,
+                4,
+                true,
+            ),
+            (
+                vec![
+                    set(1, kind, 1, 2),
+                    opened(1, kind),
+                    Client(Command::RemoveOutput { output: output(1) }),
+                ],
+                1,
+                2,
+                false,
+            ),
+        ];
+        for (events, first, last, expected) in cases {
+            let project = events.iter().fold(Project::new(four), |project, event| {
+                project.update(*event).unwrap().0
+            });
+            assert_eq!(
+                project.streams(first, last),
+                expected,
+                "{first} to {last} after {events:?}"
             );
         }
     }

@@ -6,7 +6,9 @@ use common::{fixture, lights, say};
 use engine_core::{
     ChannelNumbers, Color, Lights, PatchCommand, Pixels, Refusal, Text, Universes, Writer,
 };
+use engine_core::{Command, OutputKind, OutputNumber, Project, ProjectEvent, RunNumbers};
 use rig::{Patch, PatchEffect};
+use std::net::{Ipv4Addr, SocketAddrV4};
 
 fn text(text: &str) -> Text {
     Text::new(text).unwrap()
@@ -101,11 +103,7 @@ fn a_fixture_with_heads_is_one_light_per_head_in_the_order_of_the_definition() {
         let row = patch.fixtures()[0];
         assert_eq!(format!("{}, {}", row.model, row.mode), named);
         assert_eq!(row.lights, count, "{named}");
-        assert_eq!(
-            row.layout.map(|l| (l.width, l.height)),
-            layout,
-            "{named}"
-        );
+        assert_eq!(row.layout.map(|l| (l.width, l.height)), layout, "{named}");
         assert_eq!(owners(patch.writers()), expected, "{named}");
     }
 }
@@ -156,7 +154,13 @@ fn a_strip_that_does_not_fit_is_refused() {
         (301, Color::Rgbw, 1, 1, Refusal::NoLightsLeft),
         (60_000, Color::Rgb, 1, 1, Refusal::NoLightsLeft),
         (300, Color::Rgb, 1, 0, Refusal::NoSuchAddress),
-        (1, Color::Rgb, 2, 1, Refusal::NoSuchUniverse { universes: 1 }),
+        (
+            1,
+            Color::Rgb,
+            2,
+            1,
+            Refusal::NoSuchUniverse { universes: 1 },
+        ),
     ];
     for (pixels, color, universe, address, expected) in cases {
         let empty = Patch::new(Universes::ONE, few);
@@ -176,14 +180,72 @@ fn a_fixture_runs_on_into_the_next_universe_and_clashes_there() {
         ((2, 1), (1, 511), [vec![2], vec![1]]),
     ];
     for (first, then, expected) in cases {
-        let patch = [first, then].iter().fold(
-            Patch::new(two, lights()),
-            |patch, &(universe, address)| {
-                let command = strip(1, Color::Rgb, universe, address);
+        let patch =
+            [first, then]
+                .iter()
+                .fold(Patch::new(two, lights()), |patch, &(universe, address)| {
+                    let command = strip(1, Color::Rgb, universe, address);
+                    patch.update(command, &[]).unwrap().0.unwrap()
+                });
+        let clashes: Vec<Vec<u16>> = patch
+            .fixtures()
+            .iter()
+            .map(|f| f.clashes.to_vec())
+            .collect();
+        assert_eq!(clashes, expected, "{first:?} then {then:?}");
+    }
+}
+
+#[test]
+fn a_fixture_over_more_than_one_universe_needs_one_output_that_streams_them_all() {
+    let four = Universes::new(4).unwrap();
+    let ddp = OutputKind::Ddp {
+        address: SocketAddrV4::new(Ipv4Addr::LOCALHOST, 4048),
+        color: Color::Rgb,
+    };
+    let streaming = |runs: &[(u8, u16, u16)]| {
+        runs.iter()
+            .fold(Project::new(four), |project, &(n, first, count)| {
+                let output = OutputNumber::try_from(n).unwrap();
+                let set = ProjectEvent::Client(Command::SetOutput {
+                    output,
+                    kind: ddp,
+                    universes: RunNumbers { first, count },
+                    rate: None,
+                });
+                let project = project.update(set).unwrap().0;
+                let opened = ProjectEvent::Opened { output, kind: ddp };
+                project.update(opened).unwrap().0
+            })
+    };
+    // strips: pixels, universe, address. Outputs: number, first universe, count
+    type Strips = &'static [(u16, u16, u16)];
+    type Outputs = &'static [(u8, u16, u16)];
+    // fixture, first universe, last
+    type Unstreamed = Option<(u16, u16, u16)>;
+    // (strips, outputs, unstreamed)
+    let cases: [(Strips, Outputs, Unstreamed); 7] = [
+        // 170 RGB pixels fill universe 1 to 510: one universe needs no output
+        (&[(170, 1, 1)], &[], None),
+        (&[(171, 1, 1)], &[], Some((1, 1, 2))),
+        (&[(171, 1, 1)], &[(1, 1, 2)], None),
+        (&[(171, 1, 1)], &[(1, 1, 1), (2, 2, 1)], Some((1, 1, 2))),
+        (&[(171, 1, 1)], &[(1, 1, 1), (2, 1, 4)], None),
+        (&[(10, 1, 1), (400, 2, 1)], &[(1, 1, 2)], Some((2, 2, 4))),
+        (&[(10, 1, 1), (400, 2, 1)], &[(1, 2, 3)], None),
+    ];
+    for (strips, outputs, expected) in cases {
+        let patch = strips.iter().fold(
+            Patch::new(four, lights()),
+            |patch, &(pixels, universe, address)| {
+                let command = strip(pixels, Color::Rgb, universe, address);
                 patch.update(command, &[]).unwrap().0.unwrap()
             },
         );
-        let clashes: Vec<Vec<u16>> = patch.fixtures().iter().map(|f| f.clashes.to_vec()).collect();
-        assert_eq!(clashes, expected, "{first:?} then {then:?}");
+        assert_eq!(
+            patch.unstreamed(&streaming(outputs)),
+            expected,
+            "{strips:?} with {outputs:?}"
+        );
     }
 }

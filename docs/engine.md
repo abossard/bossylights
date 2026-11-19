@@ -53,7 +53,7 @@ The list is `ORIGINS` in `crates/engine-server/src/lib.rs`. No pairing or token 
 |---|---|
 | `{"Send": {"command": {"SetChannel": {"channel": {"universe": 1, "address": 1}, "value": 255}}}}` | `"Accepted"`, or `{"Refused": {"reason": "NoSuchAddress"}}` and nothing changes |
 | `{"Send": {"command": {"Patch": ...}}}` | `{"Patched": {"fixture": 1}}`: its number |
-| `"Query"` | `{"Picture": {"state": ..., "project": ..., "library": ..., "patch": [...], "universes": [[...512 levels]]}}`. `project.outputs`: per output `null`, `{"Kind": {"kind": ...}}` (what it sends to) or `"Attached"` (a test's own device) |
+| `"Query"` | `{"Picture": {"state": ..., "project": ..., "library": ..., "patch": [...], "universes": [[...512 levels]]}}`. `project.outputs`: per output `null`, `{"Kind": {"kind": ..., "universes": {"first": 1, "count": 3}}}` (what it sends to, which run) or `{"Attached": {"universes": ...}}` (a test's own device) |
 | `"Subscribe"` | the `Picture`, then `{"Changed": {"state": ..., "project": ..., "library": ..., "patch": ..., "channels": [...]}}` with every frame. `patch` is `null` unless it changed since the last message |
 
 | Command | Does |
@@ -63,13 +63,13 @@ The list is `ORIGINS` in `crates/engine-server/src/lib.rs`. No pairing or token 
 | `ReleaseAll` | lets every held channel go |
 | `Blackout` (on) | every channel goes out at zero while on, over everything; the held values stay |
 | `SetOutput` (output 1 to 16, kind, universes, rate) | adds or replaces an output. Kind `{"Ddp": {"address": "ip:port", "color": "Rgb" or "Rgbw"}}` or `{"DmxUsbPro": {"adapter": 1}}` (the first ENTTEC DMX USB Pro by USB identity, in the order of their USB serial numbers, when the output first finds one; an adapter not there yet is no error, the output is NotFound until it is plugged in; from then on the output finds that same adapter by its serial, so a lost adapter never comes back as another). Adapters count from 1: 0 is `NotACommand`. Universes `{"first": 1, "count": 3}`, sent as one stream of channels. A DMX USB Pro takes one universe: more is refused with `{"TooManyUniverses": {"most": 1}}`. DDP RGB sends whole pixels: 510 of each universe's 512 channels. Rate `"30"`, `"44"`, `"60"` or `null`: 60 for DDP, 44 for the DMX USB Pro |
-| `RemoveOutput` (output) | removes it |
+| `RemoveOutput` (output) | removes it. Refused with `{"StreamsFixture": {"fixture": 1}}` when a fixture over more than one universe would be left with no output that streams them all; so is a `SetOutput` that changes the run |
 
 The patch: a fixture of the library at an address. The front checks each command against it and the library, compiles the writers (`rig`) and swaps them in on the tick thread as it swaps a device.
 
 | Command | Does | Refused |
 |---|---|---|
-| `Patch` (name, maker, model, mode, at: universe, address) | adds a fixture: the lowest free number, its lights the first free from the lowest | `NoSuchFixture`, `NoSuchMode`, `{"PastTheEnd": {"channels": 3}}`, `NoSuchUniverse`, `NoSuchAddress`, `NoLightsLeft` |
+| `Patch` (name, maker, model, mode, at: universe, address) | adds a fixture: the lowest free number, its lights the first free from the lowest | `NoSuchFixture`, `NoSuchMode`, `{"PastTheEnd": {"channels": 3}}`, `{"NotStreamed": {"first": 1, "last": 2}}`, `NoSuchUniverse`, `NoSuchAddress`, `NoLightsLeft` |
 | `PatchStrip` (name, pixels, color: `"Rgb"` or `"Rgbw"`, at) | adds a generic strip without a definition file (a WLED device): one light per pixel, maker `Generic`, model `RGB strip` or `RGBW strip`, mode `300 pixels`. 0 pixels is `NotACommand` | as `Patch`, but never `NoSuchFixture` or `NoSuchMode` |
 | `Move` (fixture, at) | new address, the same lights: their held values stay | `NotPatched`, as `Patch` |
 | `Unpatch` (fixture) | removes it, its lights' held values go | `NotPatched` |
@@ -79,7 +79,7 @@ The patch: a fixture of the library at an address. The front checks each command
 | `ReleaseIntensity` (target) | lets the intensity go back to 0. Not held: nothing changes | `NotPatched`, `NoSuchLight` |
 | `ReleaseColour` (target) | lets the colour go back to black. Not held: nothing changes | `NotPatched`, `NoSuchLight` |
 
-A target is `{"Fixture": {"fixture": 1}}` (all its lights) or `{"Light": {"light": 7}}`. Fixtures and lights count from 1. A fixture with heads (a bar, a panel, a strip) is one light per head in the order of its definition, after the fixture itself when it has a channel in no head (a master dimmer); its `patch` row has `layout`, `{"width": 8, "height": 1}`, or `null`. Past address 512 a fixture runs on at address 1 of the next universe, as an output's run of universes streams them: `PastTheEnd` only past the engine's last universe. Two fixtures on the same channels are allowed: each `patch` row lists the other in `clashes`. Who wins on a channel is decided in one place, `mix` in `engine-core` (`docs/design/who-wins.md`): blackout over everything, a held raw channel over the light that writes it, a held value of a light over a default. Who wins between two fixtures on a shared channel is open (decision page, question 48): today the later in fixture order.
+A target is `{"Fixture": {"fixture": 1}}` (all its lights) or `{"Light": {"light": 7}}`. Fixtures and lights count from 1. A fixture with heads (a bar, a panel, a strip) is one light per head in the order of its definition, after the fixture itself when it has a channel in no head (a master dimmer); its `patch` row has `layout`, `{"width": 8, "height": 1}`, or `null`. Past address 512 a fixture runs on at address 1 of the next universe: `PastTheEnd` only past the engine's last universe. No invalid patch: a fixture over more than one universe needs one output whose run streams them all (`NotStreamed` names the universes), and that output cannot go or lose them while it is patched (`StreamsFixture`). A fixture in one universe needs no output. Two fixtures on the same channels are allowed: each `patch` row lists the other in `clashes`. Who wins on a channel is decided in one place, `mix` in `engine-core` (`docs/design/who-wins.md`): blackout over everything, a held raw channel over the light that writes it, a held value of a light over a default. Who wins between two fixtures on a shared channel is open (decision page, question 48): today the later in fixture order.
 
 ```json
 {"Send": {"command": {"Patch": {"name": "PAR 3", "maker": "Generic", "model": "Generic RGB", "mode": "RGB", "at": {"universe": 1, "address": 37}}}}}

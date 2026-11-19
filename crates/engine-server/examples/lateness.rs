@@ -99,31 +99,38 @@ fn main() -> ExitCode {
 fn run(setup: &Setup) -> Result<String, String> {
     let universes = Universes::new(setup.universes).ok_or("universes")?;
     let (mut engine, mut sender) = Engine::start(universes).map_err(|e| e.to_string())?;
-    // The lights first: their lateness is that of a patch that stands, not one being made.
-    patch(&mut sender, setup.lights)?;
-    engine.fresh();
     let (address, stop) = drain().map_err(|e| e.to_string())?;
     let rates = [Rate::Sixty, Rate::FortyFour].into_iter().cycle();
     let numbers: Vec<_> = (1..=setup.outputs)
         .map(|n| OutputNumber::try_from(n).map_err(|_| "output number"))
         .collect();
-    for (number, rate) in numbers.iter().zip(rates) {
-        let command = Command::SetOutput {
-            output: (*number)?,
-            kind: OutputKind::Ddp {
-                address,
-                color: Color::Rgbw,
-            },
-            universes: RunNumbers {
-                first: 1,
-                count: setup.universes,
-            },
-            rate: Some(rate),
-        };
-        sender
-            .send(command)
-            .map_err(|r| format!("refused: {r:?}"))?;
-    }
+    let set_outputs = |sender: &mut Sender| -> Result<(), String> {
+        for (number, rate) in numbers.iter().zip(rates.clone()) {
+            let command = Command::SetOutput {
+                output: (*number)?,
+                kind: OutputKind::Ddp {
+                    address,
+                    color: Color::Rgbw,
+                },
+                universes: RunNumbers {
+                    first: 1,
+                    count: setup.universes,
+                },
+                rate: Some(rate),
+            };
+            sender
+                .send(command)
+                .map_err(|r| format!("refused: {r:?}"))?;
+        }
+        Ok(())
+    };
+    // The outputs first: a fixture over universes needs one that streams them. Set again
+    // once the lights are patched, their counters start at zero: the lateness is that of
+    // a patch that stands, not one being made.
+    set_outputs(&mut sender)?;
+    patch(&mut sender, setup.lights)?;
+    set_outputs(&mut sender)?;
+    engine.fresh();
     // A reader on every frame: it asks again as soon as a picture is back.
     let (started, mut seen, mut pictures) = (Instant::now(), 0, 0_u64);
     while started.elapsed() < setup.run {

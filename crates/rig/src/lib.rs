@@ -161,7 +161,12 @@ fn strip(pixels: Pixels, color: Color) -> (&'static str, Mode) {
         ),
         Color::Rgbw => (
             "RGBW strip",
-            &[Function::Red, Function::Green, Function::Blue, Function::White],
+            &[
+                Function::Red,
+                Function::Green,
+                Function::Blue,
+                Function::White,
+            ],
         ),
     };
     let channel = |function: &Function| fixture_library::Channel {
@@ -233,7 +238,7 @@ pub(crate) fn flat(at: ChannelNumbers) -> usize {
 }
 
 /// The channel `flat` counts, as a client counts it.
-fn unflat(flat: usize) -> Option<ChannelNumbers> {
+pub(crate) fn unflat(flat: usize) -> Option<ChannelNumbers> {
     Some(ChannelNumbers {
         universe: u16::try_from(flat / ADDRESSES + 1).ok()?,
         address: u16::try_from(flat % ADDRESSES + 1).ok()?,

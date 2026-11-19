@@ -1,6 +1,7 @@
 //! End to end over the API: a generic strip of 300 RGBW pixels on universes 1 to 3, one
 //! DDP output streaming the three. Pixel 171 green: 0 255 0 0 at bytes 680 to 683 of the
-//! stream (universe 2, addresses 169 to 172), every other byte 0.
+//! stream (universe 2, addresses 169 to 172), every other byte 0. The strip is refused
+//! until an output streams its universes, and that output cannot go while it is patched.
 
 use engine::{Engine, Universes};
 use futures_util::{SinkExt, StreamExt};
@@ -126,14 +127,18 @@ async fn a_strip_of_300_rgbw_pixels_on_universes_1_to_3_pixel_171_green_sends_0_
     let set = json!({"SetOutput": {
         "output": 1, "kind": ddp, "universes": {"first": 1, "count": 3}, "rate": null,
     }});
-    assert_eq!(command(&mut socket, set).await, json!("Accepted"));
-
     let strip = |pixels: u16| {
         json!({"PatchStrip": {
             "name": "Strip", "pixels": pixels, "color": "Rgbw",
             "at": {"universe": 1, "address": 1},
         }})
     };
+    // no invalid patch: universes 1 to 3 need one output that streams them
+    assert_eq!(
+        command(&mut socket, strip(300)).await,
+        json!({"Refused": {"reason": {"NotStreamed": {"first": 1, "last": 3}}}})
+    );
+    assert_eq!(command(&mut socket, set).await, json!("Accepted"));
     assert_eq!(
         command(&mut socket, strip(0)).await,
         json!({"Refused": {"reason": "NotACommand"}})
@@ -141,6 +146,10 @@ async fn a_strip_of_300_rgbw_pixels_on_universes_1_to_3_pixel_171_green_sends_0_
     assert_eq!(
         command(&mut socket, strip(300)).await,
         json!({"Patched": {"fixture": 1}})
+    );
+    assert_eq!(
+        command(&mut socket, json!({"RemoveOutput": {"output": 1}})).await,
+        json!({"Refused": {"reason": {"StreamsFixture": {"fixture": 1}}}})
     );
     until_patch(
         &mut socket,
@@ -162,7 +171,8 @@ async fn a_strip_of_300_rgbw_pixels_on_universes_1_to_3_pixel_171_green_sends_0_
     until_frame(&udp, &expected).await;
 
     // white is the part red, green and blue share
-    let white = json!({"SetColour": {"target": pixel, "red": 65535, "green": 65535, "blue": 65535}});
+    let white =
+        json!({"SetColour": {"target": pixel, "red": 65535, "green": 65535, "blue": 65535}});
     assert_eq!(command(&mut socket, white).await, json!("Accepted"));
     expected[680..684].copy_from_slice(&[0, 0, 0, 255]);
     until_frame(&udp, &expected).await;

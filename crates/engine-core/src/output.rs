@@ -113,6 +113,11 @@ impl Run {
         self.count
     }
 
+    /// Whether universes `first` to `last` (counted from 1) are all in this run.
+    pub const fn covers(self, first: u16, last: u16) -> bool {
+        self.first <= first && last < self.first.saturating_add(self.count)
+    }
+
     /// This run's universes of a frame. Empty if the frame is shorter.
     pub fn of(self, frame: &[Levels]) -> &[Levels] {
         let start = usize::from(self.first.saturating_sub(1));

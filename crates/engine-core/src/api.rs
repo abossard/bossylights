@@ -125,8 +125,13 @@ pub enum Refusal {
     TooManyUniverses { most: u16 },
     /// The fixture has no mode of that name.
     NoSuchMode,
-    /// The mode's `channels` run past address 512 from there.
+    /// The mode's `channels` run past the engine's last universe from there.
     PastTheEnd { channels: u16 },
+    /// The fixture would run over universes `first` to `last`, and no output streams
+    /// them all as one run.
+    NotStreamed { first: u16, last: u16 },
+    /// Then no output would stream every universe fixture `fixture` runs over.
+    StreamsFixture { fixture: u16 },
     /// The fixture's lights do not fit in the lights the engine has left.
     NoLightsLeft,
     /// No fixture is patched with that number.

@@ -15,8 +15,8 @@ mod counting;
 mod mock;
 
 use engine::{
-    Begun, ChannelNumbers, Color, Command, Engine, Fixture, Rate, RunNumbers, Sender, Target,
-    Text, Universes,
+    Begun, ChannelNumbers, Color, Command, Engine, Fixture, Rate, RunNumbers, Sender, Target, Text,
+    Universes,
 };
 use engine_core::Pixels;
 
@@ -55,7 +55,9 @@ fn main() {
     let (mut engine, mut sender) = Engine::start(universes).expect("the tick thread starts");
     let run = RunNumbers { first: 1, count: 1 };
     mock::attach(&mut sender, universes, 1, run, Rate::Sixty);
-    mock::attach(&mut sender, universes, 2, run, Rate::Thirty);
+    // the second streams universes 3 and 4, which the strip below runs over
+    let three_four = RunNumbers { first: 3, count: 2 };
+    mock::attach(&mut sender, universes, 2, three_four, Rate::Thirty);
     let library = library();
     for n in 0..LIGHTS {
         let patch = Command::Patch {

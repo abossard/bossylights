@@ -13,14 +13,14 @@
 //!
 //! Two fixtures on the same channels are allowed: each shows the other in its clashes.
 
-use crate::{Unfit, compile, flat, lights_of, strip};
+use crate::{Unfit, compile, flat, lights_of, strip, unflat};
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 use engine_core::{
-    ChannelNumbers, EngineCommand, LightNumber, LightRun, Lights, PatchCommand, Patched, Refusal,
-    Target, Universes, Writer,
+    ChannelNumbers, EngineCommand, LightNumber, LightRun, Lights, PatchCommand, Patched, Project,
+    Refusal, Target, Universes, Writer,
 };
 use fixture_library::{Fixture, Mode};
 
@@ -97,7 +97,13 @@ impl Patch {
                     .iter()
                     .find(|m| m.name == mode.as_str())
                     .ok_or(Refusal::NoSuchMode)?;
-                self.add(name.as_str(), &fixture.maker, &fixture.model, mode.clone(), at)
+                self.add(
+                    name.as_str(),
+                    &fixture.maker,
+                    &fixture.model,
+                    mode.clone(),
+                    at,
+                )
             }
             PatchCommand::PatchStrip {
                 name,
@@ -232,6 +238,22 @@ impl Patch {
                 clashes: &e.clashes,
             })
             .collect()
+    }
+
+    /// The first fixture that runs over more than one universe with no output of
+    /// `project` streaming them all as one run: its number, its first and its last
+    /// universe. A fixture in one universe needs no output. The front keeps this `None`
+    /// through every change of the patch and of the outputs.
+    pub fn unstreamed(&self, project: &Project) -> Option<(u16, u16, u16)> {
+        self.fixtures.iter().find_map(|e| {
+            let channels = e.mode.channels.len().checked_sub(1)?;
+            let last = unflat(flat(e.at) + channels)?.universe;
+            (last > e.at.universe && !project.streams(e.at.universe, last)).then_some((
+                e.number,
+                e.at.universe,
+                last,
+            ))
+        })
     }
 
     /// The writers of every fixture, in the order of their numbers.

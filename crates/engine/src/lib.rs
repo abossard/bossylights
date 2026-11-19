@@ -276,6 +276,17 @@ impl Sender {
         {
             outputs::limits(kind).check(universes)?;
         }
+        // No patch where a fixture runs over universes no output streams as one run: a
+        // change of the outputs that would leave one is refused.
+        if let Some(
+            ProjectEffect::Keep { .. }
+            | ProjectEffect::Open { .. }
+            | ProjectEffect::Send(EngineCommand::RemoveOutput { .. }),
+        ) = effect
+            && let Some((fixture, _, _)) = self.patch.unstreamed(&project)
+        {
+            return Err(Refusal::StreamsFixture { fixture });
+        }
         let begun = match effect {
             None => Begun::Queued,
             Some(ProjectEffect::Send(command)) => {
@@ -284,6 +295,11 @@ impl Sender {
             }
             Some(ProjectEffect::Patch(command)) => {
                 let (patch, effects) = self.patch.update(command, library)?;
+                // and a change of the patch that would make one is refused
+                if let Some((_, first, last)) = patch.as_ref().and_then(|p| p.unstreamed(&project))
+                {
+                    return Err(Refusal::NotStreamed { first, last });
+                }
                 let begun = self.follow(effects)?;
                 if let Some(patch) = patch {
                     self.patch = Arc::new(patch);
@@ -387,7 +403,12 @@ impl Sender {
         universes: Run,
         rate: Rate,
     ) -> Result<(), Refusal> {
-        let (project, _) = self.project.update(ProjectEvent::Attached { output })?;
+        let (project, _) = self
+            .project
+            .update(ProjectEvent::Attached { output, universes })?;
+        if let Some((fixture, _, _)) = self.patch.unstreamed(&project) {
+            return Err(Refusal::StreamsFixture { fixture });
+        }
         let command = EngineCommand::Attach {
             output,
             universes,

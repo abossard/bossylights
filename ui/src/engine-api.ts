@@ -33,7 +33,7 @@ patch: Array<Patched>, universes: Array<Levels>, } } | { "Changed": { state: Sta
  */
 patch: Array<Patched> | null, channels: Array<ChannelLevel>, } } | { "Found": { fixtures: Array<Match>, } } | { "Fixture": { maker: string, model: string, kind: FixtureKind, modes: Array<ModeChannels>, } } | { "Failures": { failures: Array<Failure>, } };
 
-export type Refusal = "NotACommand" | { "NoSuchUniverse": { universes: number, } } | "NoSuchAddress" | "QueueFull" | "CannotOpen" | "NoSuchFixture" | "Opening" | { "TooManyUniverses": { most: number, } } | "NoSuchMode" | { "PastTheEnd": { channels: number, } } | "NoLightsLeft" | "NotPatched" | "NoSuchLight";
+export type Refusal = "NotACommand" | { "NoSuchUniverse": { universes: number, } } | "NoSuchAddress" | "QueueFull" | "CannotOpen" | "NoSuchFixture" | "Opening" | { "TooManyUniverses": { most: number, } } | "NoSuchMode" | { "PastTheEnd": { channels: number, } } | { "NotStreamed": { first: number, last: number, } } | { "StreamsFixture": { fixture: number, } } | "NoLightsLeft" | "NotPatched" | "NoSuchLight";
 
 export type State = { 
 /**
@@ -99,7 +99,7 @@ export type Project = {
  */
 outputs: Array<ProjectOutput | null>, };
 
-export type ProjectOutput = { "Kind": { kind: OutputKind, } } | "Attached";
+export type ProjectOutput = { "Kind": { kind: OutputKind, universes: Run, } } | { "Attached": { universes: Run, } };
 
 export type Target = { "Light": { light: number, } } | { "Fixture": { fixture: number, } };
 
