@@ -183,6 +183,10 @@ impl Project {
                     green,
                     blue,
                 }),
+                Command::ReleaseIntensity { target } => {
+                    patch(PatchCommand::ReleaseIntensity { target })
+                }
+                Command::ReleaseColour { target } => patch(PatchCommand::ReleaseColour { target }),
                 Command::RemoveOutput { output } => {
                     self.idle(output)?;
                     let project = self.with(output, |slot, _| *slot = None);
@@ -287,7 +291,7 @@ mod tests {
         // (events before, event, its effect or why not, output 1 after)
         type Done = Result<Option<ProjectEffect>, Refusal>;
         let target = Target::Fixture { fixture: 3 };
-        let cases: [(Vec<ProjectEvent>, ProjectEvent, Done, Option<ProjectOutput>); 17] = [
+        let cases: [(Vec<ProjectEvent>, ProjectEvent, Done, Option<ProjectOutput>); 19] = [
             // the patch checks what names a fixture or a light
             (
                 vec![],
@@ -306,6 +310,22 @@ mod tests {
                 Ok(Some(ProjectEffect::Patch(PatchCommand::SetIntensity {
                     target,
                     intensity: 9,
+                }))),
+                None,
+            ),
+            (
+                vec![],
+                Client(Command::ReleaseIntensity { target }),
+                Ok(Some(ProjectEffect::Patch(PatchCommand::ReleaseIntensity {
+                    target,
+                }))),
+                None,
+            ),
+            (
+                vec![],
+                Client(Command::ReleaseColour { target }),
+                Ok(Some(ProjectEffect::Patch(PatchCommand::ReleaseColour {
+                    target,
                 }))),
                 None,
             ),

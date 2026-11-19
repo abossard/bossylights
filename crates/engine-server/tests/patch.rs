@@ -224,6 +224,85 @@ async fn a_patched_par_made_red_sends_255_0_0_at_37_on_ddp_and_dmx_and_unpatched
     stop.store(true, Ordering::Relaxed);
 }
 
+/// Who wins, end to end: a raw channel held wins over the light that writes it until
+/// released, a blackout wins over everything, a released colour goes back to black.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_red_par_under_raw_38_at_9_sends_255_9_0_released_255_0_0_blackout_0_0_0() {
+    let heard: Heard = Arc::new(Mutex::new(None));
+    let stop = Arc::new(AtomicBool::new(false));
+    let address = serve(open(Arc::clone(&heard), Arc::clone(&stop))).await;
+    let mut socket = connect(address).await;
+    let udp = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let ddp = json!({"Ddp": {"address": udp.local_addr().unwrap().to_string(), "color": "Rgb"}});
+    let dmx = json!({"DmxUsbPro": {"adapter": 1}});
+    for (output, kind) in [(1, ddp), (2, dmx)] {
+        let set = json!({"SetOutput": {
+            "output": output, "kind": kind, "universes": {"first": 1, "count": 1}, "rate": null,
+        }});
+        assert_eq!(command(&mut socket, set).await, json!("Accepted"));
+    }
+    assert_eq!(
+        patch_once_read(&mut socket, &par("PAR 1", 37)).await,
+        json!({"Patched": {"fixture": 1}})
+    );
+    let fixture = json!({"Fixture": {"fixture": 1}});
+    let channel_38 = json!({"universe": 1, "address": 38});
+    // (command, bytes at 37 38 39 after it)
+    let steps = [
+        (
+            json!({"SetIntensity": {"target": fixture, "intensity": 65535}}),
+            [0, 0, 0],
+        ),
+        (
+            json!({"SetColour": {"target": fixture, "red": 65535, "green": 0, "blue": 0}}),
+            [255, 0, 0],
+        ),
+        (
+            json!({"SetChannel": {"channel": channel_38, "value": 9}}),
+            [255, 9, 0],
+        ),
+        (
+            json!({"ReleaseChannel": {"channel": channel_38}}),
+            [255, 0, 0],
+        ),
+        (json!({"Blackout": {"on": true}}), [0, 0, 0]),
+        (json!({"Blackout": {"on": false}}), [255, 0, 0]),
+        (
+            json!({"SetColour": {"target": fixture, "red": 65535, "green": 65535, "blue": 0}}),
+            [255, 255, 0],
+        ),
+        (
+            json!({"SetChannel": {"channel": channel_38, "value": 0}}),
+            [255, 0, 0],
+        ),
+        (
+            json!({"ReleaseChannel": {"channel": channel_38}}),
+            [255, 255, 0],
+        ),
+        (json!({"ReleaseColour": {"target": fixture}}), [0, 0, 0]),
+        (json!({"ReleaseColour": {"target": fixture}}), [0, 0, 0]),
+        (
+            json!({"SetColour": {"target": fixture, "red": 65535, "green": 0, "blue": 0}}),
+            [255, 0, 0],
+        ),
+        (json!({"ReleaseIntensity": {"target": fixture}}), [0, 0, 0]),
+    ];
+    for (step, bytes) in steps {
+        assert_eq!(
+            command(&mut socket, step.clone()).await,
+            json!("Accepted"),
+            "{step}"
+        );
+        until_both(&udp, &heard, bytes).await;
+    }
+    let none = json!({"ReleaseColour": {"target": {"Fixture": {"fixture": 2}}}});
+    assert_eq!(
+        command(&mut socket, none).await,
+        json!({"Refused": {"reason": "NotPatched"}})
+    );
+    stop.store(true, Ordering::Relaxed);
+}
+
 /// Every client sees one patch and one project per frame: a subscriber, which gets the patch
 /// only when it changed, and a client that patches and asks again and again see the same
 /// for the same frame.

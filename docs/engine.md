@@ -58,10 +58,10 @@ The list is `ORIGINS` in `crates/engine-server/src/lib.rs`. No pairing or token 
 
 | Command | Does |
 |---|---|
-| `SetChannel` (universe, address, value) | holds that channel at the value |
-| `ReleaseChannel` (universe, address) | lets it go back to zero |
+| `SetChannel` (universe, address, value) | holds that channel at the value. It wins over the light that writes it, also at 0 |
+| `ReleaseChannel` (universe, address) | lets it go: the light that writes it shows again, else zero |
 | `ReleaseAll` | lets every held channel go |
-| `Blackout` (on) | every channel goes out at zero while on; the held values stay |
+| `Blackout` (on) | every channel goes out at zero while on, over everything; the held values stay |
 | `SetOutput` (output 1 to 16, kind, universes, rate) | adds or replaces an output. Kind `{"Ddp": {"address": "ip:port", "color": "Rgb" or "Rgbw"}}` or `{"DmxUsbPro": {"adapter": 1}}` (the first ENTTEC DMX USB Pro by USB identity, in the order of their USB serial numbers, when the output first finds one; an adapter not there yet is no error, the output is NotFound until it is plugged in; from then on the output finds that same adapter by its serial, so a lost adapter never comes back as another). Adapters count from 1: 0 is `NotACommand`. Universes `{"first": 1, "count": 3}`, sent as one stream of channels. A DMX USB Pro takes one universe: more is refused with `{"TooManyUniverses": {"most": 1}}`. DDP RGB sends whole pixels: 510 of each universe's 512 channels. Rate `"30"`, `"44"`, `"60"` or `null`: 60 for DDP, 44 for the DMX USB Pro |
 | `RemoveOutput` (output) | removes it |
 
@@ -75,8 +75,10 @@ The patch: a fixture of the library at an address. The front checks each command
 | `Rename` (fixture, name) | | `NotPatched` |
 | `SetIntensity` (target, intensity 0 to 65 535) | holds the intensity | `NotPatched`, `NoSuchLight` |
 | `SetColour` (target, red, green, blue, 0 to 65 535 each) | holds the colour | `NotPatched`, `NoSuchLight` |
+| `ReleaseIntensity` (target) | lets the intensity go back to 0. Not held: nothing changes | `NotPatched`, `NoSuchLight` |
+| `ReleaseColour` (target) | lets the colour go back to black. Not held: nothing changes | `NotPatched`, `NoSuchLight` |
 
-A target is `{"Fixture": {"fixture": 1}}` (all its lights) or `{"Light": {"light": 7}}`. Fixtures and lights count from 1. Two fixtures on the same channels are allowed: each `patch` row lists the other in `clashes`. Who wins on a shared channel is open (decision page, question 48).
+A target is `{"Fixture": {"fixture": 1}}` (all its lights) or `{"Light": {"light": 7}}`. Fixtures and lights count from 1. Two fixtures on the same channels are allowed: each `patch` row lists the other in `clashes`. Who wins on a channel is decided in one place, `mix` in `engine-core` (`docs/design/who-wins.md`): blackout over everything, a held raw channel over the light that writes it, a held value of a light over a default. Who wins between two fixtures on a shared channel is open (decision page, question 48): today the later in fixture order.
 
 ```json
 {"Send": {"command": {"Patch": {"name": "PAR 3", "maker": "Generic", "model": "Generic RGB", "mode": "RGB", "at": {"universe": 1, "address": 37}}}}}

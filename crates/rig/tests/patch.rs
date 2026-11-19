@@ -100,6 +100,12 @@ fn said(effect: &PatchEffect) -> String {
         PatchEffect::Send(EngineCommand::SetIntensity { lights, .. }) => {
             format!("intensity {}", run(*lights))
         }
+        PatchEffect::Send(EngineCommand::ReleaseColour { lights }) => {
+            format!("release colour {}", run(*lights))
+        }
+        PatchEffect::Send(EngineCommand::ReleaseIntensity { lights }) => {
+            format!("release intensity {}", run(*lights))
+        }
         PatchEffect::Send(other) => format!("{other:?}"),
     }
 }
@@ -143,7 +149,7 @@ fn a_patch_command_makes_a_new_patch_and_says_what_follows() {
         Done,
         &'static [&'static str],
     );
-    let cases: [Case; 24] = [
+    let cases: [Case; 28] = [
         (
             many,
             vec![],
@@ -366,6 +372,49 @@ fn a_patch_command_makes_a_new_patch_and_says_what_follows() {
             many,
             vec![par_3],
             red(fixture_(2)),
+            Err(Refusal::NotPatched),
+            &["1 PAR 3: Generic RGB, RGB at 1.37 (3) lights 1+1 clashes []"],
+        ),
+        // a release names its lights as a set does, and changes no patch
+        (
+            many,
+            vec![par_3, bar],
+            PatchCommand::ReleaseColour {
+                target: fixture_(2),
+            },
+            Ok(&["release colour 1+9"]),
+            &[
+                "1 PAR 3: Generic RGB, RGB at 1.37 (3) lights 1+1 clashes []",
+                "2 Bar: X-240Bar RGB, 26 Channel at 2.1 (26) lights 2+9 clashes []",
+            ],
+        ),
+        (
+            many,
+            vec![par_3, bar],
+            PatchCommand::ReleaseIntensity {
+                target: Target::Light { light: 10 },
+            },
+            Ok(&["release intensity 9+1"]),
+            &[
+                "1 PAR 3: Generic RGB, RGB at 1.37 (3) lights 1+1 clashes []",
+                "2 Bar: X-240Bar RGB, 26 Channel at 2.1 (26) lights 2+9 clashes []",
+            ],
+        ),
+        (
+            many,
+            vec![par_3],
+            PatchCommand::ReleaseIntensity {
+                target: Target::Light { light: 2 },
+            },
+            Err(Refusal::NoSuchLight),
+            &["1 PAR 3: Generic RGB, RGB at 1.37 (3) lights 1+1 clashes []"],
+        ),
+        (
+            many,
+            vec![par_3],
+            PatchCommand::ReleaseColour {
+                target: fixture_(2),
+            },
             Err(Refusal::NotPatched),
             &["1 PAR 3: Generic RGB, RGB at 1.37 (3) lights 1+1 clashes []"],
         ),

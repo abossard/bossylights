@@ -427,6 +427,8 @@ impl Sender {
             | EngineCommand::Writers
             | EngineCommand::SetIntensity { .. }
             | EngineCommand::SetColour { .. }
+            | EngineCommand::ReleaseIntensity { .. }
+            | EngineCommand::ReleaseColour { .. }
             | EngineCommand::Darken { .. } => (None, false),
         };
         let retires = matches!(command, EngineCommand::Writers)
@@ -634,6 +636,7 @@ impl Ticker {
             frame(
                 &self.now.state,
                 self.now.universes(),
+                self.now.holds(),
                 self.now.lights(),
                 &self.writers,
                 now,

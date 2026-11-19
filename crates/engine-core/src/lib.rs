@@ -18,6 +18,8 @@ mod api;
 mod channel;
 mod kinds;
 mod library;
+mod mix;
+use mix::{Want, mix};
 mod output;
 mod patch;
 mod project;
@@ -25,7 +27,8 @@ mod resolve;
 
 pub use api::{API_VERSION, MATCHES, Refusal, Reply, Request};
 pub use channel::{
-    ADDRESSES, Channel, ChannelLevel, ChannelNumbers, Levels, MAX_UNIVERSES, Universes, changes,
+    ADDRESSES, Channel, ChannelLevel, ChannelNumbers, ChannelSet, Levels, MAX_UNIVERSES, Universes,
+    changes,
 };
 pub use kinds::{Adapter, Color, OutputKind};
 pub use library::{
@@ -120,11 +123,11 @@ pub enum BestEffort {
     reason = "a client's command has no heap: `Patch` carries its four names in place. Moved once per request, off the tick thread"
 )]
 pub enum Command {
-    /// Hold a channel at a level.
+    /// Hold a channel at a level. It wins over the light that writes it.
     SetChannel { channel: ChannelNumbers, value: u8 },
-    /// Let a channel go back to zero.
+    /// Let a channel go: the light that writes it shows again, else zero.
     ReleaseChannel { channel: ChannelNumbers },
-    /// Let every channel go back to zero.
+    /// Let every channel go.
     ReleaseAll,
     /// Every channel out at zero while on. The held levels stay and come back when off.
     Blackout { on: bool },
@@ -169,6 +172,10 @@ pub enum Command {
         green: u16,
         blue: u16,
     },
+    /// Let the intensity of a light, or of every light of a fixture, go back to 0.
+    ReleaseIntensity { target: Target },
+    /// Let the colour of a light, or of every light of a fixture, go back to black.
+    ReleaseColour { target: Target },
 }
 
 /// What changes the state on the tick thread. The front makes these from a checked
@@ -219,6 +226,12 @@ pub enum EngineCommand {
         green: u16,
         blue: u16,
     },
+    ReleaseIntensity {
+        lights: LightRun,
+    },
+    ReleaseColour {
+        lights: LightRun,
+    },
     /// The lights of an unpatched fixture: their held values go.
     Darken {
         lights: LightRun,
@@ -230,13 +243,15 @@ pub enum EngineCommand {
 pub enum Effect {}
 
 /// The only place state changes: state and command in, new state and effects out.
-/// `universes` are the held levels and `lights` the held values per light, buffers the
-/// caller owns; a command changes them in place. At most one effect, so nothing
+/// `universes` are the levels of the raw channels, `holds` which of them are held (a
+/// channel not held is at 0), `lights` the held values per light: buffers the caller
+/// owns; a command changes them in place. At most one effect, so nothing
 /// allocates. A command that needs more widens this to a fixed-size array, never to a
 /// `Vec`.
 pub fn update(
     state: State,
     universes: &mut [Levels],
+    holds: &mut [ChannelSet],
     lights: &mut [Light],
     command: EngineCommand,
 ) -> (State, Option<Effect>) {
@@ -284,6 +299,7 @@ pub fn update(
         EngineCommand::SetChannel { channel, value } => {
             if let Some(level) = channel.level(universes) {
                 *level = value;
+                channel.mark(holds, true);
             }
             (state, None)
         }
@@ -291,10 +307,12 @@ pub fn update(
             if let Some(level) = channel.level(universes) {
                 *level = 0;
             }
+            channel.mark(holds, false);
             (state, None)
         }
         EngineCommand::ReleaseAll => {
             universes.fill(Levels::ZERO);
+            holds.fill(ChannelSet::NONE);
             (state, None)
         }
         EngineCommand::Blackout { on } => (
@@ -330,6 +348,21 @@ pub fn update(
             }
             (state, None)
         }
+        EngineCommand::ReleaseIntensity { lights: run } => {
+            for light in run.of(lights) {
+                light.intensity = Light::DARK.intensity;
+            }
+            (state, None)
+        }
+        EngineCommand::ReleaseColour { lights: run } => {
+            for light in run.of(lights) {
+                *light = Light {
+                    intensity: light.intensity,
+                    ..Light::DARK
+                };
+            }
+            (state, None)
+        }
         EngineCommand::Darken { lights: run } => {
             run.of(lights).fill(Light::DARK);
             (state, None)
@@ -338,22 +371,37 @@ pub fn update(
 }
 
 /// The levels that go out at `_at` (since the engine started), written into `out`, a
-/// buffer the caller owns: the held levels, then what the `writers` make of the `lights`
-/// on the channels they write, or zero in a blackout. Who wins between them moves to
-/// `mix` (#136). No level depends on time yet; effects will.
+/// buffer the caller owns. It resolves and mixes, nothing else: what the `writers` make
+/// of the `lights`, the raw channels held (`universes` at `holds`), the blackout. `mix`
+/// decides each channel. No level depends on time yet; effects will.
 pub fn frame(
     state: &State,
     universes: &[Levels],
+    holds: &[ChannelSet],
     lights: &[Light],
     writers: &[Writer],
     _at: Duration,
     out: &mut [Levels],
 ) {
-    for (out, held) in out.iter_mut().zip(universes) {
-        *out = if state.blackout { Levels::ZERO } else { *held };
-    }
-    if !state.blackout {
-        resolve(lights, writers, out);
+    let mut lit = [ChannelSet::NONE; MAX_UNIVERSES as usize];
+    out.fill(Levels::ZERO);
+    resolve::write(lights, writers, out, &mut lit);
+    let raw = universes.iter().zip(holds);
+    for ((out, lit), (held, holds)) in out.iter_mut().zip(&lit).zip(raw) {
+        for (address, (out, held)) in out.0.iter_mut().zip(held.0).enumerate() {
+            let mut want = if lit.has(address) {
+                Want::Light(*out)
+            } else {
+                Want::Default(*out)
+            };
+            if holds.has(address) {
+                want = mix(want, Want::Raw(held));
+            }
+            if state.blackout {
+                want = mix(want, Want::Blackout);
+            }
+            *out = want.level();
+        }
     }
 }
 
@@ -489,13 +537,22 @@ mod tests {
         ..CALM
     };
 
-    /// Two universes, with these (universe, address, level) held; counted from 1.
+    /// Two universes, with these (universe, address, level) set; counted from 1.
     fn held(levels: &[(u16, u16, u8)]) -> [Levels; 2] {
         let mut universes = [Levels::ZERO; 2];
         for (universe, address, level) in levels {
             universes[usize::from(*universe - 1)].0[usize::from(*address - 1)] = *level;
         }
         universes
+    }
+
+    /// The raw channels of two universes, these (universe, address, level) held.
+    fn raw(levels: &[(u16, u16, u8)]) -> ([Levels; 2], [ChannelSet; 2]) {
+        let mut holds = [ChannelSet::NONE; 2];
+        for (universe, address, _) in levels {
+            channel(*universe, *address).mark(&mut holds, true);
+        }
+        (held(levels), holds)
     }
 
     fn channel(universe: u16, address: u16) -> Channel {
@@ -527,14 +584,14 @@ mod tests {
         let cases = [
             (
                 CALM,
-                held(&[]),
+                raw(&[]),
                 tick(0),
                 State { frame: 8, ..CALM },
-                held(&[]),
+                raw(&[]),
             ), // the beat is not due yet: it stays
             (
                 CALM,
-                held(&[]),
+                raw(&[]),
                 EngineCommand::Tick { now: BEAT },
                 State {
                     frame: 8,
@@ -542,58 +599,61 @@ mod tests {
                     beat: BEAT * 2,
                     ..CALM
                 },
-                held(&[]),
+                raw(&[]),
             ), // the beat is due: it moves on
-            (
-                max,
-                held(&[]),
-                tick(0),
-                State { frame: 0, ..CALM },
-                held(&[]),
-            ), // wraps
-            (CALM, held(&[]), set(1, 1, 255), CALM, held(&[(1, 1, 255)])),
+            (max, raw(&[]), tick(0), State { frame: 0, ..CALM }, raw(&[])), // wraps
+            (CALM, raw(&[]), set(1, 1, 255), CALM, raw(&[(1, 1, 255)])),
             (
                 CALM,
-                held(&[(2, 512, 9)]),
+                raw(&[(2, 512, 9)]),
                 set(2, 512, 10),
                 CALM,
-                held(&[(2, 512, 10)]),
+                raw(&[(2, 512, 10)]),
             ),
             (
                 CALM,
-                held(&[(1, 3, 9), (1, 4, 5)]),
+                raw(&[(1, 3, 9), (1, 4, 5)]),
                 release(1, 3),
                 CALM,
-                held(&[(1, 4, 5)]),
+                raw(&[(1, 4, 5)]),
             ),
-            (CALM, held(&[]), release(1, 3), CALM, held(&[])), // nothing held: no change
+            (CALM, raw(&[]), release(1, 3), CALM, raw(&[])), // nothing held: no change
             (
                 CALM,
-                held(&[(1, 1, 1), (2, 2, 2)]),
+                raw(&[(1, 1, 1), (2, 2, 2)]),
                 EngineCommand::ReleaseAll,
                 CALM,
-                held(&[]),
+                raw(&[]),
             ),
             (
                 CALM,
-                held(&[(1, 1, 80)]),
+                raw(&[(1, 1, 80)]),
                 EngineCommand::Blackout { on: true },
                 DARK,
-                held(&[(1, 1, 80)]),
+                raw(&[(1, 1, 80)]),
             ),
             (
                 DARK,
-                held(&[(1, 1, 80)]),
+                raw(&[(1, 1, 80)]),
                 EngineCommand::Blackout { on: false },
                 CALM,
-                held(&[(1, 1, 80)]),
+                raw(&[(1, 1, 80)]),
             ),
-            (DARK, held(&[]), set(1, 2, 50), DARK, held(&[(1, 2, 50)])), // held in a blackout
+            (DARK, raw(&[]), set(1, 2, 50), DARK, raw(&[(1, 2, 50)])), // held in a blackout
+            (CALM, raw(&[]), set(1, 2, 0), CALM, raw(&[(1, 2, 0)])),   // held at 0 is held
+            (CALM, raw(&[(1, 2, 0)]), release(1, 2), CALM, raw(&[])),
+            (
+                CALM,
+                raw(&[(1, 2, 0)]),
+                release(1, 3),
+                CALM,
+                raw(&[(1, 2, 0)]),
+            ),
         ];
-        for (state, mut universes, command, after, held_after) in cases {
-            let result = update(state, &mut universes, &mut [], command);
+        for (state, (mut universes, mut holds), command, after, raw_after) in cases {
+            let result = update(state, &mut universes, &mut holds, &mut [], command);
             assert_eq!(result, (after, None), "{command:?}");
-            assert_eq!(universes, held_after, "{command:?}");
+            assert_eq!((universes, holds), raw_after, "{command:?}");
         }
     }
 
@@ -628,6 +688,8 @@ mod tests {
             intensity: 0x8000,
             ..red
         };
+        let let_go = |lights| EngineCommand::ReleaseIntensity { lights };
+        let black = |lights| EngineCommand::ReleaseColour { lights };
         // (lights before, command, lights after)
         let cases = [
             ([dark; 4], set_red(run(1, 2)), [dark, red, red, dark]),
@@ -641,17 +703,34 @@ mod tests {
                 [full_red, dark, dark, dark],
             ),
             ([red; 4], EngineCommand::Writers, [red; 4]),
+            // a release lets one property go back to its default, on its own
+            (
+                [full_red; 4],
+                let_go(run(1, 2)),
+                [full_red, red, red, full_red],
+            ),
+            (
+                [full_red; 4],
+                black(run(0, 1)),
+                [lit, full_red, full_red, full_red],
+            ),
+            ([full_red; 4], black(run(0, 4)), [lit; 4]),
+            // releasing what is not held does nothing
+            ([red; 4], let_go(run(0, 4)), [red; 4]),
+            ([lit; 4], black(run(0, 4)), [lit; 4]),
+            ([dark; 4], let_go(run(0, 4)), [dark; 4]),
+            ([dark; 4], black(run(0, 4)), [dark; 4]),
         ];
         for (before, command, after) in cases {
             let mut lights = before;
-            let mut universes = held(&[(1, 1, 5)]);
+            let (mut universes, mut holds) = raw(&[(1, 1, 5)]);
             assert_eq!(
-                update(CALM, &mut universes, &mut lights, command),
+                update(CALM, &mut universes, &mut holds, &mut lights, command),
                 (CALM, None),
                 "{command:?}"
             );
             assert_eq!(lights, after, "{command:?}");
-            assert_eq!(universes, held(&[(1, 1, 5)]), "{command:?}");
+            assert_eq!((universes, holds), raw(&[(1, 1, 5)]), "{command:?}");
         }
     }
 
@@ -684,59 +763,155 @@ mod tests {
 
     #[test]
     fn a_channel_on_a_shorter_buffer_changes_nothing() {
-        let mut one = [Levels::ZERO];
+        let (mut one, mut holds) = ([Levels::ZERO], [ChannelSet::NONE]);
         let command = EngineCommand::SetChannel {
             channel: channel(2, 1),
             value: 9,
         };
-        assert_eq!(update(CALM, &mut one, &mut [], command), (CALM, None));
-        assert_eq!(one, [Levels::ZERO]);
+        assert_eq!(
+            update(CALM, &mut one, &mut holds, &mut [], command),
+            (CALM, None)
+        );
+        assert_eq!((one, holds), ([Levels::ZERO], [ChannelSet::NONE]));
     }
 
     #[test]
-    fn frame_sends_the_held_levels_and_the_lights_or_zero_in_a_blackout() {
+    fn frame_resolves_the_lights_and_mix_decides_each_channel() {
         let all = Lights::new(1).unwrap();
-        let writers = [Writer::Takes {
-            light: LightNumber::new(0, all).unwrap(),
-            take: Take::INTENSITY,
-            at: Place::Byte(channel(1, 2)),
-        }];
-        let lit = [Light {
-            intensity: 0xffff,
+        let light = LightNumber::new(0, all).unwrap();
+        let takes = |of, address| Writer::Takes {
+            light,
+            take: Take {
+                of,
+                ..Take::INTENSITY
+            },
+            at: Place::Byte(channel(1, address)),
+        };
+        let shutter = Writer::Fixed {
+            at: channel(1, 4),
+            value: 200,
+        };
+        // a PAR at 1: red, green, blue, a shutter open at 200
+        let par = [
+            takes(Part::Red, 1),
+            takes(Part::Green, 2),
+            takes(Part::Blue, 3),
+            shutter,
+        ];
+        // two fixtures on channel 1: a light value and a default
+        let light_then_default = [
+            takes(Part::Red, 1),
+            Writer::Fixed {
+                at: channel(1, 1),
+                value: 100,
+            },
+        ];
+        let default_then_light = [
+            Writer::Fixed {
+                at: channel(1, 1),
+                value: 100,
+            },
+            takes(Part::Red, 1),
+        ];
+        let red = [Light {
+            red: 0xffff,
             ..Light::DARK
         }];
-        // (state, held, light values, writers, out)
-        type Case<'a> = (State, [Levels; 2], [Light; 1], &'a [Writer], [Levels; 2]);
-        let cases: [Case; 5] = [
-            (CALM, held(&[]), lit, &[], held(&[])),
+        let lit = |more: &[(u16, u16, u8)]| {
+            let mut levels = vec![(1, 1, 255), (1, 4, 200)];
+            levels.extend_from_slice(more);
+            held(&levels)
+        };
+        // (row, state, raw held, writers, out)
+        type Case<'a> = (
+            &'a str,
+            State,
+            &'a [(u16, u16, u8)],
+            &'a [Writer],
+            [Levels; 2],
+        );
+        let cases: [Case; 13] = [
+            ("nothing", CALM, &[], &[], held(&[])),
             (
+                "raw only",
                 CALM,
-                held(&[(1, 1, 255), (2, 512, 3)]),
-                lit,
+                &[(1, 1, 255), (2, 512, 3)],
                 &[],
                 held(&[(1, 1, 255), (2, 512, 3)]),
             ),
-            (DARK, held(&[(1, 1, 255), (2, 512, 3)]), lit, &[], held(&[])),
+            ("the light", CALM, &[], &par, lit(&[])),
             (
+                "2 raw over the light",
                 CALM,
-                held(&[(1, 1, 255)]),
-                lit,
-                &writers,
-                held(&[(1, 1, 255), (1, 2, 255)]),
+                &[(1, 2, 9)],
+                &par,
+                lit(&[(1, 2, 9)]),
             ),
-            (DARK, held(&[]), lit, &writers, held(&[])),
+            (
+                "2 raw at 0 over the light",
+                CALM,
+                &[(1, 1, 0)],
+                &par,
+                held(&[(1, 4, 200)]),
+            ),
+            (
+                "2 raw over a default",
+                CALM,
+                &[(1, 4, 7)],
+                &par,
+                held(&[(1, 1, 255), (1, 4, 7)]),
+            ),
+            (
+                "2 raw beside the light",
+                CALM,
+                &[(2, 512, 3)],
+                &par,
+                lit(&[(2, 512, 3)]),
+            ),
+            ("1 blackout", DARK, &[], &par, held(&[])),
+            (
+                "1 blackout over raw",
+                DARK,
+                &[(1, 2, 9), (2, 512, 3)],
+                &par,
+                held(&[]),
+            ),
+            ("1 blackout, raw only", DARK, &[(1, 1, 255)], &[], held(&[])),
+            (
+                "3 a light over a default",
+                CALM,
+                &[],
+                &light_then_default,
+                held(&[(1, 1, 255)]),
+            ),
+            (
+                "3 a light over a default",
+                CALM,
+                &[],
+                &default_then_light,
+                held(&[(1, 1, 255)]),
+            ),
+            (
+                "2 raw over both",
+                CALM,
+                &[(1, 1, 9)],
+                &light_then_default,
+                held(&[(1, 1, 9)]),
+            ),
         ];
-        for (state, universes, lights, writers, expected) in cases {
+        for (row, state, raw_held, writers, expected) in cases {
+            let (universes, holds) = raw(raw_held);
             let mut out = held(&[(1, 9, 9)]); // whatever was there before
             frame(
                 &state,
                 &universes,
-                &lights,
+                &holds,
+                &red,
                 writers,
                 Duration::ZERO,
                 &mut out,
             );
-            assert_eq!(out, expected, "{state:?} {writers:?}");
+            assert_eq!(out, expected, "{row}");
         }
     }
 
@@ -772,9 +947,16 @@ mod tests {
             if ms > until_ms {
                 return wakes;
             }
-            state = update(state, &mut universes, &mut [], EngineCommand::Tick { now }).0;
+            state = update(
+                state,
+                &mut universes,
+                &mut [],
+                &mut [],
+                EngineCommand::Tick { now },
+            )
+            .0;
             for command in at(ms) {
-                state = update(state, &mut universes, &mut [], command).0;
+                state = update(state, &mut universes, &mut [], &mut [], command).0;
             }
             let served: Vec<u8> = due(&state, now).map(|n| n.slot() as u8 + 1).collect();
             for &number in &served {
@@ -782,7 +964,7 @@ mod tests {
                     output: output(number),
                     outcome: Outcome::Accepted,
                 };
-                state = update(state, &mut universes, &mut [], handed).0;
+                state = update(state, &mut universes, &mut [], &mut [], handed).0;
             }
             wakes.push((ms, served));
         }
@@ -922,11 +1104,32 @@ mod tests {
     fn after_a_long_stall_each_output_starts_over_from_now() {
         let mut universes = [Levels::ZERO];
         let mut state = State::new(Priority::RealTime);
-        state = update(state, &mut universes, &mut [], set_output(1, Rate::Sixty)).0;
-        state = update(state, &mut universes, &mut [], set_output(2, Rate::Thirty)).0;
+        state = update(
+            state,
+            &mut universes,
+            &mut [],
+            &mut [],
+            set_output(1, Rate::Sixty),
+        )
+        .0;
+        state = update(
+            state,
+            &mut universes,
+            &mut [],
+            &mut [],
+            set_output(2, Rate::Thirty),
+        )
+        .0;
         // the machine slept for a second
         let now = Duration::from_secs(1);
-        state = update(state, &mut universes, &mut [], EngineCommand::Tick { now }).0;
+        state = update(
+            state,
+            &mut universes,
+            &mut [],
+            &mut [],
+            EngineCommand::Tick { now },
+        )
+        .0;
         let served: Vec<_> = due(&state, now).collect();
         assert_eq!(served, vec![output(1), output(2)]);
         for number in served {
@@ -934,7 +1137,7 @@ mod tests {
                 output: number,
                 outcome: Outcome::Accepted,
             };
-            state = update(state, &mut universes, &mut [], handed).0;
+            state = update(state, &mut universes, &mut [], &mut [], handed).0;
         }
         assert_eq!(next_wake(&state), now + Rate::Sixty.period());
         let thirty = state.outputs[1].unwrap();
@@ -968,7 +1171,14 @@ mod tests {
         let mut universes = [Levels::ZERO];
         let calm = State::new(Priority::RealTime);
         let due = BEAT; // the beat, and the output's first frame
-        let with_output = update(calm, &mut universes, &mut [], set_output(1, Rate::Sixty)).0;
+        let with_output = update(
+            calm,
+            &mut universes,
+            &mut [],
+            &mut [],
+            set_output(1, Rate::Sixty),
+        )
+        .0;
         let with_output = State {
             outputs: with_output.outputs.map(|o| o.map(|o| Output { due, ..o })),
             ..with_output

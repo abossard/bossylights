@@ -15,7 +15,8 @@
 //! A value of 16 bits goes out as one byte (its high byte) or as a coarse and a fine
 //! byte. So an 8-bit channel always shows the coarse byte of the same value.
 
-use crate::channel::{Channel, Levels};
+use crate::channel::{Channel, ChannelSet, Levels, MAX_UNIVERSES};
+use crate::mix::{Want, mix};
 
 /// The most lights an engine can have: 64 universes of 170 RGB pixels and more.
 pub const MAX_LIGHTS: u16 = 16_384;
@@ -233,24 +234,37 @@ fn times(a: u16, b: u16) -> u16 {
 
 /// Every writer's byte for this frame, written into `out`, a buffer the caller owns.
 /// `lights` are the values of the lights by number. A channel no writer names keeps what
-/// `out` holds. A writer whose light is past `lights` writes nothing. Allocates nothing,
-/// cannot fail.
+/// `out` holds. A writer whose light is past `lights` writes nothing. Where writers share
+/// a channel, `mix` decides. Allocates nothing, cannot fail.
 pub fn resolve(lights: &[Light], writers: &[Writer], out: &mut [Levels]) {
-    // Fixtures may share a channel (the patch shows the clash). Which of them wins there
-    // is not decided yet: decision page question 48, then `mix` (#136).
+    write(
+        lights,
+        writers,
+        out,
+        &mut [ChannelSet::NONE; MAX_UNIVERSES as usize],
+    );
+}
+
+/// [`resolve`], and the channels a light wrote go into `lit`.
+pub(crate) fn write(
+    lights: &[Light],
+    writers: &[Writer],
+    out: &mut [Levels],
+    lit: &mut [ChannelSet],
+) {
     for writer in writers {
         match *writer {
-            Writer::Fixed { at, value } => put(at, value, out),
+            Writer::Fixed { at, value } => put(at, Want::Default(value), out, lit),
             Writer::Takes { light, take, at } => {
                 let Some(light) = lights.get(usize::from(light.0)) else {
                     continue;
                 };
                 let [high, low] = take.value(light).to_be_bytes();
                 match at {
-                    Place::Byte(at) => put(at, high, out),
+                    Place::Byte(at) => put(at, Want::Light(high), out, lit),
                     Place::Pair { coarse, fine } => {
-                        put(coarse, high, out);
-                        put(fine, low, out);
+                        put(coarse, Want::Light(high), out, lit);
+                        put(fine, Want::Light(low), out, lit);
                     }
                 }
             }
@@ -258,9 +272,18 @@ pub fn resolve(lights: &[Light], writers: &[Writer], out: &mut [Levels]) {
     }
 }
 
-fn put(at: Channel, value: u8, out: &mut [Levels]) {
+/// `want` against what `at` has: `mix` decides.
+fn put(at: Channel, want: Want, out: &mut [Levels], lit: &mut [ChannelSet]) {
+    let was_lit = at.marked(lit);
     if let Some(level) = at.level(out) {
-        *level = value;
+        let had = if was_lit {
+            Want::Light(*level)
+        } else {
+            Want::Default(*level)
+        };
+        let won = mix(had, want);
+        *level = won.level();
+        at.mark(lit, matches!(won, Want::Light(_)));
     }
 }
 

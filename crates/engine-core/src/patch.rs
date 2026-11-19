@@ -56,6 +56,12 @@ pub enum PatchCommand {
         green: u16,
         blue: u16,
     },
+    ReleaseIntensity {
+        target: Target,
+    },
+    ReleaseColour {
+        target: Target,
+    },
 }
 
 /// A patched fixture, as the picture shows it.

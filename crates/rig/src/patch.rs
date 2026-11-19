@@ -172,6 +172,18 @@ impl Patch {
                 };
                 Ok((None, vec![PatchEffect::Send(send)]))
             }
+            PatchCommand::ReleaseIntensity { target } => {
+                let send = EngineCommand::ReleaseIntensity {
+                    lights: self.target(target)?,
+                };
+                Ok((None, vec![PatchEffect::Send(send)]))
+            }
+            PatchCommand::ReleaseColour { target } => {
+                let send = EngineCommand::ReleaseColour {
+                    lights: self.target(target)?,
+                };
+                Ok((None, vec![PatchEffect::Send(send)]))
+            }
         }
     }
 

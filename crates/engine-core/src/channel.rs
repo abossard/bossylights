@@ -88,6 +88,44 @@ impl Levels {
     pub const ZERO: Self = Self([0; ADDRESSES]);
 }
 
+/// A set of the addresses of one universe: which raw channels are held, which a light
+/// wrote this frame. Buffers of these belong to the caller.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChannelSet([u64; ADDRESSES / 64]);
+
+impl ChannelSet {
+    pub const NONE: Self = Self([0; ADDRESSES / 64]);
+
+    /// Whether `address` (counted from 0) is in the set. Past the universe it is not.
+    pub fn has(&self, address: usize) -> bool {
+        self.0
+            .get(address / 64)
+            .is_some_and(|word| word & (1 << (address % 64)) != 0)
+    }
+
+    fn put(&mut self, address: usize, on: bool) {
+        if let Some(word) = self.0.get_mut(address / 64) {
+            let bit = 1 << (address % 64);
+            *word = if on { *word | bit } else { *word & !bit };
+        }
+    }
+}
+
+impl Channel {
+    /// Puts this channel in `sets`, or takes it out.
+    pub(crate) fn mark(self, sets: &mut [ChannelSet], on: bool) {
+        if let Some(set) = sets.get_mut(usize::from(self.universe)) {
+            set.put(usize::from(self.address), on);
+        }
+    }
+
+    /// Whether `sets` has this channel.
+    pub(crate) fn marked(self, sets: &[ChannelSet]) -> bool {
+        sets.get(usize::from(self.universe))
+            .is_some_and(|set| set.has(usize::from(self.address)))
+    }
+}
+
 impl Serialize for Levels {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.collect_seq(self.0.iter())
@@ -148,6 +186,47 @@ mod tests {
             let expected = expected.map(|(universe, address)| Channel { universe, address });
             assert_eq!(checked, expected, "universe {universe}, address {address}");
         }
+    }
+
+    #[test]
+    fn a_channel_set_holds_each_address_on_its_own() {
+        let two = Universes::new(2).unwrap();
+        let channel = |universe, address| ChannelNumbers { universe, address }.check(two).unwrap();
+        // (marked on, then off, the addresses in the set after, counted from 1)
+        type Addresses<'a> = &'a [(u16, u16)];
+        let cases: [(Addresses, Addresses, Addresses); 5] = [
+            (&[], &[], &[]),
+            (
+                &[(1, 1), (1, 64), (1, 65), (2, 512)],
+                &[],
+                &[(1, 1), (1, 64), (1, 65), (2, 512)],
+            ),
+            (&[(1, 64), (1, 65)], &[(1, 65)], &[(1, 64)]),
+            (&[(2, 1)], &[(2, 1), (2, 1)], &[]),
+            (&[(1, 3)], &[(2, 3)], &[(1, 3)]), // another universe stays
+        ];
+        for (on, off, after) in cases {
+            let mut sets = [ChannelSet::NONE; 2];
+            for (u, a) in on {
+                channel(*u, *a).mark(&mut sets, true);
+            }
+            for (u, a) in off {
+                channel(*u, *a).mark(&mut sets, false);
+            }
+            for u in 1..=2 {
+                for a in 1..=512 {
+                    let has = after.contains(&(u, a));
+                    assert_eq!(channel(u, a).marked(&sets), has, "{on:?} {off:?}: {u} {a}");
+                    assert_eq!(sets[usize::from(u - 1)].has(usize::from(a - 1)), has);
+                }
+            }
+        }
+        // past the universe, or on a shorter buffer: nothing
+        assert!(!ChannelSet([u64::MAX; 8]).has(512));
+        let mut one = [ChannelSet::NONE];
+        channel(2, 1).mark(&mut one, true);
+        assert_eq!(one, [ChannelSet::NONE]);
+        assert!(!channel(2, 1).marked(&one));
     }
 
     #[test]
