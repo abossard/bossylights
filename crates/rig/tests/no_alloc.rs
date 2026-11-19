@@ -1,7 +1,7 @@
-//! Proves a frame of 512 patched lights allocates nothing: the rig compiles the writers
-//! first (it may allocate), then every frame the light values change and `resolve` writes
-//! the universes. A counting allocator sees every allocation in this process; the window
-//! holds only frames. That the engine's own tick allocates nothing is proved in
+//! Proves a frame of 512 patched lights allocates and frees nothing: the rig compiles the
+//! writers first (it may allocate), then every frame the light values change and `resolve`
+//! writes the universes, as the tick thread does. A counting allocator sees every
+//! allocation and free in this process; the window holds only frames, on this one thread. That the engine's own tick allocates nothing is proved in
 //! `crates/engine/tests/no_alloc.rs`.
 
 mod common;
@@ -45,7 +45,7 @@ fn main() {
     let mut values = vec![Light::DARK; usize::from(LIGHTS)];
     let mut out = vec![Levels::ZERO; usize::from(UNIVERSES)];
 
-    let allocations = counting::allocations();
+    let (allocations, frees) = (counting::allocations(), counting::frees());
     for frame in 0..FRAMES {
         for (n, value) in (0..).zip(values.iter_mut()) {
             let step = frame.wrapping_mul(97).wrapping_add(n);
@@ -59,11 +59,13 @@ fn main() {
         resolve(&values, &writers, &mut out);
     }
     let new_allocations = counting::allocations() - allocations;
+    let new_frees = counting::frees() - frees;
 
     let written = out.iter().flat_map(|u| u.0).filter(|&b| b != 0).count();
     assert!(written > 1_000, "the frames wrote bytes: {written}");
     assert_eq!(
-        new_allocations, 0,
-        "{FRAMES} frames of {LIGHTS} lights made {new_allocations} allocations"
+        (new_allocations, new_frees),
+        (0, 0),
+        "{FRAMES} frames of {LIGHTS} lights: allocations and frees"
     );
 }

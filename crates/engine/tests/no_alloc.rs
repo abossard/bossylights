@@ -1,11 +1,13 @@
 //! Proves the tick thread allocates nothing per wake, also while it serves two outputs at
 //! different rates, resolves 512 patched lights and a strip of 100 pixels over two
 //! universes, takes commands, swaps in new writers, takes a group of 256 runs and
-//! hands a reader a snapshot on every frame. A counting allocator sees every allocation in
-//! this process, except those of the front while it sends: a light or patch command
-//! allocates there (the patch is a calculation on the heap), never on the tick thread. The
-//! outputs are attached and the lights patched before the window (a device is boxed, the
-//! writers compiled on the sending thread). In the window the main thread sends and reads
+//! hands a reader a snapshot on every frame. And that it frees nothing: the old writers,
+//! runs and a replaced device go to the free thread. A counting allocator sees every
+//! allocation in this process, except those of the front while it sends: a light, patch or
+//! attach command allocates there (the patch is a calculation on the heap, a device is
+//! boxed), never on the tick thread. It counts the frees of the tick thread apart, by its
+//! name. The outputs are attached and the lights patched before the window (the writers
+//! compiled on the sending thread). In the window the main thread sends and reads
 //! snapshots, which allocates nothing, and sleeps, so any allocation counted is the tick's
 //! or the reader's. That each real device's `take` allocates nothing is proved in
 //! `crates/outputs/tests/no_alloc.rs`.
@@ -123,7 +125,7 @@ fn main() {
             .all(|o| o.is_some_and(|o| o.counters.accepted > 0))
     });
 
-    let allocations = counting::allocations();
+    let (allocations, tick_frees) = (counting::allocations(), counting::tick_frees());
     let frame = engine.latest().state.frame;
     let mut pictures = 0;
     for value in 0..=255 {
@@ -156,6 +158,10 @@ fn main() {
             };
             assert!(send(&mut sender, back, &library), "fixture {light} moves");
         }
+        if value % 64 == 32 {
+            // a new device for output 1: the tick swaps it in and sends the old one back
+            counting::uncounted(|| mock::attach(&mut sender, universes, 1, run, Rate::Sixty));
+        }
         // Pace the commands by the tick: a reader on every frame waits for the next picture.
         let seen = engine.latest().state.frame;
         mock::wait_until("no frame went by", || engine.latest().state.frame > seen);
@@ -174,6 +180,7 @@ fn main() {
         .count();
     let ticks = state.frame - frame;
     let new_allocations = counting::allocations() - allocations;
+    let new_tick_frees = counting::tick_frees() - tick_frees;
     drop(engine);
 
     assert!(ticks >= 5, "too few ticks to prove anything: {ticks}");
@@ -196,5 +203,9 @@ fn main() {
     assert_eq!(
         new_allocations, 0,
         "{ticks} ticks made {new_allocations} allocations"
+    );
+    assert_eq!(
+        new_tick_frees, 0,
+        "{ticks} ticks made {new_tick_frees} frees on the tick thread"
     );
 }
