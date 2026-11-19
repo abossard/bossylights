@@ -19,6 +19,8 @@ From the Codex model list (`~/.codex/models_cache.json`), read 2026-11-19.
 | `gpt-6.1-terra` | visual understanding, computer use | 500k |
 | `gpt-6-luna` | easy, cheap | 272k |
 
+Context: the models start at 500k tokens (a 475k window). The runner sets `model_context_window=872000`, the model's own maximum, on every run, and a Copilot run takes `--context long_context`. Checked: the session log of a run shows 475000 without it and 828400 with it.
+
 | Effort | Use |
 |---|---|
 | `high`, `xhigh` | normal work and reviews |

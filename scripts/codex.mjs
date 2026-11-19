@@ -7,6 +7,9 @@ export const MODELS = {
   terra: "gpt-6.1-terra", // visual understanding and computer use
 };
 
+/** The largest context window the Codex model list gives (`max_context_window`). */
+export const LONG_CONTEXT = 872000;
+
 export const EFFORTS = ["low", "medium", "high", "xhigh", "max", "ultra"];
 
 /** `<mode> <commit> <task-file> [--model astra|sol|terra] [--effort ultra] [--name label]`. Throws the usage text otherwise. */
@@ -45,6 +48,7 @@ export function execArgs({ mode, model, effort }, { cwd, lastMessage }) {
     "--ignore-user-config",
     "-m", MODELS[model],
     "-c", `model_reasoning_effort=${effort}`,
+    "-c", `model_context_window=${LONG_CONTEXT}`, // the models' own maximum; the default for astra and sol is 500k
     "-s", sandboxOf(mode),
     "-c", "sandbox_workspace_write.network_access=true", // the engine tests bind 127.0.0.1
     "-C", cwd,

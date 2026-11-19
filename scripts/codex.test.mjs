@@ -27,7 +27,7 @@ test("both modes write in a scratch copy and may run the tests", () => {
 
 test("exec arguments ignore the user config and name the model, effort and sandbox", () => {
   const args = execArgs({ mode: "build", model: "astra", effort: "ultra" }, { cwd: "/c", lastMessage: "/m" });
-  assert.deepEqual(args, ["exec", "--ignore-user-config", "-m", "gpt-6.2-astra", "-c", "model_reasoning_effort=ultra", "-s", "workspace-write", "-c", "sandbox_workspace_write.network_access=true", "-C", "/c", "--json", "-o", "/m"]);
+  assert.deepEqual(args, ["exec", "--ignore-user-config", "-m", "gpt-6.2-astra", "-c", "model_reasoning_effort=ultra", "-c", "model_context_window=872000", "-s", "workspace-write", "-c", "sandbox_workspace_write.network_access=true", "-C", "/c", "--json", "-o", "/m"]);
 });
 
 test("the prompt is the brief, the task, then how it is judged", () => {
