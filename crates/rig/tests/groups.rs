@@ -94,7 +94,10 @@ fn said(effect: &PatchEffect) -> String {
         | EngineCommand::RemoveOutput { .. }
         | EngineCommand::Writers
         | EngineCommand::ReleaseColour { .. }
-        | EngineCommand::Runs { .. }) => format!("{other:?}"),
+        | EngineCommand::Runs { .. }
+        | EngineCommand::Start { .. }
+        | EngineCommand::Plan { .. }
+        | EngineCommand::Release { .. }) => format!("{other:?}"),
     };
     match effect {
         PatchEffect::Patched { fixture } => format!("patched {fixture}"),

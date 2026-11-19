@@ -25,8 +25,8 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use engine::{
-    API_VERSION, Begun, ChannelLevel, Command, Engine, Grouped, Patch, Patched, Project, Refusal,
-    Reply, Request, Sender, Snapshot, changes,
+    API_VERSION, Begun, ChannelLevel, Command, Engine, Grouped, Looks, Patch, Patched, Project,
+    Refusal, Reply, Request, Saved, Sender, Snapshot, changes,
 };
 use engine_core::{HeldLight, Library, ShowFile, held_lights, light_changes};
 use library::Shelf;
@@ -56,7 +56,7 @@ pub async fn serve(
         .map_or(ShowFile::None, |path| show::open(path, &mut sender));
     let (kept, shown) = watch::channel(opened);
     let (moments, taken) = mpsc::unbounded_channel();
-    let (patch, _) = watch::channel(sender.patch());
+    let (patch, _) = watch::channel(show::Kept::of(&sender));
     let keeper = show
         .filter(|_| opened.saves())
         .map(|path| tokio::spawn(show::keep(path, patch.subscribe(), kept, stop.subscribe())));
@@ -113,8 +113,8 @@ struct Api {
     /// The front after each change, in the order of the changes: the reader pairs each
     /// snapshot with the one it was taken under.
     moments: mpsc::UnboundedSender<Moment>,
-    /// The front's patch after the last command, for the show file.
-    patch: watch::Sender<Arc<Patch>>,
+    /// The front's patch and looks after the last command, for the show file.
+    patch: watch::Sender<show::Kept>,
     /// Turns true once, on `Stop`. Every connection and the server watch it.
     stop: watch::Sender<bool>,
     /// The newest picture, one per frame, the same for every connection.
@@ -130,6 +130,7 @@ struct Picture {
     library: Library,
     project: Project,
     patch: Arc<Patch>,
+    looks: Arc<Looks>,
     show: ShowFile,
 }
 
@@ -145,6 +146,7 @@ impl Picture {
             library: shelf.borrow().library(),
             project: moment.project,
             patch: Arc::clone(&moment.patch),
+            looks: Arc::clone(&moment.looks),
             show: *show.borrow(),
         }
     }
@@ -156,6 +158,7 @@ struct Moment {
     sent: u64,
     project: Project,
     patch: Arc<Patch>,
+    looks: Arc<Looks>,
 }
 
 impl Moment {
@@ -164,6 +167,7 @@ impl Moment {
             sent: sender.sent(),
             project: sender.project(),
             patch: sender.patch(),
+            looks: sender.looks(),
         }
     }
 }
@@ -301,8 +305,7 @@ async fn answer(
     };
     match request {
         Request::Send { command } => json(&match send(api, command).await {
-            Ok(Some(fixture)) => Reply::Patched { fixture },
-            Ok(None) => Reply::Accepted,
+            Ok(reply) => reply,
             Err(reason) => Reply::Refused { reason },
         }),
         Request::Query => picture(&pictures.borrow()),
@@ -326,8 +329,8 @@ async fn answer(
 
 /// Sends `command` to the front, with the library as it is read so far. A device it needs
 /// is opened on a thread of the blocking pool, without the front: every other client is
-/// answered meanwhile. The number of a patched fixture.
-async fn send(api: &Api, command: Command) -> Result<Option<u16>, Refusal> {
+/// answered meanwhile. The answer when it is taken.
+async fn send(api: &Api, command: Command) -> Result<Reply<'static>, Refusal> {
     let shelf = Arc::clone(&api.shelf.borrow());
     let begun = api
         .changing(|sender| sender.begin(command, shelf.fixtures()))
@@ -338,12 +341,13 @@ async fn send(api: &Api, command: Command) -> Result<Option<u16>, Refusal> {
                 Ok(opened) => api
                     .changing(|sender| sender.finish(opened))
                     .await
-                    .map(|()| None),
+                    .map(|()| Reply::Accepted),
                 Err(_) => Err(Refusal::CannotOpen), // the task was cancelled: the engine stops
             }
         }
-        Ok(Begun::Queued) => Ok(None),
-        Ok(Begun::Patched { fixture }) => Ok(Some(fixture)),
+        Ok(Begun::Queued) => Ok(Reply::Accepted),
+        Ok(Begun::Patched { fixture }) => Ok(Reply::Patched { fixture }),
+        Ok(Begun::Started { play }) => Ok(Reply::Started { play }),
         Err(reason) => Err(reason),
     }
 }
@@ -356,7 +360,7 @@ impl Api {
         let changed = change(&mut sender);
         // The reader is gone only once the server stops: nobody needs the moment then.
         let _ = self.moments.send(Moment::of(&sender));
-        self.patch.send_replace(sender.patch());
+        self.patch.send_replace(show::Kept::of(&sender));
         changed
     }
 }
@@ -369,6 +373,7 @@ fn picture(now: &Picture) -> Option<String> {
         library: now.library,
         patch: &now.patch.fixtures(),
         groups: &now.patch.groups(),
+        looks: &now.looks.all(),
         show: now.show,
         universes: now.snapshot.universes(),
         lights: &lights,
@@ -390,12 +395,15 @@ fn changed(
     let new = !Arc::ptr_eq(&last.patch, &now.patch);
     let fixtures: Option<Vec<Patched>> = new.then(|| now.patch.fixtures());
     let groups: Option<Vec<Grouped>> = new.then(|| now.patch.groups());
+    let looks: Option<Vec<Saved>> =
+        (!Arc::ptr_eq(&last.looks, &now.looks)).then(|| now.looks.all());
     let reply = json(&Reply::Changed {
         state: now.snapshot.state,
         project: now.project,
         library: now.library,
         patch: fixtures.as_deref(),
         groups: groups.as_deref(),
+        looks: looks.as_deref(),
         show: now.show,
         channels: &channels,
         lights: &lights,

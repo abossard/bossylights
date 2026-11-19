@@ -14,6 +14,7 @@ engine-core = { path = "../engine-core" }
 rt-thread = { path = "../rt-thread" }
 outputs = { path = "../outputs" }
 rig = { path = "../rig" }
+looks = { path = "../looks" }
 fixture-library = { path = "../fixture-library" }
 rtrb = "0.4.1"
 

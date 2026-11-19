@@ -834,6 +834,7 @@ version = "0.0.0"
 dependencies = [
  "engine-core",
  "fixture-library",
+ "looks",
  "outputs",
  "rig",
  "rt-thread",
@@ -1925,6 +1926,15 @@ name = "log"
 version = "0.4.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5d15f86d12da44cd8d4ec3c73984537eb7f4cadcb9776a575a0a8a05ca11005c"
+
+[[package]]
+name = "looks"
+version = "0.0.0"
+dependencies = [
+ "engine-core",
+ "fixture-library",
+ "rig",
+]
 
 [[package]]
 name = "mach2"
@@ -3216,6 +3226,7 @@ version = "0.0.0"
 dependencies = [
  "engine-core",
  "fixture-library",
+ "looks",
  "rig",
  "serde",
  "serde_json",

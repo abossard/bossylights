@@ -13,13 +13,16 @@
 //! | anything else | `{"Refused": {"reason": "NotACommand"}}` |
 
 use crate::library::{Failure, FixtureKind, Library, Match, ModeChannels, Text};
-use crate::{ChannelLevel, Command, Grouped, HeldLight, Levels, Patched, Project, ShowFile, State};
+use crate::{
+    ChannelLevel, Command, Grouped, HeldLight, Levels, Patched, PlayId, Project, Saved, ShowFile,
+    State,
+};
 use serde::{Deserialize, Serialize};
 
 /// The version of this API. `GET /version` answers it as text. A client that speaks
 /// another version does not talk to the engine. Raise it with every change a client of
 /// the old version would get wrong.
-pub const API_VERSION: u16 = 2;
+pub const API_VERSION: u16 = 3;
 
 /// What a client sends. A key it does not know, here or in any type it carries, refuses
 /// the request: a misspelled field would otherwise be ignored without a word.
@@ -63,6 +66,8 @@ pub enum Reply<'a> {
     Accepted,
     /// The fixture is patched as `fixture`; its writers are queued for the very next frame.
     Patched { fixture: u16 },
+    /// The look plays as `play` from the very next frame.
+    Started { play: PlayId },
     /// The engine stops: every connection closes, then the process ends.
     Stopping,
     /// The command was not taken. Nothing changed.
@@ -77,7 +82,9 @@ pub enum Reply<'a> {
         patch: &'a [Patched<'a>],
         /// Every group, in the order they were made.
         groups: &'a [Grouped<'a>],
-        /// Whether the patch and the groups are kept in a show file.
+        /// Every saved look, by number.
+        looks: &'a [Saved],
+        /// Whether the patch, the groups and the looks are kept in a show file.
         show: ShowFile,
         universes: &'a [Levels],
         /// Every light that holds a part, by number.
@@ -93,7 +100,9 @@ pub enum Reply<'a> {
         patch: Option<&'a [Patched<'a>]>,
         /// Every group when the patch changed since the last message, else `None`.
         groups: Option<&'a [Grouped<'a>]>,
-        /// Whether the patch and the groups are kept in a show file.
+        /// Every saved look when they changed since the last message, else `None`.
+        looks: Option<&'a [Saved]>,
+        /// Whether the patch, the groups and the looks are kept in a show file.
         show: ShowFile,
         channels: &'a [ChannelLevel],
         /// Every light whose held parts changed, as it holds them now: a part let go is
@@ -168,4 +177,12 @@ pub enum Refusal {
     TooManyMembers { most: u16 },
     /// Then the show file would be longer than its `most` bytes, and would not open.
     ShowFileFull { most: u32 },
+    /// No look is saved with that number.
+    NoSuchLook,
+    /// Look `look` uses it: a saved look's target, or a play of the look.
+    LookInUse { look: u16 },
+    /// At most `most` looks are saved.
+    TooManyLooks { most: u16 },
+    /// Every play slot is taken. Release a play first.
+    PlayFull,
 }

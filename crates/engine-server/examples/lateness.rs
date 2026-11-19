@@ -179,7 +179,7 @@ fn patch(sender: &mut Sender, lights: Lights) -> Result<(), String> {
         // A full queue empties within a wake: send again.
         loop {
             match sender.begin(command, &library) {
-                Ok(Begun::Queued | Begun::Patched { .. }) => return Ok(()),
+                Ok(Begun::Queued | Begun::Patched { .. } | Begun::Started { .. }) => return Ok(()),
                 Err(Refusal::QueueFull) => thread::sleep(Duration::from_millis(1)),
                 Ok(Begun::Opening(_)) => return Err("a light opened a device".to_string()),
                 Err(refused) => return Err(format!("light {n}: refused: {refused:?}")),

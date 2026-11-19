@@ -27,6 +27,8 @@ function refusalText(refusal: Refusal): string {
   if ("TooManyMembers" in refusal) return `TooManyMembers: a group has at most ${refusal.TooManyMembers.most}`;
   if ("Overlaps" in refusal) return `Overlaps: on a channel of fixture ${refusal.Overlaps.fixture}`;
   if ("ShowFileFull" in refusal) return `ShowFileFull: the show file has at most ${refusal.ShowFileFull.most} bytes`;
+  if ("LookInUse" in refusal) return `LookInUse: look ${refusal.LookInUse.look} uses it`;
+  if ("TooManyLooks" in refusal) return `TooManyLooks: at most ${refusal.TooManyLooks.most} looks`;
   return `TooManyUniverses: this kind takes at most ${refusal.TooManyUniverses.most}`;
 }
 

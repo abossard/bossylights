@@ -418,7 +418,19 @@ impl Patch {
         target: Target,
         change: LightChange,
     ) -> Result<(Option<Self>, Vec<PatchEffect>), Refusal> {
-        let runs = match target {
+        let runs = self.runs(target)?;
+        let effects = match runs.as_slice() {
+            [] => vec![],
+            [run] => vec![PatchEffect::Send(change.on(*run))],
+            [_, _, ..] => vec![PatchEffect::Runs { change, runs }],
+        };
+        Ok((None, effects))
+    }
+
+    /// The lights `target` names: one run for a light or a fixture, the fewest runs for a
+    /// group, lowest first. Refused when it names nothing patched.
+    pub fn runs(&self, target: Target) -> Result<Vec<LightRun>, Refusal> {
+        Ok(match target {
             Target::Light { light } => vec![self.member(Member::Light { light })?],
             Target::Fixture { fixture } => vec![self.member(Member::Fixture { fixture })?],
             Target::Group { group } => {
@@ -434,13 +446,7 @@ impl Patch {
                     .collect::<Result<Vec<_>, _>>()?;
                 self.joined(runs)
             }
-        };
-        let effects = match runs.as_slice() {
-            [] => vec![],
-            [run] => vec![PatchEffect::Send(change.on(*run))],
-            [_, _, ..] => vec![PatchEffect::Runs { change, runs }],
-        };
-        Ok((None, effects))
+        })
     }
 
     /// `runs` as the fewest runs that hold the same lights, lowest first.

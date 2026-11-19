@@ -2,7 +2,7 @@
 //! one save at a time on the blocking pool, never on the tick thread. What the file
 //! holds: the `show-file` crate.
 
-use engine::{Patch, Sender};
+use engine::{Looks, Patch, Sender};
 use engine_core::{ShowFile, Unopened};
 use std::fs::{self, File};
 use std::io::{self, ErrorKind, Read, Write};
@@ -16,6 +16,7 @@ use tokio::sync::watch;
 /// is refused. A file that cannot be opened is left alone, and the patch stays empty.
 /// Reads at most one byte over [`show_file::MOST_BYTES`]: enough for `read` to say the
 /// file is too big, never a file of gigabytes.
+/// The looks of the file come after its patch, checked against it.
 pub fn open(path: &Path, sender: &mut Sender) -> ShowFile {
     let mut text = String::new();
     let most = u64::try_from(show_file::MOST_BYTES).unwrap_or(u64::MAX);
@@ -23,12 +24,15 @@ pub fn open(path: &Path, sender: &mut Sender) -> ShowFile {
     let read = match File::open(path).and_then(|file| file.take(most + 1).read_to_string(&mut text))
     {
         Ok(_) => show_file::read(&text, &empty),
-        Err(error) if error.kind() == ErrorKind::NotFound => Ok(Patch::clone(&empty)),
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            Ok((Patch::clone(&empty), Looks::new()))
+        }
         Err(_) => Err(Unopened::CannotRead),
     };
-    let opened = read.and_then(|patch| {
+    let opened = read.and_then(|(patch, looks)| {
         sender
             .load(patch.kept_in(show_file::LIMIT))
+            .and_then(|()| sender.load_looks(looks))
             .map_err(|reason| Unopened::Refused { reason })
     });
     match opened {
@@ -37,26 +41,47 @@ pub fn open(path: &Path, sender: &mut Sender) -> ShowFile {
     }
 }
 
-/// Saves the patch to `path` after every change, while `state` says the file is saved.
+/// What the show file keeps: the front's patch and looks after a change.
+#[derive(Clone)]
+pub struct Kept {
+    patch: Arc<Patch>,
+    looks: Arc<Looks>,
+}
+
+impl Kept {
+    pub fn of(sender: &Sender) -> Self {
+        Self {
+            patch: sender.patch(),
+            looks: sender.looks(),
+        }
+    }
+
+    fn same(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.patch, &other.patch) && Arc::ptr_eq(&self.looks, &other.looks)
+    }
+}
+
+/// Saves the patch and the looks to `path` after every change, while `state` says the file is saved.
 /// A change made while a save runs is saved after it. Once `stopped`, saves the last
 /// change and ends.
 pub async fn keep(
     path: PathBuf,
-    mut patches: watch::Receiver<Arc<Patch>>,
+    mut patches: watch::Receiver<Kept>,
     state: watch::Sender<ShowFile>,
     mut stopped: watch::Receiver<bool>,
 ) {
-    let mut saved = Arc::clone(&patches.borrow_and_update());
+    let mut saved = patches.borrow_and_update().clone();
     loop {
         let stopping = tokio::select! {
             changed = patches.changed() => changed.is_err(),
             _ = stopped.wait_for(|stop| *stop) => true,
         };
-        let now = Arc::clone(&patches.borrow_and_update());
-        if !Arc::ptr_eq(&now, &saved) && state.borrow().saves() {
-            let (path, patch) = (path.clone(), Arc::clone(&now));
+        let now = patches.borrow_and_update().clone();
+        if !now.same(&saved) && state.borrow().saves() {
+            let (path, kept) = (path.clone(), now.clone());
             let whole = tokio::task::spawn_blocking(move || {
-                show_file::write(&patch).is_some_and(|text| save(&path, &text).is_ok())
+                show_file::write(&kept.patch, &kept.looks)
+                    .is_some_and(|text| save(&path, &text).is_ok())
             })
             .await
             .unwrap_or(false);

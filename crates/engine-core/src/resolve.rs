@@ -95,7 +95,7 @@ impl LightRun {
     }
 
     /// These lights of `lights`, the values by number. Fewer when `lights` is shorter.
-    pub fn of(self, lights: &mut [Light]) -> &mut [Light] {
+    pub fn of<T>(self, lights: &mut [T]) -> &mut [T] {
         let first = usize::from(self.first).min(lights.len());
         let end = (first + usize::from(self.count)).min(lights.len());
         lights.get_mut(first..end).unwrap_or_default()

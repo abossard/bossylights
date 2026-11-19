@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 
 /// What a light command names: one light, every light of a fixture, or every member of a
 /// group. Counted from 1, as a client sends them. Not checked yet.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub enum Target {

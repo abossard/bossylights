@@ -15,7 +15,7 @@ use crate::{
     EngineCommand, Histogram, LATENCY_BUCKETS, LATENESS_BUCKETS, Levels, MAX_LIGHTS, MAX_OUTPUTS,
     MAX_UNIVERSES, OutputNumber, Priority, State, Universes, bucket, percentile, update,
 };
-use engine_core::{ChannelSet, Light};
+use engine_core::{ChannelSet, Entry, Held, Light, show};
 use std::thread;
 use std::time::Duration;
 
@@ -36,8 +36,12 @@ pub struct Snapshot {
     held: [Levels; MAX_UNIVERSES as usize],
     /// Which raw channels are held.
     holds: [ChannelSet; MAX_UNIVERSES as usize],
-    /// The held values per light, by light number: [`MAX_LIGHTS`] of them.
+    /// What each light shows, by light number: [`MAX_LIGHTS`] of them, its direct holds
+    /// and the plays mixed.
     lights: Box<[Light]>,
+    /// The direct holds per light, by light number: [`MAX_LIGHTS`] of them. The tick
+    /// thread's own: no reader reads them, so [`Snapshot::copy_to`] leaves them.
+    grabs: Box<[Held]>,
     /// How late each output's device was handed its frames, since it was attached.
     lateness: [Times<LATENESS_BUCKETS>; MAX_OUTPUTS],
     /// Frames handed to each output's own thread, since it was attached.
@@ -65,6 +69,7 @@ impl Snapshot {
             held: [Levels::ZERO; MAX_UNIVERSES as usize],
             holds: [ChannelSet::NONE; MAX_UNIVERSES as usize],
             lights: vec![Light::DARK; usize::from(MAX_LIGHTS)].into_boxed_slice(),
+            grabs: vec![Held::NONE; usize::from(MAX_LIGHTS)].into_boxed_slice(),
             lateness: [Times::ZERO; MAX_OUTPUTS],
             handed: [0; MAX_OUTPUTS],
             latency: Times::ZERO,
@@ -129,6 +134,7 @@ impl Snapshot {
             held,
             holds,
             lights,
+            grabs: _,
             lateness,
             handed,
             latency,
@@ -157,7 +163,13 @@ impl Snapshot {
         let count = usize::from(self.universes.count());
         let held = self.held.get_mut(..count).unwrap_or_default();
         let holds = self.holds.get_mut(..count).unwrap_or_default();
-        self.state = update(self.state, held, holds, &mut self.lights, command);
+        self.state = update(self.state, held, holds, &mut self.grabs, command);
+    }
+
+    /// What each light shows now: its direct holds and the plays, `plan` giving each
+    /// play's entries by slot.
+    pub(crate) fn show<'a>(&mut self, plan: impl Fn(usize) -> &'a [Entry]) {
+        show(&self.grabs, &self.state.plays, plan, &mut self.lights);
     }
 
     /// A frame of `output` was handed over this late.

@@ -1,0 +1,17 @@
+[package]
+name = "looks"
+description = "Saved looks: checked against the patch and compiled into plans for the core. A calculation, off the tick thread."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+engine-core = { path = "../engine-core" }
+rig = { path = "../rig" }
+
+[dev-dependencies]
+fixture-library = { path = "../fixture-library" }

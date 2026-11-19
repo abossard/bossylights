@@ -19,9 +19,11 @@ mod channel;
 mod kinds;
 mod library;
 mod mix;
+pub use mix::{Held, show, wins};
 use mix::{Want, mix};
 mod output;
 mod patch;
+mod playback;
 mod project;
 mod property;
 mod resolve;
@@ -43,6 +45,7 @@ pub use output::{
 pub use patch::{
     Grouped, Layout, Member, MemberList, Members, PatchCommand, Patched, Pixels, Target,
 };
+pub use playback::{Entry, LOOKS, LookCommand, PLAYS, Play, PlayId, Plays, Saved, Step};
 pub use project::{Project, ProjectEffect, ProjectEvent, ProjectOutput};
 pub use property::{Gobo, Light, Position, Property, Rgb};
 pub use resolve::{
@@ -76,6 +79,13 @@ pub struct State {
     #[serde(skip)]
     #[cfg_attr(test, ts(skip))]
     pub beat: Duration,
+    /// The looks playing, by slot.
+    #[cfg_attr(test, ts(type = "Array<Play>"))]
+    pub plays: Plays,
+    /// The start order the next hold or play takes: a later start wins.
+    #[serde(skip)]
+    #[cfg_attr(test, ts(skip))]
+    pub order: u64,
 }
 
 impl State {
@@ -88,6 +98,8 @@ impl State {
             outputs: [None; MAX_OUTPUTS],
             now: Duration::ZERO,
             beat: BEAT,
+            plays: Plays::NONE,
+            order: 1,
         }
     }
 }
@@ -206,6 +218,22 @@ pub enum Command {
         #[cfg_attr(test, ts(type = "string"))]
         name: Text,
     },
+    /// Save `step` as look `look` named `name`, in place of the one saved there. A
+    /// playing look shows the new step in the next frame and keeps its start.
+    PutStep {
+        look: u16,
+        #[cfg_attr(test, ts(type = "string"))]
+        name: Text,
+        step: Step,
+    },
+    /// Remove a saved look that no play uses. Nothing happens if there is none.
+    RemoveLook { look: u16 },
+    /// Play a saved look at Manual rank: answered `Started` with its play. A look playing
+    /// already starts afresh, as the latest start.
+    StartLook { look: u16 },
+    /// End a play: what it held shows what is underneath in the next frame. An ended
+    /// play is a harmless no-op.
+    ReleaseHold { play: PlayId },
 }
 
 /// What changes the state on the tick thread. The front makes these from a checked
@@ -279,6 +307,20 @@ pub enum EngineCommand {
     Runs {
         change: LightChange,
     },
+    /// `play` of `look` starts in its slot, in place of the play there. Its plan arrives
+    /// with this command and takes the place of the slot's plan.
+    Start {
+        play: PlayId,
+        look: u16,
+    },
+    /// The plan of `play` arrives with this command: the play keeps its start order.
+    Plan {
+        play: PlayId,
+    },
+    /// `play` ends; its plan goes back to be freed.
+    Release {
+        play: PlayId,
+    },
 }
 
 /// What a light command does to each light it names, without naming them.
@@ -319,9 +361,13 @@ pub fn update(
     state: State,
     universes: &mut [Levels],
     holds: &mut [ChannelSet],
-    lights: &mut [Light],
+    lights: &mut [Held],
     command: EngineCommand,
 ) -> State {
+    let held = State {
+        order: state.order.saturating_add(1),
+        ..state
+    };
     match command {
         EngineCommand::Tick { now } => State {
             frame: state.frame.wrapping_add(1),
@@ -394,15 +440,19 @@ pub fn update(
             blackout: on,
             ..state
         },
-        EngineCommand::Writers | EngineCommand::Runs { .. } => state,
+        EngineCommand::Writers | EngineCommand::Runs { .. } | EngineCommand::Plan { .. } => state,
         EngineCommand::SetIntensity {
             lights: run,
             intensity,
         } => {
+            let value = Light {
+                intensity: Some(intensity),
+                ..Light::DARK
+            };
             for light in run.of(lights) {
-                light.intensity = Some(intensity);
+                light.hold(Property::Intensity, &value, state.order);
             }
-            state
+            held
         }
         EngineCommand::SetColour {
             lights: run,
@@ -410,26 +460,40 @@ pub fn update(
             green,
             blue,
         } => {
+            let value = Light {
+                colour: Some(Rgb { red, green, blue }),
+                ..Light::DARK
+            };
             for light in run.of(lights) {
-                light.colour = Some(Rgb { red, green, blue });
+                light.hold(Property::Colour, &value, state.order);
             }
-            state
+            held
         }
         EngineCommand::ReleaseIntensity { lights: run } => {
             for light in run.of(lights) {
-                light.intensity = None;
+                light.release(Property::Intensity);
             }
             state
         }
         EngineCommand::ReleaseColour { lights: run } => {
             for light in run.of(lights) {
-                light.colour = None;
+                light.release(Property::Colour);
             }
             state
         }
         EngineCommand::Darken { lights: run } => {
-            run.of(lights).fill(Light::DARK);
+            run.of(lights).fill(Held::NONE);
             state
+        }
+        EngineCommand::Start { play, look } => {
+            let mut plays = state.plays;
+            plays.start(play, look, state.order);
+            State { plays, ..held }
+        }
+        EngineCommand::Release { play } => {
+            let mut plays = state.plays;
+            plays.release(play);
+            State { plays, ..state }
         }
     }
 }
@@ -807,14 +871,24 @@ mod tests {
             ([dark; 4], black(run(0, 4)), [dark; 4]),
         ];
         for (before, command, after) in cases {
-            let mut lights = before;
+            let mut lights = before.map(|values| {
+                let mut held = Held::NONE;
+                for property in Property::ALL.into_iter().filter(|p| values.has(*p)) {
+                    held.hold(property, &values, 1);
+                }
+                held
+            });
             let (mut universes, mut holds) = raw(&[(1, 1, 5)]);
+            let state = update(CALM, &mut universes, &mut holds, &mut lights, command);
             assert_eq!(
-                update(CALM, &mut universes, &mut holds, &mut lights, command),
+                State {
+                    order: CALM.order,
+                    ..state
+                },
                 CALM,
                 "{command:?}"
             );
-            assert_eq!(lights, after, "{command:?}");
+            assert_eq!(lights.map(|held| held.values), after, "{command:?}");
             assert_eq!((universes, holds), raw(&[(1, 1, 5)]), "{command:?}");
         }
     }
@@ -1377,6 +1451,13 @@ mod tests {
                 ChannelLevel::decl(&config),
                 HeldLight::decl(&config),
                 Rgb::decl(&config),
+                Light::decl(&config),
+                Position::decl(&config),
+                Gobo::decl(&config),
+                Step::decl(&config),
+                Saved::decl(&config),
+                PlayId::decl(&config),
+                Play::decl(&config),
                 Output::decl(&config),
                 Run::decl(&config),
                 Status::decl(&config),

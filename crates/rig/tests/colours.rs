@@ -3,7 +3,7 @@
 mod common;
 
 use common::{at, light, lights, mode};
-use engine_core::{Levels, Light, Rgb, Universes, resolve};
+use engine_core::{Held, Levels, Light, Rgb, Universes, resolve};
 use rig::compile;
 
 const FULL: u16 = u16::MAX;
@@ -247,14 +247,14 @@ fn a_part_not_held_is_the_definition_default() {
         ),
     ];
     for (name, commands, expected) in cases {
-        let mut shown = [Light::DARK];
+        let mut shown = [Held::NONE];
         let (mut universes, mut holds) = ([Levels::ZERO], [ChannelSet::NONE]);
         let mut state = State::new(Priority::RealTime);
         for command in commands {
             state = update(state, &mut universes, &mut holds, &mut shown, command);
         }
         let mut out = [Levels::ZERO];
-        resolve(&shown, &rigged.writers, &mut out);
+        resolve(&[shown[0].values], &rigged.writers, &mut out);
         assert_eq!(out[0].0[36..40], expected, "{name}");
     }
 }

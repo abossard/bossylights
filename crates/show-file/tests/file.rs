@@ -2,10 +2,11 @@
 //! check of the commands is not read; one change of a fixture is one line.
 
 use engine_core::{
-    ChannelNumbers, Color, Lights, Member, Members, PatchCommand, Pixels, Refusal, Text, Universes,
-    Unopened,
+    ChannelNumbers, Color, Gobo, Light, Lights, Member, Members, PatchCommand, Pixels, Position,
+    Refusal, Rgb, Saved, Target, Text, Universes, Unopened,
 };
 use fixture_library::{Fixture, parse};
+use looks::Looks;
 use rig::{Patch, Whole};
 use std::path::Path;
 
@@ -154,38 +155,38 @@ fn a_patch_written_and_read_back_is_the_same_patch() {
     ];
     for (case, commands) in cases {
         let patch = patched(commands);
-        let file = show_file::write(&patch).unwrap();
-        let read = show_file::read(&file, &empty())
-            .unwrap_or_else(|why| panic!("{case}: {why:?}\n{file}"));
+        let file = write(&patch).unwrap();
+        let read = read(&file, &empty()).unwrap_or_else(|why| panic!("{case}: {why:?}\n{file}"));
         assert_eq!(read, patch, "{case}\n{file}");
-        assert_eq!(
-            show_file::write(&read).unwrap(),
-            file,
-            "{case}: written again"
-        );
+        assert_eq!(write(&read).unwrap(), file, "{case}: written again");
     }
 }
 
 #[test]
 fn a_file_that_fails_a_check_of_the_commands_is_not_read() {
     let two = patched(vec![lib(par("PAR 1", 1)), lib(par("PAR 2", 4))]);
-    let file = show_file::write(&two).unwrap();
+    let file = write(&two).unwrap();
     let row1 = r#"{"fixture":1,"name":"PAR 1","mode":"Generic / Generic RGB / RGB","at":{"universe":1,"address":1},"first":1}"#;
     let row2 = r#"{"fixture":2,"name":"PAR 2","mode":"Generic / Generic RGB / RGB","at":{"universe":1,"address":4},"first":2}"#;
     assert!(file.contains(row1) && file.contains(row2), "{file}");
     let long = "x".repeat(Text::MOST + 1);
+    let version = format!("\"version\": {}", show_file::VERSION);
+    let newer = format!("\"version\": {}", show_file::VERSION + 1);
+    let versioned = format!("{version},\n");
     let refused = |reason| Unopened::Refused { reason };
     // (case, what is replaced, by what, why the file is not read)
     let cases = [
         (
             "a newer version",
-            r#""version": 1"#,
-            r#""version": 2"#,
-            Unopened::Newer { version: 2 },
+            version.as_str(),
+            newer.as_str(),
+            Unopened::Newer {
+                version: show_file::VERSION + 1,
+            },
         ),
         (
             "version 0",
-            r#""version": 1"#,
+            version.as_str(),
             r#""version": 0"#,
             Unopened::Broken {
                 line: 2,
@@ -194,10 +195,10 @@ fn a_file_that_fails_a_check_of_the_commands_is_not_read() {
         ),
         (
             "no version",
-            "\"version\": 1,\n",
+            versioned.as_str(),
             "",
             Unopened::Broken {
-                line: 45,
+                line: 46,
                 column: 1,
             },
         ),
@@ -302,7 +303,7 @@ fn a_file_that_fails_a_check_of_the_commands_is_not_read() {
         .into_iter()
         .filter_map(|(case, from, to, why)| {
             assert!(file.contains(from), "{case}: {from}");
-            let read = show_file::read(&file.replacen(from, to, 1), &empty());
+            let read = read(&file.replacen(from, to, 1), &empty());
             (read != Err(why)).then(|| format!("{case}: {read:?}, wanted {why:?}"))
         })
         .collect();
@@ -334,10 +335,10 @@ fn a_change_of_one_fixture_is_one_line_of_the_file() {
         ),
         ("group", group("front", &[f(3), f(1), f(2)])),
     ];
-    let old = show_file::write(&before).unwrap();
+    let old = write(&before).unwrap();
     for (case, command) in cases {
         let (after, _) = before.update(command, &[]).unwrap();
-        let new = show_file::write(&after.unwrap()).unwrap();
+        let new = write(&after.unwrap()).unwrap();
         let changed = old.lines().zip(new.lines()).filter(|(a, b)| a != b).count();
         assert_eq!(old.lines().count(), new.lines().count(), "{case}\n{new}");
         assert_eq!(changed, 1, "{case}\n{new}");
@@ -356,9 +357,9 @@ fn par_with_a_longer_name(extra: usize) -> Patch {
 #[test]
 fn a_file_of_the_most_bytes_is_written_and_read_and_one_byte_more_is_neither() {
     let most = show_file::MOST_BYTES;
-    let short = show_file::write(&par_with_a_longer_name(0)).unwrap().len();
+    let short = write(&par_with_a_longer_name(0)).unwrap().len();
     let at_most = par_with_a_longer_name(most - short);
-    let file = show_file::write(&at_most).unwrap();
+    let file = write(&at_most).unwrap();
     assert_eq!(file.len(), most);
     let too_big = Unopened::TooBig {
         most: u32::try_from(most).unwrap(),
@@ -371,21 +372,22 @@ fn a_file_of_the_most_bytes_is_written_and_read_and_one_byte_more_is_neither() {
     for (case, over, written, read) in cases {
         let patch = par_with_a_longer_name(most - short + over);
         assert_eq!(
-            show_file::write(&patch).map(|text| text.len()),
+            write(&patch).map(|text| text.len()),
             written,
             "{case}: written"
         );
         // the file at the most, and spaces after it
         let text = format!("{file}{}", " ".repeat(over));
-        assert_eq!(show_file::read(&text, &empty()), read, "{case}: read");
+        assert_eq!(crate::read(&text, &empty()), read, "{case}: read");
     }
 }
 
 #[test]
 fn a_patch_kept_in_its_file_refuses_the_command_that_would_take_the_file_over_the_most() {
-    let most = show_file::MOST_BYTES;
-    let short = show_file::write(&par_with_a_longer_name(0)).unwrap().len();
-    let none = show_file::write(&empty()).unwrap().len();
+    // the patch leaves the room every look may take
+    let most = show_file::LIMIT.most;
+    let short = write(&par_with_a_longer_name(0)).unwrap().len();
+    let none = write(&empty()).unwrap().len();
     // the file at the most, with the PAR named "PAR 1"
     let full = par_with_a_longer_name(most - short).kept_in(show_file::LIMIT);
     let rename = |name: &str| PatchCommand::Rename {
@@ -408,8 +410,8 @@ fn a_patch_kept_in_its_file_refuses_the_command_that_would_take_the_file_over_th
         let after = full.update(command, &library());
         let file = after.map(|(patch, _)| {
             let patch = patch.unwrap();
-            let file = show_file::write(&patch).unwrap();
-            let read = show_file::read(&file, &empty()).unwrap();
+            let file = write(&patch).unwrap();
+            let read = read(&file, &empty()).unwrap();
             assert_eq!(read.kept_in(show_file::LIMIT), patch, "{case}: read back");
             file.len()
         });
@@ -420,8 +422,8 @@ fn a_patch_kept_in_its_file_refuses_the_command_that_would_take_the_file_over_th
 #[test]
 fn a_file_under_the_most_whose_patch_is_written_back_over_it_is_not_read() {
     let most = show_file::MOST_BYTES;
-    let short = show_file::write(&par_with_a_longer_name(0)).unwrap().len();
-    let full = show_file::write(&par_with_a_longer_name(most - short)).unwrap();
+    let short = write(&par_with_a_longer_name(0)).unwrap().len();
+    let full = write(&par_with_a_longer_name(most - short)).unwrap();
     // one byte more in the name, two spaces less before "patch": the file is under the
     // most, its patch is written one byte over it
     let packed = full
@@ -431,7 +433,7 @@ fn a_file_under_the_most_whose_patch_is_written_back_over_it_is_not_read() {
     let too_big = Unopened::TooBig {
         most: u32::try_from(most).unwrap(),
     };
-    assert_eq!(show_file::read(&packed, &empty()), Err(too_big));
+    assert_eq!(read(&packed, &empty()), Err(too_big));
 }
 
 static ENCODED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -484,8 +486,174 @@ fn a_definition_is_encoded_once_when_patched_and_no_change_after_it_encodes_a_mo
         patch = step(&patch, command);
         assert_eq!(ENCODED.load(SeqCst), 1, "{case}: encoded nothing");
     }
-    let plain = show_file::write(&patch).unwrap();
+    let plain = write(&patch).unwrap();
     let same = ["PAR 2", "front"].iter().all(|n| plain.contains(n));
     assert!(same, "the file has the changes");
     assert!(show_file::LIMIT.most >= plain.len());
+}
+
+/// The text of `patch` with no looks.
+fn write(patch: &Patch) -> Option<String> {
+    show_file::write(patch, &Looks::new())
+}
+
+/// The patch of `text`; its looks are tested in `looks.rs`.
+fn read(text: &str, empty: &Patch) -> Result<Patch, Unopened> {
+    show_file::read(text, empty).map(|(patch, _)| patch)
+}
+
+fn saved(look: u16, target: Target, values: Light) -> Saved {
+    Saved {
+        look,
+        name: text("red"),
+        step: engine_core::Step { target, values },
+    }
+}
+
+const RED: Light = Light {
+    colour: Some(Rgb {
+        red: u16::MAX,
+        green: 0,
+        blue: 0,
+    }),
+    ..Light::DARK
+};
+
+#[test]
+fn looks_written_and_read_back_are_the_same_looks() {
+    let patch = patched(vec![lib(par("PAR 1", 1))]);
+    let fixture = Target::Fixture { fixture: 1 };
+    let zero = Light {
+        intensity: Some(0),
+        colour: Some(Rgb {
+            red: 0,
+            green: 0,
+            blue: 0,
+        }),
+        ..Light::DARK
+    };
+    // (case, looks)
+    let cases = [
+        ("none", vec![]),
+        ("red", vec![saved(1, fixture, RED)]),
+        ("zero and black", vec![saved(7, fixture, zero)]),
+        (
+            "a rest",
+            vec![saved(2, Target::Light { light: 1 }, Light::DARK)],
+        ),
+        ("two", vec![saved(9, fixture, RED), saved(1, fixture, zero)]),
+    ];
+    for (case, all) in cases {
+        let looks = all
+            .iter()
+            .try_fold(Looks::new(), |looks, saved| looks.put(*saved, &patch))
+            .unwrap();
+        let file = show_file::write(&patch, &looks).unwrap();
+        let (_, read) = show_file::read(&file, &empty()).unwrap();
+        assert_eq!(read, looks, "{case}");
+    }
+}
+
+#[test]
+fn a_file_of_version_1_has_no_looks() {
+    let patch = patched(vec![lib(par("PAR 1", 1))]);
+    let v2 = show_file::write(&patch, &Looks::new()).unwrap();
+    let v1 = v2
+        .replacen(r#""version": 2"#, r#""version": 1"#, 1)
+        .replacen("  \"looks\": [],\n", "", 1);
+    assert_ne!(v1, v2);
+    assert_eq!(show_file::read(&v1, &empty()), Ok((patch, Looks::new())));
+}
+
+#[test]
+fn a_look_the_patch_refuses_is_not_read() {
+    let patch = patched(vec![lib(par("PAR 1", 1))]);
+    let looks = Looks::new()
+        .put(saved(1, Target::Fixture { fixture: 1 }, RED), &patch)
+        .unwrap();
+    let file = show_file::write(&patch, &looks).unwrap();
+    let refused = |reason| Err(Unopened::Refused { reason });
+    let row = r#"{"look":1,"name":"red","step":{"target":{"Fixture":{"fixture":1}}"#;
+    assert!(file.contains(row), "{file}");
+    let whole = file.lines().find(|line| line.contains(row)).unwrap().trim();
+    // (case, the look's line becomes, why the file is not read)
+    let cases = [
+        (
+            "a fixture not patched",
+            row.replace("\"fixture\":1}", "\"fixture\":2}"),
+            refused(Refusal::NotPatched),
+        ),
+        (
+            "a group there is none of",
+            row.replace(
+                r#"{"Fixture":{"fixture":1}}"#,
+                r#"{"Group":{"group":"front"}}"#,
+            ),
+            refused(Refusal::NoSuchGroup),
+        ),
+        (
+            "two of one number",
+            format!("{whole},\n    {row}"),
+            refused(Refusal::LookInUse { look: 1 }),
+        ),
+    ];
+    for (case, to, why) in cases {
+        let read = show_file::read(&file.replacen(row, &to, 1), &empty());
+        assert_eq!(read.map(|_| ()), why, "{case}");
+    }
+}
+
+#[test]
+fn a_file_whose_version_2_is_one_byte_over_the_most_is_not_read() {
+    let most = show_file::MOST_BYTES;
+    let too_big = Err(Unopened::TooBig {
+        most: u32::try_from(most).unwrap(),
+    });
+    let short = write(&par_with_a_longer_name(0)).unwrap().len();
+    let at_most = write(&par_with_a_longer_name(most - short)).unwrap();
+    assert_eq!(at_most.len(), most);
+    assert!(read(&at_most, &empty()).is_ok());
+    // one byte longer: as it is, and as version 1, which is shorter on disk but is
+    // written back as version 2
+    let over = at_most.replacen("\"name\": \"Red", "\"name\": \"Redx", 1);
+    assert_eq!(over.len(), most + 1);
+    let v1 = over
+        .replacen(r#""version": 2"#, r#""version": 1"#, 1)
+        .replacen("  \"looks\": [],\n", "", 1);
+    assert!(v1.len() <= most, "{}", v1.len());
+    assert_eq!(read(&over, &empty()), too_big);
+    assert_eq!(read(&v1, &empty()), too_big);
+}
+
+#[test]
+fn the_longest_look_fits_its_room() {
+    let escaped = "\u{1}".repeat(Text::MOST);
+    let longest = Saved {
+        look: u16::MAX,
+        name: text(&escaped),
+        step: engine_core::Step {
+            target: Target::Group {
+                group: text(&escaped),
+            },
+            values: Light {
+                intensity: Some(u16::MAX),
+                colour: Some(Rgb {
+                    red: u16::MAX,
+                    green: u16::MAX,
+                    blue: u16::MAX,
+                }),
+                position: Some(Position {
+                    pan: u16::MAX,
+                    tilt: u16::MAX,
+                }),
+                zoom: Some(u16::MAX),
+                gobo: Some(Gobo {
+                    wheel: u8::MAX,
+                    slot: u8::MAX,
+                }),
+            },
+        },
+    };
+    let line = serde_json::to_string(&longest).unwrap();
+    assert!(line.len() <= show_file::LOOK_MOST, "{}", line.len());
 }

@@ -16,8 +16,8 @@
 //! ```
 
 use crate::{
-    Command, EngineCommand, MAX_OUTPUTS, MemberList, Members, OutputKind, OutputNumber,
-    PatchCommand, Rate, Refusal, Run, Universes,
+    Command, EngineCommand, LookCommand, MAX_OUTPUTS, MemberList, Members, OutputKind,
+    OutputNumber, PatchCommand, Rate, Refusal, Run, Universes,
 };
 use serde::Serialize;
 
@@ -85,6 +85,8 @@ pub enum ProjectEffect {
     Send(EngineCommand),
     /// The patch checks this and says what follows (`crates/rig`).
     Patch(PatchCommand),
+    /// The saved looks and the plays check this and say what follows (`crates/looks`).
+    Look(LookCommand),
     /// The output keeps its device: only its run and rate change.
     Keep {
         output: OutputNumber,
@@ -212,6 +214,26 @@ impl Project {
                     }),
                 },
                 Command::RemoveGroup { name } => patch(PatchCommand::RemoveGroup { name }),
+                Command::PutStep { look, name, step } => Ok((
+                    self,
+                    Some(ProjectEffect::Look(LookCommand::PutStep {
+                        look,
+                        name,
+                        step,
+                    })),
+                )),
+                Command::RemoveLook { look } => Ok((
+                    self,
+                    Some(ProjectEffect::Look(LookCommand::RemoveLook { look })),
+                )),
+                Command::StartLook { look } => Ok((
+                    self,
+                    Some(ProjectEffect::Look(LookCommand::StartLook { look })),
+                )),
+                Command::ReleaseHold { play } => Ok((
+                    self,
+                    Some(ProjectEffect::Look(LookCommand::ReleaseHold { play })),
+                )),
                 Command::RemoveOutput { output } => {
                     self.idle(output)?;
                     let project = self.with(output, |slot, _| *slot = None);

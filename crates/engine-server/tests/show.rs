@@ -259,8 +259,11 @@ async fn a_file_the_engine_cannot_open_is_left_alone_and_the_picture_says_why() 
     let cases = [
         (
             "newer",
-            r#"{"version": 2, "patch": [], "outputs": []}"#.to_string(),
-            json!({"Newer": {"version": 2}}),
+            format!(
+                r#"{{"version": {}, "patch": [], "outputs": []}}"#,
+                show_file::VERSION + 1
+            ),
+            json!({"Newer": {"version": show_file::VERSION + 1}}),
         ),
         (
             "broken",
@@ -429,9 +432,10 @@ async fn a_change_that_would_take_the_file_over_the_most_is_refused_and_the_file
         json!({"Patched": {"fixture": 1}})
     );
     stop(&mut socket, &mut first).await;
-    // the red channel's name longer, so the file is at the most
+    // the red channel's name longer, so the patch is at the most it may take: the rest
+    // of the file is the room the looks may take
     let text = std::fs::read_to_string(&file).unwrap();
-    let most = show_file::MOST_BYTES;
+    let most = show_file::LIMIT.most;
     let red = "\"name\": \"Red\"";
     assert!(text.contains(red), "{text}");
     let longer = format!("\"name\": \"Red{}\"", "x".repeat(most - text.len()));
