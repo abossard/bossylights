@@ -30,11 +30,12 @@ use engine::{
 };
 use engine_core::{Library, ShowFile};
 use library::Shelf;
+use std::collections::VecDeque;
 use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::net::TcpListener;
-use tokio::sync::{Mutex, watch};
+use tokio::sync::{Mutex, mpsc, watch};
 use tokio::time::MissedTickBehavior;
 
 /// Serves the API on `listener` until a client sends `Stop`. Then every connection is
@@ -54,21 +55,24 @@ pub async fn serve(
         .as_deref()
         .map_or(ShowFile::None, |path| show::open(path, &mut sender));
     let (kept, shown) = watch::channel(opened);
-    let (project, projects) = watch::channel(sender.project());
-    let (patch, patches) = watch::channel(sender.patch());
+    let (moments, taken) = mpsc::unbounded_channel();
+    let (patch, _) = watch::channel(sender.patch());
     let keeper = show
         .filter(|_| opened.saves())
         .map(|path| tokio::spawn(show::keep(path, patch.subscribe(), kept, stop.subscribe())));
+    let first = Moment::of(&sender);
+    // A snapshot of a wake after every command queued so far: taken under `first`.
+    let picture = Picture::of(*engine.fresh(), &first, &shelf, &shown);
     let front = Front {
         shelf: shelf.clone(),
-        project: projects,
-        patch: patches,
+        moments: taken,
+        kept: VecDeque::from([first]),
         show: shown,
     };
-    let (painted, pictures) = watch::channel(Arc::new(front.picture(*engine.latest())));
+    let (painted, pictures) = watch::channel(Arc::new(picture));
     let reader = tokio::spawn(read(engine, front, painted, stop.subscribe()));
     let api = Arc::new(Api {
-        project,
+        moments,
         patch,
         sender: Mutex::new(sender),
         stop,
@@ -106,9 +110,10 @@ struct Api {
     /// The engine front; connections take turns. Nobody holds it while a device opens.
     /// The tick thread never sees this lock.
     sender: Mutex<Sender>,
-    /// The front's project after the last command: the reader takes it into the next picture.
-    project: watch::Sender<Project>,
-    /// The front's patch after the last command: the reader takes it into the next picture.
+    /// The front after each change, in the order of the changes: the reader pairs each
+    /// snapshot with the one it was taken under.
+    moments: mpsc::UnboundedSender<Moment>,
+    /// The front's patch after the last command, for the show file.
     patch: watch::Sender<Arc<Patch>>,
     /// Turns true once, on `Stop`. Every connection and the server watch it.
     stop: watch::Sender<bool>,
@@ -128,23 +133,71 @@ struct Picture {
     show: ShowFile,
 }
 
+impl Picture {
+    fn of(
+        snapshot: Snapshot,
+        moment: &Moment,
+        shelf: &watch::Receiver<Arc<Shelf>>,
+        show: &watch::Receiver<ShowFile>,
+    ) -> Self {
+        Self {
+            snapshot,
+            library: shelf.borrow().library(),
+            project: moment.project,
+            patch: Arc::clone(&moment.patch),
+            show: *show.borrow(),
+        }
+    }
+}
+
+/// The front's project and patch once it had queued `sent` commands. A snapshot that
+/// applied exactly `sent` commands was taken under them.
+struct Moment {
+    sent: u64,
+    project: Project,
+    patch: Arc<Patch>,
+}
+
+impl Moment {
+    fn of(sender: &Sender) -> Self {
+        Self {
+            sent: sender.sent(),
+            project: sender.project(),
+            patch: sender.patch(),
+        }
+    }
+}
+
+/// The moment a snapshot that applied `applied` commands was taken under, if it is known:
+/// the newest one at exactly `applied`. `None` while the tick is part way through the
+/// commands of one change, or the change is not in `kept` yet. Forgets the moments
+/// older than it: `applied` never goes back.
+fn under(kept: &mut VecDeque<Moment>, applied: u64) -> Option<&Moment> {
+    while kept.get(1).is_some_and(|next| next.sent <= applied) {
+        kept.pop_front();
+    }
+    kept.front().filter(|moment| moment.sent == applied)
+}
+
 /// What the front holds besides the engine, as the reader takes it into each picture.
 struct Front {
     shelf: watch::Receiver<Arc<Shelf>>,
-    project: watch::Receiver<Project>,
-    patch: watch::Receiver<Arc<Patch>>,
+    /// The front's moments, as `send` makes them.
+    moments: mpsc::UnboundedReceiver<Moment>,
+    /// The moments a coming snapshot may be taken under, oldest first.
+    kept: VecDeque<Moment>,
     show: watch::Receiver<ShowFile>,
 }
 
 impl Front {
-    fn picture(&self, snapshot: Snapshot) -> Picture {
-        Picture {
-            snapshot,
-            library: self.shelf.borrow().library(),
-            project: *self.project.borrow(),
-            patch: Arc::clone(&self.patch.borrow()),
-            show: *self.show.borrow(),
+    /// `snapshot` with the project and the patch it was taken under. `None` when that
+    /// moment is not known yet.
+    fn picture(&mut self, snapshot: &Snapshot) -> Option<Picture> {
+        while let Ok(moment) = self.moments.try_recv() {
+            self.kept.push_back(moment);
         }
+        let moment = under(&mut self.kept, snapshot.applied())?;
+        Some(Picture::of(*snapshot, moment, &self.shelf, &self.show))
     }
 }
 
@@ -153,7 +206,7 @@ impl Front {
 /// then it gives the engine back.
 async fn read(
     mut engine: Engine,
-    front: Front,
+    mut front: Front,
     painted: watch::Sender<Arc<Picture>>,
     mut stopped: watch::Receiver<bool>,
 ) -> Engine {
@@ -164,8 +217,10 @@ async fn read(
             _ = stopped.wait_for(|stop| *stop) => return engine,
             _ = poll.tick() => {
                 let snapshot = engine.latest();
-                if snapshot.state.frame != painted.borrow().snapshot.state.frame {
-                    painted.send_replace(Arc::new(front.picture(*snapshot)));
+                if snapshot.state.frame != painted.borrow().snapshot.state.frame
+                    && let Some(picture) = front.picture(snapshot)
+                {
+                    painted.send_replace(Arc::new(picture));
                 }
             }
         }
@@ -269,22 +324,33 @@ async fn answer(
 /// answered meanwhile. The number of a patched fixture.
 async fn send(api: &Api, command: Command) -> Result<Option<u16>, Refusal> {
     let shelf = Arc::clone(&api.shelf.borrow());
-    let begun = api.sender.lock().await.begin(command, shelf.fixtures());
-    let sent = match begun {
+    let begun = api
+        .changing(|sender| sender.begin(command, shelf.fixtures()))
+        .await;
+    match begun {
         Ok(Begun::Opening(opening)) => {
             match tokio::task::spawn_blocking(move || opening.open()).await {
-                Ok(opened) => api.sender.lock().await.finish(opened).map(|()| None),
+                Ok(opened) => api.changing(|sender| sender.finish(opened)).await.map(|()| None),
                 Err(_) => Err(Refusal::CannotOpen), // the task was cancelled: the engine stops
             }
         }
         Ok(Begun::Queued) => Ok(None),
         Ok(Begun::Patched { fixture }) => Ok(Some(fixture)),
         Err(reason) => Err(reason),
-    };
-    let sender = api.sender.lock().await;
-    api.project.send_replace(sender.project());
-    api.patch.send_replace(sender.patch());
-    sent
+    }
+}
+
+impl Api {
+    /// Changes the front with `change`, and tells the reader and the show file the front
+    /// as `change` left it, before another change: each moment is one the engine was in.
+    async fn changing<T>(&self, change: impl FnOnce(&mut Sender) -> T) -> T {
+        let mut sender = self.sender.lock().await;
+        let changed = change(&mut sender);
+        // The reader is gone only once the server stops: nobody needs the moment then.
+        let _ = self.moments.send(Moment::of(&sender));
+        self.patch.send_replace(sender.patch());
+        changed
+    }
 }
 
 fn picture(now: &Picture) -> Option<String> {
@@ -328,4 +394,38 @@ fn changed(
 /// A reply is plain numbers and names: this does not fail.
 fn json(reply: &Reply) -> Option<String> {
     serde_json::to_string(reply).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use engine::Universes;
+
+    #[test]
+    fn a_snapshot_is_paired_only_with_the_moment_at_exactly_its_applied_commands() {
+        let (_engine, sender) = Engine::start(Universes::new(1).unwrap()).unwrap();
+        // (sent of each kept moment, applied, sent of the moment found, sent of those kept after)
+        let cases = [
+            (vec![0], 0, Some(0), vec![0]),
+            (vec![0], 1, None, vec![0]), // queued, its moment not here yet
+            (vec![0, 2], 1, None, vec![0, 2]), // part way through one change
+            (vec![0, 2], 2, Some(2), vec![2]),
+            (vec![0, 2, 2], 2, Some(2), vec![2]), // a change that queued nothing: the newest
+            (vec![0, 2, 5], 3, None, vec![2, 5]),
+            (vec![0, 2, 5], 7, None, vec![5]),
+        ];
+        for (sents, applied, found, left) in cases {
+            let mut kept: VecDeque<Moment> = sents
+                .iter()
+                .map(|&sent| Moment {
+                    sent,
+                    ..Moment::of(&sender)
+                })
+                .collect();
+            let moment = under(&mut kept, applied).map(|moment| moment.sent);
+            assert_eq!(moment, found, "{sents:?} at {applied}");
+            let after: Vec<u64> = kept.iter().map(|moment| moment.sent).collect();
+            assert_eq!(after, left, "{sents:?} at {applied}");
+        }
+    }
 }

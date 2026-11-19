@@ -40,6 +40,8 @@ pub struct Snapshot {
     lateness: [Times<LATENESS_BUCKETS>; MAX_OUTPUTS],
     /// The time from a send to the frame that carries it, per output that carries it.
     latency: Times<LATENCY_BUCKETS>,
+    /// Commands applied, so far: the first this many the sender queued.
+    applied: u64,
 }
 
 /// How late an output's frames were handed over, so far.
@@ -60,6 +62,7 @@ impl Snapshot {
             lights: [Light::DARK; MAX_LIGHTS as usize],
             lateness: [Times::ZERO; MAX_OUTPUTS],
             latency: Times::ZERO,
+            applied: 0,
         }
     }
 
@@ -96,6 +99,18 @@ impl Snapshot {
     /// before the first frame that carried a command.
     pub fn send_to_frame_p95(&self) -> Option<Duration> {
         self.latency.percentile(95)
+    }
+
+    /// How many commands this wake and the ones before applied: the first this many the
+    /// sender queued ([`crate::Sender::sent`]). Pairs a snapshot with the project it was
+    /// taken under.
+    pub fn applied(&self) -> u64 {
+        self.applied
+    }
+
+    /// One more command was applied.
+    pub(crate) fn applied_one(&mut self) {
+        self.applied = self.applied.wrapping_add(1);
     }
 
     /// The only change to the state, the held levels and the held values per light: through `engine_core::update`.

@@ -98,6 +98,8 @@ pub struct Sender {
     /// Devices this sender sent the tick thread away from, so far. The free thread
     /// counts the ones it freed in `Shared::freed`.
     retired: u64,
+    /// Commands queued for the tick thread, so far: [`Snapshot::applied`] counts the same.
+    sent: u64,
     shared: Arc<Shared>,
     free: Thread,
     start: Instant,
@@ -225,6 +227,7 @@ impl Engine {
                 Whole(|kind| outputs::limits(kind).whole),
             )),
             retired: 0,
+            sent: 0,
             shared: Arc::clone(&shared),
             free: free.thread().clone(),
             start,
@@ -451,6 +454,13 @@ impl Sender {
         Arc::clone(&self.patch)
     }
 
+    /// How many commands this sender queued for the tick thread, so far. A snapshot whose
+    /// [`Snapshot::applied`] is this number was taken under the project and the patch as
+    /// they are now, or as they were when this number was last read.
+    pub fn sent(&self) -> u64 {
+        self.sent
+    }
+
     /// Queues `command` with what it `brings`. A device `Attach` brings and
     /// `RemoveOutput` send the old one back; `Attach` with no device keeps it. `Writers`
     /// send the old writers back, `Runs` the runs it brought.
@@ -494,6 +504,7 @@ impl Sender {
         if retires {
             self.retired += 1;
         }
+        self.sent += 1;
         Ok(())
     }
 }
@@ -674,6 +685,7 @@ impl Ticker {
                 self.apply(sent.command);
                 self.swap(sent.command, sent.brings);
                 self.carried.applied(sent.at);
+                self.now.applied_one();
                 applied += 1;
             }
 

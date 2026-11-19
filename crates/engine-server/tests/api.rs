@@ -593,3 +593,62 @@ async fn a_device_that_opens_slowly_stalls_no_other_client_and_the_project_shows
         );
     }
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn no_picture_shows_an_output_in_the_state_and_not_in_the_project_or_the_other_way() {
+    let (address, mut commander, _) = start().await;
+    let mut subscriber = open(address).await;
+    let (_udp, add) = receiver().await;
+    let remove = json!({"Send": {"command": {"RemoveOutput": {"output": 1}}}});
+
+    send(&mut subscriber, &json!("Subscribe")).await;
+    let watched = tokio::spawn(async move {
+        // (pictures seen, the first torn one: frame, in the state, in the project)
+        let (mut seen, mut torn) = (0, Vec::new());
+        while let Ok(Some(Ok(message))) =
+            tokio::time::timeout(Duration::from_secs(1), subscriber.next()).await
+        {
+            let Ok(reply) = serde_json::from_str::<Value>(message.to_text().unwrap_or("")) else {
+                break;
+            };
+            let Some(picture) = reply.get("Picture").or_else(|| reply.get("Changed")) else {
+                continue;
+            };
+            seen += 1;
+            let state = !picture["state"]["outputs"][0].is_null();
+            let project = !picture["project"]["outputs"][0].is_null();
+            if state != project {
+                torn.push((picture["state"]["frame"].clone(), state, project));
+            }
+        }
+        (seen, torn)
+    });
+    // Each change is seen in a picture, then a few more queries put the next change at
+    // another point between two reads of the engine.
+    for round in 0..100 {
+        for (request, running) in [(&add, true), (&remove, false)] {
+            send(&mut commander, request).await;
+            assert_eq!(answer(&mut commander).await, json!("Accepted"));
+            let mut more = round * 7 % 64;
+            loop {
+                send(&mut commander, &json!("Query")).await;
+                let picture = answer(&mut commander).await;
+                if picture["Picture"]["state"]["outputs"][0].is_null() != running {
+                    if more == 0 {
+                        break;
+                    }
+                    more -= 1;
+                }
+            }
+        }
+    }
+    send(&mut commander, &json!("Stop")).await;
+    let (seen, torn) = watched.await.unwrap();
+    assert!(seen > 100, "only {seen} pictures");
+    assert!(
+        torn.is_empty(),
+        "{} of {seen} pictures show output 1 in one of state and project only, first: {:?}",
+        torn.len(),
+        torn.first()
+    );
+}
