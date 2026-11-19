@@ -50,7 +50,7 @@ pub use project::{Project, ProjectEffect, ProjectEvent, ProjectOutput};
 pub use property::{Gobo, Light, Position, Property, Rgb};
 pub use resolve::{
     HeldLight, Less, LightNumber, LightRun, Lights, MAX_LIGHTS, Part, Place, Scale, Sense, Take,
-    Writer, held_lights, light_changes, resolve,
+    Travel, Writer, held_lights, light_changes, resolve,
 };
 pub use show::{ShowFile, Unopened};
 

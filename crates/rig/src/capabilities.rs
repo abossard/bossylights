@@ -3,15 +3,16 @@
 //!
 //! | Channel of a light | Binding |
 //! |---|---|
-//! | a colour wheel, and the light mixes colour (hybrid) | fixed at its neutral slot: the colour is mixed. No neutral slot: refused |
+//! | a colour wheel, and the light mixes colour (hybrid) | fixed at its bypass: the colour is mixed. No bypass: refused |
 //! | a colour wheel, nothing mixes | picks each colour of the light's wheels: its own slot, else its neutral slot. Neither: refused |
-//! | a gobo wheel | picks each gobo of the wheel, slot 1 first |
+//! | a gobo wheel | picks each gobo of the wheel and open, slot 1 first |
 //!
 //! | Word | Is |
 //! |---|---|
 //! | colour wheel | a colour channel with at least one static colour (`ColorMacro`) |
 //! | gobo wheel | a gobo channel with at least one gobo that does not shake |
 //! | neutral slot | white, or a range without a preset named open, white, no function, no colour or off. It shows white |
+//! | bypass | a range without a preset that is neutral or names the mix (RGB, CMY, mix), else white: a static white can be a fixed white that overrides the mix |
 //! | slot byte | the lower midpoint of its range: 20 to 29 is 24 |
 //!
 //! A light refuses a colour or a gobo when it has a wheel for it but no slot that shows it
@@ -70,19 +71,19 @@ impl Wheels {
     ) -> Option<Result<Vec<Writer>, Unfit>> {
         let unheld = channel.default.unwrap_or(0);
         if is_colour_wheel(channel) {
-            let neutral = neutral(channel);
             let refused = Unfit::Refused(unsupported(
                 light.index().saturating_add(1),
                 Property::Colour,
             ));
             if self.mixes {
                 return Some(
-                    neutral
+                    bypass(channel)
                         .map(|value| vec![Writer::Fixed { at, value }])
                         .ok_or(refused),
                 );
             }
             let own = colour_slots(channel);
+            let neutral = neutral(channel);
             let slots = self
                 .colours
                 .iter()
@@ -234,12 +235,18 @@ fn colour_slots(channel: &fixture_library::Channel) -> Vec<(Rgb, u8)> {
     slots
 }
 
-/// The byte of each gobo of a gobo wheel that does not shake, slot 1 first.
+/// The byte of each slot of a gobo wheel, slot 1 first: each gobo that does not shake,
+/// and open without a preset. None without a gobo.
 fn gobo_slots(channel: &fixture_library::Channel) -> Vec<u8> {
+    let gobo = |r: &&Range| matches!(r.does, Some(Does::Gobo { shakes: false, .. }));
+    let open = |r: &&Range| r.does.is_none() && r.label.trim().eq_ignore_ascii_case("open");
+    if !channel.ranges.iter().any(|r| gobo(&r)) {
+        return Vec::new();
+    }
     channel
         .ranges
         .iter()
-        .filter(|r| matches!(r.does, Some(Does::Gobo { shakes: false, .. })))
+        .filter(|r| gobo(r) || open(r))
         .map(midpoint)
         .collect()
 }
@@ -250,6 +257,22 @@ fn neutral(channel: &fixture_library::Channel) -> Option<u8> {
         .into_iter()
         .find(|(colour, _)| *colour == WHITE)
         .map(|(_, value)| value)
+}
+
+/// The byte where a hybrid's colour wheel lets the mix through: a range without a preset
+/// that is neutral or names the mix, else its neutral slot.
+fn bypass(channel: &fixture_library::Channel) -> Option<u8> {
+    const MIXES: [&str; 3] = ["rgb", "cmy", "mix"];
+    channel
+        .ranges
+        .iter()
+        .find(|range| {
+            let label = range.label.to_ascii_lowercase();
+            range.does.is_none()
+                && (is_neutral(range) || MIXES.iter().any(|mix| label.contains(mix)))
+        })
+        .map(midpoint)
+        .or_else(|| neutral(channel))
 }
 
 const WHITE: Rgb = Rgb {

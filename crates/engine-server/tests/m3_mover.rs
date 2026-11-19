@@ -3,17 +3,19 @@
 //! zoomed half: 12 34 56 78 at 1 to 4, 80 at 9. The same zoom on a Martin Rush MH6 Wash,
 //! whose zoom runs big to small: 7f at 9. A Shehds LED Spot 100W 14 Channel red with
 //! Static Gobo / Gobo 2: 7 at 6, 24 at 7, its rotating gobo wheel at its default at 8. A
-//! gobo cuts to its next slot, and black, not on the Shehds wheel, is refused.
+//! gobo cuts to its next slot in the first frame handed over after its start, and black,
+//! not on the Shehds wheel, is refused in a step and held directly.
 
 mod common;
 
 use common::{Heard, Socket, command, connect, open};
-use engine::{Engine, Universes};
+use engine::{Engine, Event, Outcome, Universes, Wakes};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use tokio::task::block_in_place;
 
 /// A folder of the three definitions: two from the fixture library's tests, the Martin
 /// from the rig's.
@@ -42,10 +44,11 @@ fn definitions() -> PathBuf {
 }
 
 /// An engine with the three definitions, universe 1 on the fake adapter heard into
-/// `heard`, and `maker` `model` `mode` patched at address 1 as fixture 1.
-async fn patched(heard: &Heard, stop: &Arc<AtomicBool>, fixture: [&str; 3]) -> Socket {
+/// `heard`, and `maker` `model` `mode` patched at address 1 as fixture 1. Its clock runs
+/// until the test holds it.
+async fn patched(heard: &Heard, stop: &Arc<AtomicBool>, fixture: [&str; 3]) -> (Socket, Wakes) {
     let opens = open(Some(Arc::clone(heard)), Arc::clone(stop));
-    let (engine, sender) = Engine::start_with(Universes::new(1).unwrap(), opens).unwrap();
+    let (engine, sender, wakes) = Engine::start_stepped(Universes::new(1).unwrap(), opens).unwrap();
     let address = common::serve(engine, sender, Some(definitions())).await;
     let mut socket = connect(address).await;
     let dmx = json!({"SetOutput": {
@@ -64,7 +67,7 @@ async fn patched(heard: &Heard, stop: &Arc<AtomicBool>, fixture: [&str; 3]) -> S
         let reply = command(&mut socket, patch.clone()).await;
         if reply != json!({"Refused": {"reason": "NoSuchFixture"}}) {
             assert_eq!(reply, json!({"Patched": {"fixture": 1}}), "{model}");
-            return socket;
+            return (socket, wakes);
         }
         assert!(started.elapsed() < Duration::from_secs(10), "no library");
         tokio::task::yield_now().await;
@@ -74,14 +77,52 @@ async fn patched(heard: &Heard, stop: &Arc<AtomicBool>, fixture: [&str; 3]) -> S
 /// A channel, counted from 1, and its byte.
 type Bytes = (usize, u8);
 
-/// Saves `values` on fixture 1 as look `look` and plays it.
-async fn play(socket: &mut Socket, look: u16, values: &Value) {
+/// Saves `values` on fixture 1 as look `look` and plays it. The play.
+async fn play(socket: &mut Socket, look: u16, values: &Value) -> Value {
     let step = json!({"PutStep": {"look": look, "name": "mover", "step": {
         "target": {"Fixture": {"fixture": 1}}, "values": values,
     }}});
     assert_eq!(command(socket, step).await, json!("Accepted"), "{values}");
     let started = command(socket, json!({"StartLook": {"look": look}})).await;
     assert!(started["Started"]["play"].is_object(), "{started}");
+    started["Started"]["play"].clone()
+}
+
+/// The frames handed over to the adapter (output 1) since the engine started, and how
+/// many of them were dropped.
+#[derive(Default)]
+struct Handed {
+    frames: usize,
+    dropped: usize,
+}
+
+impl Handed {
+    /// Takes the tick's events, then waits until every frame handed over is heard or
+    /// dropped.
+    async fn drain(&mut self, wakes: &mut Wakes, heard: &Heard) {
+        let started = Instant::now();
+        loop {
+            for event in wakes.events() {
+                match event {
+                    Event::Handed { output, .. } if output.slot() == 0 => self.frames += 1,
+                    Event::Came {
+                        output,
+                        outcome: Outcome::Dropped,
+                        ..
+                    } if output.slot() == 0 => self.dropped += 1,
+                    Event::Handed { .. } | Event::Came { .. } => {}
+                }
+            }
+            if heard.lock().unwrap().len() + self.dropped >= self.frames {
+                return;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "frames handed over but not heard"
+            );
+            tokio::task::yield_now().await;
+        }
+    }
 }
 
 /// Waits until the adapter's last frame shows `bytes` (channel from 1, byte). The index
@@ -134,7 +175,7 @@ async fn mover_properties_reach_their_channels_at_address_1() {
     for (fixture, values, bytes) in cases {
         let heard: Heard = Arc::new(Mutex::new(Vec::new()));
         let stop = Arc::new(AtomicBool::new(false));
-        let mut socket = patched(&heard, &stop, fixture).await;
+        let (mut socket, _) = patched(&heard, &stop, fixture).await;
         play(&mut socket, 1, &values).await;
         until_dmx(&heard, bytes).await;
         stop.store(true, Ordering::Relaxed);
@@ -146,7 +187,7 @@ async fn a_gobo_cuts_to_its_slot_and_a_colour_not_on_the_wheel_is_refused() {
     let heard: Heard = Arc::new(Mutex::new(Vec::new()));
     let stop = Arc::new(AtomicBool::new(false));
     let shehds = ["Shehds", "LED Spot 100W", "14 Channel"];
-    let mut socket = patched(&heard, &stop, shehds).await;
+    let (mut socket, mut wakes) = patched(&heard, &stop, shehds).await;
 
     let black = json!({"colour": {"red": 0, "green": 0, "blue": 0}});
     let step = json!({"PutStep": {"look": 9, "name": "black", "step": {
@@ -154,6 +195,14 @@ async fn a_gobo_cuts_to_its_slot_and_a_colour_not_on_the_wheel_is_refused() {
     }}});
     assert_eq!(
         command(&mut socket, step).await,
+        json!({"Refused": {"reason": {"Unsupported": {"light": 1, "property": "Colour"}}}})
+    );
+    // the same black held directly: refused too
+    let direct = json!({"SetColour": {
+        "target": {"Fixture": {"fixture": 1}}, "red": 0, "green": 0, "blue": 0,
+    }});
+    assert_eq!(
+        command(&mut socket, direct).await,
         json!({"Refused": {"reason": {"Unsupported": {"light": 1, "property": "Colour"}}}})
     );
     let gobo = json!({"gobo": {"wheel": 2, "slot": 9}});
@@ -165,11 +214,26 @@ async fn a_gobo_cuts_to_its_slot_and_a_colour_not_on_the_wheel_is_refused() {
         json!({"Refused": {"reason": {"Unsupported": {"light": 1, "property": "Gobo"}}}})
     );
 
-    // Gobo 2 (24), then Gobo 7 (74), the later start winning: every frame between shows
-    // one slot or the other, never a byte on the way
+    // Gobo 2 (24), then Gobo 7 (74), the later start winning: the first frame handed over
+    // after the second start shows 74, and every frame heard between shows one slot or
+    // the other, never a byte on the way
     play(&mut socket, 1, &json!({"gobo": {"wheel": 1, "slot": 3}})).await;
     let from = until_dmx(&heard, &[(7, 24)]).await;
+    let mut handed = Handed::default();
+    block_in_place(|| wakes.hold()).unwrap();
+    handed.drain(&mut wakes, &heard).await;
+    let before = heard.lock().unwrap().len();
     play(&mut socket, 2, &json!({"gobo": {"wheel": 1, "slot": 8}})).await;
+    while heard.lock().unwrap().len() == before {
+        block_in_place(|| wakes.wake()).unwrap();
+        handed.drain(&mut wakes, &heard).await;
+    }
+    assert_eq!(
+        heard.lock().unwrap()[before][6],
+        74,
+        "the first frame after the second start"
+    );
+    wakes.run();
     let to = until_dmx(&heard, &[(7, 74)]).await;
     let between: Vec<u8> = heard.lock().unwrap()[from..=to]
         .iter()

@@ -29,15 +29,15 @@
 //! output streams is one it sends. What an output sends is the outputs' to know
 //! (`crates/outputs`), so [`Whole`] brings it in.
 
-use crate::{ADDRESSES, Unfit, compile, flat, lights_of, strip, unflat};
+use crate::{ADDRESSES, Unfit, compile, flat, lights_of, strip, supports, unflat};
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::num::NonZeroU16;
 use engine_core::{
-    ChannelNumbers, EngineCommand, Grouped, LightChange, LightNumber, LightRun, Lights, Member,
-    OutputKind, PatchCommand, Patched, Project, Refusal, Target, Universes, Writer,
+    ChannelNumbers, EngineCommand, Grouped, Light, LightChange, LightNumber, LightRun, Lights,
+    Member, OutputKind, PatchCommand, Patched, Project, Refusal, Rgb, Target, Universes, Writer,
 };
 use fixture_library::{Fixture, Mode};
 
@@ -185,6 +185,18 @@ impl Patch {
         self
     }
 
+    /// `ShowFileFull` when this patch is over the most bytes the show file it is kept in
+    /// gives it ([`Limit::most`]), so the looks have less than their room: one opened from
+    /// a file at its most bytes. A patch kept in no file fits.
+    pub fn fits(&self) -> Result<(), Refusal> {
+        match self.limit {
+            Some(limit) if !(limit.fits)(self) => Err(Refusal::ShowFileFull {
+                most: u32::try_from(limit.most).unwrap_or(u32::MAX),
+            }),
+            Some(_) | None => Ok(()),
+        }
+    }
+
     /// The file's text of the definition fixture `fixture` is patched from, when it was
     /// made ([`Limit::encode`]).
     pub fn definition_text(&self, fixture: u16) -> Option<&Arc<str>> {
@@ -299,7 +311,14 @@ impl Patch {
                 red,
                 green,
                 blue,
-            } => self.send(target, LightChange::SetColour { red, green, blue }),
+            } => {
+                let shows = Light {
+                    colour: Some(Rgb { red, green, blue }),
+                    ..Light::DARK
+                };
+                supports(&self.writers, &self.runs(target)?, &shows)?;
+                self.send(target, LightChange::SetColour { red, green, blue })
+            }
             PatchCommand::ReleaseIntensity { target } => {
                 self.send(target, LightChange::ReleaseIntensity)
             }

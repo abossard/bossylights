@@ -65,7 +65,14 @@ fn each_property_goes_to_its_channels() {
     };
     // (mode, the light, channels from 1 and the bytes they show)
     type Case<'a> = (&'a Mode, Light, &'a [Bytes]);
-    let cases: [Case; 8] = [
+    let zoomed = |zoom| Light {
+        zoom: Some(zoom),
+        ..Light::DARK
+    };
+    let x4 = mode("GLP-Impression-X4.qxf", "Normal");
+    let platinum = mode("Elation-Platinum-Spot-5R.qxf", "Basic");
+    let mac = mode("Martin-MAC-2000-Wash.qxf", "8-bit with Color Wheel 2");
+    let cases: [Case; 15] = [
         (
             &elation,
             aimed,
@@ -88,6 +95,23 @@ fn each_property_goes_to_its_channels() {
         ),
         (&shehds(), shows(None, Some(gobo(2, 7))), &[(7, 0), (8, 64)]),
         (&shehds(), Light::DARK, &[(6, 0), (7, 0), (8, 0)]),
+        // a hybrid holds its wheel where the mix goes through: 0 to 7, not fixed white
+        (
+            &x4,
+            Light {
+                intensity: Some(FULL),
+                ..shows(Some(RED), None)
+            },
+            &[(5, 3), (6, 255)],
+        ),
+        (&x4, Light::DARK, &[(5, 3)]),
+        // an open range without a preset is slot 1, before Gobo 1
+        (&platinum, shows(None, Some(gobo(2, 1))), &[(6, 3)]),
+        (&platinum, shows(None, Some(gobo(2, 2))), &[(6, 11)]),
+        (&platinum, shows(None, Some(gobo(1, 1))), &[(4, 4)]),
+        // zoom travels 0 to 244, big to small: 245 to 251 is "no changes"
+        (&mac, zoomed(0xFA00), &[(9, 5)]),
+        (&mac, zoomed(0), &[(9, 244)]),
     ];
     for (mode, light, bytes) in cases {
         let mut out = [Levels::ZERO];

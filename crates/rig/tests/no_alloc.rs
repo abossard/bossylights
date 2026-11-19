@@ -9,23 +9,34 @@ mod common;
 mod counting;
 
 use common::{light, lights, mode};
-use engine_core::{ChannelNumbers, Levels, Light, Rgb, Universes, Writer, resolve};
+use engine_core::{ChannelNumbers, Gobo, Levels, Light, Position, Rgb, Universes, Writer, resolve};
 use rig::compile;
 
 const UNIVERSES: u16 = 8;
 const LIGHTS: u16 = 512;
 const FRAMES: u16 = 1_000;
+const RED: Rgb = Rgb {
+    red: u16::MAX,
+    green: 0,
+    blue: 0,
+};
 
 fn main() {
     let universes = Universes::new(UNIVERSES).unwrap();
-    // 64 moving heads (16-bit dimmer, shutter), then RGBW PARs, RGB PARs and dimmers
-    let heads = mode("Martin-Rush-MH6-Wash.qxf", "Standard");
+    // 64 moving heads: 16-bit dimmer and shutter, colour and gobo wheels, a zoom over part
+    // of its channel; then RGBW PARs, RGB PARs and dimmers
+    let heads = [
+        mode("Martin-Rush-MH6-Wash.qxf", "Standard"),
+        mode("Shehds-LED-Spot-100W.qxf", "14 Channel"),
+        mode("Martin-MAC-2000-Wash.qxf", "8-bit with Color Wheel 2"),
+        mode("Elation-Platinum-Spot-5R.qxf", "Basic"),
+    ];
     let modes = [
         mode("Generic-Generic-RGBW.qxf", "Dimmer RGBW"),
         mode("Generic-Generic-RGB.qxf", "RGB"),
         mode("Showtec-Par-64-100W-COB-UV.qxf", "8 Bit"),
     ];
-    let patch = std::iter::repeat_n(&heads, 64).chain(modes.iter().cycle());
+    let patch = heads.iter().cycle().take(64).chain(modes.iter().cycle());
     let (mut writers, mut next, mut at) = (Vec::<Writer>::new(), 0, (1, 1));
     for mode in patch.take(usize::from(LIGHTS)) {
         let size = u16::try_from(mode.channels.len()).unwrap();
@@ -42,6 +53,10 @@ fn main() {
         at.1 += size;
     }
     assert_eq!(next, LIGHTS, "every fixture here is one light");
+    assert!(
+        writers.iter().any(|w| matches!(w, Writer::Picks { .. })),
+        "wheels are written"
+    );
     let mut values = vec![Light::DARK; usize::from(LIGHTS)];
     let mut out = vec![Levels::ZERO; usize::from(UNIVERSES)];
 
@@ -49,14 +64,28 @@ fn main() {
     for frame in 0..FRAMES {
         for (n, value) in (0..).zip(values.iter_mut()) {
             let step = frame.wrapping_mul(97).wrapping_add(n);
-            *value = Light {
-                intensity: Some(step),
-                colour: Some(Rgb {
+            // every other frame a colour on the wheels, so a wheel changes its slot
+            let colour = if frame % 2 == 0 {
+                Rgb {
                     red: step.wrapping_mul(3),
                     green: step.wrapping_mul(5),
                     blue: step.wrapping_mul(7),
+                }
+            } else {
+                RED
+            };
+            *value = Light {
+                intensity: Some(step),
+                colour: Some(colour),
+                position: Some(Position {
+                    pan: step,
+                    tilt: step.wrapping_mul(11),
                 }),
-                ..Light::DARK
+                zoom: Some(step.wrapping_mul(13)),
+                gobo: Some(Gobo {
+                    wheel: 1 + u8::try_from(frame % 2).unwrap(),
+                    slot: 1 + u8::try_from(step % 8).unwrap(),
+                }),
             };
         }
         resolve(&values, &writers, &mut out);

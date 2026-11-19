@@ -4,7 +4,7 @@
 
 use engine_core::{
     Channel, ChannelNumbers, Color, Less, LightNumber, Lights, MAX_LIGHTS, OutputKind, Part, Place,
-    Scale, Sense, Take, Universes, Writer,
+    Scale, Sense, Take, Travel, Universes, Writer,
 };
 use fixture_library::{Fixture, Mode, parse};
 use rig::Whole;
@@ -151,6 +151,9 @@ fn say_take(take: Take) -> String {
     }
     if take.sense == Sense::Falling {
         words = format!("full - {words}");
+    }
+    if take.travel != Travel::FULL {
+        words += &format!(" over {}-{}", take.travel.low, take.travel.high);
     }
     words
 }

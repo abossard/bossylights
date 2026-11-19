@@ -199,7 +199,7 @@ pub enum Place {
 }
 
 /// What a writer takes from its light, and how: the part `of` the light, less `less`,
-/// then scaled, then turned.
+/// then scaled, then turned, then laid over the bytes it travels.
 ///
 /// | Channel | Take |
 /// |---|---|
@@ -209,13 +209,14 @@ pub enum Place {
 /// | red beside white | red, less shared |
 /// | white | shared: the part red, green and blue all have |
 /// | cyan | red, falling: full less red |
-/// | pan, tilt, zoom | pan, tilt, zoom, falling when the channel runs the other way |
+/// | pan, tilt, zoom | pan, tilt, zoom, falling when the channel runs the other way, over the range it travels |
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Take {
     pub of: Part,
     pub less: Less,
     pub scale: Scale,
     pub sense: Sense,
+    pub travel: Travel,
 }
 
 impl Take {
@@ -225,6 +226,7 @@ impl Take {
         less: Less::Nothing,
         scale: Scale::Whole,
         sense: Sense::Rising,
+        travel: Travel::FULL,
     };
 
     /// The value of this take for `light`, 16 bits. `None` when nothing holds the part it
@@ -249,10 +251,35 @@ impl Take {
             Scale::Whole => less,
             Scale::ByIntensity => times(less, light.intensity.unwrap_or(0)),
         };
-        Some(match self.sense {
+        let turned = match self.sense {
             Sense::Rising => scaled,
             Sense::Falling => u16::MAX - scaled,
-        })
+        };
+        Some(self.travel.over(turned))
+    }
+}
+
+/// The high bytes a part travels over, both included: a zoom of 0 to 244 leaves 245 to
+/// 255 to what is not zoom.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Travel {
+    pub low: u8,
+    pub high: u8,
+}
+
+impl Travel {
+    /// Every byte.
+    pub const FULL: Self = Self {
+        low: 0,
+        high: u8::MAX,
+    };
+
+    /// `value`, 0 to full, laid over the travel: 0 is `low` 00, full is `high` ff.
+    fn over(self, value: u16) -> u16 {
+        let low = u32::from(self.low) << 8;
+        let span = (u32::from(self.high) << 8 | 0xff).saturating_sub(low);
+        let laid = low + (u32::from(value) * span + u32::from(u16::MAX / 2)) / u32::from(u16::MAX);
+        u16::try_from(laid).unwrap_or(u16::MAX)
     }
 }
 
@@ -416,6 +443,7 @@ mod tests {
             less,
             scale,
             sense,
+            travel: Travel::FULL,
         }
     }
 

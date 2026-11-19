@@ -57,9 +57,9 @@ use alloc::vec;
 use alloc::vec::Vec;
 use engine_core::{
     ADDRESSES, Channel, ChannelNumbers, Color, Less, LightNumber, Lights, Part, Pixels, Place,
-    Refusal, Scale, Sense, Take, Universes, Writer,
+    Refusal, Scale, Sense, Take, Travel, Universes, Writer,
 };
-use fixture_library::{Byte, Direction, Function, Layout, Mode};
+use fixture_library::{Byte, Direction, Does, Function, Layout, Mode};
 
 /// A mode at an address, compiled.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -326,7 +326,7 @@ fn coarse(
     light: LightNumber,
     place: Channel,
 ) -> Writer {
-    match take(&channel.function, channel.direction, has) {
+    match take(channel, has) {
         Some(take) => Writer::Takes {
             light,
             take,
@@ -349,9 +349,24 @@ fn fixed(channel: &fixture_library::Channel, at: Channel) -> Writer {
     }
 }
 
-/// What a channel takes from its light, `direction` the way its values run. `None` for
-/// what this slice does not write.
-fn take(function: &Function, direction: Option<Direction>, has: Has) -> Option<Take> {
+/// What a channel takes from its light. `None` for what this slice does not write. Pan,
+/// tilt and zoom travel over the first range that says which way it runs, that way, else
+/// over every byte the way the channel runs.
+fn take(channel: &fixture_library::Channel, has: Has) -> Option<Take> {
+    let runs = channel.ranges.iter().find_map(|range| match range.does {
+        Some(Does::Runs(direction)) => Some((range, direction)),
+        _ => None,
+    });
+    let (travel, direction) =
+        runs.map_or((Travel::FULL, channel.direction), |(range, direction)| {
+            (
+                Travel {
+                    low: range.min,
+                    high: range.max,
+                },
+                Some(direction),
+            )
+        });
     let scale = if has.dimmer {
         Scale::Whole
     } else {
@@ -366,12 +381,14 @@ fn take(function: &Function, direction: Option<Direction>, has: Has) -> Option<T
         },
         scale,
         sense: Sense::Rising,
+        travel: Travel::FULL,
     };
     let filter = |of| Take {
         of,
         less: Less::Nothing,
         scale,
         sense: Sense::Falling,
+        travel: Travel::FULL,
     };
     let travels = |of| Take {
         of,
@@ -381,8 +398,9 @@ fn take(function: &Function, direction: Option<Direction>, has: Has) -> Option<T
             Some(Direction::Down) => Sense::Falling,
             Some(Direction::Up) | None => Sense::Rising,
         },
+        travel,
     };
-    let take = match function {
+    let take = match &channel.function {
         Function::Dimmer => Take::INTENSITY,
         Function::Pan => travels(Part::Pan),
         Function::Tilt => travels(Part::Tilt),
@@ -395,6 +413,7 @@ fn take(function: &Function, direction: Option<Direction>, has: Has) -> Option<T
             less: Less::Nothing,
             scale,
             sense: Sense::Rising,
+            travel: Travel::FULL,
         },
         Function::Cyan => filter(Part::Red),
         Function::Magenta => filter(Part::Green),

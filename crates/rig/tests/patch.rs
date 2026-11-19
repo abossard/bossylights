@@ -4,8 +4,8 @@ mod common;
 
 use common::fixture;
 use engine_core::{
-    ChannelNumbers, EngineCommand, Lights, PatchCommand, Place, Refusal, Target, Text, Universes,
-    Writer,
+    ChannelNumbers, EngineCommand, Lights, PatchCommand, Place, Property, Refusal, Target, Text,
+    Universes, Writer,
 };
 use fixture_library::Fixture;
 use rig::{Patch, PatchEffect};
@@ -22,6 +22,8 @@ fn at(universe: u16, address: u16) -> ChannelNumbers {
 fn patch(name: &str, model: &str, mode: &str, universe: u16, address: u16) -> PatchCommand {
     let maker = if model.starts_with("X-240") {
         "XStatic"
+    } else if model.starts_with("LED Spot") {
+        "Shehds"
     } else {
         "Generic"
     };
@@ -47,6 +49,15 @@ fn red(target: Target) -> PatchCommand {
     }
 }
 
+fn black(target: Target) -> PatchCommand {
+    PatchCommand::SetColour {
+        target,
+        red: 0,
+        green: 0,
+        blue: 0,
+    }
+}
+
 const fn fixture_(fixture: u16) -> Target {
     Target::Fixture { fixture }
 }
@@ -56,6 +67,7 @@ fn library() -> Vec<Fixture> {
         "Generic-Generic-RGB.qxf",
         "Generic-Generic-RGBW.qxf",
         "XStatic-X-240Bar-RGB.qxf",
+        "Shehds-LED-Spot-100W.qxf",
     ]
     .map(fixture)
     .into()
@@ -144,6 +156,7 @@ fn a_patch_command_makes_a_new_patch_and_says_what_follows() {
     let many = Lights::new(64).unwrap();
     let par_3 = par("PAR 3", 1, 37);
     let bar = patch("Bar", "X-240Bar RGB", "26 Channel", 2, 1);
+    let spot = patch("Spot", "LED Spot 100W", "14 Channel", 1, 1);
     // (lights of the engine, patch before, command, effects or why not, patch after)
     type Done = Result<&'static [&'static str], Refusal>;
     type Case = (
@@ -153,7 +166,7 @@ fn a_patch_command_makes_a_new_patch_and_says_what_follows() {
         Done,
         &'static [&'static str],
     );
-    let cases: [Case; 28] = [
+    let cases: [Case; 30] = [
         (
             many,
             vec![],
@@ -361,6 +374,24 @@ fn a_patch_command_makes_a_new_patch_and_says_what_follows() {
                 "1 PAR 3: Generic RGB, RGB at 1.37 (3) lights 1+1",
                 "2 Bar: X-240Bar RGB, 26 Channel at 2.1 (26) lights 2+9",
             ],
+        ),
+        // a colour wheel without black: refused as a step would be
+        (
+            many,
+            vec![spot],
+            black(fixture_(1)),
+            Err(Refusal::Unsupported {
+                light: 1,
+                property: Property::Colour,
+            }),
+            &["1 Spot: LED Spot 100W, 14 Channel at 1.1 (14) lights 1+1"],
+        ),
+        (
+            many,
+            vec![spot],
+            red(fixture_(1)),
+            Ok(&["colour 0+1"]),
+            &["1 Spot: LED Spot 100W, 14 Channel at 1.1 (14) lights 1+1"],
         ),
         (
             many,
