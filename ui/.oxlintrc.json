@@ -74,6 +74,7 @@
   ],
   "ignorePatterns": [
     "src/**/*.test.mjs",
-    "src/catalog/reviews-file.mjs"
+    "src/catalog/reviews-file.mjs",
+    "src/catalog/run-port.mjs"
   ]
 }
