@@ -169,9 +169,11 @@ pub struct Sender {
     grabs: Grabs,
     /// The generation of the last grab.
     grabbed: u32,
-    /// Devices this sender sent the tick thread away from, so far. The free thread
-    /// counts the ones it freed in `Shared::freed`.
+    /// Boxes this sender sent back from the tick thread, so far. The free thread counts
+    /// the ones it freed in `Shared::freed`.
     retired: u64,
+    /// Of them, the devices: an opening waits for each (`Shared::devices_freed`).
+    devices: u64,
     /// Commands queued for the tick thread, so far: [`Snapshot::applied`] counts the same.
     sent: u64,
     shared: Arc<Shared>,
@@ -196,7 +198,7 @@ pub struct Opening {
     shared: Arc<Shared>,
     free: Thread,
     /// The devices sent away before this one opens: a port they hold must be free.
-    retired: u64,
+    devices: u64,
 }
 
 /// What came of an [`Opening`]. It brings the `open` back.
@@ -481,12 +483,16 @@ struct Live {
 /// Between the threads of the engine. Atomics only.
 struct Shared {
     stop: AtomicBool,
-    /// Devices the free thread freed, so far.
+    /// Boxes the free thread freed, so far.
     freed: AtomicU64,
+    /// Of them, the devices. A plan the tick thread sends back on its own is counted
+    /// in `freed` before the front counts it, so an opening counts devices only.
+    devices_freed: AtomicU64,
     /// Changes the sender ended, so far ([`Sender::revise`]). A wake reads it at its cutoff.
     revision: AtomicU64,
     /// By slot, the generation of the last play the tick thread ended on its own: a
-    /// stop that cancelled it while it waited. Its plan is on its way back.
+    /// stop that cancelled it while it waited. Its plan is on its way back. Zero, which
+    /// names no play, until then.
     ended: [AtomicU32; PLAYS],
     /// A test holds the free thread: what goes back is not freed while set.
     #[cfg(test)]
@@ -524,6 +530,7 @@ impl Engine {
         let shared = Arc::new(Shared {
             stop: AtomicBool::new(false),
             freed: AtomicU64::new(0),
+            devices_freed: AtomicU64::new(0),
             revision: AtomicU64::new(0),
             ended: [const { AtomicU32::new(0) }; PLAYS],
             #[cfg(test)]
@@ -571,6 +578,7 @@ impl Engine {
             grabs: Grabs::new(),
             grabbed: 0,
             retired: 0,
+            devices: 0,
             sent: 0,
             shared: Arc::clone(&shared),
             free: free.thread().clone(),
@@ -674,7 +682,7 @@ impl Sender {
                 open: self.open.take().ok_or(Refusal::Opening)?,
                 shared: Arc::clone(&self.shared),
                 free: self.free.clone(),
-                retired: self.retired,
+                devices: self.devices,
             }),
             Change::Patch {
                 patch,
@@ -760,7 +768,8 @@ impl Sender {
                     })
                     .or_else(|| self.plays.iter().position(Option::is_none))
                     .ok_or(Refusal::PlayFull)?;
-                let generation = self.generation.wrapping_add(1);
+                // no play is generation zero: each slot's `Shared::ended` starts there
+                let generation = self.generation.wrapping_add(1).max(1);
                 let play = PlayId::new(slot, generation).ok_or(Refusal::PlayFull)?;
                 self.push(
                     EngineCommand::Start {
@@ -1164,13 +1173,18 @@ impl Sender {
         // its start on, so a release takes no more of the queue back: it needs only a
         // place in the command queue. (ReleaseAll and Rules: their plays go back through
         // `forget`, kept the same way.)
+        let device =
+            sends_back && changes.is_some_and(|output| self.project.output(output).is_some());
         let back = if let EngineCommand::Start { play, .. } = command {
             self.plays.get(play.slot()).copied().flatten().is_some()
         } else {
-            matches!(
-                command,
-                EngineCommand::Plan { .. } | EngineCommand::Release { .. } | EngineCommand::Writers
-            ) || sends_back && changes.is_some_and(|output| self.project.output(output).is_some())
+            device
+                || matches!(
+                    command,
+                    EngineCommand::Plan { .. }
+                        | EngineCommand::Release { .. }
+                        | EngineCommand::Writers
+                )
         };
         // one more box on its way back or held by the tick thread: all but a release
         let adds = back && !matches!(command, EngineCommand::Release { .. })
@@ -1192,6 +1206,7 @@ impl Sender {
         }
         if back {
             self.retired += 1;
+            self.devices += u64::from(device);
             self.free.unpark();
         }
         self.sent += 1;
@@ -1228,7 +1243,9 @@ impl Opening {
     /// are freed (one may hold the port this opens), then for as long as opening takes.
     pub fn open(mut self) -> Opened {
         let started = Instant::now();
-        while on_their_way(&self.shared, self.retired) > 0 && started.elapsed() < FREE_WITHIN {
+        while self.devices > self.shared.devices_freed.load(Ordering::Acquire)
+            && started.elapsed() < FREE_WITHIN
+        {
             self.free.unpark();
             thread::sleep(Duration::from_millis(1));
         }
@@ -1248,7 +1265,7 @@ impl Opening {
     }
 }
 
-/// Of the `retired` devices sent away so far, those not freed yet.
+/// Of the `retired` boxes sent back so far, those not freed yet.
 fn on_their_way(shared: &Shared, retired: u64) -> u64 {
     retired.saturating_sub(shared.freed.load(Ordering::Acquire))
 }
@@ -1261,9 +1278,13 @@ fn free(mut retired: rtrb::Consumer<Retired>, shared: &Shared) {
         while shared.stalled.load(Ordering::Acquire) && !shared.stop.load(Ordering::Relaxed) {
             thread::park_timeout(Duration::from_millis(1));
         }
-        while let Ok(device) = retired.pop() {
-            drop(device);
+        while let Ok(back) = retired.pop() {
+            let device = matches!(back, Retired::Device(_));
+            drop(back);
             shared.freed.fetch_add(1, Ordering::Release);
+            if device {
+                shared.devices_freed.fetch_add(1, Ordering::Release);
+            }
         }
         if shared.stop.load(Ordering::Relaxed) {
             return; // what comes back later is freed with the tick thread's queue end
@@ -1935,5 +1956,56 @@ mod tests {
             assert_eq!(left, plays_after, "{case}: plays");
             engine.shared.stalled.store(false, Ordering::Release);
         }
+    }
+
+    #[test]
+    #[expect(clippy::unwrap_used, reason = "a test that cannot set itself up fails")]
+    fn a_play_started_as_the_generations_wrap_is_never_taken_for_a_cancelled_one() {
+        let (mut engine, mut sender) = Engine::start(Universes::new(1).unwrap()).unwrap();
+        let strip = Command::PatchStrip {
+            name: Text::new("strip").unwrap(),
+            pixels: engine_core::Pixels::try_from(1).unwrap(),
+            color: Color::Rgb,
+            at: ChannelNumbers {
+                universe: 1,
+                address: 1,
+            },
+        };
+        assert!(sender.begin(strip, &[]).is_ok());
+        let step = engine_core::Step {
+            target: Target::Light { light: 1 },
+            values: Light::DARK,
+        };
+        let name = Text::new("s").unwrap();
+        sender
+            .send(Command::PutStep {
+                look: 1,
+                name,
+                step,
+            })
+            .unwrap();
+        // the last generation before the counter wraps
+        sender.generation = u32::MAX;
+        let start = Command::StartLook {
+            look: 1,
+            rank: Rank::Manual,
+            when: When::Now,
+        };
+        assert!(matches!(
+            sender.begin(start, &[]),
+            Ok(Begun::Started { .. })
+        ));
+        let started = Instant::now();
+        while engine.fresh().applied() < sender.sent() {
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
+                "the tick applies"
+            );
+        }
+        assert_eq!(
+            sender.send(Command::RemoveLook { look: 1 }),
+            Err(Refusal::LookInUse { look: 1 })
+        );
+        assert!(engine.fresh().state.plays.has(0));
     }
 }

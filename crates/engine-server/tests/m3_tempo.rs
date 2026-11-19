@@ -11,7 +11,7 @@
 mod common;
 
 use common::{Heard, Socket, answer, command, connect, open, send};
-use engine::{Engine, Event, Outcome, Universes, Wakes};
+use engine::{Device, Engine, Event, Levels, Open, Outcome, Universes, Wakes};
 use serde_json::{Value, json};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -40,12 +40,44 @@ struct Desk {
     zero: Duration,
 }
 
+/// The adapter, but its thread drops every other frame it is handed.
+struct EveryOther {
+    device: Box<dyn Device>,
+    handed: u64,
+}
+
+impl Device for EveryOther {
+    fn take(&mut self, frame: &[Levels]) -> Outcome {
+        self.handed += 1;
+        if self.handed.is_multiple_of(2) {
+            Outcome::Dropped
+        } else {
+            self.device.take(frame)
+        }
+    }
+}
+
 impl Desk {
     async fn new() -> Self {
+        Self::opened(|open| open).await
+    }
+
+    /// A desk whose adapter's thread drops every other frame.
+    async fn dropping() -> Self {
+        Self::opened(|mut open| -> Open {
+            Box::new(move |kind| {
+                open(kind)
+                    .map(|device| Box::new(EveryOther { device, handed: 0 }) as Box<dyn Device>)
+            })
+        })
+        .await
+    }
+
+    async fn opened(adapter: impl FnOnce(Open) -> Open) -> Self {
         let turn = ONE_AT_A_TIME.lock().await;
         let heard: Heard = Arc::new(Mutex::new(Vec::new()));
         let stop = Arc::new(AtomicBool::new(false));
-        let opens = open(Some(Arc::clone(&heard)), Arc::clone(&stop));
+        let opens = adapter(open(Some(Arc::clone(&heard)), Arc::clone(&stop)));
         let (engine, sender, wakes) =
             Engine::start_stepped(Universes::new(1).unwrap(), opens).unwrap();
         let definitions = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -106,8 +138,8 @@ impl Desk {
     }
 
     /// Counts the frames handed over and dropped since last asked. The frame due at the
-    /// one handed over in the wake at `at`, if any, and whether it was dropped.
-    fn count_at(&mut self, at: Duration) -> (Option<Duration>, bool) {
+    /// one handed over in the wake at `at`, if any, and the frames dropped.
+    fn count_at(&mut self, at: Duration) -> (Option<Duration>, Vec<Duration>) {
         let (mut due_now, mut dropped) = (None, Vec::new());
         for event in self.wakes.events() {
             match event {
@@ -130,7 +162,7 @@ impl Desk {
                 Event::Came { .. } => {}
             }
         }
-        (due_now, due_now.is_some_and(|due| dropped.contains(&due)))
+        (due_now, dropped)
     }
 
     fn count(&mut self) {
@@ -138,21 +170,24 @@ impl Desk {
     }
 
     /// Lets a wake through at `ms`. What the PAR shows in the frame it handed the
-    /// adapter then, once it is on the wire; `None` if the adapter was not due or had
-    /// no spare box for it.
+    /// adapter then, once it is on the wire; `None` if the adapter was not due or
+    /// dropped it. A frame the adapter's thread dropped is counted by a later wake:
+    /// until every frame is heard or dropped, wakes at `ms` again (nothing is due).
     async fn at(&mut self, ms: u64) -> Option<[u8; 3]> {
         let at = self.time(ms);
         assert_eq!(block_in_place(|| self.wakes.wake_at(at)).unwrap(), at);
-        let (due, dropped) = self.count_at(at);
-        let served = due.is_some() && !dropped;
+        let (due, mut dropped) = self.count_at(at);
         let started = Instant::now();
         while self.heard.lock().unwrap().len() + self.dropped < self.handed {
             assert!(
                 started.elapsed() < Duration::from_secs(10),
                 "frames not on the wire"
             );
-            tokio::task::yield_now().await;
+            tokio::time::sleep(Duration::from_millis(1)).await; // poll
+            assert_eq!(block_in_place(|| self.wakes.wake_at(at)).unwrap(), at);
+            dropped.extend(self.count_at(at).1);
         }
+        let served = due.is_some_and(|due| !dropped.contains(&due));
         let last = self
             .heard
             .lock()
@@ -414,5 +449,41 @@ async fn a_stop_cancels_a_waiting_play_and_frees_its_slot() {
     assert_eq!(desk.shows(140).await, GREEN);
     // and none launches on the bar
     assert_eq!(desk.shows(2000).await, GREEN);
+    desk.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_frame_the_adapter_drops_on_its_own_thread_shows_nothing() {
+    let mut desk = Desk::dropping().await;
+    desk.at(0).await;
+    desk.start(1, "Now").await;
+    // a frame due at each, 60 a second: every other one dropped, the others red
+    let mut shown = Vec::new();
+    for ms in [20, 40, 60, 80] {
+        shown.push(desk.at(ms).await);
+    }
+    for pair in shown.windows(2) {
+        assert_ne!(pair[0].is_some(), pair[1].is_some(), "{shown:?}");
+    }
+    assert!(
+        shown.iter().flatten().all(|&shown| shown == RED),
+        "{shown:?}"
+    );
+    desk.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_feed_edit_off_the_beat_launches_on_the_beat_worked_out_from_it() {
+    let mut desk = Desk::new().await;
+    // a tap at 0 puts a beat there; red at once
+    desk.at(0).await;
+    desk.start(1, "Now").await;
+    desk.send(json!("TapTempo")).await;
+    // 120 to 60 BPM at 100 ms: 0.2 beats, then 0.8 of a second: beat 1 at 900 ms
+    desk.at(100).await;
+    desk.send(json!({"SetInternalTempo": {"bpm": 60}})).await;
+    desk.start(2, "Beat").await;
+    assert_eq!(desk.shows(880).await, RED);
+    assert_eq!(desk.shows(900).await, GREEN);
     desk.stop().await;
 }

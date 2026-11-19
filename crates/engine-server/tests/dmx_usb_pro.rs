@@ -8,8 +8,9 @@ mod common;
 
 use common::Fake;
 use engine::{
-    Adapter, ChannelNumbers, Command, Device, Engine, Levels, Open, Outcome, OutputKind,
-    OutputNumber, Rate, Refusal, RunNumbers, Sender, Status, Universes,
+    Adapter, Begun, ChannelNumbers, Color, Command, Device, Engine, Levels, Light, MixRules, Open,
+    OtherEnd, Outcome, OutputKind, OutputNumber, Rank, Rate, Refusal, Rgb, RunNumbers, Sender,
+    Status, Target, Text, Universes, When,
 };
 use outputs::dmx_usb_pro::{DmxUsbPro, Find, MESSAGE, never_wait};
 use serialport::{SerialPort, TTYPort};
@@ -315,5 +316,95 @@ fn a_removed_dmx_usb_pro_output_frees_its_port_without_another_command() {
             "the port stays held"
         );
         thread::sleep(Duration::from_millis(10)); // poll
+    }
+}
+
+/// An adapter whose port only one may hold: a second open while it is held fails. Its
+/// device holds the port a while as it closes.
+fn one_port() -> Open {
+    let held = Arc::new(AtomicBool::new(false));
+    Box::new(move |_kind| {
+        if held.swap(true, Ordering::AcqRel) {
+            return Err(std::io::Error::other("the port is held"));
+        }
+        Ok(Box::new(Port(Arc::clone(&held))) as Box<dyn Device>)
+    })
+}
+
+struct Port(Arc<AtomicBool>);
+
+impl Device for Port {
+    fn take(&mut self, _frame: &[Levels]) -> Outcome {
+        Outcome::Accepted
+    }
+}
+
+impl Drop for Port {
+    fn drop(&mut self) {
+        thread::sleep(Duration::from_millis(100)); // closing takes a while
+        self.0.store(false, Ordering::Release);
+    }
+}
+
+#[test]
+fn an_output_set_again_after_a_cancelled_wait_opens_once_its_port_is_free() {
+    // (name, a waiting play stopped just before the output is removed)
+    for (name, cancels) in [("nothing cancelled", false), ("a wait cancelled", true)] {
+        let (_engine, mut sender, wakes) =
+            Engine::start_stepped(Universes::ONE, one_port()).unwrap();
+        assert_eq!(sender.send(set_output(1, None)), Ok(()), "{name}");
+        let strip = Command::PatchStrip {
+            name: Text::new("strip").unwrap(),
+            pixels: engine_core::Pixels::try_from(1).unwrap(),
+            color: Color::Rgb,
+            at: ChannelNumbers {
+                universe: 1,
+                address: 1,
+            },
+        };
+        let step = engine_core::Step {
+            target: Target::Light { light: 1 },
+            values: Light {
+                colour: Some(Rgb::BLACK),
+                ..Light::DARK
+            },
+        };
+        let rules = MixRules {
+            other_end: OtherEnd::Stay,
+            ..MixRules::default()
+        };
+        let setup = [
+            strip,
+            Command::PutStep {
+                look: 1,
+                name: Text::new("s").unwrap(),
+                step,
+            },
+            Command::SetMixRules { rules },
+        ];
+        assert_eq!(send_all(&mut sender, &setup), [Ok(()); 3], "{name}");
+        // off the grid: the bar is ahead
+        wakes.hold().unwrap();
+        wakes.wake_at(Duration::from_millis(100)).unwrap();
+        let start = Command::StartLook {
+            look: 1,
+            rank: Rank::Show,
+            when: When::Bar,
+        };
+        let Ok(Begun::Started { play }) = sender.begin(start, &[]) else {
+            panic!("{name}: look 1 waits");
+        };
+        wakes.wake().unwrap();
+        if cancels {
+            assert_eq!(sender.send(Command::StopLook { play }), Ok(()), "{name}");
+        }
+        assert_eq!(sender.send(remove(1)), Ok(()), "{name}");
+        let Ok(Begun::Opening(opening)) = sender.begin(set_output(1, None), &[]) else {
+            panic!("{name}: opens");
+        };
+        // one wake ends the wait and sends the device back
+        wakes.wake().unwrap();
+        assert_eq!(sender.finish(opening.open()), Ok(()), "{name}");
+        wakes.run();
     }
 }

@@ -147,10 +147,12 @@ pub struct Clock {
     /// Earlier than `at` for an event sent before a frame it missed.
     sent: Duration,
     /// From this time on, the clock counts at `tempo`; `elapsed` and `grid` are the
-    /// counts then, in [`ONE`]s.
+    /// counts then, in [`ONE`]s. The grid is `part` `tempo.span`ths of a [`ONE`] past
+    /// `grid`: kept exactly, so a change of tempo moves no crossing.
     from: Duration,
     elapsed: u64,
     grid: u64,
+    part: u64,
     tempo: Tempo,
     feed: Bpm,
     /// A one tap that lapsed stays here: [`Clock::source`] tells it as the feed.
@@ -165,6 +167,7 @@ impl Clock {
         from: Duration::ZERO,
         elapsed: 0,
         grid: 0,
+        part: 0,
         tempo: Bpm::FEED.tempo(),
         feed: Bpm::FEED,
         source: Source::Feed,
@@ -209,7 +212,28 @@ impl Clock {
 
     /// Where the grid is now, in [`ONE`]s.
     pub fn grid(&self) -> u64 {
-        self.grid.saturating_add(self.count(self.at))
+        self.position().0
+    }
+
+    /// Where the grid is now: whole [`ONE`]s, and the part of one in `tempo.span`ths. On
+    /// a beat's crossing, exactly on that beat: the grid is there all that nanosecond.
+    fn position(&self) -> (u64, u64) {
+        let span = u128::from(self.tempo.span.max(1));
+        let total = self
+            .since(self.at)
+            .saturating_mul(u128::from(ONE) * u128::from(self.tempo.beats))
+            .saturating_add(u128::from(self.part));
+        let grid = self
+            .grid
+            .saturating_add(u64::try_from(total / span).unwrap_or(u64::MAX));
+        let part = u64::try_from(total % span).unwrap_or(0);
+        let below = grid / ONE;
+        let past = (self.grid, self.part) > (below.saturating_mul(ONE), 0);
+        if !past && self.crossing(below) == self.at {
+            (below.saturating_mul(ONE), 0)
+        } else {
+            (grid, part)
+        }
     }
 
     /// The beat a launch asked for now waits for: `None` for at once. A request on the
@@ -226,16 +250,22 @@ impl Clock {
     /// The first beat whose crossing is now or later: the one the grid is on, else the
     /// next. Decided by [`Clock::crossing`], as a launch is.
     fn first_beat(&self) -> u64 {
-        let below = self.grid() / ONE;
-        let on = below.saturating_mul(ONE) >= self.grid && self.crossing(below) == self.at;
-        if on { below } else { below.saturating_add(1) }
+        match self.position() {
+            (grid, 0) if grid.is_multiple_of(ONE) => grid / ONE,
+            (grid, _) => (grid / ONE).saturating_add(1),
+        }
     }
 
     /// When the grid reaches beat `beat`: the last change if it was there already.
     pub fn crossing(&self, beat: u64) -> Duration {
-        let to = u128::from(beat.saturating_mul(ONE).saturating_sub(self.grid));
-        let nanos = (to * u128::from(self.tempo.span))
-            .div_ceil(u128::from(ONE) * u128::from(self.tempo.beats.max(1)));
+        let span = u128::from(self.tempo.span);
+        let at = u128::from(self.grid)
+            .saturating_mul(span)
+            .saturating_add(u128::from(self.part));
+        let to = u128::from(beat.saturating_mul(ONE))
+            .saturating_mul(span)
+            .saturating_sub(at);
+        let nanos = to.div_ceil(u128::from(ONE) * u128::from(self.tempo.beats.max(1)));
         self.from.saturating_add(Duration::from_nanos(
             u64::try_from(nanos).unwrap_or(u64::MAX),
         ))
@@ -269,6 +299,7 @@ impl Clock {
         let beat = self.first_beat();
         Self {
             grid: beat.saturating_mul(ONE),
+            part: 0,
             tempo,
             source,
             ..self.rebase()
@@ -299,29 +330,46 @@ impl Clock {
     /// taken again rounds, and would move a crossing.
     fn at_tempo(self, tempo: Tempo) -> Self {
         if self.tempo.same(tempo) {
-            self
-        } else {
-            Self {
-                tempo,
-                ..self.rebase()
-            }
+            return self;
+        }
+        let based = self.rebase();
+        // the part in the new span's units, rounded up: a crossing never comes late
+        let part = (u128::from(based.part) * u128::from(tempo.span))
+            .div_ceil(u128::from(based.tempo.span.max(1)));
+        let (grid, part) = match u64::try_from(part) {
+            Ok(part) if part < tempo.span => (based.grid, part),
+            Ok(_) | Err(_) => (based.grid.saturating_add(1), 0),
+        };
+        Self {
+            grid,
+            part,
+            tempo,
+            ..based
         }
     }
 
     /// The same clock, its counts taken now: ready for a change of tempo or grid.
     fn rebase(self) -> Self {
+        let (grid, part) = self.position();
         Self {
             from: self.at,
             elapsed: self.elapsed_now(),
-            grid: self.grid(),
+            grid,
+            part,
             ..self
         }
     }
 
+    /// Nanoseconds from the last change to `t`.
+    fn since(&self, t: Duration) -> u128 {
+        t.saturating_sub(self.from).as_nanos()
+    }
+
     /// Beats from the last change to `t`, in [`ONE`]s.
     fn count(&self, t: Duration) -> u64 {
-        let since = t.saturating_sub(self.from).as_nanos();
-        let count = since.saturating_mul(u128::from(ONE) * u128::from(self.tempo.beats))
+        let count = self
+            .since(t)
+            .saturating_mul(u128::from(ONE) * u128::from(self.tempo.beats))
             / u128::from(self.tempo.span.max(1));
         u64::try_from(count).unwrap_or(u64::MAX)
     }
@@ -560,9 +608,10 @@ mod tests {
         let fed = Clock::START.settle(at_60_s);
         assert_eq!(fed.next(When::Bar), Some(124), "124 BPM, a bar at 60 s");
         assert_eq!(fed.crossing(124), at_60_s);
-        // 120 to 60 BPM at 100 ms: 0.2 beats, beat 1 at the clock's own crossing
+        // 120 to 60 BPM at 100 ms: 0.2 beats, then 0.8 of a second each: beat 1 at 900 ms
         let slowed = run(&[Feed(100, 60)]);
-        let on = slowed.settle(slowed.crossing(1));
+        assert_eq!(slowed.crossing(1), ms(900), "slowed at 100 ms, beat 1");
+        let on = slowed.settle(ms(900));
         assert!(on.reached(1));
         assert_eq!(on.next(When::Beat), Some(1), "a beat asked on its crossing");
         assert_eq!(
@@ -589,6 +638,24 @@ mod tests {
         ];
         for (name, events, beat, crossing) in cases {
             assert_eq!(run(&events).crossing(beat), crossing, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_change_on_a_crossing_keeps_the_grid_on_its_beat() {
+        // 124 BPM: no beat is a whole nanosecond. (name, the change on the crossing of
+        // `on`, asked, waits for)
+        let on = |beat| Clock::START.settle(Clock::START.crossing(beat));
+        let cases: [(&str, Clock, When, u64); 5] = [
+            ("on beat 16, a bar", on(16), When::Bar, 16),
+            ("the feed on beat 16, a bar", on(16).set_feed(bpm(120)), When::Bar, 16),
+            ("the feed on beat 16, a beat", on(16).set_feed(bpm(120)), When::Beat, 16),
+            ("the feed and a tap on beat 3, a beat", on(3).set_feed(bpm(120)).tap(), When::Beat, 3),
+            ("the feed and a tap on beat 3, a bar", on(3).set_feed(bpm(120)).tap(), When::Bar, 4),
+        ];
+        for (name, clock, when, beat) in cases {
+            assert_eq!(clock.next(when), Some(beat), "{name}");
+            assert_eq!(clock.reached(beat), beat != 4, "{name}");
         }
     }
 

@@ -1135,25 +1135,26 @@ mod tests {
         let state = wake(at_120(), 1600, &[(1100, start(When::Now))]);
         assert!(close(state.plays.iter().next().unwrap().start, 3.2));
         // a change of tempo after it, in the same wake: still beat zero in that frame
-        let tempo = |at, command| {
-            let state = wake(at_120(), 500, &[(100, start(When::Now)), (at, command)]);
+        let tempo = |sent: &[(u64, EngineCommand)]| {
+            let mut sent = sent.to_vec();
+            sent.insert(0, (100, start(When::Now)));
+            let state = wake(at_120(), 500, &sent);
             let play = *state.plays.iter().next().unwrap();
             (play.start, state.clock.elapsed_now())
         };
-        let changes = [
-            (
-                "the feed at 60",
-                200,
-                EngineCommand::Feed {
-                    bpm: Bpm::new(60).unwrap(),
-                },
-            ),
-            ("a tap", 200, EngineCommand::Tap),
-            ("a tap at its frame", 500, EngineCommand::Tap),
-            ("released", 200, EngineCommand::ReleaseTempo),
+        let slow = EngineCommand::Feed {
+            bpm: Bpm::new(60).unwrap(),
+        };
+        let keep = EngineCommand::Keep { play: play(0) };
+        let changes: [(&str, &[(u64, EngineCommand)]); 5] = [
+            ("the feed at 60", &[(200, slow)]),
+            ("a tap", &[(200, EngineCommand::Tap)]),
+            ("a tap at its frame", &[(500, EngineCommand::Tap)]),
+            ("released", &[(200, EngineCommand::ReleaseTempo)]),
+            ("kept, then the feed at 60", &[(150, keep), (200, slow)]),
         ];
-        for (name, at, command) in changes {
-            let (start, elapsed) = tempo(at, command);
+        for (name, sent) in changes {
+            let (start, elapsed) = tempo(sent);
             assert_eq!(start, elapsed, "{name}");
         }
         // on a beat in a late wake: from its crossing at 1500, 0.2 beats on by the frame

@@ -261,14 +261,15 @@ impl Plays {
         }
     }
 
-    /// The plays started at once since the clock was last at the frame `now` begin at
-    /// it on `clock`, which changed tempo since they were asked for: beat zero in their
-    /// applying frame.
+    /// The plays started at once since the clock was last at the frame `now`, kept or
+    /// not, begin at it on `clock`, which changed tempo since they were asked for: beat
+    /// zero in their applying frame.
     pub fn begin_at(&mut self, clock: &Clock, now: Duration) {
         let settled = clock.elapsed_now();
         for play in self.0.iter_mut().flatten() {
-            // a start past the clock's count is one made for the frame ahead
-            if play.state == PlayState::Playing && play.start > settled {
+            // a start past the clock's count is one made for the frame ahead; a waiting
+            // play takes its start at its launch
+            if play.start > settled {
                 play.start = clock.elapsed_at(now);
             }
         }
