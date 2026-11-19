@@ -1,0 +1,337 @@
+//! End to end with the engine process and `--show <file>`: patch, stop, start again
+//! without the library: the patch and the groups are there and light up on DDP. A file
+//! the engine cannot open is left alone and the picture says why. A save that cannot be
+//! written leaves the file as it was, and the picture says so until the next save.
+
+use futures_util::{SinkExt, StreamExt};
+use serde_json::{Value, json};
+use std::io::{BufRead, BufReader};
+use std::net::TcpListener;
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
+use tokio::net::{TcpStream, UdpSocket};
+use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
+
+type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
+
+/// A port nobody listens on right now.
+fn free_port() -> String {
+    let port = TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    format!("127.0.0.1:{port}")
+}
+
+/// A show file of this test run, not there yet.
+fn show_file(name: &str) -> PathBuf {
+    let path = std::env::temp_dir().join(format!(
+        "bossylights-show-{}-{name}.json",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_dir(saving(&path));
+    path
+}
+
+fn saving(path: &Path) -> PathBuf {
+    engine_server::show::saving(path)
+}
+
+/// An engine process, killed when the test ends however it ends.
+struct Running(Child);
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// Starts the engine on `listen` with the show file `show`, and the test definitions when
+/// `library`. Returns once it listens.
+fn engine(listen: &str, show: &Path, library: bool) -> Running {
+    let definitions =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../fixture-library/tests/definitions");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_bossylights-engine"));
+    command.args(["--listen", listen]).arg("--show").arg(show);
+    if library {
+        command.arg("--fixtures").arg(definitions);
+    }
+    let mut running = Running(
+        command
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let mut line = String::new();
+    BufReader::new(running.0.stdout.as_mut().unwrap())
+        .read_line(&mut line)
+        .unwrap();
+    assert!(line.contains("listening"), "{line}");
+    running
+}
+
+/// Sends `Stop` and waits at most 10 s for the process to end well.
+async fn stop(socket: &mut Socket, Running(engine): &mut Running) {
+    assert_eq!(answer_to(socket, &json!("Stop")).await, json!("Stopping"));
+    let until = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(status) = engine.try_wait().unwrap() {
+            assert!(status.success(), "{status}");
+            return;
+        }
+        assert!(Instant::now() < until, "the engine did not end within 10 s");
+        thread::sleep(Duration::from_millis(50)); // poll
+    }
+}
+
+async fn connect(listen: &str) -> Socket {
+    let (socket, _) = tokio_tungstenite::connect_async(format!("ws://{listen}/api"))
+        .await
+        .unwrap();
+    socket
+}
+
+/// Sends `request`, returns the next message that is not a `Changed`.
+async fn answer_to(socket: &mut Socket, request: &Value) -> Value {
+    socket
+        .send(Message::text(request.to_string()))
+        .await
+        .unwrap();
+    loop {
+        let message = tokio::time::timeout(Duration::from_secs(5), socket.next())
+            .await
+            .expect("a message within 5 s")
+            .unwrap()
+            .unwrap();
+        let reply: Value = serde_json::from_str(message.to_text().unwrap()).unwrap();
+        if reply.get("Changed").is_none() {
+            return reply;
+        }
+    }
+}
+
+async fn command(socket: &mut Socket, command: Value) -> Value {
+    answer_to(socket, &json!({"Send": {"command": command}})).await
+}
+
+/// Asks until the picture shows `wanted` under `key`: a picture is of a frame, and the
+/// frame after a command may not be taken yet. The picture.
+async fn until_picture(socket: &mut Socket, key: &str, wanted: &Value) -> Value {
+    let started = Instant::now();
+    loop {
+        let picture = answer_to(socket, &json!("Query")).await["Picture"].clone();
+        if picture[key] == *wanted {
+            return picture;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "{key} {}, wanted {wanted}",
+            picture[key]
+        );
+    }
+}
+
+async fn until_show(socket: &mut Socket, wanted: &Value) -> Value {
+    until_picture(socket, "show", wanted).await
+}
+
+fn par(name: &str, address: u16) -> Value {
+    json!({"Patch": {
+        "name": name, "maker": "Generic", "model": "Generic RGB", "mode": "RGB",
+        "at": {"universe": 1, "address": address},
+    }})
+}
+
+fn strip(name: &str, address: u16) -> Value {
+    json!({"PatchStrip": {
+        "name": name, "pixels": 3, "color": "Rgb", "at": {"universe": 1, "address": address},
+    }})
+}
+
+/// Patches `par`, again until the library is read. The reply.
+async fn patch_once_read(socket: &mut Socket, par: Value) -> Value {
+    let started = Instant::now();
+    loop {
+        let reply = command(socket, par.clone()).await;
+        if reply != json!({"Refused": {"reason": "NoSuchFixture"}}) {
+            return reply;
+        }
+        assert!(started.elapsed() < Duration::from_secs(10), "no library");
+    }
+}
+
+/// Waits until universe 1 from address 37 is `bytes` on the DDP socket.
+async fn until_ddp(udp: &UdpSocket, bytes: &[u8]) {
+    let started = Instant::now();
+    let mut packet = vec![0; 1500];
+    let mut seen = None;
+    loop {
+        if let Ok(Ok(size)) =
+            tokio::time::timeout(Duration::from_millis(100), udp.recv(&mut packet)).await
+        {
+            let end = 10 + 36 + bytes.len();
+            seen = (size >= end).then(|| packet[10 + 36..end].to_vec());
+        }
+        if seen.as_deref() == Some(bytes) {
+            return;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "from 37: {seen:?}, wanted {bytes:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn patch_stop_start_the_patch_and_groups_are_there_and_light_up_without_the_library() {
+    let file = show_file("restart");
+    let listen = free_port();
+    let mut first = engine(&listen, &file, true);
+    let mut socket = connect(&listen).await;
+    until_show(&mut socket, &json!("Kept")).await;
+    assert_eq!(
+        patch_once_read(&mut socket, par("PAR 1", 37)).await,
+        json!({"Patched": {"fixture": 1}})
+    );
+    for (n, address) in [(2, 40), (3, 43)] {
+        assert_eq!(
+            command(&mut socket, par(&format!("PAR {n}"), address)).await,
+            json!({"Patched": {"fixture": n}})
+        );
+    }
+    // a hole: fixtures 1 and 3 on lights 1 and 3
+    let unpatch = json!({"Unpatch": {"fixture": 2}});
+    assert_eq!(command(&mut socket, unpatch).await, json!("Accepted"));
+    let front = json!({"SetGroup": {"name": "front", "members": [
+        {"Fixture": {"fixture": 3}}, {"Fixture": {"fixture": 1}},
+    ]}});
+    assert_eq!(command(&mut socket, front).await, json!("Accepted"));
+    let groups = json!([{"name": "front", "members": [
+        {"Fixture": {"fixture": 3}}, {"Fixture": {"fixture": 1}},
+    ]}]);
+    let before = until_picture(&mut socket, "groups", &groups).await;
+    stop(&mut socket, &mut first).await;
+    assert!(file.exists(), "saved");
+    assert!(!saving(&file).exists(), "the new file was renamed");
+
+    let mut second = engine(&listen, &file, false);
+    let mut socket = connect(&listen).await;
+    let after = until_show(&mut socket, &json!("Kept")).await;
+    assert_eq!(after["patch"], before["patch"]);
+    assert_eq!(after["groups"], before["groups"]);
+    assert_eq!(
+        after["patch"].as_array().unwrap().len(),
+        2,
+        "{}",
+        after["patch"]
+    );
+
+    let udp = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let ddp = json!({"Ddp": {"address": udp.local_addr().unwrap().to_string(), "color": "Rgb"}});
+    let set = json!({"SetOutput": {
+        "output": 1, "kind": ddp, "universes": {"first": 1, "count": 1}, "rate": null,
+    }});
+    assert_eq!(command(&mut socket, set).await, json!("Accepted"));
+    let group = json!({"Group": {"group": "front"}});
+    let full = json!({"SetIntensity": {"target": group, "intensity": 65535}});
+    let red = json!({"SetColour": {"target": group, "red": 65535, "green": 0, "blue": 0}});
+    assert_eq!(command(&mut socket, full).await, json!("Accepted"));
+    assert_eq!(command(&mut socket, red).await, json!("Accepted"));
+    until_ddp(&udp, &[255, 0, 0, 0, 0, 0, 255, 0, 0]).await;
+    stop(&mut socket, &mut second).await;
+    let _ = std::fs::remove_file(&file);
+}
+
+#[tokio::test]
+async fn a_file_the_engine_cannot_open_is_left_alone_and_the_picture_says_why() {
+    let mode = r#"{"name":"RGB","channels":[],"pixels":[],"layout":null,"degrees":null}"#;
+    let past = format!(
+        r#"{{"version":1,"patch":[{{"fixture":1,"name":"PAR","mode":"m","at":{{"universe":9,"address":1}},"first":1}}],"groups":[],"modes":{{"m":{{"maker":"Generic","model":"Generic RGB","mode":{mode}}}}}}}"#
+    );
+    // (case, the file, why)
+    let cases = [
+        (
+            "newer",
+            r#"{"version": 2, "patch": [], "outputs": []}"#.to_string(),
+            json!({"Newer": {"version": 2}}),
+        ),
+        (
+            "broken",
+            "not a show file".to_string(),
+            json!({"Broken": {"line": 1, "column": 2}}),
+        ),
+        (
+            "past_the_universes",
+            past,
+            json!({"Refused": {"reason": {"NoSuchUniverse": {"universes": 4}}}}),
+        ),
+    ];
+    for (case, text, why) in cases {
+        let file = show_file(case);
+        std::fs::write(&file, &text).unwrap();
+        let listen = free_port();
+        let mut running = engine(&listen, &file, false);
+        let mut socket = connect(&listen).await;
+        let picture = until_show(&mut socket, &json!({"LeftAlone": {"why": why}})).await;
+        assert_eq!(picture["patch"], json!([]), "{case}");
+        // a change is not saved
+        assert_eq!(
+            command(&mut socket, strip("Strip", 1)).await,
+            json!({"Patched": {"fixture": 1}}),
+            "{case}"
+        );
+        stop(&mut socket, &mut running).await;
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), text, "{case}");
+        assert!(!saving(&file).exists(), "{case}");
+        let _ = std::fs::remove_file(&file);
+    }
+}
+
+#[tokio::test]
+async fn a_save_that_cannot_be_written_leaves_the_file_as_it_was_until_the_next_save() {
+    let file = show_file("not_saved");
+    let listen = free_port();
+    let mut running = engine(&listen, &file, false);
+    let mut socket = connect(&listen).await;
+    until_show(&mut socket, &json!("Kept")).await;
+    assert_eq!(
+        command(&mut socket, strip("A", 1)).await,
+        json!({"Patched": {"fixture": 1}})
+    );
+    until_show(&mut socket, &json!("Kept")).await;
+    let started = Instant::now();
+    while !std::fs::read_to_string(&file).is_ok_and(|text| text.contains("\"A\"")) {
+        assert!(started.elapsed() < Duration::from_secs(10), "A not saved");
+        tokio::task::yield_now().await;
+    }
+    let saved = std::fs::read_to_string(&file).unwrap();
+
+    // the new file cannot be made: a folder has its name
+    std::fs::create_dir(saving(&file)).unwrap();
+    assert_eq!(
+        command(&mut socket, strip("B", 20)).await,
+        json!({"Patched": {"fixture": 2}})
+    );
+    until_show(&mut socket, &json!("NotSaved")).await;
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), saved);
+
+    std::fs::remove_dir(saving(&file)).unwrap();
+    assert_eq!(
+        command(&mut socket, strip("C", 40)).await,
+        json!({"Patched": {"fixture": 3}})
+    );
+    until_show(&mut socket, &json!("Kept")).await;
+    stop(&mut socket, &mut running).await;
+    let text = std::fs::read_to_string(&file).unwrap();
+    for name in ["\"A\"", "\"B\"", "\"C\""] {
+        assert!(text.contains(name), "{name}: {text}");
+    }
+    let _ = std::fs::remove_file(&file);
+}

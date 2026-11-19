@@ -31,7 +31,11 @@ patch: Array<Patched>,
 /**
  * Every group, in the order they were made.
  */
-groups: Array<Grouped>, universes: Array<Levels>, } } | { "Changed": { state: State, project: Project, library: Library, 
+groups: Array<Grouped>, 
+/**
+ * Whether the patch and the groups are kept in a show file.
+ */
+show: ShowFile, universes: Array<Levels>, } } | { "Changed": { state: State, project: Project, library: Library, 
 /**
  * The whole patch when it changed since the last message, else `None`.
  */
@@ -39,7 +43,11 @@ patch: Array<Patched> | null,
 /**
  * Every group when the patch changed since the last message, else `None`.
  */
-groups: Array<Grouped> | null, channels: Array<ChannelLevel>, } } | { "Found": { fixtures: Array<Match>, } } | { "Fixture": { maker: string, model: string, kind: FixtureKind, modes: Array<ModeChannels>, } } | { "Failures": { failures: Array<Failure>, } };
+groups: Array<Grouped> | null, 
+/**
+ * Whether the patch and the groups are kept in a show file.
+ */
+show: ShowFile, channels: Array<ChannelLevel>, } } | { "Found": { fixtures: Array<Match>, } } | { "Fixture": { maker: string, model: string, kind: FixtureKind, modes: Array<ModeChannels>, } } | { "Failures": { failures: Array<Failure>, } };
 
 export type Refusal = "NotACommand" | { "NoSuchUniverse": { universes: number, } } | "NoSuchAddress" | "QueueFull" | "CannotOpen" | "NoSuchFixture" | "Opening" | { "TooManyUniverses": { most: number, } } | "NoSuchMode" | { "PastTheEnd": { channels: number, } } | { "NotStreamed": { first: number, last: number, } } | { "StreamsFixture": { fixture: number, } } | "NoLightsLeft" | "NotPatched" | "NoSuchLight" | "NoSuchGroup";
 
@@ -149,5 +157,9 @@ export type Grouped = { name: string,
  * In the order they were set.
  */
 members: Array<Member>, };
+
+export type ShowFile = "None" | "Kept" | "NotSaved" | { "LeftAlone": { why: Unopened, } };
+
+export type Unopened = "CannotRead" | { "Broken": { line: number, column: number, } } | { "Newer": { version: number, } } | { "Taken": { fixture: number, } } | { "Refused": { reason: Refusal, } };
 
 export const API_VERSION = 2;

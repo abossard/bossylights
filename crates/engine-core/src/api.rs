@@ -13,7 +13,7 @@
 //! | anything else | `{"Refused": {"reason": "NotACommand"}}` |
 
 use crate::library::{Failure, FixtureKind, Library, Match, ModeChannels, Text};
-use crate::{ChannelLevel, Command, Grouped, Levels, Patched, Project, State};
+use crate::{ChannelLevel, Command, Grouped, Levels, Patched, Project, ShowFile, State};
 use serde::{Deserialize, Serialize};
 
 /// The version of this API. `GET /version` answers it as text. A client that speaks
@@ -76,6 +76,8 @@ pub enum Reply<'a> {
         patch: &'a [Patched<'a>],
         /// Every group, in the order they were made.
         groups: &'a [Grouped<'a>],
+        /// Whether the patch and the groups are kept in a show file.
+        show: ShowFile,
         universes: &'a [Levels],
     },
     /// A new frame: the state, and the channels whose held level changed since the last
@@ -88,6 +90,8 @@ pub enum Reply<'a> {
         patch: Option<&'a [Patched<'a>]>,
         /// Every group when the patch changed since the last message, else `None`.
         groups: Option<&'a [Grouped<'a>]>,
+        /// Whether the patch and the groups are kept in a show file.
+        show: ShowFile,
         channels: &'a [ChannelLevel],
     },
     /// The answer to `Search`: at most [`MATCHES`], best first. Empty while the library

@@ -861,6 +861,7 @@ dependencies = [
  "rtrb",
  "serde_json",
  "serialport",
+ "show-file",
  "tokio",
  "tokio-tungstenite",
 ]
@@ -918,6 +919,7 @@ name = "fixture-library"
 version = "0.0.0"
 dependencies = [
  "roxmltree",
+ "serde",
 ]
 
 [[package]]
@@ -3207,6 +3209,17 @@ name = "shlex"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
+
+[[package]]
+name = "show-file"
+version = "0.0.0"
+dependencies = [
+ "engine-core",
+ "fixture-library",
+ "rig",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "simd-adler32"

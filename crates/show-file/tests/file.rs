@@ -1,0 +1,338 @@
+//! The show file: a patch written and read back is the same patch; a file that fails a
+//! check of the commands is not read; one change of a fixture is one line.
+
+use engine_core::{
+    ChannelNumbers, Color, Lights, Member, Members, PatchCommand, Pixels, Refusal, Text, Universes,
+    Unopened,
+};
+use fixture_library::{Fixture, parse};
+use rig::Patch;
+use std::path::Path;
+
+fn text(text: &str) -> Text {
+    Text::new(text).unwrap()
+}
+
+const fn at(universe: u16, address: u16) -> ChannelNumbers {
+    ChannelNumbers { universe, address }
+}
+
+fn par(name: &str, address: u16) -> PatchCommand {
+    PatchCommand::Patch {
+        name: text(name),
+        maker: text("Generic"),
+        model: text("Generic RGB"),
+        mode: text("RGB"),
+        at: at(1, address),
+    }
+}
+
+/// A bar of 8 pixels at 2.1: 9 lights, the bar first.
+fn bar() -> PatchCommand {
+    PatchCommand::Patch {
+        name: text("Bar"),
+        maker: text("XStatic"),
+        model: text("X-240Bar RGB"),
+        mode: text("26 Channel"),
+        at: at(2, 1),
+    }
+}
+
+fn strip(pixels: u16) -> PatchCommand {
+    PatchCommand::PatchStrip {
+        name: text("Strip"),
+        pixels: Pixels::try_from(pixels).unwrap(),
+        color: Color::Rgbw,
+        at: at(2, 100),
+    }
+}
+
+fn group(name: &str, members: &[Member]) -> PatchCommand {
+    PatchCommand::SetGroup {
+        name: text(name),
+        members: Members::new(members).unwrap(),
+    }
+}
+
+const fn f(fixture: u16) -> Member {
+    Member::Fixture { fixture }
+}
+
+const fn l(light: u16) -> Member {
+    Member::Light { light }
+}
+
+fn definition(file: &str) -> Fixture {
+    let folder = Path::new(env!("CARGO_MANIFEST_DIR")).join("../fixture-library/tests/definitions");
+    parse(file, &std::fs::read(folder.join(file)).unwrap()).unwrap()
+}
+
+fn library() -> Vec<Fixture> {
+    ["Generic-Generic-RGB.qxf", "XStatic-X-240Bar-RGB.qxf"]
+        .map(definition)
+        .into()
+}
+
+/// The generic PAR, its RGB mode with another default on red: the library changed.
+fn changed_library() -> Vec<Fixture> {
+    let mut par = definition("Generic-Generic-RGB.qxf");
+    for mode in &mut par.modes {
+        mode.channels[0].default = Some(9);
+    }
+    vec![par]
+}
+
+fn empty() -> Patch {
+    Patch::new(Universes::new(2).unwrap(), Lights::new(64).unwrap())
+}
+
+/// `commands` from an empty patch, each with its library; every one is taken.
+fn patched(commands: Vec<(PatchCommand, Vec<Fixture>)>) -> Patch {
+    commands
+        .into_iter()
+        .fold(empty(), |patch, (command, library)| {
+            match patch.update(command, &library) {
+                Ok((Some(next), _)) => next,
+                Ok((None, _)) => patch,
+                Err(reason) => panic!("{command:?}: {reason:?}"),
+            }
+        })
+}
+
+fn lib(command: PatchCommand) -> (PatchCommand, Vec<Fixture>) {
+    (command, library())
+}
+
+#[test]
+fn a_patch_written_and_read_back_is_the_same_patch() {
+    let cases: Vec<(&str, Vec<(PatchCommand, Vec<Fixture>)>)> = vec![
+        ("empty", vec![]),
+        ("one PAR", vec![lib(par("PAR 1", 37))]),
+        (
+            "three PARs, the first unpatched: numbers 2 and 3, lights 2 and 3",
+            vec![
+                lib(par("PAR 1", 1)),
+                lib(par("PAR 2", 4)),
+                lib(par("PAR 3", 7)),
+                lib(PatchCommand::Unpatch { fixture: 1 }),
+            ],
+        ),
+        (
+            "unpatched, then a bar: number 1, lights from 4",
+            vec![
+                lib(par("PAR 1", 1)),
+                lib(par("PAR 2", 4)),
+                lib(PatchCommand::Unpatch { fixture: 1 }),
+                lib(bar()),
+            ],
+        ),
+        (
+            "groups in their order, of fixtures and lights",
+            vec![
+                lib(par("PAR 1", 1)),
+                lib(par("PAR 2", 4)),
+                lib(bar()),
+                lib(group("front", &[f(2), f(1)])),
+                lib(group("pixels", &[l(5), l(4), f(3)])),
+                lib(group("empty", &[])),
+            ],
+        ),
+        ("a strip, no definition", vec![lib(strip(30))]),
+        (
+            "two fixtures on the same channels",
+            vec![lib(par("PAR 1", 1)), lib(par("PAR 2", 2))],
+        ),
+        (
+            "one fixture in two versions of its mode",
+            vec![
+                lib(par("PAR 1", 1)),
+                (par("PAR 2", 4), changed_library()),
+                lib(par("PAR 3", 7)),
+            ],
+        ),
+    ];
+    for (case, commands) in cases {
+        let patch = patched(commands);
+        let file = show_file::write(&patch).unwrap();
+        let read = show_file::read(&file, &empty())
+            .unwrap_or_else(|why| panic!("{case}: {why:?}\n{file}"));
+        assert_eq!(read, patch, "{case}\n{file}");
+        assert_eq!(
+            show_file::write(&read).unwrap(),
+            file,
+            "{case}: written again"
+        );
+    }
+}
+
+#[test]
+fn a_file_that_fails_a_check_of_the_commands_is_not_read() {
+    let two = patched(vec![lib(par("PAR 1", 1)), lib(par("PAR 2", 4))]);
+    let file = show_file::write(&two).unwrap();
+    let row1 = r#"{"fixture":1,"name":"PAR 1","mode":"Generic / Generic RGB / RGB","at":{"universe":1,"address":1},"first":1}"#;
+    let row2 = r#"{"fixture":2,"name":"PAR 2","mode":"Generic / Generic RGB / RGB","at":{"universe":1,"address":4},"first":2}"#;
+    assert!(file.contains(row1) && file.contains(row2), "{file}");
+    let long = "x".repeat(Text::MOST + 1);
+    let refused = |reason| Unopened::Refused { reason };
+    // (case, what is replaced, by what, why the file is not read)
+    let cases = [
+        (
+            "a newer version",
+            r#""version": 1"#,
+            r#""version": 2"#,
+            Unopened::Newer { version: 2 },
+        ),
+        (
+            "version 0",
+            r#""version": 1"#,
+            r#""version": 0"#,
+            Unopened::Broken {
+                line: 2,
+                column: 14,
+            },
+        ),
+        (
+            "no version",
+            "\"version\": 1,\n",
+            "",
+            Unopened::Broken {
+                line: 45,
+                column: 1,
+            },
+        ),
+        (
+            "not JSON",
+            "\"groups\": []",
+            "\"groups\": [",
+            Unopened::Broken {
+                line: 7,
+                column: 14,
+            },
+        ),
+        (
+            "a key it does not know",
+            "\"groups\": []",
+            "\"groups\": [], \"outputs\": []",
+            Unopened::Broken {
+                line: 7,
+                column: 25,
+            },
+        ),
+        (
+            "fixture 0",
+            r#""fixture":2"#,
+            r#""fixture":0"#,
+            Unopened::Broken {
+                line: 5,
+                column: 16,
+            },
+        ),
+        (
+            "a name too long",
+            r#""name":"PAR 2""#,
+            &format!(r#""name":"{long}""#),
+            Unopened::Broken {
+                line: 5,
+                column: 155,
+            },
+        ),
+        (
+            "no such mode",
+            r#""fixture":2,"name":"PAR 2","mode":"Generic"#,
+            r#""fixture":2,"name":"PAR 2","mode":"Other"#,
+            refused(Refusal::NoSuchMode),
+        ),
+        (
+            "no such universe",
+            r#""universe":1,"address":4"#,
+            r#""universe":3,"address":4"#,
+            refused(Refusal::NoSuchUniverse { universes: 2 }),
+        ),
+        (
+            "past the end",
+            r#""universe":1,"address":4"#,
+            r#""universe":2,"address":511"#,
+            refused(Refusal::PastTheEnd { channels: 3 }),
+        ),
+        (
+            "light 0",
+            r#""first":2"#,
+            r#""first":0"#,
+            refused(Refusal::NoLightsLeft),
+        ),
+        (
+            "past the last light",
+            r#""first":2"#,
+            r#""first":65"#,
+            refused(Refusal::NoLightsLeft),
+        ),
+        (
+            "the number of another",
+            r#""fixture":2"#,
+            r#""fixture":1"#,
+            Unopened::Taken { fixture: 1 },
+        ),
+        (
+            "a light of another",
+            r#""first":2"#,
+            r#""first":1"#,
+            Unopened::Taken { fixture: 2 },
+        ),
+        (
+            "a group of a fixture not patched",
+            "\"groups\": []",
+            r#""groups": [{"name":"front","members":[{"Fixture":{"fixture":9}}]}]"#,
+            refused(Refusal::NotPatched),
+        ),
+        (
+            "a group of a light no fixture has",
+            "\"groups\": []",
+            r#""groups": [{"name":"front","members":[{"Light":{"light":3}}]}]"#,
+            refused(Refusal::NoSuchLight),
+        ),
+    ];
+    let wrong: Vec<String> = cases
+        .into_iter()
+        .filter_map(|(case, from, to, why)| {
+            assert!(file.contains(from), "{case}: {from}");
+            let read = show_file::read(&file.replacen(from, to, 1), &empty());
+            (read != Err(why)).then(|| format!("{case}: {read:?}, wanted {why:?}"))
+        })
+        .collect();
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn a_change_of_one_fixture_is_one_line_of_the_file() {
+    let before = patched(vec![
+        lib(par("PAR 1", 1)),
+        lib(par("PAR 2", 4)),
+        lib(par("PAR 3", 7)),
+        lib(group("front", &[f(3), f(1)])),
+    ]);
+    let cases = [
+        (
+            "move",
+            PatchCommand::Move {
+                fixture: 2,
+                at: at(1, 100),
+            },
+        ),
+        (
+            "rename",
+            PatchCommand::Rename {
+                fixture: 2,
+                name: text("Back"),
+            },
+        ),
+        ("group", group("front", &[f(3), f(1), f(2)])),
+    ];
+    let old = show_file::write(&before).unwrap();
+    for (case, command) in cases {
+        let (after, _) = before.update(command, &[]).unwrap();
+        let new = show_file::write(&after.unwrap()).unwrap();
+        let changed = old.lines().zip(new.lines()).filter(|(a, b)| a != b).count();
+        assert_eq!(old.lines().count(), new.lines().count(), "{case}\n{new}");
+        assert_eq!(changed, 1, "{case}\n{new}");
+    }
+}

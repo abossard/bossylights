@@ -24,6 +24,7 @@ mod output;
 mod patch;
 mod project;
 mod resolve;
+mod show;
 
 pub use api::{API_VERSION, MATCHES, Refusal, Reply, Request};
 pub use channel::{
@@ -45,6 +46,7 @@ pub use resolve::{
     Less, Light, LightNumber, LightRun, Lights, MAX_LIGHTS, Part, Place, Scale, Sense, Take,
     Writer, resolve,
 };
+pub use show::{ShowFile, Unopened};
 
 use core::time::Duration;
 use serde::{Deserialize, Serialize};
@@ -1344,6 +1346,8 @@ mod tests {
                 Layout::decl(&config),
                 Member::decl(&config),
                 Grouped::decl(&config),
+                ShowFile::decl(&config),
+                Unopened::decl(&config),
             ]
             .map(|declaration| format!("export {declaration}\n"))
             .join("\n"),

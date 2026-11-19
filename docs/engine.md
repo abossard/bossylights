@@ -100,6 +100,26 @@ A target is `{"Fixture": {"fixture": 1}}` (all its lights), `{"Light": {"light":
 | State | `library` in `Picture` and `Changed`: `NoFolder`, `Reading`, `Read { read, failed }`, `CannotOpen` |
 | Requests | `Search { text }`: best matches, each mode with its channel count. `Fixture { maker, model }`: each mode's channels by name and function. `Failures`: each file that could not be read, its line and why. A broken file never stops the engine |
 
+## Show file
+
+```mermaid
+stateDiagram-v2
+  direction LR
+  [*] --> None: no --show
+  [*] --> Kept: opened, or not there yet
+  [*] --> LeftAlone: newer, broken,<br/>refused by a check
+  Kept --> NotSaved: a save failed
+  NotSaved --> Kept: the next save
+```
+
+| | |
+|---|---|
+| Start | `npm run engine -- --show <file>`: the patch and the groups, opened at start, saved after every change and on `Stop` |
+| Holds | each fixture by number with its mode whole (opens without the library), its first light, the groups in order. Not the outputs yet |
+| A save | a new file `<file>.saving`, then renamed over the file, on the blocking pool. Never half written, never on the tick thread |
+| Opening | the same checks as the commands. A file that fails one is left alone: empty patch, never written. Format: `crates/show-file` |
+| State | `show` in `Picture` and `Changed`: `None`, `Kept`, `NotSaved`, `LeftAlone { why }`: `CannotRead`, `Broken { line, column }`, `Newer { version }`, `Taken { fixture }`, `Refused { reason }` |
+
 ## Each output's states
 
 ```mermaid

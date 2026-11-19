@@ -1,6 +1,7 @@
 use crate::error::Warning;
 use alloc::string::String;
 use alloc::vec::Vec;
+use serde::{Deserialize, Serialize};
 
 /// One fixture definition.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -34,7 +35,8 @@ pub enum Kind {
 }
 
 /// A way to run the fixture: how many channels it takes and what each does.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Mode {
     pub name: String,
     /// In DMX order: the first is address 1 of the fixture.
@@ -52,20 +54,23 @@ pub struct Mode {
 }
 
 /// The full pan and tilt range of a moving head or scanner, in degrees.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Degrees {
     pub pan: u16,
     pub tilt: u16,
 }
 
 /// The pixels of a bar or a panel in a grid.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Layout {
     pub width: u16,
     pub height: u16,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Channel {
     pub name: String,
     pub function: Function,
@@ -79,7 +84,7 @@ pub struct Channel {
     pub ranges: Vec<Range>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Byte {
     Coarse,
     Fine,
@@ -87,7 +92,8 @@ pub enum Byte {
 
 /// What a range of values on a channel does, in the words of the definition, and in
 /// the model's words when the definition says it by preset.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Range {
     pub min: u8,
     pub max: u8,
@@ -99,7 +105,8 @@ pub struct Range {
 /// The presets left as the label only, on purpose: `ColorWheelIndex` (an index has no
 /// fixed meaning), `GenericPicture` (a picture of an effect, not a gobo), `SilentMode*`
 /// (the fan, no light), `Alias` (another channel's meaning, a later slice).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub enum Does {
     /// `ShutterOpen`: light comes out.
     Open,
@@ -136,14 +143,14 @@ pub enum Does {
 
 /// Which way the values of a channel or a range run: more of what it does as the value
 /// rises (faster, bigger, farther, more open), or less.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Direction {
     Up,
     Down,
 }
 
 /// How fast something flashes or turns.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Pace {
     /// The definition does not say.
     Unsaid,
@@ -157,14 +164,15 @@ pub enum Pace {
 }
 
 /// A frequency from the start of a range to its end, in millihertz: 0.5 Hz is 500.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Hertz {
     pub from: u32,
     pub to: u32,
 }
 
 /// What a rotation does.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Turn {
     Stop,
     /// Turned to a position, not spinning.
@@ -174,7 +182,8 @@ pub enum Turn {
 }
 
 /// A colour as a definition gives it: `#rrggbb`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Rgb {
     pub red: u8,
     pub green: u8,
@@ -183,7 +192,7 @@ pub struct Rgb {
 
 /// What a channel does. Every QLC+ channel preset has an entry, or is `Other` on purpose
 /// (see `function.rs`). `Other` keeps the name of what is not in the list.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Function {
     Dimmer,
     Red,

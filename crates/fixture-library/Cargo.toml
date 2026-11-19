@@ -10,4 +10,5 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+serde = { version = "1.0.229", default-features = false, features = ["derive", "alloc"] } # the model in a show file
 roxmltree = { version = "0.21.2", default-features = false, features = ["positions"] }

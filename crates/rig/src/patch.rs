@@ -14,12 +14,16 @@
 //! | set, release intensity or colour | sent for one light, the lights of a fixture, or of every member of a group | not patched, no such light, no such group |
 //!
 //! Two fixtures on the same channels are allowed: each shows the other in its clashes.
+//!
+//! A show file's fixtures come back with [`Patch::restore`]: each at its own number and
+//! lights, checked as patch checks them, and refused when it has another's number or light.
 
 use crate::{Unfit, compile, flat, lights_of, strip, unflat};
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
+use core::num::NonZeroU16;
 use engine_core::{
     ChannelNumbers, EngineCommand, Grouped, LightNumber, LightRun, Lights, Member, PatchCommand,
     Patched, Project, Refusal, Target, Universes, Writer,
@@ -63,6 +67,28 @@ struct Entry {
 }
 
 /// What follows a change, as data, in the order the front does it.
+/// A fixture as a show file keeps it: its number and its lights as they were.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Placed {
+    pub fixture: NonZeroU16,
+    pub name: String,
+    pub maker: String,
+    pub model: String,
+    pub mode: Mode,
+    pub at: ChannelNumbers,
+    /// Its first light, counted from 1, as the picture shows it.
+    pub first: u16,
+}
+
+/// Why a fixture of a show file is not restored.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Unplaced {
+    /// Its number, or one of its lights, is another fixture's.
+    Taken,
+    /// Patched there, it would be refused for this reason.
+    Refused(Refusal),
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PatchEffect {
     /// The fixture was patched with this number: the reply says it.
@@ -208,6 +234,48 @@ impl Patch {
             }
         }
     }
+    /// This patch with `placed` added, each fixture at its own number and first light.
+    /// All or none: the first that does not fit, by its number, and why.
+    pub fn restore(&self, placed: Vec<Placed>) -> Result<Self, (u16, Unplaced)> {
+        let mut fixtures = self.fixtures.clone();
+        for p in placed {
+            let number = p.fixture.get();
+            let first = p
+                .first
+                .checked_sub(1)
+                .and_then(|index| LightNumber::new(index, self.lights))
+                .ok_or((number, Unplaced::Refused(Refusal::NoLightsLeft)))?;
+            let rigged = compile(&p.mode, p.at, first, self.universes, self.lights)
+                .map_err(|unfit| (number, Unplaced::Refused(refusal(unfit))))?;
+            let entry = Entry {
+                number,
+                name: p.name,
+                maker: p.maker,
+                model: p.model,
+                mode: p.mode,
+                at: p.at,
+                first,
+                lights: rigged.lights,
+                writers: rigged.writers,
+                clashes: vec![],
+            };
+            if fixtures
+                .iter()
+                .any(|e| e.number == number || e.shares_lights(&entry))
+            {
+                return Err((number, Unplaced::Taken));
+            }
+            let place = fixtures.partition_point(|e| e.number < number);
+            fixtures.insert(place, Arc::new(entry));
+        }
+        Ok(self.with(fixtures))
+    }
+
+    /// The mode fixture `fixture` is patched in.
+    pub fn mode(&self, fixture: u16) -> Option<&Mode> {
+        self.entry(fixture).ok().map(|e| &e.mode)
+    }
+
 
     /// Adds `mode` at `at` under the lowest free number, on the first free lights.
     fn add(
@@ -483,6 +551,13 @@ impl Entry {
             .checked_sub(1)
             .and_then(|index| index.checked_sub(self.first.index()))
             .is_some_and(|from| from < self.lights)
+    }
+
+    /// Whether one of its lights is one of `other`'s.
+    fn shares_lights(&self, other: &Self) -> bool {
+        let (from, to) = (self.first.index(), self.first.index() + self.lights);
+        let (other_from, other_to) = (other.first.index(), other.first.index() + other.lights);
+        from < other_to && other_from < to
     }
 }
 

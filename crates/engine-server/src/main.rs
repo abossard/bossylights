@@ -4,7 +4,11 @@
 //! before it starts anything. The system frees the lock when the process ends, however.
 //! An engine that got `Stop` stops answering before its process ends, so a new one waits
 //! up to [`FREED`] for the lock before it gives up.
-//! On `Stop` it prints what it measured to stderr and ends.
+//! On `Stop` it saves the show file, prints what it measured to stderr and ends.
+//!
+//! With `--show <file>` the patch and the groups are opened from the file at start and
+//! saved to it after every change. A file of a newer version, or a broken one, is left
+//! alone: the engine starts with an empty patch and the picture says why.
 
 #![forbid(unsafe_code)]
 
@@ -19,8 +23,7 @@ use std::time::{Duration, Instant};
 #[path = "report_line.rs"]
 mod report_line;
 
-const USAGE: &str =
-    "usage: bossylights-engine [--listen 127.0.0.1:7744] [--universes 4] [--fixtures <folder>]";
+const USAGE: &str = "usage: bossylights-engine [--listen 127.0.0.1:7744] [--universes 4] [--fixtures <folder>] [--show <file>]";
 
 /// How long a new engine waits for the lock of an engine that is stopping.
 const FREED: Duration = Duration::from_secs(3);
@@ -33,6 +36,8 @@ struct Settings {
     universes: Universes,
     /// The folder of fixture definitions (QLC+ `.qxf`), read while the engine runs.
     fixtures: Option<PathBuf>,
+    /// The show file: the patch and the groups.
+    show: Option<PathBuf>,
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -69,12 +74,13 @@ async fn main() {
         settings.listen,
         settings.universes.count()
     );
-    let mut engine = engine_server::serve(listener, engine, sender, settings.fixtures)
-        .await
-        .unwrap_or_else(|error| {
-            eprintln!("bossylights-engine: {error}");
-            exit(1);
-        });
+    let mut engine =
+        engine_server::serve(listener, engine, sender, settings.fixtures, settings.show)
+            .await
+            .unwrap_or_else(|error| {
+                eprintln!("bossylights-engine: {error}");
+                exit(1);
+            });
     eprint!("{}", report(&mut engine));
 }
 
@@ -127,6 +133,7 @@ fn settings(args: &[String]) -> Result<Settings, String> {
         listen: SocketAddr::from(([127, 0, 0, 1], 7744)),
         universes: Universes::new(4).ok_or("4 universes")?,
         fixtures: None,
+        show: None,
     };
     let mut args = args.iter();
     while let Some(flag) = args.next() {
@@ -145,6 +152,7 @@ fn settings(args: &[String]) -> Result<Settings, String> {
                     .ok_or(format!("universes are 1 to {}", engine::MAX_UNIVERSES))?;
             }
             "--fixtures" => settings.fixtures = Some(PathBuf::from(value)),
+            "--show" => settings.show = Some(PathBuf::from(value)),
             _ => return Err(format!("unknown flag: {flag}")),
         }
     }

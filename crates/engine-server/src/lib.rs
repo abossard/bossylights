@@ -14,6 +14,7 @@
 #![forbid(unsafe_code)]
 
 mod library;
+pub mod show;
 
 use axum::Router;
 use axum::extract::State;
@@ -26,7 +27,7 @@ use engine::{
     API_VERSION, Begun, ChannelLevel, Command, Engine, Grouped, Patch, Patched, Project, Refusal,
     Reply, Request, Sender, Snapshot, changes,
 };
-use engine_core::Library;
+use engine_core::{Library, ShowFile};
 use library::Shelf;
 use std::io;
 use std::path::PathBuf;
@@ -36,22 +37,32 @@ use tokio::sync::{Mutex, watch};
 use tokio::time::MissedTickBehavior;
 
 /// Serves the API on `listener` until a client sends `Stop`. Then every connection is
-/// closed and this returns the engine: the caller reports and drops it. The fixture
-/// library is read from `fixtures` while the engine runs.
+/// closed, the last change is saved, and this returns the engine: the caller reports and
+/// drops it. The fixture library is read from `fixtures` while the engine runs. The patch
+/// and the groups are opened from the show file `show` and saved to it after every change.
 pub async fn serve(
     listener: TcpListener,
     mut engine: Engine,
-    sender: Sender,
+    mut sender: Sender,
     fixtures: Option<PathBuf>,
+    show: Option<PathBuf>,
 ) -> io::Result<Engine> {
     let (stop, mut stopped) = watch::channel(false);
     let shelf = library::start(fixtures);
+    let opened = show
+        .as_deref()
+        .map_or(ShowFile::None, |path| show::open(path, &mut sender));
+    let (kept, shown) = watch::channel(opened);
     let (project, projects) = watch::channel(sender.project());
     let (patch, patches) = watch::channel(sender.patch());
+    let keeper = show
+        .filter(|_| opened.saves())
+        .map(|path| tokio::spawn(show::keep(path, patch.subscribe(), kept, stop.subscribe())));
     let front = Front {
         shelf: shelf.clone(),
         project: projects,
         patch: patches,
+        show: shown,
     };
     let (painted, pictures) = watch::channel(Arc::new(front.picture(*engine.latest())));
     let reader = tokio::spawn(read(engine, front, painted, stop.subscribe()));
@@ -78,6 +89,9 @@ pub async fn serve(
         })
         .await;
     api.stop.send_replace(true);
+    if let Some(keeper) = keeper {
+        keeper.await.map_err(io::Error::other)?;
+    }
     let engine = reader.await.map_err(io::Error::other)?;
     served.map(|()| engine)
 }
@@ -99,12 +113,13 @@ struct Api {
 }
 
 /// A frame as every connection shows it: the engine's snapshot, and the library, the
-/// project and the patch as they were when the snapshot was taken.
+/// project, the patch and the show file as they were when the snapshot was taken.
 struct Picture {
     snapshot: Snapshot,
     library: Library,
     project: Project,
     patch: Arc<Patch>,
+    show: ShowFile,
 }
 
 /// What the front holds besides the engine, as the reader takes it into each picture.
@@ -112,6 +127,7 @@ struct Front {
     shelf: watch::Receiver<Arc<Shelf>>,
     project: watch::Receiver<Project>,
     patch: watch::Receiver<Arc<Patch>>,
+    show: watch::Receiver<ShowFile>,
 }
 
 impl Front {
@@ -121,6 +137,7 @@ impl Front {
             library: self.shelf.borrow().library(),
             project: *self.project.borrow(),
             patch: Arc::clone(&self.patch.borrow()),
+            show: *self.show.borrow(),
         }
     }
 }
@@ -268,6 +285,7 @@ fn picture(now: &Picture) -> Option<String> {
         library: now.library,
         patch: &now.patch.fixtures(),
         groups: &now.patch.groups(),
+        show: now.show,
         universes: now.snapshot.universes(),
     })
 }
@@ -291,6 +309,7 @@ fn changed(
         library: now.library,
         patch: fixtures.as_deref(),
         groups: groups.as_deref(),
+        show: now.show,
         channels: &channels,
     });
     *last = now;

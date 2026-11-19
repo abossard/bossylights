@@ -426,6 +426,18 @@ impl Sender {
 
     /// The patch as it is now.
     pub fn patch(&self) -> Arc<Patch> {
+    /// Takes `patch` in place of the patch, as a show file brings it: made from
+    /// [`Sender::patch`], so it has this engine's universes and lights. Its writers go to
+    /// the tick thread. Refused as a change of the patch is: nothing changes.
+    pub fn load(&mut self, patch: Patch) -> Result<(), Refusal> {
+        if let Some((_, first, last)) = patch.unstreamed(&self.project) {
+            return Err(Refusal::NotStreamed { first, last });
+        }
+        self.follow(vec![PatchEffect::Writers(patch.writers().to_vec())])?;
+        self.patch = Arc::new(patch);
+        Ok(())
+    }
+
         Arc::clone(&self.patch)
     }
 

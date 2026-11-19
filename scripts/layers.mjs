@@ -14,12 +14,13 @@
  */
 export const CRATES = {
   "engine-core": { kind: "core", deps: ["serde"] },
-  "fixture-library": { kind: "calc", deps: ["roxmltree"] }, // QLC+ fixture definitions in, a model out. Reads no files
+  "fixture-library": { kind: "calc", deps: ["roxmltree", "serde"] }, // QLC+ fixture definitions in, a model out. Reads no files
   rig: { kind: "calc", deps: ["engine-core", "fixture-library"] }, // a mode at an address becomes writers: only it knows an address belongs to a fixture
+  "show-file": { kind: "calc", deps: ["engine-core", "fixture-library", "rig", "serde", "serde_json"] }, // the patch as a show file's text and back, checked as the commands check. Reads no files
   "rt-thread": { kind: "action", deps: ["engine-core"] }, // the only unsafe: asks for real-time priority
   outputs: { kind: "action", deps: ["engine-core"] }, // opens devices, takes frames: only it knows bytes
   engine: { kind: "action", deps: ["engine-core", "rt-thread", "outputs", "rig", "fixture-library"] }, // the front owns the patch: it checks a patch against the library and compiles writers
-  "engine-server": { kind: "action", deps: ["engine", "engine-core", "fixture-library"] }, // reads the fixture folder, answers the library
+  "engine-server": { kind: "action", deps: ["engine", "engine-core", "fixture-library", "show-file"] }, // reads the fixture folder, answers the library, opens and saves the show file
   shell: { kind: "action", deps: ["engine-core"] }, // knows the API version it speaks, nothing more
 };
 

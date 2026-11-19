@@ -25,7 +25,7 @@ async fn start() -> (SocketAddr, Socket, JoinHandle<std::io::Result<Engine>>) {
     let (engine, sender) = Engine::start(Universes::new(2).unwrap()).unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
-    let served = tokio::spawn(engine_server::serve(listener, engine, sender, None));
+    let served = tokio::spawn(engine_server::serve(listener, engine, sender, None, None));
     (address, open(address).await, served)
 }
 
@@ -544,7 +544,7 @@ async fn a_device_that_opens_slowly_stalls_no_other_client_and_the_project_shows
     let (engine, sender) = Engine::start_with(Universes::new(2).unwrap(), slow_open).unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
-    tokio::spawn(engine_server::serve(listener, engine, sender, None));
+    tokio::spawn(engine_server::serve(listener, engine, sender, None, None));
     let (mut slow, mut other) = (open(address).await, open(address).await);
     let (_udp, add) = receiver().await;
 
