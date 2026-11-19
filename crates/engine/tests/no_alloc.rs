@@ -213,7 +213,7 @@ fn main() {
         if value % 16 == 2 {
             // the tempo: a feed, taps, a release; an Autopilot play on the next beat or
             // bar, started afresh (the waiting one's plan goes back), stopped every other
-            // time: kept or cancelled under Stay, ended under Reveal
+            // time under Reveal: ended
             let bpm = engine::Bpm::new(30 + u16::from(value)).unwrap();
             assert!(
                 send(&mut sender, Command::SetInternalTempo { bpm }, &library),
@@ -312,6 +312,20 @@ fn main() {
             };
             let stop = Command::StopLook { play: shown };
             assert!(send(&mut sender, stop, &library), "the Show play stops");
+            if stay {
+                // an Autopilot play waiting for the next bar, stopped under Stay:
+                // cancelled, its plan goes back
+                let start = Command::StartLook {
+                    look: 1,
+                    rank: Rank::Autopilot,
+                    when: engine::When::Bar,
+                };
+                let Ok(Begun::Started { play: waits }) = begin(&mut sender, start, &library) else {
+                    panic!("look 1 waits at Autopilot");
+                };
+                let stop = Command::StopLook { play: waits };
+                assert!(send(&mut sender, stop, &library), "the waiting play stops");
+            }
         }
         if value % 16 == 14 {
             // a grab on one run and on two: updated, then ended under the Manual end

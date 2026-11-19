@@ -6,13 +6,17 @@
 //!                       \--StartLook again (same look, same rank)--> Playing, a new play in the same slot
 //! Kept --StartLook again--> Playing
 //! off, Kept --StartLook on a beat or bar--> Waiting --the grid reaches it--> Playing
-//! Waiting --StopLook, the Mixer would keep it--> Cancelled --ReleaseHold--> off
-//! Waiting --StopLook, the Mixer reveals; EndFlash (Manual); ReleaseHold--> off
+//! Waiting --StopLook (cancelled), EndFlash (Manual), ReleaseHold--> off
 //! ```
 //!
-//! A cancelled play shows nothing and is in no picture. It keeps its slot and plan until
-//! it is released, as a kept play does: the front cannot tell whether the stop came
-//! before the launch, so it counts it as kept either way.
+//! A stop the Mixer would keep cancels a waiting play: it ends, and its plan goes back.
+//! The front cannot tell whether the stop came before the launch: it books the play as
+//! kept until the tick thread says it ended (`engine`).
+//!
+//! Start orders: a later start wins. Each instant the clock reaches keeps [`PLAYS`] orders
+//! before the commands sent at it ([`Launches`]): a launch at that instant takes the next,
+//! unless its request was sent at that instant too, then it keeps its request's order. So
+//! starts at one instant go by the order they were asked in, launches first.
 //!
 //! A play's values come as a plan the front compiled off the tick thread: its step's
 //! values on the runs of lights its target names ([`Entry`]). Who wins a light's
@@ -113,7 +117,6 @@ pub enum Rank {
 
 /// Where a play is: it waits for beat `beat` of the grid, it plays, or it was stopped
 /// and the Mixer keeps its last values until it is released or started again.
-/// `Cancelled`: stopped while it waited, kept by nothing; never in a picture.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub enum PlayState {
@@ -123,7 +126,6 @@ pub enum PlayState {
     },
     Playing,
     Kept,
-    Cancelled,
 }
 
 /// One play: a slot and the generation of the play in it. An ended generation names
@@ -152,7 +154,8 @@ impl PlayId {
 
 /// A play on the tick thread: which look, its rank, where it is, its start order and
 /// the elapsed count of the clock at its start: its own beat is the clock's less this.
-/// A waiting play takes its order and start at its launch.
+/// A waiting play takes its order and start at its launch; until then `order` is its
+/// request's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub struct Play {
@@ -173,6 +176,34 @@ fn in_beats<S: serde::Serializer>(count: &u64, serializer: S) -> Result<S::Ok, S
     serializer.serialize_f64(beats(*count))
 }
 
+/// The start orders kept for launches at the instant the clock is at: `next` is the
+/// one the next launch takes, `end` the first a command sent at this instant took.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Launches {
+    next: u64,
+    end: u64,
+}
+
+impl Launches {
+    /// The orders from `order` on kept for the launches of a new instant, and the order
+    /// its first command takes.
+    pub const fn from(order: u64) -> (Self, u64) {
+        let end = order.saturating_add(PLAYS as u64);
+        (Self { next: order, end }, end)
+    }
+
+    /// The start order of a launch asked for at `asked`.
+    fn take(&mut self, asked: u64) -> u64 {
+        if asked >= self.end {
+            return asked;
+        }
+        let order = self.next;
+        // no more than PLAYS launches at one instant: each play launches once
+        self.next = self.next.saturating_add(1).min(self.end.saturating_sub(1));
+        order
+    }
+}
+
 /// Every play, by slot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Plays([Option<Play>; PLAYS]);
@@ -180,18 +211,17 @@ pub struct Plays([Option<Play>; PLAYS]);
 impl Plays {
     pub const NONE: Self = Self([None; PLAYS]);
 
-    /// `play` starts in its slot at `rank`, in place of whatever played there: now,
-    /// as the latest start, or waiting for the beat or bar `when` names, its request
-    /// order kept to launch plays on one beat in. Then every waiting play whose beat the
-    /// grid reached by now launches. The next start order.
+    /// `play` starts in its slot at `rank`, asked for as start order `order`, in place
+    /// of whatever played there: now, beat zero at the frame `now`, or waiting for the
+    /// beat or bar `when` names. On the grid it launches at once.
     pub fn start(
         &mut self,
         (play, look, rank): (PlayId, u16, Rank),
         when: When,
         clock: &Clock,
         now: Duration,
-        order: u64,
-    ) -> u64 {
+        (order, launches): (u64, &mut Launches),
+    ) {
         let state = clock
             .next(when)
             .map_or(PlayState::Playing, |beat| PlayState::Waiting { beat });
@@ -205,23 +235,20 @@ impl Plays {
                 start: clock.elapsed_at(now),
             });
         }
-        self.launch(clock, order.saturating_add(1))
+        self.launch(clock, launches);
     }
 
     /// Every waiting play whose beat the grid reached by now plays, in the order of their
-    /// beats, then of their requests: each takes the next start order and starts at its
-    /// crossing. The next start order.
-    pub fn launch(&mut self, clock: &Clock, mut order: u64) -> u64 {
+    /// beats, then of their requests: each takes its start order from `launches` and
+    /// starts at its crossing.
+    pub fn launch(&mut self, clock: &Clock, launches: &mut Launches) {
         while let Some(play) = self
             .0
             .iter_mut()
             .flatten()
             .filter_map(|play| match play.state {
                 PlayState::Waiting { beat } if clock.reached(beat) => Some((beat, play)),
-                PlayState::Waiting { .. }
-                | PlayState::Playing
-                | PlayState::Kept
-                | PlayState::Cancelled => None,
+                PlayState::Waiting { .. } | PlayState::Playing | PlayState::Kept => None,
             })
             .min_by_key(|(beat, play)| (*beat, play.order))
             .map(|(beat, play)| {
@@ -230,22 +257,34 @@ impl Plays {
             })
         {
             play.state = PlayState::Playing;
-            play.order = order;
-            order = order.saturating_add(1);
+            play.order = launches.take(play.order);
         }
-        order
+    }
+
+    /// The plays started at once since the clock was last at the frame `now` begin at
+    /// it on `clock`, which changed tempo since they were asked for: beat zero in their
+    /// applying frame.
+    pub fn begin_at(&mut self, clock: &Clock, now: Duration) {
+        let settled = clock.elapsed_now();
+        for play in self.0.iter_mut().flatten() {
+            // a start past the clock's count is one made for the frame ahead
+            if play.state == PlayState::Playing && play.start > settled {
+                play.start = clock.elapsed_at(now);
+            }
+        }
     }
 
     /// `play` is kept, if it still plays: its values stay at its rank and order. If it
-    /// waits, it is cancelled.
+    /// waits, it is cancelled: it ends.
     pub fn keep(&mut self, play: PlayId) {
-        if let Some(Some(now)) = self.0.get_mut(play.slot())
+        if let Some(slot) = self.0.get_mut(play.slot())
+            && let Some(now) = slot
             && now.play == play
         {
-            now.state = match now.state {
-                PlayState::Waiting { .. } | PlayState::Cancelled => PlayState::Cancelled,
-                PlayState::Playing | PlayState::Kept => PlayState::Kept,
-            };
+            match now.state {
+                PlayState::Waiting { .. } => *slot = None,
+                PlayState::Playing | PlayState::Kept => now.state = PlayState::Kept,
+            }
         }
     }
 
@@ -276,10 +315,7 @@ impl Plays {
 
     /// The plays, by slot: waiting, playing or kept.
     pub fn iter(&self) -> impl Iterator<Item = &Play> {
-        self.0
-            .iter()
-            .flatten()
-            .filter(|play| play.state != PlayState::Cancelled)
+        self.0.iter().flatten()
     }
 
     /// The plays the Mixer hears, by slot: playing or kept.
@@ -317,7 +353,7 @@ mod tests {
             When::Now,
             &Clock::START,
             Duration::ZERO,
-            order,
+            (order, &mut Launches::from(0).0),
         );
     }
 

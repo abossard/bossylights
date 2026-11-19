@@ -99,8 +99,7 @@ pub const fn stops(rank: Rank, rules: MixRules) -> End {
 /// Whether a play at `rank` in `state` is kept and `rules` no longer keep it: switching
 /// to `UntilStop` or `Reveal` clears the stopped holds of those ranks.
 pub const fn unkept(rank: Rank, state: PlayState, rules: MixRules) -> bool {
-    matches!(state, PlayState::Kept | PlayState::Cancelled)
-        && matches!(stops(rank, rules), End::Remove)
+    matches!(state, PlayState::Kept) && matches!(stops(rank, rules), End::Remove)
 }
 
 /// Who holds a light's property: a rank and a start order.
@@ -436,7 +435,7 @@ mod tests {
 mod properties {
     use super::*;
     use crate::clock::{Clock, When};
-    use crate::playback::{PLAYS, PlayId, Plays};
+    use crate::playback::{Launches, PLAYS, PlayId, Plays};
     use crate::property::{Gobo, Position, Rgb, Value, Wheel};
     use crate::resolve::{LightNumber, LightRun, Lights};
     use core::time::Duration;
@@ -544,7 +543,7 @@ mod properties {
                 When::Now,
                 &Clock::START,
                 Duration::ZERO,
-                *order,
+                (*order, &mut Launches::from(0).0),
             );
             if *state == PlayState::Kept {
                 plays.keep(id);

@@ -270,7 +270,9 @@ async fn a_bar_waits_two_crossings_in_one_wake_start_in_order_and_a_tap_moves_on
     let green = desk.start(2, "Beat").await;
     assert_eq!(desk.shows(beat_at(first, bar + 1) - 20).await, RED);
     assert_eq!(desk.shows(beat_at(first, bar + 4) + 20).await, BLUE);
+    // green launched too: blue let go, green is on the wire
     desk.send(json!({"ReleaseHold": {"play": blue}})).await;
+    assert_eq!(desk.shows(beat_at(first, bar + 4) + 40).await, GREEN);
     desk.send(json!({"ReleaseHold": {"play": green}})).await;
     // green on the next bar, at 4 bars on; a tap 200 ms past a beat moves the grid on
     // by 0.6 beats once: green comes 300 ms early, and red's own beat runs on
@@ -289,15 +291,95 @@ async fn a_bar_waits_two_crossings_in_one_wake_start_in_order_and_a_tap_moves_on
     let moved = beat_at(first, bar + 4) - 300;
     assert_eq!(desk.shows(moved - 20).await, RED);
     assert_eq!(desk.shows(moved).await, GREEN);
+    // once: at the bar it waited for, the same play from the same start
+    let greens = |state: &Value| -> Vec<_> {
+        state["plays"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|play| play["look"] == 2)
+            .map(|play| {
+                (
+                    play["play"].clone(),
+                    play["state"].clone(),
+                    play["start"].clone(),
+                )
+            })
+            .collect()
+    };
+    let launched = greens(&desk.picture(moved).await);
     let state = desk.picture(beat_at(first, bar + 4)).await;
+    assert_eq!(greens(&state), launched, "{state}");
+    assert_eq!(launched.first().map(|play| &play.0), Some(&green));
+    assert_eq!(desk.shows(beat_at(first, bar + 4) + 20).await, GREEN);
+    desk.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn two_taps_drained_in_one_wake_count_at_the_times_they_were_sent() {
+    let mut desk = Desk::new().await;
+    desk.at(0).await;
+    desk.start(1, "Now").await;
+    desk.send(json!("TapTempo")).await;
+    // the second tap sent at 750, before any wake: one wake at 800 drains both
+    desk.wakes.set_time(desk.time(750));
+    desk.send(json!("TapTempo")).await;
+    let state = desk.picture(800).await;
+    assert_eq!(state["clock"]["bpm"], 80.0, "{state}");
+    assert_eq!(state["clock"]["source"], "Tapped");
+    // the beat the second tap marked was at 750: the next at 1500
+    desk.start(2, "Beat").await;
+    assert_eq!(desk.shows(1480).await, RED);
+    assert_eq!(desk.shows(1500).await, GREEN);
+    desk.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_stop_cancels_a_waiting_play_and_frees_its_slot() {
+    let mut desk = Desk::new().await;
+    // red at once on a tapped beat at 0, and 31 more looks on the PAR
+    desk.at(0).await;
+    desk.start(1, "Now").await;
+    desk.send(json!("TapTempo")).await;
+    let waiting: Vec<u16> = (4..35).collect();
+    for &look in &waiting {
+        desk.send(
+            json!({"PutStep": {"look": look, "name": format!("look {look}"), "step": {
+                "target": {"Fixture": {"fixture": 1}},
+                "values": {"intensity": 65535, "colour": {"red": 0, "green": 0, "blue": 65535}},
+            }}}),
+        )
+        .await;
+    }
+    // each asked for the next bar, then stopped before it: every slot is taken now
+    desk.at(100).await;
+    for &look in &waiting {
+        let play = desk.start(look, "Bar").await;
+        desk.send(json!({"StopLook": {"play": play}})).await;
+    }
+    let full = command(
+        &mut desk.socket,
+        json!({"StartLook": {"look": 2, "when": "Now"}}),
+    )
+    .await;
+    assert_eq!(
+        full,
+        json!({"Refused": {"reason": "PlayFull"}}),
+        "before the wake"
+    );
+    // a wake cancels them: gone from the picture, their slots and looks free
+    let state = desk.picture(120).await;
     let plays: Vec<_> = state["plays"]
         .as_array()
         .unwrap()
         .iter()
-        .filter(|play| play["look"] == 2)
-        .map(|play| (play["play"].clone(), play["state"].clone()))
+        .map(|play| play["look"].clone())
         .collect();
-    assert_eq!(plays, [(green, json!("Playing"))], "{state}");
-    assert_eq!(desk.shows(beat_at(first, bar + 4) + 20).await, GREEN);
+    assert_eq!(plays, [json!(1)], "{state}");
+    desk.send(json!({"RemoveLook": {"look": 4}})).await;
+    desk.start(2, "Now").await;
+    assert_eq!(desk.shows(140).await, GREEN);
+    // and none launches on the bar
+    assert_eq!(desk.shows(2000).await, GREEN);
     desk.stop().await;
 }

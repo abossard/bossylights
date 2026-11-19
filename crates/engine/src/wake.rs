@@ -339,6 +339,13 @@ mod stepped {
             self.wake()
         }
 
+        /// Moves the engine's time on to `at` while the tick waits, with no wake: what
+        /// is sent now is stamped `at` and drained by the next wake.
+        pub fn set_time(&self, at: Duration) {
+            let at = u64::try_from(at.as_nanos()).unwrap_or(u64::MAX);
+            self.steps.now.fetch_max(at, SeqCst);
+        }
+
         /// The number of the last wake: the frame it made.
         pub fn woke(&self) -> u64 {
             self.steps.woke.load(SeqCst)

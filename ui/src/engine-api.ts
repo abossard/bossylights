@@ -147,7 +147,7 @@ start: number, };
 
 export type Rank = "Autopilot" | "Show" | "Manual";
 
-export type PlayState = { "Waiting": { beat: number } } | "Playing" | "Kept" | "Cancelled";
+export type PlayState = { "Waiting": { beat: number } } | "Playing" | "Kept";
 
 export type When = "Now" | "Beat" | "Bar";
 

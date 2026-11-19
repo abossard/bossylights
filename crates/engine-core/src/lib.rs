@@ -50,7 +50,7 @@ pub use patch::{
     Grouped, Layout, Member, MemberList, Members, PatchCommand, Patched, Pixels, Target,
 };
 pub use playback::{
-    Entry, LOOKS, LookCommand, PLAYS, Play, PlayId, PlayState, Plays, Rank, Saved, Step,
+    Entry, LOOKS, Launches, LookCommand, PLAYS, Play, PlayId, PlayState, Plays, Rank, Saved, Step,
 };
 pub use project::{Project, ProjectEffect, ProjectEvent, ProjectOutput};
 pub use property::{Gobo, Light, Position, Property, Rgb, Value, Wheel};
@@ -94,6 +94,10 @@ pub struct State {
     #[serde(skip)]
     #[cfg_attr(test, ts(skip))]
     pub order: u64,
+    /// The start orders kept for the launches at the clock's instant.
+    #[serde(skip)]
+    #[cfg_attr(test, ts(skip))]
+    pub launches: Launches,
     /// The beat clock, settled to the frame's time.
     #[cfg_attr(test, ts(type = "Reading"))]
     pub clock: Clock,
@@ -115,7 +119,8 @@ impl State {
                 manual_end: ManualEnd::UntilRelease,
                 other_end: OtherEnd::Reveal,
             },
-            order: 1,
+            order: Launches::from(1).1,
+            launches: Launches::from(1).0,
             clock: Clock::START,
         }
     }
@@ -546,18 +551,18 @@ pub fn update(
             rank,
             when,
         } => {
-            let mut plays = state.plays;
-            let order = plays.start(
+            let (mut plays, mut launches) = (state.plays, state.launches);
+            plays.start(
                 (play, look, rank),
                 when,
                 &state.clock,
                 state.now,
-                state.order,
+                (state.order, &mut launches),
             );
             State {
                 plays,
-                order,
-                ..state
+                launches,
+                ..held
             }
         }
         EngineCommand::Keep { play } => {
@@ -582,34 +587,52 @@ pub fn update(
             plays.release(play);
             State { plays, ..state }
         }
-        EngineCommand::Settle { at } => launch(State {
-            clock: state.clock.settle(at),
-            ..state
-        }),
-        EngineCommand::Tap => launch(State {
+        EngineCommand::Settle { at } => {
+            let clock = state.clock.settle(at);
+            // a new instant keeps the orders of its launches before its commands
+            let (launches, order) = if clock.at() > state.clock.at() {
+                Launches::from(state.order)
+            } else {
+                (state.launches, state.order)
+            };
+            launch(State {
+                clock,
+                launches,
+                order,
+                ..state
+            })
+        }
+        EngineCommand::Tap => retempo(launch(State {
             clock: state.clock.tap(),
             ..state
-        }),
-        EngineCommand::ReleaseTempo => State {
+        })),
+        EngineCommand::ReleaseTempo => retempo(State {
             clock: state.clock.release(),
             ..state
-        },
-        EngineCommand::Feed { bpm } => State {
+        }),
+        EngineCommand::Feed { bpm } => retempo(State {
             clock: state.clock.set_feed(bpm),
             ..state
-        },
+        }),
     }
 }
 
 /// The waiting plays whose beat the grid reached by now play.
 fn launch(state: State) -> State {
-    let mut plays = state.plays;
-    let order = plays.launch(&state.clock, state.order);
+    let (mut plays, mut launches) = (state.plays, state.launches);
+    plays.launch(&state.clock, &mut launches);
     State {
         plays,
-        order,
+        launches,
         ..state
     }
+}
+
+/// After a change of tempo: the plays started at once begin at the frame as it is now.
+fn retempo(state: State) -> State {
+    let mut plays = state.plays;
+    plays.begin_at(&state.clock, state.now);
+    State { plays, ..state }
 }
 
 /// The levels that go out now, written into `out`, a buffer the caller owns. It
@@ -866,7 +889,44 @@ mod tests {
         type Wakes<'a> = &'a [(u64, &'a [(u64, EngineCommand)])];
         // (name, wakes, plays after the last, the latest start that sounds)
         type Case<'a> = (&'a str, Wakes<'a>, &'a [(usize, PlayState)], Option<usize>);
-        let cases: [Case; 19] = [
+        let cases: [Case; 23] = [
+            (
+                "a tap supplies a crossing at the instant of a later request: it wins",
+                &[
+                    (1100, &[(1100, start(0, beat))]),
+                    (1300, &[(1300, start(1, now)), (1300, tap)]),
+                ],
+                &[(0, playing), (1, playing)],
+                Some(1),
+            ),
+            (
+                "a tap supplies a crossing asked at its instant, after a start at once",
+                &[(
+                    1300,
+                    &[(1300, start(1, now)), (1300, start(0, beat)), (1300, tap)],
+                )],
+                &[(0, playing), (1, playing)],
+                Some(0),
+            ),
+            (
+                "a launched play, then a later start: it wins",
+                &[
+                    (1100, &[(1100, start(0, beat))]),
+                    (1500, &[]),
+                    (1500, &[(1500, start(1, now))]),
+                ],
+                &[(0, playing), (1, playing)],
+                Some(1),
+            ),
+            (
+                "two launched at one instant by a tap, then a later start",
+                &[
+                    (1100, &[(1100, start(0, beat)), (1100, start(2, beat))]),
+                    (1300, &[(1300, tap), (1300, start(1, now))]),
+                ],
+                &[(0, playing), (1, playing), (2, playing)],
+                Some(1),
+            ),
             (
                 "a beat, before it",
                 &[(1100, &[(1100, start(0, beat))]), (1499, &[])],
@@ -1030,13 +1090,21 @@ mod tests {
                 .map(|play| (play.play.slot(), play.state))
                 .collect();
             assert_eq!(now, plays, "{name}");
+            let mut orders: Vec<_> = state.plays.sounding().map(|play| play.order).collect();
+            orders.sort_unstable();
+            orders.dedup();
+            assert_eq!(
+                orders.len(),
+                state.plays.sounding().count(),
+                "{name}: a tie"
+            );
             let last = state.plays.sounding().max_by_key(|play| play.order);
             assert_eq!(last.map(|play| play.play.slot()), latest, "{name}");
         }
     }
 
     #[test]
-    fn a_cancelled_play_keeps_its_slot_until_it_is_released() {
+    fn a_cancelled_play_ends_and_frees_its_slot() {
         let start = EngineCommand::Start {
             play: play(0),
             look: 7,
@@ -1049,27 +1117,10 @@ mod tests {
             1200,
             &[(1200, EngineCommand::Keep { play: play(0) })],
         );
-        assert!(state.plays.has(0) && state.plays.iter().next().is_none());
-        // its plan goes back as a kept play's would: the rules that end kept plays end it
-        let reveal = MixRules {
-            other_end: OtherEnd::Reveal,
-            ..state.rules
-        };
-        let ended = wake(
-            state,
-            1300,
-            &[(1300, EngineCommand::Rules { rules: reveal })],
-        );
-        assert!(!ended.plays.has(0));
-        let released = wake(
-            state,
-            1300,
-            &[(1300, EngineCommand::Release { play: play(0) })],
-        );
-        assert!(!released.plays.has(0));
+        assert!(!state.plays.has(0));
         // and it never sounds: past its bar, nothing launched
         let later = wake(state, 2500, &[]);
-        assert!(later.plays.sounding().next().is_none());
+        assert!(later.plays.iter().next().is_none());
     }
 
     #[test]
@@ -1083,6 +1134,28 @@ mod tests {
         // at once: beat zero in its applying frame, the wake at 1600
         let state = wake(at_120(), 1600, &[(1100, start(When::Now))]);
         assert!(close(state.plays.iter().next().unwrap().start, 3.2));
+        // a change of tempo after it, in the same wake: still beat zero in that frame
+        let tempo = |at, command| {
+            let state = wake(at_120(), 500, &[(100, start(When::Now)), (at, command)]);
+            let play = *state.plays.iter().next().unwrap();
+            (play.start, state.clock.elapsed_now())
+        };
+        let changes = [
+            (
+                "the feed at 60",
+                200,
+                EngineCommand::Feed {
+                    bpm: Bpm::new(60).unwrap(),
+                },
+            ),
+            ("a tap", 200, EngineCommand::Tap),
+            ("a tap at its frame", 500, EngineCommand::Tap),
+            ("released", 200, EngineCommand::ReleaseTempo),
+        ];
+        for (name, at, command) in changes {
+            let (start, elapsed) = tempo(at, command);
+            assert_eq!(start, elapsed, "{name}");
+        }
         // on a beat in a late wake: from its crossing at 1500, 0.2 beats on by the frame
         let state = wake(at_120(), 1100, &[(1100, start(When::Beat))]);
         let state = wake(state, 1600, &[]);

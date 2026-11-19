@@ -12,9 +12,11 @@
 //! ```
 //!
 //! A tap under 200 ms after the last is a bounce: ignored. A tap more than 2 s after the
-//! last starts a fresh interval at the current tempo. A tap marks a beat: at an exact beat
-//! the grid keeps its number, otherwise it moves on to the next one. The elapsed count
-//! never jumps; only its rate changes.
+//! last starts a fresh interval at the current tempo. Intervals and the lapse count from
+//! the time each tap was sent, even when it missed a frame. A tap marks a beat: at an
+//! exact beat the grid keeps its number, otherwise it moves on to the next one. The
+//! elapsed count never jumps; only its rate changes. A tempo is kept exactly (124 BPM is
+//! 124 beats a minute), and every decision on the grid is made by [`Clock::crossing`].
 
 use core::time::Duration;
 use serde::{Deserialize, Serialize, Serializer};
@@ -50,8 +52,35 @@ impl Bpm {
         }
     }
 
-    const fn period(self) -> Duration {
-        Duration::from_nanos(60_000_000_000 / self.0 as u64)
+    /// Its beats in a minute, exactly: 124 BPM is no whole number of nanoseconds a beat.
+    const fn tempo(self) -> Tempo {
+        Tempo {
+            span: 60_000_000_000,
+            beats: self.0 as u64,
+        }
+    }
+}
+
+/// How fast the clock counts: `beats` beats in `span` nanoseconds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Tempo {
+    span: u64,
+    beats: u64,
+}
+
+impl Tempo {
+    /// One beat in `gap`, a tap's interval: 200 ms to 2 s.
+    fn every(gap: Duration) -> Self {
+        Self {
+            span: u64::try_from(gap.as_nanos()).unwrap_or(u64::MAX),
+            beats: 1,
+        }
+    }
+
+    /// Whether both count at the same rate.
+    fn same(self, other: Self) -> bool {
+        u128::from(self.span) * u128::from(other.beats)
+            == u128::from(other.span) * u128::from(self.beats)
     }
 }
 
@@ -114,13 +143,17 @@ pub struct Reading {
 pub struct Clock {
     /// The time the clock was settled to, since the engine started.
     at: Duration,
-    /// From this time on, a beat lasts `period`; `elapsed` and `grid` are the counts
-    /// then, in [`ONE`]s.
+    /// The time the last settle asked for: when the event it comes before was sent.
+    /// Earlier than `at` for an event sent before a frame it missed.
+    sent: Duration,
+    /// From this time on, the clock counts at `tempo`; `elapsed` and `grid` are the
+    /// counts then, in [`ONE`]s.
     from: Duration,
     elapsed: u64,
     grid: u64,
-    period: Duration,
+    tempo: Tempo,
     feed: Bpm,
+    /// A one tap that lapsed stays here: [`Clock::source`] tells it as the feed.
     source: Source,
 }
 
@@ -128,32 +161,40 @@ impl Clock {
     /// A new engine's clock: the internal feed at [`Bpm::FEED`], on beat zero.
     pub const START: Self = Self {
         at: Duration::ZERO,
+        sent: Duration::ZERO,
         from: Duration::ZERO,
         elapsed: 0,
         grid: 0,
-        period: Bpm::FEED.period(),
+        tempo: Bpm::FEED.tempo(),
         feed: Bpm::FEED,
         source: Source::Feed,
     };
 
-    /// Who sets the tempo.
-    pub const fn source(&self) -> Source {
-        self.source
-    }
-
-    /// How long a beat lasts now.
-    pub const fn period(&self) -> Duration {
-        self.period
-    }
-
-    /// The clock at `t`, if that is later: one tap lapses on the way.
-    pub fn settle(self, t: Duration) -> Self {
-        let at = self.at.max(t);
-        let source = match self.source {
-            Source::OneTap { at: tap } if at.saturating_sub(tap) > LAPSE => Source::Feed,
+    /// Who sets the tempo now: one tap lapses 2 s after it was sent.
+    pub fn source(&self) -> Source {
+        match self.source {
+            Source::OneTap { at: tap } if self.at.saturating_sub(tap) > LAPSE => Source::Feed,
             source @ (Source::Feed | Source::OneTap { .. } | Source::Tapped { .. }) => source,
-        };
-        Self { at, source, ..self }
+        }
+    }
+
+    /// How long a beat lasts now, to the nanosecond below.
+    pub fn period(&self) -> Duration {
+        Duration::from_nanos(self.tempo.span / self.tempo.beats.max(1))
+    }
+
+    /// The time the clock was settled to.
+    pub const fn at(&self) -> Duration {
+        self.at
+    }
+
+    /// The clock at `t`, if that is later, for an event sent at `t`.
+    pub fn settle(self, t: Duration) -> Self {
+        Self {
+            at: self.at.max(t),
+            sent: t,
+            ..self
+        }
     }
 
     /// The elapsed count at `t`, which is not before the last change, in [`ONE`]s.
@@ -174,7 +215,7 @@ impl Clock {
     /// The beat a launch asked for now waits for: `None` for at once. A request on the
     /// beat (or bar) waits for none.
     pub fn next(&self, when: When) -> Option<u64> {
-        let beat = self.grid().div_ceil(ONE);
+        let beat = self.first_beat();
         match when {
             When::Now => None,
             When::Beat => Some(beat),
@@ -182,10 +223,19 @@ impl Clock {
         }
     }
 
+    /// The first beat whose crossing is now or later: the one the grid is on, else the
+    /// next. Decided by [`Clock::crossing`], as a launch is.
+    fn first_beat(&self) -> u64 {
+        let below = self.grid() / ONE;
+        let on = below.saturating_mul(ONE) >= self.grid && self.crossing(below) == self.at;
+        if on { below } else { below.saturating_add(1) }
+    }
+
     /// When the grid reaches beat `beat`: the last change if it was there already.
     pub fn crossing(&self, beat: u64) -> Duration {
         let to = u128::from(beat.saturating_mul(ONE).saturating_sub(self.grid));
-        let nanos = (to * self.period.as_nanos()).div_ceil(u128::from(ONE));
+        let nanos = (to * u128::from(self.tempo.span))
+            .div_ceil(u128::from(ONE) * u128::from(self.tempo.beats.max(1)));
         self.from.saturating_add(Duration::from_nanos(
             u64::try_from(nanos).unwrap_or(u64::MAX),
         ))
@@ -196,53 +246,65 @@ impl Clock {
         self.crossing(beat) <= self.at
     }
 
-    /// A tap now.
+    /// A tap, sent when the last settle asked for: its interval counts from the time it
+    /// was sent, the beat it marks is now.
     pub fn tap(self) -> Self {
-        let at = self.at;
-        let (source, period) = match self.source {
-            Source::Feed => (Source::OneTap { at }, self.period),
+        let sent = self.sent;
+        let (source, tempo) = match self.source {
+            Source::Feed => (Source::OneTap { at: sent }, self.tempo),
             Source::OneTap { at: last } | Source::Tapped { at: last } => {
-                let gap = at.saturating_sub(last);
+                let gap = sent.saturating_sub(last);
                 if gap < BOUNCE {
                     return self;
                 }
                 match self.source {
-                    _ if gap <= LAPSE => (Source::Tapped { at }, gap),
-                    Source::Tapped { .. } => (Source::Tapped { at }, self.period),
-                    Source::Feed | Source::OneTap { .. } => (Source::OneTap { at }, self.period),
+                    _ if gap <= LAPSE => (Source::Tapped { at: sent }, Tempo::every(gap)),
+                    Source::Tapped { .. } => (Source::Tapped { at: sent }, self.tempo),
+                    Source::Feed | Source::OneTap { .. } => {
+                        (Source::OneTap { at: sent }, self.tempo)
+                    }
                 }
             }
         };
-        let now = self.rebase();
+        let beat = self.first_beat();
         Self {
-            grid: now.grid.div_ceil(ONE).saturating_mul(ONE),
-            period,
+            grid: beat.saturating_mul(ONE),
+            tempo,
             source,
-            ..now
+            ..self.rebase()
         }
     }
 
     /// The tempo goes back to the feed, at the grid's phase now.
     pub fn release(self) -> Self {
         Self {
-            period: self.feed.period(),
             source: Source::Feed,
-            ..self.rebase()
+            ..self.at_tempo(self.feed.tempo())
         }
     }
 
     /// The internal feed takes `bpm`: the tempo now, unless taps set it.
     pub fn set_feed(self, bpm: Bpm) -> Self {
-        let now = Self {
-            feed: bpm,
-            ..self.rebase()
+        let tempo = match self.source {
+            Source::Feed | Source::OneTap { .. } => bpm.tempo(),
+            Source::Tapped { .. } => self.tempo,
         };
-        match self.source {
-            Source::Feed | Source::OneTap { .. } => Self {
-                period: bpm.period(),
-                ..now
-            },
-            Source::Tapped { .. } => now,
+        Self {
+            feed: bpm,
+            ..self.at_tempo(tempo)
+        }
+    }
+
+    /// The same clock at `tempo` from now on. The same rate changes nothing: a count
+    /// taken again rounds, and would move a crossing.
+    fn at_tempo(self, tempo: Tempo) -> Self {
+        if self.tempo.same(tempo) {
+            self
+        } else {
+            Self {
+                tempo,
+                ..self.rebase()
+            }
         }
     }
 
@@ -259,16 +321,17 @@ impl Clock {
     /// Beats from the last change to `t`, in [`ONE`]s.
     fn count(&self, t: Duration) -> u64 {
         let since = t.saturating_sub(self.from).as_nanos();
-        let count = since * u128::from(ONE) / self.period.as_nanos().max(1);
+        let count = since.saturating_mul(u128::from(ONE) * u128::from(self.tempo.beats))
+            / u128::from(self.tempo.span.max(1));
         u64::try_from(count).unwrap_or(u64::MAX)
     }
 
     /// The clock as a picture shows it.
     pub fn reading(&self) -> Reading {
         Reading {
-            bpm: 60e9 / self.period.as_nanos() as f64,
+            bpm: 60e9 * self.tempo.beats as f64 / self.tempo.span.max(1) as f64,
             feed: self.feed,
-            source: self.source,
+            source: self.source(),
             beat: beats(self.grid()),
             elapsed: beats(self.elapsed_now()),
         }
@@ -309,6 +372,8 @@ mod tests {
         Feed(u64, u16),
         /// Time passes, with nothing sent.
         Settle(u64),
+        /// A tap sent at the first time, after a frame at the second took the clock on.
+        Late(u64, u64),
     }
 
     fn run(events: &[Event]) -> Clock {
@@ -316,6 +381,7 @@ mod tests {
         for event in events {
             clock = match *event {
                 Event::Tap(t) => clock.settle(ms(t)).tap(),
+                Event::Late(sent, frame) => clock.settle(ms(frame)).settle(ms(sent)).tap(),
                 Event::Release(t) => clock.settle(ms(t)).release(),
                 Event::Feed(t, b) => clock.settle(ms(t)).set_feed(bpm(b)),
                 Event::Settle(t) => clock.settle(ms(t)),
@@ -339,7 +405,7 @@ mod tests {
         }
     }
 
-    use Event::{Feed, Release, Settle, Tap};
+    use Event::{Feed, Late, Release, Settle, Tap};
 
     #[test]
     fn every_source_takes_every_event() {
@@ -347,7 +413,35 @@ mod tests {
         let one: &[Event] = &[Tap(1000)];
         let tapped: &[Event] = &[Tap(1000), Tap(1600)];
         // (name, from, event, source after, beat after)
-        let cases: [(&str, &[Event], Event, Kind, Duration); 22] = [
+        let cases: [(&str, &[Event], Event, Kind, Duration); 26] = [
+            (
+                "one tap, 200 ms sent, after a frame 1 ms on",
+                &[Late(1000, 1001)],
+                Late(1200, 1200),
+                Kind::Tapped,
+                ms(200),
+            ),
+            (
+                "one tap, exactly 2 s sent, after a frame 1 ms on",
+                one,
+                Late(3000, 3001),
+                Kind::Tapped,
+                ms(2000),
+            ),
+            (
+                "tapped, lost phase, then 750 ms: the fresh tap counts",
+                &[Tap(1000), Tap(1600), Tap(5000)],
+                Tap(5750),
+                Kind::Tapped,
+                ms(750),
+            ),
+            (
+                "tapped, lost phase, then 750 ms after a bounce",
+                &[Tap(1000), Tap(1600), Tap(5000), Tap(5100)],
+                Tap(5750),
+                Kind::Tapped,
+                ms(750),
+            ),
             ("feed, tap", &[], Tap(1000), Kind::OneTap, ms(500)),
             ("feed, silence", &[], Settle(5000), Kind::Feed, ms(500)),
             ("feed, release", &[], Release(1000), Kind::Feed, ms(500)),
@@ -445,6 +539,57 @@ mod tests {
         // the next interval counts from the last valid tap, not from a bounce
         let clock = run(&[Tap(1000), Tap(1600), Tap(1650), Tap(2300)]);
         assert_eq!(clock.period(), ms(700));
+        // and moves nothing: the grid stays where time took it. (name, from, bounce at)
+        let cases: [(&str, &[Event], u64); 2] = [
+            ("one tap, 100 ms", &[Tap(1000)], 1100),
+            ("tapped, 100 ms", &[Tap(1000), Tap(1600)], 1700),
+        ];
+        for (name, from, at) in cases {
+            let mut bounced = from.to_vec();
+            bounced.push(Tap(at));
+            let mut waited = from.to_vec();
+            waited.push(Settle(at));
+            assert_eq!(run(&bounced), run(&waited), "{name}");
+        }
+    }
+
+    #[test]
+    fn the_grid_decides_by_its_crossings() {
+        let at_60_s = Duration::from_secs(60);
+        // 124 BPM: 60 s is beat 124 exactly, a bar
+        let fed = Clock::START.settle(at_60_s);
+        assert_eq!(fed.next(When::Bar), Some(124), "124 BPM, a bar at 60 s");
+        assert_eq!(fed.crossing(124), at_60_s);
+        // 120 to 60 BPM at 100 ms: 0.2 beats, beat 1 at the clock's own crossing
+        let slowed = run(&[Feed(100, 60)]);
+        let on = slowed.settle(slowed.crossing(1));
+        assert!(on.reached(1));
+        assert_eq!(on.next(When::Beat), Some(1), "a beat asked on its crossing");
+        assert_eq!(
+            beats(on.tap().grid()),
+            1.0,
+            "a tap on a crossing keeps the beat"
+        );
+        // the same tempo again, or the feed while tapped: no crossing moves.
+        // (name, events, the beat waited for, its crossing)
+        let cases = [
+            ("the feed at 120 again", vec![Feed(100, 120)], 1, ms(500)),
+            (
+                "the feed while tapped",
+                vec![Tap(0), Tap(750), Feed(850, 100)],
+                3,
+                ms(1500),
+            ),
+            (
+                "released at the feed's tempo",
+                vec![Release(100)],
+                1,
+                ms(500),
+            ),
+        ];
+        for (name, events, beat, crossing) in cases {
+            assert_eq!(run(&events).crossing(beat), crossing, "{name}");
+        }
     }
 
     #[test]

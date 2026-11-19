@@ -70,7 +70,7 @@ mod wake;
 use std::io;
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::thread::{self, JoinHandle, Thread};
 use std::time::{Duration, Instant};
 use wake::{Clock, Trace};
@@ -482,6 +482,9 @@ struct Shared {
     freed: AtomicU64,
     /// Changes the sender ended, so far ([`Sender::revise`]). A wake reads it at its cutoff.
     revision: AtomicU64,
+    /// By slot, the generation of the last play the tick thread ended on its own: a
+    /// stop that cancelled it while it waited. Its plan is on its way back.
+    ended: [AtomicU32; PLAYS],
     /// A test holds the free thread: what goes back is not freed while set.
     #[cfg(test)]
     stalled: AtomicBool,
@@ -519,6 +522,7 @@ impl Engine {
             stop: AtomicBool::new(false),
             freed: AtomicU64::new(0),
             revision: AtomicU64::new(0),
+            ended: [const { AtomicU32::new(0) }; PLAYS],
             #[cfg(test)]
             stalled: AtomicBool::new(false),
         });
@@ -647,6 +651,7 @@ impl Sender {
         {
             return Err(Refusal::Stale);
         }
+        self.reap();
         let begun = match change {
             Change::Nothing => Begun::Queued,
             Change::Send(command) => {
@@ -875,6 +880,18 @@ impl Sender {
             *live = None;
         }
         Ok(())
+    }
+
+    /// Forgets the plays the tick thread cancelled: the front booked each as kept, and
+    /// its plan is on its way back.
+    fn reap(&mut self) {
+        for (slot, ended) in self.plays.iter_mut().zip(&self.shared.ended) {
+            let generation = ended.load(Ordering::Acquire);
+            if slot.is_some_and(|live| live.play.generation == generation) {
+                *slot = None;
+                self.retired += 1;
+            }
+        }
     }
 
     /// Forgets the plays the command just queued ends: their plans go back.
@@ -1424,6 +1441,18 @@ impl Ticker {
     fn swap(&mut self, command: EngineCommand, brings: Brings) {
         if let EngineCommand::Release { play } = command {
             self.replan(play.slot(), None);
+            return;
+        }
+        if let EngineCommand::Keep { play } = command {
+            // a stop that cancelled a waiting play ended it: its plan goes back
+            let slot = play.slot();
+            let had = self.plans.get(slot).is_some_and(Option::is_some);
+            if had && !self.now.state.plays.has(slot) {
+                self.replan(slot, None);
+                if let Some(ended) = self.shared.ended.get(slot) {
+                    ended.store(play.generation, Ordering::Release);
+                }
+            }
             return;
         }
         if let EngineCommand::ReleaseAll | EngineCommand::Rules { .. } = command {
