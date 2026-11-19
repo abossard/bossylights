@@ -86,8 +86,11 @@ fn empty() -> Patch {
     Patch::new(Universes::new(2).unwrap(), Lights::new(64).unwrap())
 }
 
+/// A command and the library it is sent with.
+type Step = (PatchCommand, Vec<Fixture>);
+
 /// `commands` from an empty patch, each with its library; every one is taken.
-fn patched(commands: Vec<(PatchCommand, Vec<Fixture>)>) -> Patch {
+fn patched(commands: Vec<Step>) -> Patch {
     commands
         .into_iter()
         .fold(empty(), |patch, (command, library)| {
@@ -99,13 +102,13 @@ fn patched(commands: Vec<(PatchCommand, Vec<Fixture>)>) -> Patch {
         })
 }
 
-fn lib(command: PatchCommand) -> (PatchCommand, Vec<Fixture>) {
+fn lib(command: PatchCommand) -> Step {
     (command, library())
 }
 
 #[test]
 fn a_patch_written_and_read_back_is_the_same_patch() {
-    let cases: Vec<(&str, Vec<(PatchCommand, Vec<Fixture>)>)> = vec![
+    let cases: Vec<(&str, Vec<Step>)> = vec![
         ("empty", vec![]),
         ("one PAR", vec![lib(par("PAR 1", 37))]),
         (
