@@ -25,8 +25,10 @@ const BOXES: usize = 2;
 /// Everything the tick thread holds, as one wake left it. The tick thread works on its
 /// own `Snapshot` and hands over a copy: a new field (held values per light, say) is in
 /// every picture with no change in the hand-over. Every field is fixed in size, as all
-/// state on the tick thread is.
-#[derive(Clone, Copy)]
+/// state on the tick thread is. The values per light live on the heap, made there once:
+/// a copy on the stack would not fit a thread's stack. [`Snapshot::copy_to`] copies
+/// without allocating; `clone` allocates, off the tick thread only.
+#[derive(Clone)]
 pub struct Snapshot {
     pub state: State,
     universes: Universes,
@@ -34,8 +36,8 @@ pub struct Snapshot {
     held: [Levels; MAX_UNIVERSES as usize],
     /// Which raw channels are held.
     holds: [ChannelSet; MAX_UNIVERSES as usize],
-    /// The held values per light, by light number.
-    lights: [Light; MAX_LIGHTS as usize],
+    /// The held values per light, by light number: [`MAX_LIGHTS`] of them.
+    lights: Box<[Light]>,
     /// How late each output's device was handed its frames, since it was attached.
     lateness: [Times<LATENESS_BUCKETS>; MAX_OUTPUTS],
     /// Frames handed to each output's own thread, since it was attached.
@@ -56,13 +58,13 @@ pub struct Lateness {
 
 impl Snapshot {
     /// A new engine's: nothing held, no outputs, nothing counted.
-    pub(crate) const fn new(universes: Universes, priority: Priority) -> Self {
+    pub(crate) fn new(universes: Universes, priority: Priority) -> Self {
         Self {
             state: State::new(priority),
             universes,
             held: [Levels::ZERO; MAX_UNIVERSES as usize],
             holds: [ChannelSet::NONE; MAX_UNIVERSES as usize],
-            lights: [Light::DARK; MAX_LIGHTS as usize],
+            lights: vec![Light::DARK; usize::from(MAX_LIGHTS)].into_boxed_slice(),
             lateness: [Times::ZERO; MAX_OUTPUTS],
             handed: [0; MAX_OUTPUTS],
             latency: Times::ZERO,
@@ -117,6 +119,32 @@ impl Snapshot {
     /// taken under.
     pub fn applied(&self) -> u64 {
         self.applied
+    }
+
+    /// Makes `to` this snapshot without allocating: both have every light.
+    pub(crate) fn copy_to(&self, to: &mut Self) {
+        let Self {
+            state,
+            universes,
+            held,
+            holds,
+            lights,
+            lateness,
+            handed,
+            latency,
+            applied,
+        } = self;
+        to.state = *state;
+        to.universes = *universes;
+        to.held = *held;
+        to.holds = *holds;
+        if to.lights.len() == lights.len() {
+            to.lights.copy_from_slice(lights);
+        }
+        to.lateness = *lateness;
+        to.handed = *handed;
+        to.latency = *latency;
+        to.applied = *applied;
     }
 
     /// One more command was applied.
@@ -206,7 +234,7 @@ impl Hand {
 
     /// Copies `now` into the box and sends it back.
     pub(crate) fn fill(&mut self, Asked(mut picture): Asked, now: &Snapshot) {
-        *picture = *now;
+        now.copy_to(&mut picture);
         // The queue has room for every box: this push cannot fail, so no box is freed here.
         let _ = self.pictures.push(picture);
     }
@@ -245,8 +273,8 @@ impl Reader {
         Self {
             asks: queues.asks,
             pictures: queues.pictures,
+            spare: Some(Box::new(first.clone())),
             latest: Box::new(first),
-            spare: Some(Box::new(first)),
         }
     }
 

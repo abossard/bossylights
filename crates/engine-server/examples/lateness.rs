@@ -141,7 +141,7 @@ fn run(setup: &Setup) -> Result<String, String> {
         thread::sleep(Duration::from_millis(1));
     }
     eprintln!("snapshots read: {pictures}, frames: {seen}");
-    let picture = *engine.fresh();
+    let picture = engine.fresh().clone();
     let state = picture.state;
     stop.store(true, Ordering::Relaxed);
     let (mut p99, mut worst, mut off) = (Duration::ZERO, Duration::ZERO, 0);

@@ -62,7 +62,7 @@ pub async fn serve(
         .map(|path| tokio::spawn(show::keep(path, patch.subscribe(), kept, stop.subscribe())));
     let first = Moment::of(&sender);
     // A snapshot of a wake after every command queued so far: taken under `first`.
-    let picture = Picture::of(*engine.fresh(), &first, &shelf, &shown);
+    let picture = Picture::of(engine.fresh().clone(), &first, &shelf, &shown);
     let front = Front {
         shelf: shelf.clone(),
         moments: taken,
@@ -197,7 +197,12 @@ impl Front {
             self.kept.push_back(moment);
         }
         let moment = under(&mut self.kept, snapshot.applied())?;
-        Some(Picture::of(*snapshot, moment, &self.shelf, &self.show))
+        Some(Picture::of(
+            snapshot.clone(),
+            moment,
+            &self.shelf,
+            &self.show,
+        ))
     }
 }
 
