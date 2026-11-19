@@ -21,6 +21,7 @@ fn bytes(file: &str, name: &str, intensity: u16, (red, green, blue): (u16, u16, 
     let shown = [Light {
         intensity: Some(intensity),
         colour: Some(Rgb { red, green, blue }),
+        ..Light::DARK
     }];
     let mut out = [Levels::ZERO];
     resolve(&shown, &rigged.writers, &mut out);

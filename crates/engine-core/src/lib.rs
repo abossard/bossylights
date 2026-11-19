@@ -23,6 +23,7 @@ use mix::{Want, mix};
 mod output;
 mod patch;
 mod project;
+mod property;
 mod resolve;
 mod show;
 
@@ -43,9 +44,10 @@ pub use patch::{
     Grouped, Layout, Member, MemberList, Members, PatchCommand, Patched, Pixels, Target,
 };
 pub use project::{Project, ProjectEffect, ProjectEvent, ProjectOutput};
+pub use property::{Gobo, Light, Position, Property, Rgb};
 pub use resolve::{
-    HeldLight, Less, Light, LightNumber, LightRun, Lights, MAX_LIGHTS, Part, Place, Rgb, Scale,
-    Sense, Take, Writer, held_lights, light_changes, resolve,
+    HeldLight, Less, LightNumber, LightRun, Lights, MAX_LIGHTS, Part, Place, Scale, Sense, Take,
+    Writer, held_lights, light_changes, resolve,
 };
 pub use show::{ShowFile, Unopened};
 
@@ -731,6 +733,7 @@ mod tests {
                 green: 0,
                 blue: 0,
             }),
+            ..Light::DARK
         };
         let lit = Light {
             intensity: Some(0x8000),

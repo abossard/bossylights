@@ -56,6 +56,7 @@ fn main() {
                     green: step.wrapping_mul(5),
                     blue: step.wrapping_mul(7),
                 }),
+                ..Light::DARK
             };
         }
         resolve(&values, &writers, &mut out);

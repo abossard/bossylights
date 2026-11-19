@@ -245,6 +245,7 @@ fn a_channel_two_heads_name_is_the_fixtures_own() {
             green: 0,
             blue: 0,
         }),
+        ..Light::DARK
     };
     const FULL: Light = Light {
         intensity: Some(u16::MAX),

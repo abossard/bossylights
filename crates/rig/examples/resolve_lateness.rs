@@ -104,6 +104,7 @@ fn frames_of(writers: &[Writer], frames: u64) -> (Vec<Duration>, Vec<Duration>) 
                     green: step.wrapping_mul(5),
                     blue: step.wrapping_mul(7),
                 }),
+                ..Light::DARK
             };
         }
         resolve(&values, writers, &mut out);

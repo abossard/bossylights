@@ -209,6 +209,7 @@ fn a_fixture_up_to_the_last_channel_its_output_sends_is_kept_one_over_is_refused
                 green: u16::MAX,
                 blue: u16::MAX,
             }),
+            ..Light::DARK
         };
         let mut out = [Levels::ZERO; 2];
         resolve(&vec![white; usize::from(pixels)], patch.writers(), &mut out);

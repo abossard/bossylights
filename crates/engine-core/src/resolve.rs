@@ -20,6 +20,7 @@
 
 use crate::channel::{Channel, ChannelSet, Levels, MAX_UNIVERSES};
 use crate::mix::{Want, mix};
+use crate::property::{Light, Rgb};
 use serde::Serialize;
 
 /// The most lights an engine can have: 64 universes of 170 RGB pixels and more.
@@ -101,23 +102,6 @@ impl LightRun {
     }
 }
 
-/// What a light shows this frame: the value held of each part, `None` where nothing
-/// holds it. 0 to 65 535 is 0 to 1.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Light {
-    pub intensity: Option<u16>,
-    pub colour: Option<Rgb>,
-}
-
-impl Light {
-    /// Nothing held: each part shows the definition's default, which is dark unless the
-    /// definition says otherwise.
-    pub const DARK: Self = Self {
-        intensity: None,
-        colour: None,
-    };
-}
-
 /// A light's held parts, as the picture shows them: its number, counted from 1, and each
 /// part's value, `None` where nothing holds it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -155,27 +139,6 @@ const fn held((light, values): (u16, &Light)) -> HeldLight {
         light,
         intensity: values.intensity,
         colour: values.colour,
-    }
-}
-
-/// A colour, one part of a light.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub struct Rgb {
-    pub red: u16,
-    pub green: u16,
-    pub blue: u16,
-}
-
-impl Rgb {
-    /// The part red, green and blue all have: the smallest.
-    const fn shared(self) -> u16 {
-        let least = if self.red < self.green {
-            self.red
-        } else {
-            self.green
-        };
-        if least < self.blue { least } else { self.blue }
     }
 }
 
@@ -374,6 +337,7 @@ mod tests {
         Light {
             intensity: Some(intensity),
             colour: Some(Rgb { red, green, blue }),
+            ..Light::DARK
         }
     }
 
