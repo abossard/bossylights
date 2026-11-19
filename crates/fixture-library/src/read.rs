@@ -12,16 +12,33 @@ use roxmltree::{Document, Node, ParsingOptions};
 /// The largest real definition is 133 kB: this is about seven times that.
 pub const MOST_BYTES: usize = 1024 * 1024;
 
-/// The line of the `[` that opens declarations in a DOCTYPE, when there is one. Quoted text is skipped.
+/// The line of the `[` that opens declarations in the DOCTYPE of the prolog, when there is one.
+/// Only the prolog is walked (declaration, comments, processing instructions, white space), so text
+/// inside a comment or an instruction is never taken for a DOCTYPE. Quoted text in the DOCTYPE is skipped.
 fn declarations_at(text: &str) -> Option<u32> {
-    let start = text.find("<!DOCTYPE")?;
+    let mut at = 0;
+    loop {
+        at += text[at..].len() - text[at..].trim_start().len();
+        let rest = &text[at..];
+        let skip = if rest.starts_with("<?") {
+            "?>"
+        } else if rest.starts_with("<!--") {
+            "-->"
+        } else {
+            break;
+        };
+        at += rest.find(skip)? + skip.len();
+    }
+    if !text[at..].starts_with("<!DOCTYPE") {
+        return None;
+    }
     let mut quote = None;
-    for (at, c) in text[start..].char_indices() {
+    for (i, c) in text[at..].char_indices() {
         match (quote, c) {
             (Some(q), c) if c == q => quote = None,
             (Some(_), _) => {}
             (None, '"' | '\'') => quote = Some(c),
-            (None, '[') => return Some(1 + text[..start + at].matches('\n').count() as u32),
+            (None, '[') => return Some(1 + text[..at + i].matches('\n').count() as u32),
             (None, '>') => return None,
             _ => {}
         }
