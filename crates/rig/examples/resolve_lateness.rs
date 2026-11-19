@@ -7,7 +7,7 @@
 //! `cargo run -q --release -p rig --example resolve_lateness -- [seconds, 60 if none]`
 
 use engine_core::{
-    ChannelNumbers, Levels, Light, LightNumber, Lights, MAX_LIGHTS, MAX_UNIVERSES, Universes,
+    ChannelNumbers, Levels, Light, LightNumber, Lights, MAX_LIGHTS, MAX_UNIVERSES, Rgb, Universes,
     Writer, next_frame, resolve, sleep_before,
 };
 use std::hint;
@@ -98,10 +98,12 @@ fn frames_of(writers: &[Writer], frames: u64) -> (Vec<Duration>, Vec<Duration>) 
         for (n, value) in (0..).zip(values.iter_mut()) {
             let step = frame.wrapping_mul(97).wrapping_add(n);
             *value = Light {
-                intensity: step,
-                red: step.wrapping_mul(3),
-                green: step.wrapping_mul(5),
-                blue: step.wrapping_mul(7),
+                intensity: Some(step),
+                colour: Some(Rgb {
+                    red: step.wrapping_mul(3),
+                    green: step.wrapping_mul(5),
+                    blue: step.wrapping_mul(7),
+                }),
             };
         }
         resolve(&values, writers, &mut out);

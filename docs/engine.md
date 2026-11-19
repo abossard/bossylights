@@ -76,8 +76,8 @@ The patch: a fixture of the library at an address. The front checks each command
 | `Rename` (fixture, name) | | `NotPatched` |
 | `SetIntensity` (target, intensity 0 to 65 535) | holds the intensity | `NotPatched`, `NoSuchLight`, `NoSuchGroup` |
 | `SetColour` (target, red, green, blue, 0 to 65 535 each) | holds the colour | `NotPatched`, `NoSuchLight`, `NoSuchGroup` |
-| `ReleaseIntensity` (target) | lets the intensity go back to 0. Not held: nothing changes | `NotPatched`, `NoSuchLight`, `NoSuchGroup` |
-| `ReleaseColour` (target) | lets the colour go back to black. Not held: nothing changes | `NotPatched`, `NoSuchLight`, `NoSuchGroup` |
+| `ReleaseIntensity` (target) | lets the intensity go: the dimmer shows the definition's default again, else 0. Not held: nothing changes | `NotPatched`, `NoSuchLight`, `NoSuchGroup` |
+| `ReleaseColour` (target) | lets the colour go: each colour channel shows the definition's default again, else 0. Held black is black, not let go. Not held: nothing changes | `NotPatched`, `NoSuchLight`, `NoSuchGroup` |
 | `SetGroup` (name, members) | makes a group, or replaces the one of that name in its place. Members in order, at most 512: `{"Fixture": {"fixture": 1}}` or `{"Light": {"light": 7}}` | `NotPatched`, `NoSuchLight` |
 | `RemoveGroup` (name) | removes it. No such group: nothing changes | |
 

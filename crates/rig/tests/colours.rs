@@ -3,7 +3,7 @@
 mod common;
 
 use common::{at, light, lights, mode};
-use engine_core::{Levels, Light, Universes, resolve};
+use engine_core::{Levels, Light, Rgb, Universes, resolve};
 use rig::compile;
 
 const FULL: u16 = u16::MAX;
@@ -19,10 +19,8 @@ fn bytes(file: &str, name: &str, intensity: u16, (red, green, blue): (u16, u16, 
     let mode = mode(file, name);
     let rigged = compile(&mode, at(37), light(0), Universes::ONE, lights()).unwrap();
     let shown = [Light {
-        intensity,
-        red,
-        green,
-        blue,
+        intensity: Some(intensity),
+        colour: Some(Rgb { red, green, blue }),
     }];
     let mut out = [Levels::ZERO];
     resolve(&shown, &rigged.writers, &mut out);
@@ -176,5 +174,86 @@ fn coarse_and_fine_come_from_one_value() {
     for (intensity, expected) in cases {
         let bytes = bytes("Martin-Rush-MH6-Wash.qxf", "Standard", intensity, BLACK);
         assert_eq!(bytes[..3], expected, "{intensity:#06x}");
+    }
+}
+
+/// A dimmer and RGB mode whose red defaults to 200.
+const DEFAULT_RED: &str = r#"<?xml version="1.0"?>
+<FixtureDefinition xmlns="http://www.qlcplus.org/FixtureDefinition">
+ <Manufacturer>Test</Manufacturer><Model>Default red</Model><Type>Color Changer</Type>
+ <Channel Name="Dimmer" Preset="IntensityDimmer"/>
+ <Channel Name="Red" Preset="IntensityRed" Default="200"/>
+ <Channel Name="Green" Preset="IntensityGreen"/>
+ <Channel Name="Blue" Preset="IntensityBlue"/>
+ <Mode Name="Dimmer RGB">
+  <Channel Number="0">Dimmer</Channel>
+  <Channel Number="1">Red</Channel>
+  <Channel Number="2">Green</Channel>
+  <Channel Number="3">Blue</Channel>
+ </Mode>
+</FixtureDefinition>"#;
+
+/// A part nothing holds shows the definition's default, also after a release. A part held
+/// at 0 is 0 (#160).
+#[test]
+fn a_part_not_held_is_the_definition_default() {
+    use engine_core::{ChannelSet, EngineCommand, LightRun, Priority, State, update};
+    let fixture = fixture_library::parse("default.qxf", DEFAULT_RED.as_bytes()).unwrap();
+    let rigged = compile(
+        &fixture.modes[0],
+        at(37),
+        light(0),
+        Universes::ONE,
+        lights(),
+    )
+    .unwrap();
+    let one = LightRun::new(light(0), 1, lights()).unwrap();
+    let full = EngineCommand::SetIntensity {
+        lights: one,
+        intensity: FULL,
+    };
+    let colour = |(red, green, blue)| EngineCommand::SetColour {
+        lights: one,
+        red,
+        green,
+        blue,
+    };
+    let release_colour = EngineCommand::ReleaseColour { lights: one };
+    let release_intensity = EngineCommand::ReleaseIntensity { lights: one };
+    // (name, commands, bytes 37 to 40)
+    let cases = [
+        ("nothing held", vec![], [0, 200, 0, 0]),
+        ("only intensity set", vec![full], [255, 200, 0, 0]),
+        (
+            "colour set, then released",
+            vec![full, colour((0, FULL, 0)), release_colour],
+            [255, 200, 0, 0],
+        ),
+        (
+            "colour set",
+            vec![full, colour((0, FULL, 0))],
+            [255, 0, 255, 0],
+        ),
+        (
+            "colour held black",
+            vec![full, colour(BLACK)],
+            [255, 0, 0, 0],
+        ),
+        (
+            "intensity set, then released",
+            vec![full, release_intensity],
+            [0, 200, 0, 0],
+        ),
+    ];
+    for (name, commands, expected) in cases {
+        let mut shown = [Light::DARK];
+        let (mut universes, mut holds) = ([Levels::ZERO], [ChannelSet::NONE]);
+        let mut state = State::new(Priority::RealTime);
+        for command in commands {
+            state = update(state, &mut universes, &mut holds, &mut shown, command);
+        }
+        let mut out = [Levels::ZERO];
+        resolve(&shown, &rigged.writers, &mut out);
+        assert_eq!(out[0].0[36..40], expected, "{name}");
     }
 }

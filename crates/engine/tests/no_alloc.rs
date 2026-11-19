@@ -177,13 +177,13 @@ fn main() {
     let state = engine.latest().state;
     let lit = engine.latest().lights()[..usize::from(LIGHTS) + 100]
         .iter()
-        .filter(|light| light.intensity == u16::MAX)
+        .filter(|light| light.intensity == Some(u16::MAX))
         .count();
     let green_lights = engine.latest().lights()[..usize::from(LIGHTS)]
         .iter()
         .skip(1)
         .step_by(2)
-        .filter(|light| light.green == u16::MAX)
+        .filter(|light| light.colour.is_some_and(|c| c.green == u16::MAX))
         .count();
     let ticks = state.frame - frame;
     let new_allocations = counting::allocations() - allocations;

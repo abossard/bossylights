@@ -9,7 +9,7 @@ mod common;
 mod counting;
 
 use common::{light, lights, mode};
-use engine_core::{ChannelNumbers, Levels, Light, Universes, Writer, resolve};
+use engine_core::{ChannelNumbers, Levels, Light, Rgb, Universes, Writer, resolve};
 use rig::compile;
 
 const UNIVERSES: u16 = 8;
@@ -50,10 +50,12 @@ fn main() {
         for (n, value) in (0..).zip(values.iter_mut()) {
             let step = frame.wrapping_mul(97).wrapping_add(n);
             *value = Light {
-                intensity: step,
-                red: step.wrapping_mul(3),
-                green: step.wrapping_mul(5),
-                blue: step.wrapping_mul(7),
+                intensity: Some(step),
+                colour: Some(Rgb {
+                    red: step.wrapping_mul(3),
+                    green: step.wrapping_mul(5),
+                    blue: step.wrapping_mul(7),
+                }),
             };
         }
         resolve(&values, &writers, &mut out);

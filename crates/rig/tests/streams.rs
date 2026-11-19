@@ -6,7 +6,7 @@ mod common;
 use common::{lights, whole};
 use engine_core::{
     ChannelNumbers, Color, Command, Levels, Light, OutputKind, OutputNumber, PatchCommand, Pixels,
-    Project, ProjectEvent, Refusal, RunNumbers, Text, Universes, resolve,
+    Project, ProjectEvent, Refusal, Rgb, RunNumbers, Text, Universes, resolve,
 };
 use rig::Patch;
 use std::net::{Ipv4Addr, SocketAddrV4};
@@ -203,10 +203,12 @@ fn a_fixture_up_to_the_last_channel_its_output_sends_is_kept_one_over_is_refused
             continue;
         }
         let white = Light {
-            intensity: u16::MAX,
-            red: u16::MAX,
-            green: u16::MAX,
-            blue: u16::MAX,
+            intensity: Some(u16::MAX),
+            colour: Some(Rgb {
+                red: u16::MAX,
+                green: u16::MAX,
+                blue: u16::MAX,
+            }),
         };
         let mut out = [Levels::ZERO; 2];
         resolve(&vec![white; usize::from(pixels)], patch.writers(), &mut out);

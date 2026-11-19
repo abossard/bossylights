@@ -24,6 +24,9 @@
 //! | shutter, strobe | fixed: the value that lets light out |
 //! | anything else | fixed: its default, else 0 |
 //!
+//! A writer that takes from a light writes its channel's default (else 0) while nothing
+//! holds the part it takes.
+//!
 //! Every channel of the mode is written by one writer. A channel two heads name is the
 //! fixture's own (a shared dimmer, a strobe): the fixture's light writes it, so no two
 //! writers reach one channel (decision 48, `docs/design/who-wins.md`).
@@ -118,7 +121,7 @@ pub fn compile(
                 .iter()
                 .zip(slots.iter_mut())
                 .filter(|((_, c), _)| c.byte == Byte::Coarse && c.function == channel.function)
-                .any(|(_, slot)| join(slot, place));
+                .any(|(_, slot)| join(slot, place, channel.default));
             if !joined && let Some(slot) = slots.get_mut(at) {
                 *slot = Some(fixed(channel, place));
             }
@@ -219,12 +222,14 @@ fn strip(pixels: Pixels, color: Color) -> (&'static str, Mode) {
     (model, mode)
 }
 
-/// Adds `fine` to a writer that takes a light into one byte. False for any other.
-fn join(writer: &mut Option<Writer>, fine: Channel) -> bool {
+/// Adds `fine`, its default `default`, to a writer that takes a light into one byte.
+/// False for any other.
+fn join(writer: &mut Option<Writer>, fine: Channel, default: Option<u8>) -> bool {
     match writer {
-        Some(Writer::Takes { at, .. }) => match *at {
+        Some(Writer::Takes { at, unheld, .. }) => match *at {
             Place::Byte(coarse) => {
                 *at = Place::Pair { coarse, fine };
+                *unheld |= u16::from(default.unwrap_or(0));
                 true
             }
             Place::Pair { .. } => false,
@@ -310,6 +315,7 @@ fn coarse(
             light,
             take,
             at: Place::Byte(place),
+            unheld: u16::from(channel.default.unwrap_or(0)) << 8,
         },
         None => fixed(channel, place),
     }

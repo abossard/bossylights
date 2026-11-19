@@ -17,8 +17,8 @@ pub enum Want {
     /// What the definition gives a channel no light value writes (a shutter held open),
     /// or 0 where nothing writes.
     Default(u8),
-    /// The held values of a light, through its writer. A property not held is at its
-    /// default value in the light (intensity 0, black).
+    /// The held values of a light, through its writer. A part not held is `Default`: its
+    /// writer writes the channel's default from the definition.
     Light(u8),
     /// A raw channel held on the DMX screen.
     Raw(u8),

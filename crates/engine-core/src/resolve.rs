@@ -7,10 +7,13 @@
 //! lights (values per light) + writers --resolve--> bytes in the universes
 //! ```
 //!
-//! | A light | 16 bits, 0 to 65 535 is 0 to 1 |
+//! | A light | 16 bits, 0 to 65 535 is 0 to 1, or not held |
 //! |---|---|
 //! | intensity | how bright |
-//! | red, green, blue | its colour |
+//! | red, green, blue | its colour, one part |
+//!
+//! A part nothing holds shows the definition's default: its writers write the default of
+//! their channel, not a value of the light.
 //!
 //! A value of 16 bits goes out as one byte (its high byte) or as a coarse and a fine
 //! byte. So an 8-bit channel always shows the coarse byte of the same value.
@@ -97,23 +100,41 @@ impl LightRun {
     }
 }
 
-/// What a light shows this frame, every property with a value. 0 to 65 535 is 0 to 1.
+/// What a light shows this frame: the value held of each part, `None` where nothing
+/// holds it. 0 to 65 535 is 0 to 1.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Light {
-    pub intensity: u16,
+    pub intensity: Option<u16>,
+    pub colour: Option<Rgb>,
+}
+
+impl Light {
+    /// Nothing held: each part shows the definition's default, which is dark unless the
+    /// definition says otherwise.
+    pub const DARK: Self = Self {
+        intensity: None,
+        colour: None,
+    };
+}
+
+/// A colour, one part of a light.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Rgb {
     pub red: u16,
     pub green: u16,
     pub blue: u16,
 }
 
-impl Light {
-    /// Intensity 0, colour black.
-    pub const DARK: Self = Self {
-        intensity: 0,
-        red: 0,
-        green: 0,
-        blue: 0,
-    };
+impl Rgb {
+    /// The part red, green and blue all have: the smallest.
+    const fn shared(self) -> u16 {
+        let least = if self.red < self.green {
+            self.red
+        } else {
+            self.green
+        };
+        if least < self.blue { least } else { self.blue }
+    }
 }
 
 /// One channel, or a coarse and fine pair, and what goes there each frame.
@@ -122,11 +143,13 @@ pub enum Writer {
     /// The same byte every frame: a shutter held open, the default of a channel no
     /// light writes.
     Fixed { at: Channel, value: u8 },
-    /// A value taken from a light.
+    /// A value taken from a light, or `unheld` when nothing holds the part it takes: the
+    /// default of its channel from the definition, the coarse byte high.
     Takes {
         light: LightNumber,
         take: Take,
         at: Place,
+        unheld: u16,
     },
 }
 
@@ -167,28 +190,29 @@ impl Take {
         sense: Sense::Rising,
     };
 
-    /// The value of this take for `light`, 16 bits.
-    pub fn value(self, light: &Light) -> u16 {
-        let shared = light.red.min(light.green).min(light.blue);
+    /// The value of this take for `light`, 16 bits. `None` when nothing holds the part it
+    /// takes. Intensity not held scales as 0.
+    pub fn value(self, light: &Light) -> Option<u16> {
         let part = match self.of {
             Part::Intensity => light.intensity,
-            Part::Red => light.red,
-            Part::Green => light.green,
-            Part::Blue => light.blue,
-            Part::Shared => shared,
-        };
+            Part::Red => light.colour.map(|c| c.red),
+            Part::Green => light.colour.map(|c| c.green),
+            Part::Blue => light.colour.map(|c| c.blue),
+            Part::Shared => light.colour.map(Rgb::shared),
+        }?;
+        let shared = light.colour.map_or(0, Rgb::shared);
         let less = match self.less {
             Less::Nothing => part,
             Less::Shared => part.saturating_sub(shared),
         };
         let scaled = match self.scale {
             Scale::Whole => less,
-            Scale::ByIntensity => times(less, light.intensity),
+            Scale::ByIntensity => times(less, light.intensity.unwrap_or(0)),
         };
-        match self.sense {
+        Some(match self.sense {
             Sense::Rising => scaled,
             Sense::Falling => u16::MAX - scaled,
-        }
+        })
     }
 }
 
@@ -255,16 +279,25 @@ pub(crate) fn write(
     for writer in writers {
         match *writer {
             Writer::Fixed { at, value } => put(at, Want::Default(value), out, lit),
-            Writer::Takes { light, take, at } => {
+            Writer::Takes {
+                light,
+                take,
+                at,
+                unheld,
+            } => {
                 let Some(light) = lights.get(usize::from(light.0)) else {
                     continue;
                 };
-                let [high, low] = take.value(light).to_be_bytes();
+                let (want, value): (fn(u8) -> Want, u16) = match take.value(light) {
+                    Some(value) => (Want::Light, value),
+                    None => (Want::Default, unheld),
+                };
+                let [high, low] = value.to_be_bytes();
                 match at {
-                    Place::Byte(at) => put(at, Want::Light(high), out, lit),
+                    Place::Byte(at) => put(at, want(high), out, lit),
                     Place::Pair { coarse, fine } => {
-                        put(coarse, Want::Light(high), out, lit);
-                        put(fine, Want::Light(low), out, lit);
+                        put(coarse, want(high), out, lit);
+                        put(fine, want(low), out, lit);
                     }
                 }
             }
@@ -297,10 +330,8 @@ mod tests {
 
     fn light(intensity: u16, (red, green, blue): (u16, u16, u16)) -> Light {
         Light {
-            intensity,
-            red,
-            green,
-            blue,
+            intensity: Some(intensity),
+            colour: Some(Rgb { red, green, blue }),
         }
     }
 
@@ -326,51 +357,102 @@ mod tests {
             (
                 take(Intensity, Nothing, Whole, Rising),
                 light(HALF, orange),
-                HALF,
+                Some(HALF),
             ),
-            (take(Red, Nothing, Whole, Rising), light(0, orange), FULL),
-            (take(Green, Nothing, Whole, Rising), light(0, orange), HALF),
-            (take(Blue, Nothing, Whole, Rising), light(0, orange), 0x1000),
+            (
+                take(Red, Nothing, Whole, Rising),
+                light(0, orange),
+                Some(FULL),
+            ),
+            (
+                take(Green, Nothing, Whole, Rising),
+                light(0, orange),
+                Some(HALF),
+            ),
+            (
+                take(Blue, Nothing, Whole, Rising),
+                light(0, orange),
+                Some(0x1000),
+            ),
             (
                 take(Shared, Nothing, Whole, Rising),
                 light(0, orange),
-                0x1000,
+                Some(0x1000),
             ),
             (
                 take(Red, LessShared, Whole, Rising),
                 light(0, orange),
-                FULL - 0x1000,
+                Some(FULL - 0x1000),
             ),
-            (take(Shared, LessShared, Whole, Rising), light(0, orange), 0),
+            (
+                take(Shared, LessShared, Whole, Rising),
+                light(0, orange),
+                Some(0),
+            ),
             (
                 take(Red, Nothing, ByIntensity, Rising),
                 light(HALF, orange),
-                HALF,
+                Some(HALF),
             ),
-            (take(Red, Nothing, ByIntensity, Rising), light(0, orange), 0),
+            (
+                take(Red, Nothing, ByIntensity, Rising),
+                light(0, orange),
+                Some(0),
+            ),
             (
                 take(Red, Nothing, ByIntensity, Rising),
                 light(FULL, orange),
-                FULL,
+                Some(FULL),
             ),
             // 0.5 × 0.5 is 0.25, rounded to the nearest
             (
                 take(Green, Nothing, ByIntensity, Rising),
                 light(HALF, grey),
-                0x4000,
+                Some(0x4000),
             ),
-            (take(Red, Nothing, Whole, Falling), light(0, orange), 0),
+            (
+                take(Red, Nothing, Whole, Falling),
+                light(0, orange),
+                Some(0),
+            ),
             (
                 take(Blue, Nothing, Whole, Falling),
                 light(0, orange),
-                FULL - 0x1000,
+                Some(FULL - 0x1000),
             ),
             (
                 take(Red, Nothing, ByIntensity, Falling),
                 light(0, orange),
-                FULL,
+                Some(FULL),
             ),
-            (Take::INTENSITY, light(0x1234, grey), 0x1234),
+            (Take::INTENSITY, light(0x1234, grey), Some(0x1234)),
+            // a part nothing holds: no value, its writer writes the default
+            (
+                Take::INTENSITY,
+                Light {
+                    intensity: None,
+                    ..light(FULL, grey)
+                },
+                None,
+            ),
+            (
+                take(Red, Nothing, Whole, Rising),
+                Light {
+                    colour: None,
+                    ..light(FULL, grey)
+                },
+                None,
+            ),
+            (take(Shared, Nothing, Whole, Rising), Light::DARK, None),
+            // intensity not held scales as 0
+            (
+                take(Red, Nothing, ByIntensity, Rising),
+                Light {
+                    intensity: None,
+                    ..light(FULL, orange)
+                },
+                Some(0),
+            ),
         ];
         for (take, light, value) in cases {
             assert_eq!(take.value(&light), value, "{take:?} of {light:?}");
@@ -392,11 +474,17 @@ mod tests {
 
     #[test]
     fn resolve_writes_each_writer_and_leaves_the_rest() {
-        let lights = [light(0x1234, (FULL, 0, 0)), light(HALF, (0, HALF, 0))];
+        let lights = [
+            light(0x1234, (FULL, 0, 0)),
+            light(HALF, (0, HALF, 0)),
+            Light::DARK,
+        ];
+        // the default of the channels from the definition, coarse 0xc8, fine 0x05
         let takes = |index, take, at| Writer::Takes {
             light: number(index),
             take,
             at,
+            unheld: 0xc805,
         };
         let green = take(Part::Green, Less::Nothing, Scale::Whole, Sense::Rising);
         // (writers, the bytes at addresses 1 to 6, the rest of `out` holding 7)
@@ -430,6 +518,21 @@ mod tests {
                     takes(1, green, Place::Byte(channel(5))),
                 ],
                 [7, 7, 7, 0, 0x80, 7],
+            ),
+            // light 2 holds nothing: the default
+            (
+                vec![
+                    takes(2, green, Place::Byte(channel(1))),
+                    takes(
+                        2,
+                        Take::INTENSITY,
+                        Place::Pair {
+                            coarse: channel(3),
+                            fine: channel(6),
+                        },
+                    ),
+                ],
+                [0xc8, 7, 0xc8, 7, 7, 0x05],
             ),
             // light 3 is a number of the engine, but past the values given: nothing
             (

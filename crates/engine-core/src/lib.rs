@@ -44,7 +44,7 @@ pub use patch::{
 };
 pub use project::{Project, ProjectEffect, ProjectEvent, ProjectOutput};
 pub use resolve::{
-    Less, Light, LightNumber, LightRun, Lights, MAX_LIGHTS, Part, Place, Scale, Sense, Take,
+    Less, Light, LightNumber, LightRun, Lights, MAX_LIGHTS, Part, Place, Rgb, Scale, Sense, Take,
     Writer, resolve,
 };
 pub use show::{ShowFile, Unopened};
@@ -185,9 +185,11 @@ pub enum Command {
         green: u16,
         blue: u16,
     },
-    /// Let the intensity of a light, or of every light of a fixture, go back to 0.
+    /// Let the intensity of a light, or of every light of a fixture, go: its dimmer shows the
+    /// definition's default again, else 0.
     ReleaseIntensity { target: Target },
-    /// Let the colour of a light, or of every light of a fixture, go back to black.
+    /// Let the colour of a light, or of every light of a fixture, go: its colour channels
+    /// show the definition's defaults again, else black.
     ReleaseColour { target: Target },
     /// Make a group, or replace the one of this name. Its members are lights or fixtures,
     /// in the order given, each patched. Unpatching a fixture takes it out of its groups.
@@ -383,7 +385,7 @@ pub fn update(
             intensity,
         } => {
             for light in run.of(lights) {
-                light.intensity = intensity;
+                light.intensity = Some(intensity);
             }
             state
         }
@@ -394,27 +396,19 @@ pub fn update(
             blue,
         } => {
             for light in run.of(lights) {
-                *light = Light {
-                    red,
-                    green,
-                    blue,
-                    ..*light
-                };
+                light.colour = Some(Rgb { red, green, blue });
             }
             state
         }
         EngineCommand::ReleaseIntensity { lights: run } => {
             for light in run.of(lights) {
-                light.intensity = Light::DARK.intensity;
+                light.intensity = None;
             }
             state
         }
         EngineCommand::ReleaseColour { lights: run } => {
             for light in run.of(lights) {
-                *light = Light {
-                    intensity: light.intensity,
-                    ..Light::DARK
-                };
+                light.colour = None;
             }
             state
         }
@@ -718,13 +712,23 @@ mod tests {
             LightRun::new(LightNumber::new(first, all).unwrap(), count, all).unwrap()
         };
         let red = Light {
-            intensity: 0,
-            red: 0xffff,
-            green: 0,
-            blue: 0,
+            intensity: None,
+            colour: Some(Rgb {
+                red: 0xffff,
+                green: 0,
+                blue: 0,
+            }),
         };
         let lit = Light {
-            intensity: 0x8000,
+            intensity: Some(0x8000),
+            ..Light::DARK
+        };
+        let held_black = Light {
+            colour: Some(Rgb {
+                red: 0,
+                green: 0,
+                blue: 0,
+            }),
             ..Light::DARK
         };
         let dark = Light::DARK;
@@ -739,7 +743,7 @@ mod tests {
             intensity: 0x8000,
         };
         let full_red = Light {
-            intensity: 0x8000,
+            intensity: Some(0x8000),
             ..red
         };
         let let_go = |lights| EngineCommand::ReleaseIntensity { lights };
@@ -748,6 +752,17 @@ mod tests {
         let cases = [
             ([dark; 4], set_red(run(1, 2)), [dark, red, red, dark]),
             ([dark; 4], half(run(3, 1)), [dark, dark, dark, lit]),
+            // black set is held black, not nothing held
+            (
+                [dark; 4],
+                EngineCommand::SetColour {
+                    lights: run(0, 1),
+                    red: 0,
+                    green: 0,
+                    blue: 0,
+                },
+                [held_black, dark, dark, dark],
+            ),
             // intensity and colour are held on their own
             ([red; 4], half(run(0, 1)), [full_red, red, red, red]),
             ([lit; 4], set_red(run(0, 4)), [full_red; 4]),
@@ -837,6 +852,7 @@ mod tests {
                 ..Take::INTENSITY
             },
             at: Place::Byte(channel(1, address)),
+            unheld: 0,
         };
         let shutter = Writer::Fixed {
             at: channel(1, 4),
@@ -865,7 +881,11 @@ mod tests {
             takes(Part::Red, 1),
         ];
         let red = [Light {
-            red: 0xffff,
+            colour: Some(Rgb {
+                red: 0xffff,
+                green: 0,
+                blue: 0,
+            }),
             ..Light::DARK
         }];
         let lit = |more: &[(u16, u16, u8)]| {

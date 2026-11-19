@@ -3,7 +3,7 @@
 mod common;
 
 use common::{all, at, light, lights, mode, say};
-use engine_core::{Levels, Light, Refusal, Universes, Writer, resolve};
+use engine_core::{Levels, Light, Refusal, Rgb, Universes, Writer, resolve};
 use rig::{Unfit, compile};
 
 #[test]
@@ -239,13 +239,15 @@ fn every_channel_is_written_once() {
 #[test]
 fn a_channel_two_heads_name_is_the_fixtures_own() {
     const RED: Light = Light {
-        intensity: u16::MAX,
-        red: u16::MAX,
-        green: 0,
-        blue: 0,
+        intensity: Some(u16::MAX),
+        colour: Some(Rgb {
+            red: u16::MAX,
+            green: 0,
+            blue: 0,
+        }),
     };
     const FULL: Light = Light {
-        intensity: u16::MAX,
+        intensity: Some(u16::MAX),
         ..Light::DARK
     };
     let dimmer = r#"<Channel Name="Shared" Preset="IntensityDimmer"/>"#;

@@ -98,7 +98,9 @@ pub fn address(channel: Channel) -> u16 {
 pub fn say(writer: &Writer) -> String {
     match *writer {
         Writer::Fixed { at, value } => format!("{} = {value}", address(at)),
-        Writer::Takes { light, take, at } => {
+        Writer::Takes {
+            light, take, at, ..
+        } => {
             let at = match at {
                 Place::Byte(at) => address(at).to_string(),
                 Place::Pair { coarse, fine } => format!("{}+{}", address(coarse), address(fine)),
