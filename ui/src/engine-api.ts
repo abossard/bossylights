@@ -106,13 +106,19 @@ export type HeldLight = { light: number, intensity: number | null, colour: Rgb |
 
 export type Rgb = { red: number, green: number, blue: number, };
 
-export type Light = { intensity: number | null, colour: Rgb | null, position: Position | null, zoom: number | null, gobo: Gobo | null, };
+export type Light = { intensity: number | null, colour: Rgb | null, position: Position | null, zoom: number | null, 
+/**
+ * The slot of each gobo wheel, wheel 1 first.
+ */
+gobos: [number | null, number | null, number | null], };
 
 export type Position = { pan: number, tilt: number, };
 
-export type Gobo = { wheel: number, slot: number, };
+export type Gobo = { wheel: Wheel, slot: number, };
 
-export type Property = "Intensity" | "Colour" | "Position" | "Zoom" | "Gobo";
+export type Wheel = number;
+
+export type Property = "Intensity" | "Colour" | "Position" | "Zoom" | { "Gobo": Wheel };
 
 export type Value = { "Intensity": number } | { "Colour": Rgb } | { "Position": Position } | { "Zoom": number } | { "Gobo": Gobo };
 
@@ -219,4 +225,4 @@ export type ShowFile = "None" | "Kept" | "NotSaved" | { "LeftAlone": { why: Unop
 
 export type Unopened = "CannotRead" | { "Broken": { line: number, column: number, } } | { "Newer": { version: number, } } | { "Taken": { fixture: number, } } | { "Refused": { reason: Refusal, } } | { "TooBig": { most: number, } };
 
-export const API_VERSION = 6;
+export const API_VERSION = 7;

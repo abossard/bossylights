@@ -2,9 +2,9 @@
 //! check of the commands is not read; one change of a fixture is one line.
 
 use engine_core::{
-    Brightness, ChannelNumbers, Color, Gobo, Light, Lights, ManualEnd, Member, Members, MixRules,
+    Brightness, ChannelNumbers, Color, Light, Lights, ManualEnd, Member, Members, MixRules,
     OtherEnd, PatchCommand, Pixels, Position, Refusal, Rgb, Saved, Target, Text, Universes,
-    Unopened,
+    Unopened, Wheel,
 };
 use fixture_library::{Fixture, parse};
 use looks::Looks;
@@ -665,10 +665,7 @@ fn the_longest_look_fits_its_room() {
                     tilt: u16::MAX,
                 }),
                 zoom: Some(u16::MAX),
-                gobo: Some(Gobo {
-                    wheel: u8::MAX,
-                    slot: u8::MAX,
-                }),
+                gobos: [Some(u8::MAX); Wheel::COUNT],
             },
         },
     };
@@ -697,8 +694,75 @@ fn the_mixer_settings_are_saved_and_a_file_without_them_has_the_defaults() {
             let end = start + file[start..].find('\n').unwrap() + 1;
             file.replace_range(start..end, "");
         }
-        let file = file.replace("\"version\": 3", &format!("\"version\": {version}"));
+        let now = format!("\"version\": {}", show_file::VERSION);
+        let file = file.replace(&now, &format!("\"version\": {version}"));
         let (_, looks) = show_file::read(&file, &empty()).unwrap();
         assert_eq!(looks.rules(), back, "{rules:?} in version {version}");
     }
+}
+
+/// A look of version 3 holds one gobo, a wheel and a slot: read as that wheel's slot
+/// (#179).
+#[test]
+fn a_gobo_of_version_3_is_read_as_the_slot_of_its_wheel() {
+    let patch = patched(vec![lib(par("PAR 1", 1))]);
+    let fixture = Target::Fixture { fixture: 1 };
+    let gobos = |gobos| Light {
+        gobos,
+        ..Light::DARK
+    };
+    let written = |gobos| {
+        let looks = Looks::new().put(saved(1, fixture, gobos), &patch).unwrap();
+        show_file::write(&patch, &looks).unwrap()
+    };
+    let now = format!("\"version\": {}", show_file::VERSION);
+    let none = r#""gobos":[null,null,null]"#;
+    // (case, version 3 values, read back)
+    let cases: [(&str, &str, Result<Light, Unopened>); 6] = [
+        (
+            "wheel 1",
+            r#""gobo":{"wheel":1,"slot":3}"#,
+            Ok(gobos([Some(3), None, None])),
+        ),
+        (
+            "wheel 3",
+            r#""gobo":{"wheel":3,"slot":7}"#,
+            Ok(gobos([None, None, Some(7)])),
+        ),
+        ("no gobo", r#""gobo":null"#, Ok(Light::DARK)),
+        // no light has a fifth wheel: it showed nothing, and is left out
+        (
+            "a fifth wheel",
+            r#""gobo":{"wheel":5,"slot":2}"#,
+            Ok(Light::DARK),
+        ),
+        (
+            "not a gobo",
+            r#""gobo":{"wheel":1}"#,
+            Err(Unopened::Broken {
+                line: 8,
+                column: 145,
+            }),
+        ),
+        (
+            "gobos in version 3 are what version 4 reads",
+            r#""gobos":[null,4,null]"#,
+            Ok(gobos([None, Some(4), None])),
+        ),
+    ];
+    for (case, values, back) in cases {
+        let file = written(Light::DARK);
+        assert!(file.contains(none), "{file}");
+        let v3 = file.replace(&now, "\"version\": 3").replace(none, values);
+        let read = show_file::read(&v3, &empty()).map(|(_, looks)| looks);
+        let expected =
+            back.map(|light| Looks::new().put(saved(1, fixture, light), &patch).unwrap());
+        assert_eq!(read, expected, "{case}");
+    }
+    // version 4 has no `gobo`
+    let v4 = written(Light::DARK).replace(none, r#""gobo":{"wheel":1,"slot":3}"#);
+    assert!(matches!(
+        show_file::read(&v4, &empty()),
+        Err(Unopened::Broken { .. })
+    ));
 }

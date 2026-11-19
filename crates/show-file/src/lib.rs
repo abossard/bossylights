@@ -11,7 +11,7 @@
 //!
 //! ```text
 //! {
-//!   "version": 3,
+//!   "version": 4,
 //!   "patch": [
 //!     {"fixture":1,"name":"PAR 1","mode":"Generic / Generic RGB / RGB","at":{"universe":1,"address":37},"first":1}
 //!   ],
@@ -37,7 +37,7 @@
 //! | `version` | [`VERSION`]. A newer one is not read |
 //! | `patch` | each fixture by number: its name, its mode (a key of `modes`), where, its first light |
 //! | `groups` | in the order they were made, each member a light or a fixture |
-//! | `looks` | each saved look by number: its name and its step. Version 1 has none |
+//! | `looks` | each saved look by number: its name and its step, the slot of each gobo wheel in `gobos`. Version 1 has none. Versions 2 and 3 hold one `gobo` of a wheel and a slot: read as that wheel's slot, a wheel no light has (past 3) left out, as it showed nothing |
 //! | `rules` | the Mixer's three settings. Versions 1 and 2 have none: the defaults |
 //! | `modes` | each mode a fixture is patched in, with its maker and model, by key |
 //!
@@ -64,10 +64,12 @@ use alloc::collections::BTreeMap;
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
+use alloc::vec;
 use alloc::vec::Vec;
 use core::num::{NonZeroU16, NonZeroU32};
 use engine_core::{
     ChannelNumbers, LOOKS, Member, Members, MixRules, PatchCommand, Refusal, Saved, Text, Unopened,
+    Wheel,
 };
 use fixture_library::Mode;
 use looks::Looks;
@@ -76,7 +78,7 @@ use serde::{Deserialize, Serialize};
 
 /// The version of the file this engine writes and reads. Raise it with every change an
 /// engine of the old version would read wrong. An engine never reads a newer file.
-pub const VERSION: u32 = 3;
+pub const VERSION: u32 = 4;
 
 /// The longest file, in bytes: 64 MiB. Far over any show, so no show meets it, and a file
 /// of gigabytes is not read whole at start.
@@ -273,6 +275,16 @@ pub fn read(text: &str, empty: &Patch) -> Result<(Patch, Looks), Unopened> {
             version: version.get(),
         });
     }
+    let file = if version.get() < 4 {
+        let mut file: serde_json::Value = serde_json::from_str(text).map_err(broken)?;
+        one_gobo_per_wheel(&mut file);
+        // broken after all: where the text is
+        serde_json::from_value(file)
+            .or_else(|_| serde_json::from_str(text))
+            .map_err(broken)?
+    } else {
+        serde_json::from_str(text).map_err(broken)?
+    };
     let File {
         version: _,
         patch,
@@ -280,7 +292,7 @@ pub fn read(text: &str, empty: &Patch) -> Result<(Patch, Looks), Unopened> {
         looks: saved,
         rules,
         modes,
-    } = serde_json::from_str(text).map_err(broken)?;
+    } = file;
     let placed = patch
         .into_iter()
         .map(|row| {
@@ -323,6 +335,45 @@ pub fn read(text: &str, empty: &Patch) -> Result<(Patch, Looks), Unopened> {
         looks = looks.put(saved, &patch).map_err(refused)?;
     }
     write(&patch, &looks).map(|_| (patch, looks)).ok_or(too_big)
+}
+
+/// The looks of a file before version 4, each `"gobo": {"wheel": 1, "slot": 3}` as
+/// `"gobos": [3, null, null]`. A wheel past [`Wheel::COUNT`] no light has: left out. A
+/// `gobo` that is not a wheel and a slot stays, so the file is broken as it was.
+fn one_gobo_per_wheel(file: &mut serde_json::Value) {
+    /// A gobo as versions 2 and 3 have it.
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct OneGobo {
+        wheel: u8,
+        slot: u8,
+    }
+    let Some(looks) = file
+        .get_mut("looks")
+        .and_then(serde_json::Value::as_array_mut)
+    else {
+        return;
+    };
+    let values = looks
+        .iter_mut()
+        .filter_map(|look| look.pointer_mut("/step/values"))
+        .filter_map(serde_json::Value::as_object_mut);
+    for values in values {
+        let Some(gobo) = values.remove("gobo") else {
+            continue;
+        };
+        let Ok(one) = serde_json::from_value::<Option<OneGobo>>(gobo.clone()) else {
+            values.insert("gobo".to_string(), gobo);
+            continue;
+        };
+        let mut gobos = vec![serde_json::Value::Null; Wheel::COUNT];
+        if let Some(OneGobo { wheel, slot }) = one
+            && let Some(held) = Wheel::new(wheel).and_then(|wheel| gobos.get_mut(wheel.index()))
+        {
+            *held = slot.into();
+        }
+        values.insert("gobos".to_string(), gobos.into());
+    }
 }
 
 /// A fixture as the file has it.

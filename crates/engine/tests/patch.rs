@@ -268,7 +268,7 @@ fn grabs_until_refused(
 
 #[test]
 fn the_live_grabs_stay_bounded_whatever_a_client_grabs() {
-    // 1400 pixels over 9 universes, all but the end's odd lights grabbed again and again
+    // 1500 pixels over 9 universes, all but the end's odd lights grabbed again and again
     let odd = |from: u16, to: u16| (from..=to).step_by(2);
     let named = |name: &str, lights: Vec<u16>| {
         let members: Vec<Member> = lights
@@ -283,7 +283,8 @@ fn the_live_grabs_stay_bounded_whatever_a_client_grabs() {
     let all = named("all", odd(1, 1023).collect());
     let low = named("low", odd(1, 511).collect());
     let high = named("high", odd(513, 1023).collect());
-    let refused = Some(Refusal::GrabFull { most: 16_384 * 5 });
+    // every light property: 4 and a gobo per wheel, 3
+    let refused = Some(Refusal::GrabFull { most: 16_384 * 7 });
     // (what, groups made first, the grabs of each round, rounds, admitted, refused)
     type Round = Box<dyn FnMut(usize) -> Vec<Command>>;
     type Case = (
@@ -305,7 +306,7 @@ fn the_live_grabs_stay_bounded_whatever_a_client_grabs() {
             None,
         ),
         (
-            // each a fresh group of 512 runs that keeps one light of its own: the 161st
+            // each a fresh group of 512 runs that keeps one light of its own: the 225th
             // would keep more runs than every light property held by a grab of its own
             "each keeps one light",
             vec![],
@@ -313,8 +314,8 @@ fn the_live_grabs_stay_bounded_whatever_a_client_grabs() {
                 let own = 1025 + 2 * u16::try_from(n).unwrap();
                 vec![lights(odd(1, 1021).chain([own])), grab_colour("g")]
             }),
-            170,
-            160,
+            230,
+            224,
             refused,
         ),
     ];
@@ -325,7 +326,7 @@ fn the_live_grabs_stay_bounded_whatever_a_client_grabs() {
         let _heard = mock::attach(&mut sender, universes, 1, run, Rate::Sixty);
         let strip = Command::PatchStrip {
             name: text("Strip"),
-            pixels: Pixels::try_from(1400).unwrap(),
+            pixels: Pixels::try_from(1500).unwrap(),
             color: Color::Rgb,
             at: at(1, 1),
         };

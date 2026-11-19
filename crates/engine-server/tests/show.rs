@@ -468,7 +468,7 @@ fn red_step(look: u16, name: &str) -> Value {
     json!({"PutStep": {"look": look, "name": name, "step": {
         "target": {"Fixture": {"fixture": 1}},
         "values": {"intensity": null, "colour": {"red": 65535, "green": 0, "blue": 0},
-            "position": null, "zoom": null, "gobo": null},
+            "position": null, "zoom": null, "gobos": [null, null, null]},
     }}})
 }
 

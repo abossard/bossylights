@@ -8,14 +8,15 @@
 //! | colour | red, green and blue: one colour, whether a fixture mixes it or picks it on a wheel | yes |
 //! | position | pan and tilt, always together | yes |
 //! | zoom | how wide | yes |
-//! | gobo | a wheel and a slot on it, counted from 1 | no: a choice |
+//! | gobo, one per wheel | the slot on that wheel, counted from 1 | no: a choice |
 //!
 //! Absent (`None`) lets another source through. Zero and black are values: they claim
 //! the property.
 
 use serde::{Deserialize, Serialize};
 
-/// One property of a light: one winner each, never half of one.
+/// One property of a light: one winner each, never half of one. Each gobo wheel is its
+/// own property: two wheels show two gobos at once.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub enum Property {
@@ -23,17 +24,19 @@ pub enum Property {
     Colour,
     Position,
     Zoom,
-    Gobo,
+    Gobo(Wheel),
 }
 
 impl Property {
-    /// Every property, in the order of [`Light`]'s fields.
-    pub const ALL: [Self; 5] = [
+    /// Every property, in the order of [`Light`]'s fields, gobo wheel 1 first.
+    pub const ALL: [Self; 4 + Wheel::COUNT] = [
         Self::Intensity,
         Self::Colour,
         Self::Position,
         Self::Zoom,
-        Self::Gobo,
+        Self::Gobo(Wheel(1)),
+        Self::Gobo(Wheel(2)),
+        Self::Gobo(Wheel(3)),
     ];
 
     /// Its place in [`Property::ALL`].
@@ -43,8 +46,49 @@ impl Property {
             Self::Colour => 1,
             Self::Position => 2,
             Self::Zoom => 3,
-            Self::Gobo => 4,
+            Self::Gobo(wheel) => 4 + wheel.index(),
         }
+    }
+}
+
+/// A gobo wheel of a light, counted from 1 in the definition's order, at most
+/// [`Wheel::COUNT`]. Another number is no wheel: refused where it is read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "u8", into = "u8")]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct Wheel(u8);
+
+impl Wheel {
+    /// The most gobo wheels a light has: no mode of the QLC+ library has more. A wheel
+    /// past it stays at its channel's default.
+    pub const COUNT: usize = 3;
+
+    /// Wheel `number`, counted from 1, or `None` past [`Wheel::COUNT`].
+    pub const fn new(number: u8) -> Option<Self> {
+        if number >= 1 && number as usize <= Self::COUNT {
+            Some(Self(number))
+        } else {
+            None
+        }
+    }
+
+    /// Its place among a light's wheels, wheel 1 at 0.
+    pub const fn index(self) -> usize {
+        self.0 as usize - 1
+    }
+}
+
+impl TryFrom<u8> for Wheel {
+    type Error = &'static str;
+
+    fn try_from(number: u8) -> Result<Self, Self::Error> {
+        Self::new(number).ok_or("a gobo wheel is 1, 2 or 3")
+    }
+}
+
+impl From<Wheel> for u8 {
+    fn from(wheel: Wheel) -> Self {
+        wheel.0
     }
 }
 
@@ -62,8 +106,9 @@ pub struct Light {
     pub position: Option<Position>,
     #[serde(default)]
     pub zoom: Option<u16>,
+    /// The slot of each gobo wheel, wheel 1 first.
     #[serde(default)]
-    pub gobo: Option<Gobo>,
+    pub gobos: [Option<u8>; Wheel::COUNT],
 }
 
 impl Light {
@@ -74,30 +119,42 @@ impl Light {
         colour: None,
         position: None,
         zoom: None,
-        gobo: None,
+        gobos: [None; Wheel::COUNT],
     };
 
     /// Whether it has a value of `property`.
-    pub const fn has(&self, property: Property) -> bool {
+    pub fn has(&self, property: Property) -> bool {
         match property {
             Property::Intensity => self.intensity.is_some(),
             Property::Colour => self.colour.is_some(),
             Property::Position => self.position.is_some(),
             Property::Zoom => self.zoom.is_some(),
-            Property::Gobo => self.gobo.is_some(),
+            Property::Gobo(wheel) => self.gobo(wheel).is_some(),
+        }
+    }
+
+    /// The slot it holds on `wheel`.
+    pub fn gobo(&self, wheel: Wheel) -> Option<u8> {
+        self.gobos.get(wheel.index()).copied().flatten()
+    }
+
+    /// Its slot on `wheel` set to `slot`.
+    fn set_gobo(&mut self, wheel: Wheel, slot: Option<u8>) {
+        if let Some(held) = self.gobos.get_mut(wheel.index()) {
+            *held = slot;
         }
     }
 
     /// `self` with the value of `property` taken from `from`, absent where `from` has
     /// none.
-    pub const fn with(self, property: Property, from: &Self) -> Self {
+    pub fn with(self, property: Property, from: &Self) -> Self {
         let mut light = self;
         match property {
             Property::Intensity => light.intensity = from.intensity,
             Property::Colour => light.colour = from.colour,
             Property::Position => light.position = from.position,
             Property::Zoom => light.zoom = from.zoom,
-            Property::Gobo => light.gobo = from.gobo,
+            Property::Gobo(wheel) => light.set_gobo(wheel, from.gobo(wheel)),
         }
         light
     }
@@ -122,19 +179,19 @@ impl Value {
             Self::Colour(_) => Property::Colour,
             Self::Position(_) => Property::Position,
             Self::Zoom(_) => Property::Zoom,
-            Self::Gobo(_) => Property::Gobo,
+            Self::Gobo(gobo) => Property::Gobo(gobo.wheel),
         }
     }
 
     /// A light with this value and nothing else.
-    pub const fn light(self) -> Light {
+    pub fn light(self) -> Light {
         let mut light = Light::DARK;
         match self {
             Self::Intensity(level) => light.intensity = Some(level),
             Self::Colour(rgb) => light.colour = Some(rgb),
             Self::Position(position) => light.position = Some(position),
             Self::Zoom(level) => light.zoom = Some(level),
-            Self::Gobo(gobo) => light.gobo = Some(gobo),
+            Self::Gobo(gobo) => light.set_gobo(gobo.wheel, Some(gobo.slot)),
         }
         light
     }
@@ -182,7 +239,7 @@ pub struct Position {
 #[serde(deny_unknown_fields)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub struct Gobo {
-    pub wheel: u8,
+    pub wheel: Wheel,
     pub slot: u8,
 }
 
@@ -241,11 +298,19 @@ mod tests {
             ),
             (
                 Light {
-                    gobo: Some(Gobo { wheel: 1, slot: 2 }),
+                    gobos: [None, Some(2), None],
                     ..Light::DARK
                 },
-                Property::Gobo,
+                Property::Gobo(Wheel(2)),
                 true,
+            ),
+            (
+                Light {
+                    gobos: [None, Some(2), None],
+                    ..Light::DARK
+                },
+                Property::Gobo(Wheel(1)),
+                false,
             ),
         ];
         for (light, property, has) in cases {
@@ -260,7 +325,18 @@ mod tests {
             Value::Colour(Rgb::BLACK),
             Value::Position(Position { pan: 1, tilt: 2 }),
             Value::Zoom(3),
-            Value::Gobo(Gobo { wheel: 1, slot: 2 }),
+            Value::Gobo(Gobo {
+                wheel: Wheel(1),
+                slot: 2,
+            }),
+            Value::Gobo(Gobo {
+                wheel: Wheel(2),
+                slot: 2,
+            }),
+            Value::Gobo(Gobo {
+                wheel: Wheel(3),
+                slot: 2,
+            }),
         ];
         for (value, property) in values.into_iter().zip(Property::ALL) {
             assert_eq!(value.property(), property, "{value:?}");
@@ -279,11 +355,13 @@ mod tests {
         let from = Light {
             intensity: Some(7),
             colour: Some(Rgb::BLACK),
+            gobos: [Some(4), None, Some(6)],
             ..Light::DARK
         };
         let base = Light {
             intensity: Some(1),
             zoom: Some(3),
+            gobos: [None, Some(5), Some(1)],
             ..Light::DARK
         };
         for property in Property::ALL {

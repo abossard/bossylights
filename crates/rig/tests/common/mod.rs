@@ -126,7 +126,7 @@ pub fn say(writer: &Writer) -> String {
             colour.blue >> 8
         ),
         Writer::GoboSlot { gobo, value } => {
-            format!("  gobo {}/{} = {value}", gobo.wheel, gobo.slot)
+            format!("  gobo {}/{} = {value}", u8::from(gobo.wheel), gobo.slot)
         }
     }
 }

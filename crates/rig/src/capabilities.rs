@@ -5,7 +5,8 @@
 //! |---|---|
 //! | a colour wheel, and the light mixes colour (hybrid) | fixed at its bypass: the colour is mixed. No bypass: refused, a static white over an added mix (RGB, white) among them |
 //! | a colour wheel, nothing mixes | picks each colour of the light's wheels: its own slot, else its neutral slot. Neither: refused |
-//! | a gobo wheel | picks each gobo of the wheel and open, slot 1 first |
+//! | a gobo wheel, one of the first three | picks each gobo of the wheel and open, slot 1 first. Each wheel is its own property |
+//! | a fourth gobo wheel | its default: no mode of the QLC+ library has one |
 //!
 //! | Word | Is |
 //! |---|---|
@@ -24,7 +25,7 @@ use alloc::collections::BTreeMap;
 use alloc::vec;
 use alloc::vec::Vec;
 use engine_core::{
-    Channel, Gobo, Light, LightNumber, LightRun, Part, Property, Refusal, Rgb, Writer,
+    Channel, Gobo, Light, LightNumber, LightRun, Part, Property, Refusal, Rgb, Wheel, Writer,
 };
 use fixture_library::{Byte, Does, Function, Range};
 
@@ -105,7 +106,7 @@ impl Wheels {
             );
         }
         let wheel = self.gobos.iter().position(|&gobo| gobo == index)?;
-        let wheel = u8::try_from(wheel + 1).ok()?;
+        let wheel = u8::try_from(wheel + 1).ok().and_then(Wheel::new)?;
         let slots = gobo_slots(channel)
             .into_iter()
             .zip(1..=u8::MAX)
@@ -115,7 +116,10 @@ impl Wheels {
             })
             .collect();
         Some(picks(light, at, unheld, slots).map_err(|_| {
-            Unfit::Refused(unsupported(light.index().saturating_add(1), Property::Gobo))
+            Unfit::Refused(unsupported(
+                light.index().saturating_add(1),
+                Property::Gobo(wheel),
+            ))
         }))
     }
 }
@@ -188,7 +192,7 @@ pub fn supports(writers: &[Writer], runs: &[LightRun], values: &Light) -> Result
                 None
             }
             Writer::ColourSlot { .. } => Some(Property::Colour),
-            Writer::GoboSlot { .. } => Some(Property::Gobo),
+            Writer::GoboSlot { gobo, .. } => Some(Property::Gobo(gobo.wheel)),
         };
         if let (Some(property), Some(light)) = (slot_of, wheel) {
             note(light, property, true, writer.slot(values).is_some());

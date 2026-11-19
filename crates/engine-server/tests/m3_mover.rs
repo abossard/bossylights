@@ -172,7 +172,7 @@ async fn mover_properties_reach_their_channels_at_address_1() {
         ),
         (
             ["Shehds", "LED Spot 100W", "14 Channel"],
-            json!({"colour": red, "gobo": {"wheel": 1, "slot": 3}}),
+            json!({"colour": red, "gobos": [3, null, null]}),
             &[(6, 7), (7, 24), (8, 0)],
         ),
     ];
@@ -226,26 +226,36 @@ async fn a_gobo_cuts_to_its_slot_and_a_colour_not_on_the_wheel_is_refused() {
     );
     let release = json!({"ReleaseProperty": {"target": fixture, "property": "Colour"}});
     assert_eq!(command(&mut socket, release).await, json!("Accepted"));
-    let gobo = json!({"gobo": {"wheel": 2, "slot": 9}});
+    let gobo = json!({"gobos": [null, 9, null]});
     let step = json!({"PutStep": {"look": 9, "name": "no slot 9", "step": {
         "target": {"Fixture": {"fixture": 1}}, "values": gobo,
     }}});
     assert_eq!(
         command(&mut socket, step).await,
-        json!({"Refused": {"reason": {"Unsupported": {"light": 1, "property": "Gobo"}}}})
+        json!({"Refused": {"reason": {"Unsupported": {"light": 1, "property": {"Gobo": 2}}}}})
+    );
+    // no light has a fourth wheel: not a command
+    let fourth = json!({"Gobo": {"wheel": 4, "slot": 1}});
+    assert_eq!(
+        command(
+            &mut socket,
+            json!({"SetProperty": {"target": fixture, "value": fourth}})
+        )
+        .await,
+        json!({"Refused": {"reason": "NotACommand"}})
     );
 
     // Gobo 2 (24), then Gobo 7 (74), the later start winning: the first frame due after
     // the second start is taken by the adapter and shows 74, and every frame heard between
     // shows one slot or the other, never a byte on the way
-    play(&mut socket, 1, &json!({"gobo": {"wheel": 1, "slot": 3}})).await;
+    play(&mut socket, 1, &json!({"gobos": [3, null, null]})).await;
     let from = until_dmx(&heard, &[(7, 24)]).await;
     let mut handed = Handed::default();
     block_in_place(|| wakes.hold()).unwrap();
     handed.drain(&mut wakes, &heard).await;
     let before = heard.lock().unwrap().len();
     let handed_before = handed.dues.len();
-    play(&mut socket, 2, &json!({"gobo": {"wheel": 1, "slot": 8}})).await;
+    play(&mut socket, 2, &json!({"gobos": [8, null, null]})).await;
     // what came of the first frame due after the second start is written in a later wake
     let first = loop {
         block_in_place(|| wakes.wake()).unwrap();
@@ -276,5 +286,26 @@ async fn a_gobo_cuts_to_its_slot_and_a_colour_not_on_the_wheel_is_refused() {
         between.iter().all(|&byte| byte == 24 || byte == 74),
         "channel 7 on the way: {between:?}"
     );
+    stop.store(true, Ordering::Relaxed);
+}
+
+/// Each gobo wheel is its own claim (#179): on the Shehds, wheel 1 slot 3 (24 at 7) from
+/// one look and wheel 2 slot 7 (64 at 8) from another, both Manual, show both in either
+/// start order.
+#[tokio::test(flavor = "multi_thread")]
+async fn each_gobo_wheel_wins_on_its_own() {
+    let heard: Heard = Arc::new(Mutex::new(Vec::new()));
+    let stop = Arc::new(AtomicBool::new(false));
+    let shehds = ["Shehds", "LED Spot 100W", "14 Channel"];
+    let (mut socket, _wakes) = patched(&heard, &stop, shehds).await;
+    let wheel_1 = json!({"gobos": [3, null, null]});
+    let wheel_2 = json!({"gobos": [null, 7, null]});
+    for (first, second) in [(&wheel_1, &wheel_2), (&wheel_2, &wheel_1)] {
+        play(&mut socket, 1, first).await;
+        play(&mut socket, 2, second).await;
+        until_dmx(&heard, &[(7, 24), (8, 64)]).await;
+        assert_eq!(command(&mut socket, json!("ReleaseAll")).await, json!("Accepted"));
+        until_dmx(&heard, &[(7, 0), (8, 0)]).await;
+    }
     stop.store(true, Ordering::Relaxed);
 }

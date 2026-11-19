@@ -174,7 +174,7 @@ pub enum Writer {
     /// light holds `colour`, exactly. Writes nothing of its own.
     ColourSlot { colour: Rgb, value: u8 },
     /// One slot of the [`Writer::Picks`] before it: its channel shows `value` while the
-    /// light holds `gobo`. Writes nothing of its own.
+    /// light holds `gobo` on its wheel. Writes nothing of its own.
     GoboSlot { gobo: Gobo, value: u8 },
 }
 
@@ -183,7 +183,9 @@ impl Writer {
     pub fn slot(&self, light: &Light) -> Option<u8> {
         match *self {
             Self::ColourSlot { colour, value } => (light.colour == Some(colour)).then_some(value),
-            Self::GoboSlot { gobo, value } => (light.gobo == Some(gobo)).then_some(value),
+            Self::GoboSlot { gobo, value } => {
+                (light.gobo(gobo.wheel) == Some(gobo.slot)).then_some(value)
+            }
             Self::Fixed { .. } | Self::Takes { .. } | Self::Picks { .. } => None,
         }
     }
@@ -412,6 +414,7 @@ fn put(at: Channel, want: Want, out: &mut [Levels], lit: &mut [ChannelSet]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::property::{Value, Wheel};
     use crate::{ChannelNumbers, Universes};
 
     const FULL: u16 = u16::MAX;
@@ -670,11 +673,13 @@ mod tests {
             green: FULL,
             blue: 0,
         };
-        let gobo = |slot| Gobo { wheel: 1, slot };
-        let holds = |colour, gobo| Light {
+        let gobo = |slot| Gobo {
+            wheel: Wheel::new(1).unwrap(),
+            slot,
+        };
+        let holds = |colour, gobo: Option<Gobo>| Light {
             colour,
-            gobo,
-            ..Light::DARK
+            ..gobo.map_or(Light::DARK, |gobo| Value::Gobo(gobo).light())
         };
         let picks = |at, slots| Writer::Picks {
             light: number(0),
@@ -727,7 +732,13 @@ mod tests {
             (both.clone(), holds(Some(dim), Some(gobo(2))), [3, 3, 0]),
             (
                 both.clone(),
-                holds(None, Some(Gobo { wheel: 2, slot: 3 })),
+                holds(
+                    None,
+                    Some(Gobo {
+                        wheel: Wheel::new(2).unwrap(),
+                        slot: 3,
+                    }),
+                ),
                 [3, 3, 0],
             ),
             (short.to_vec(), holds(Some(red), None), [7, 0, 9]),

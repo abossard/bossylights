@@ -736,7 +736,7 @@ fn an_edit_admitted_after_stop_is_answered_stopping_so_every_accepted_one_is_sav
             let red = json!({"PutStep": {"look": 1, "name": "red", "step": {
                 "target": {"Fixture": {"fixture": fixture}},
                 "values": {"intensity": null, "colour": {"red": 65535, "green": 0, "blue": 0},
-                    "position": null, "zoom": null, "gobo": null},
+                    "position": null, "zoom": null, "gobos": [null, null, null]},
             }}});
             send(&mut a, &json!({"Send": {"command": red}})).await;
             // time for A's connection to reach the pool: nothing to observe it by

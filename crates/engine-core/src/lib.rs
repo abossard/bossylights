@@ -51,7 +51,7 @@ pub use playback::{
     Entry, LOOKS, LookCommand, PLAYS, Play, PlayId, PlayState, Plays, Rank, Saved, Step,
 };
 pub use project::{Project, ProjectEffect, ProjectEvent, ProjectOutput};
-pub use property::{Gobo, Light, Position, Property, Rgb, Value};
+pub use property::{Gobo, Light, Position, Property, Rgb, Value, Wheel};
 pub use resolve::{
     HeldLight, Less, LightNumber, LightRun, Lights, MAX_LIGHTS, Part, Place, Scale, Sense, Take,
     Travel, Writer, held_lights, light_changes, resolve,
@@ -1492,6 +1492,7 @@ mod tests {
                 Light::decl(&config),
                 Position::decl(&config),
                 Gobo::decl(&config),
+                Wheel::decl(&config),
                 Property::decl(&config),
                 Value::decl(&config),
                 GrabId::decl(&config),

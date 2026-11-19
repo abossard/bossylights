@@ -1,7 +1,7 @@
 import { For, onCleanup, Show } from "solid-js";
 import { render } from "solid-js/web";
 import { connectEngine, engineUrl } from "./engine";
-import type { Output, Priority, Refusal } from "./engine-api";
+import type { Output, Priority, Property, Refusal } from "./engine-api";
 import "./style.css";
 
 /** A developer aid: the first channels of universe 1. */
@@ -17,6 +17,11 @@ function priorityText(priority: Priority | undefined): string {
 }
 
 /** Why a command was refused, by name. */
+/** A property in a word: "Colour", or "Gobo 2" for the gobo of wheel 2. */
+function propertyText(property: Property): string {
+  return typeof property === "string" ? property : `Gobo ${property.Gobo}`;
+}
+
 function refusalText(refusal: Refusal): string {
   if (typeof refusal === "string") return refusal;
   if ("NoSuchUniverse" in refusal) return `NoSuchUniverse: this engine has ${refusal.NoSuchUniverse.universes}`;
@@ -29,8 +34,8 @@ function refusalText(refusal: Refusal): string {
   if ("ShowFileFull" in refusal) return `ShowFileFull: the show file has at most ${refusal.ShowFileFull.most} bytes`;
   if ("LookInUse" in refusal) return `LookInUse: look ${refusal.LookInUse.look} uses it`;
   if ("TooManyLooks" in refusal) return `TooManyLooks: at most ${refusal.TooManyLooks.most} looks`;
-  if ("Unsupported" in refusal) return `Unsupported: light ${refusal.Unsupported.light} cannot show that ${refusal.Unsupported.property}`;
-  if ("OtherProperty" in refusal) return `OtherProperty: the grab holds ${refusal.OtherProperty.property}`;
+  if ("Unsupported" in refusal) return `Unsupported: light ${refusal.Unsupported.light} cannot show that ${propertyText(refusal.Unsupported.property)}`;
+  if ("OtherProperty" in refusal) return `OtherProperty: the grab holds ${propertyText(refusal.OtherProperty.property)}`;
   if ("GrabFull" in refusal) return `GrabFull: the live grabs keep at most ${refusal.GrabFull.most} runs`;
   return `TooManyUniverses: this kind takes at most ${refusal.TooManyUniverses.most}`;
 }

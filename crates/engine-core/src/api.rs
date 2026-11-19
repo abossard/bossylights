@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 /// The version of this API. `GET /version` answers it as text. A client that speaks
 /// another version does not talk to the engine. Raise it with every change a client of
 /// the old version would get wrong.
-pub const API_VERSION: u16 = 6;
+pub const API_VERSION: u16 = 7;
 
 /// What a client sends. A key it does not know, here or in any type it carries, refuses
 /// the request: a misspelled field would otherwise be ignored without a word.

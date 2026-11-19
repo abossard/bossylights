@@ -5,7 +5,8 @@ mod common;
 
 use common::{all, at, light, lights, mode};
 use engine_core::{
-    Gobo, Levels, Light, LightRun, Position, Property, Refusal, Rgb, Universes, resolve,
+    Gobo, Levels, Light, LightRun, Position, Property, Refusal, Rgb, Universes, Value, Wheel,
+    resolve,
 };
 use fixture_library::{Byte, Does, Function, Mode};
 use rig::{Rigged, Unfit, compile, supports};
@@ -38,8 +39,23 @@ fn shehds() -> Mode {
     mode("Shehds-LED-Spot-100W.qxf", "14 Channel")
 }
 
-fn gobo(wheel: u8, slot: u8) -> Gobo {
-    Gobo { wheel, slot }
+fn wheel(number: u8) -> Wheel {
+    Wheel::new(number).unwrap()
+}
+
+fn gobo(number: u8, slot: u8) -> Gobo {
+    Gobo {
+        wheel: wheel(number),
+        slot,
+    }
+}
+
+/// A light holding each slot of `gobos`, wheel 1 first.
+fn gobos(gobos: [Option<u8>; Wheel::COUNT]) -> Light {
+    Light {
+        gobos,
+        ..Light::DARK
+    }
 }
 
 const fn unsupported(light: u16, property: Property) -> Refusal {
@@ -58,10 +74,9 @@ fn each_property_goes_to_its_channels() {
         zoom: Some(0x8000),
         ..Light::DARK
     };
-    let shows = |colour, gobo| Light {
+    let shows = |colour, gobo: Option<Gobo>| Light {
         colour,
-        gobo,
-        ..Light::DARK
+        ..gobo.map_or(Light::DARK, |gobo| Value::Gobo(gobo).light())
     };
     // (mode, the light, channels from 1 and the bytes they show)
     type Case<'a> = (&'a Mode, Light, &'a [Bytes]);
@@ -72,7 +87,7 @@ fn each_property_goes_to_its_channels() {
     let x4 = mode("GLP-Impression-X4.qxf", "Normal");
     let platinum = mode("Elation-Platinum-Spot-5R.qxf", "Basic");
     let mac = mode("Martin-MAC-2000-Wash.qxf", "8-bit with Color Wheel 2");
-    let cases: [Case; 16] = [
+    let cases: [Case; 17] = [
         (
             &elation,
             aimed,
@@ -94,6 +109,12 @@ fn each_property_goes_to_its_channels() {
             &[(6, 0), (7, 24), (8, 0)],
         ),
         (&shehds(), shows(None, Some(gobo(2, 7))), &[(7, 0), (8, 64)]),
+        // each wheel shows its own slot
+        (
+            &shehds(),
+            gobos([Some(3), Some(7), None]),
+            &[(7, 24), (8, 64)],
+        ),
         (&shehds(), Light::DARK, &[(6, 0), (7, 0), (8, 0)]),
         // a hybrid holds its wheel where the mix goes through: 0 to 7, not fixed white
         (
@@ -142,10 +163,7 @@ fn a_gobo_cuts_to_its_slot() {
     let mut out = [Levels::ZERO];
     // (gobo, channel 7) one frame after the other: never a byte between two slots
     for (slot, byte) in [(3, 24), (8, 74), (2, 14), (3, 24)] {
-        let light = Light {
-            gobo: Some(gobo(1, slot)),
-            ..Light::DARK
-        };
+        let light = gobos([Some(slot), None, None]);
         resolve(&[light], &writers, &mut out);
         assert_eq!(out[0].0[6], byte, "slot {slot}");
     }
@@ -171,12 +189,9 @@ fn a_light_refuses_what_its_wheel_cannot_show() {
         colour: Some(colour),
         ..Light::DARK
     };
-    let gobo_of = |wheel, slot| Light {
-        gobo: Some(gobo(wheel, slot)),
-        ..Light::DARK
-    };
+    let gobo_of = |number, slot| Value::Gobo(gobo(number, slot)).light();
     // (lights, values, result)
-    let cases: [(&[LightRun], Light, Result<(), Refusal>); 13] = [
+    let cases: [(&[LightRun], Light, Result<(), Refusal>); 16] = [
         (&both, colour(RED), Ok(())),
         (&both, colour(WHITE), Ok(())),
         // no black and no orange on the wheel
@@ -191,10 +206,26 @@ fn a_light_refuses_what_its_wheel_cannot_show() {
         (&par_only, colour(ORANGE), Ok(())),
         (&both, gobo_of(1, 3), Ok(())),
         (&both, gobo_of(2, 7), Ok(())),
-        (&both, gobo_of(2, 8), Err(unsupported(1, Property::Gobo))),
-        (&both, gobo_of(3, 1), Err(unsupported(1, Property::Gobo))),
-        // a light without a gobo wheel has nothing to show it with: let through
-        (&par_only, gobo_of(9, 9), Ok(())),
+        (
+            &both,
+            gobo_of(2, 8),
+            Err(unsupported(1, Property::Gobo(wheel(2)))),
+        ),
+        // each wheel its own property: one slot it has, one it has not
+        (&both, gobos([Some(3), Some(7), None]), Ok(())),
+        (
+            &both,
+            gobos([Some(3), Some(8), None]),
+            Err(unsupported(1, Property::Gobo(wheel(2)))),
+        ),
+        (
+            &both,
+            gobos([Some(40), Some(7), None]),
+            Err(unsupported(1, Property::Gobo(wheel(1)))),
+        ),
+        // a light without that gobo wheel has nothing to show it with: let through
+        (&both, gobo_of(3, 1), Ok(())),
+        (&par_only, gobo_of(1, 9), Ok(())),
         // position and zoom are amounts: any value
         (
             &both,

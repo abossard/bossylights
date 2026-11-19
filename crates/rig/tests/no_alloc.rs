@@ -9,7 +9,7 @@ mod common;
 mod counting;
 
 use common::{light, lights, mode};
-use engine_core::{ChannelNumbers, Gobo, Levels, Light, Position, Rgb, Universes, Writer, resolve};
+use engine_core::{ChannelNumbers, Levels, Light, Position, Rgb, Universes, Writer, resolve};
 use rig::compile;
 
 const UNIVERSES: u16 = 8;
@@ -82,10 +82,12 @@ fn main() {
                     tilt: step.wrapping_mul(11),
                 }),
                 zoom: Some(step.wrapping_mul(13)),
-                gobo: Some(Gobo {
-                    wheel: 1 + u8::try_from(frame % 2).unwrap(),
-                    slot: 1 + u8::try_from(step % 8).unwrap(),
-                }),
+                // every other frame the other wheel
+                gobos: if frame % 2 == 0 {
+                    [Some(1 + u8::try_from(step % 8).unwrap()), None, None]
+                } else {
+                    [None, Some(1 + u8::try_from(step % 8).unwrap()), None]
+                },
             };
         }
         resolve(&values, &writers, &mut out);

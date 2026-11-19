@@ -435,7 +435,7 @@ mod tests {
 mod properties {
     use super::*;
     use crate::playback::{PLAYS, PlayId, Plays};
-    use crate::property::{Gobo, Position, Rgb, Value};
+    use crate::property::{Gobo, Position, Rgb, Value, Wheel};
     use crate::resolve::{LightNumber, LightRun, Lights};
 
     const RED: Rgb = Rgb {
@@ -477,6 +477,14 @@ mod properties {
         }
     }
 
+    /// The slot of each gobo wheel, wheel 1 first.
+    fn gobos(gobos: [Option<u8>; Wheel::COUNT]) -> Light {
+        Light {
+            gobos,
+            ..Light::DARK
+        }
+    }
+
     fn both(level: u16, rgb: Rgb) -> Light {
         Light {
             intensity: Some(level),
@@ -494,9 +502,13 @@ mod properties {
             values.colour.map(Value::Colour),
             values.position.map(Value::Position),
             values.zoom.map(Value::Zoom),
-            values.gobo.map(Value::Gobo),
         ];
-        for value in each.into_iter().flatten() {
+        let gobos = (1..=3).filter_map(Wheel::new).map(|wheel| {
+            values
+                .gobo(wheel)
+                .map(|slot| Value::Gobo(Gobo { wheel, slot }))
+        });
+        for value in each.into_iter().chain(gobos).flatten() {
             held.change(LightChange::Grab { value, grab }, order);
         }
         held
@@ -551,7 +563,7 @@ mod properties {
         use Rank::{Autopilot, Manual, Show};
         let kept = |rank, order, values| (rank, order, PlayState::Kept, values);
         // (row, direct hold, plays, rules, shown)
-        let cases: [(&str, Held, Vec<Source>, MixRules, Light); 22] = [
+        let cases: [(&str, Held, Vec<Source>, MixRules, Light); 26] = [
             ("nothing", Held::NONE, vec![], LATEST, Light::DARK),
             (
                 "a hold alone",
@@ -730,6 +742,44 @@ mod properties {
                 LATEST,
                 colour(BLUE),
             ),
+            // each gobo wheel is its own claim
+            (
+                "two wheels from two plays, wheel 2 later",
+                Held::NONE,
+                vec![
+                    play(Manual, 1, gobos([Some(3), None, None])),
+                    play(Manual, 2, gobos([None, Some(7), None])),
+                ],
+                LATEST,
+                gobos([Some(3), Some(7), None]),
+            ),
+            (
+                "two wheels from two plays, wheel 1 later",
+                Held::NONE,
+                vec![
+                    play(Manual, 2, gobos([Some(3), None, None])),
+                    play(Manual, 1, gobos([None, Some(7), None])),
+                ],
+                LATEST,
+                gobos([Some(3), Some(7), None]),
+            ),
+            (
+                "a later start takes only its own wheel",
+                Held::NONE,
+                vec![
+                    play(Show, 1, gobos([Some(3), Some(7), Some(2)])),
+                    play(Show, 2, gobos([None, Some(5), None])),
+                ],
+                LATEST,
+                gobos([Some(3), Some(5), Some(2)]),
+            ),
+            (
+                "a hold of wheel 2 leaves wheel 1 to a Show",
+                held(gobos([None, Some(7), None]), 1),
+                vec![play(Show, 2, gobos([Some(3), Some(1), None]))],
+                LATEST,
+                gobos([Some(3), Some(7), None]),
+            ),
         ];
         for (row, hold, sources, rules, expected) in cases {
             for first in 0..PLAYS {
@@ -859,7 +909,7 @@ mod properties {
             let all = Light {
                 position: Some(Position { pan: 1, tilt: 2 }),
                 zoom: Some(3),
-                gobo: Some(Gobo { wheel: 1, slot: 2 }),
+                gobos: [Some(2), Some(5), Some(1)],
                 ..both(4, BLUE)
             };
             let mut hold = held(all, 3);
