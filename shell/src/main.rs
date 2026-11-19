@@ -65,13 +65,17 @@ fn main() {
     };
     let mut engine = meet(address);
     let window = window_engine(address, &engine);
+    let page = window_page();
+    // `BOSSYLIGHTS_WINDOW_SCRIPT` runs in the window too: the tests read the page with it.
+    let script =
+        window_script(address) + &std::env::var("BOSSYLIGHTS_WINDOW_SCRIPT").unwrap_or_default();
     tauri::Builder::default()
         .setup(move |app| {
             eprintln!("bossylights: {window}");
-            tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::default())
+            tauri::WebviewWindowBuilder::new(app, "main", page)
                 .title("Bossylights")
                 .inner_size(640.0, 420.0)
-                .initialization_script(window_script(address))
+                .initialization_script(script)
                 .build()?;
             Ok(())
         })
@@ -100,6 +104,14 @@ fn window_engine(address: SocketAddr, engine: &Engine) -> String {
         }
         Engine::Gone => format!("the window has no engine on {address}"),
     }
+}
+
+/// The page the window shows: the UI, or `BOSSYLIGHTS_UI=http://127.0.0.1:5299/` (tests).
+fn window_page() -> tauri::WebviewUrl {
+    std::env::var("BOSSYLIGHTS_UI")
+        .ok()
+        .and_then(|page| page.parse().ok())
+        .map_or_else(tauri::WebviewUrl::default, tauri::WebviewUrl::External)
 }
 
 /// What the window runs before its page: which engine it talks to.

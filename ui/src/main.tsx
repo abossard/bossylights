@@ -33,7 +33,8 @@ function outputText(number: number, output: Output): string {
 }
 
 function App() {
-  const engine = connectEngine(engineUrl());
+  const url = engineUrl();
+  const engine = connectEngine(url);
   onCleanup(engine.close);
   const level = (address: number) => engine.picture()?.universes[0]?.[address - 1] ?? 0;
   return (
@@ -45,6 +46,9 @@ function App() {
         {engine.picture()?.state.frame ?? "0"}
       </p>
       <p class="label">engine wakes</p>
+      <p class="label" data-testid="engine">
+        engine on {new URL(url).host}
+      </p>
       <p class="label" data-testid="priority">
         output thread: {priorityText(engine.picture()?.state.priority)}
       </p>

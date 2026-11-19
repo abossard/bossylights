@@ -4,6 +4,7 @@ import { expect, test } from "@playwright/test";
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import { createSocket } from "node:dgram";
 import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 
 const ADDRESS = "127.0.0.1:7798";
 const SHELL = `target/debug/bossylights${process.platform === "win32" ? ".exe" : ""}`;
@@ -14,8 +15,8 @@ interface Shell {
   said: () => string;
 }
 
-function startShell(address = ADDRESS): Shell {
-  const child = spawn(SHELL, [], { env: { ...process.env, BOSSYLIGHTS_ENGINE: address } });
+function startShell(address = ADDRESS, env: Record<string, string> = {}): Shell {
+  const child = spawn(SHELL, [], { env: { ...process.env, BOSSYLIGHTS_ENGINE: address, ...env } });
   let text = "";
   child.stdout?.on("data", (chunk: Buffer) => (text += chunk.toString()));
   child.stderr?.on("data", (chunk: Buffer) => (text += chunk.toString()));
@@ -103,6 +104,42 @@ test("kill the shell: the engine keeps sending, a new shell adopts it and the fr
     await expect.poll(health, WAIT).toBe("nobody");
     await expect.poll(gone, WAIT).toBe(true);
     udp.close();
+  }
+});
+
+/** What the window's page shows, as the text its layout makes: the page posts it here. */
+async function windowText() {
+  let seen = "";
+  const server = createServer((ask, answer) => {
+    let text = "";
+    ask.on("data", (chunk: Buffer) => (text += chunk.toString()));
+    ask.on("end", () => ((seen = text), answer.end()));
+  });
+  await new Promise<void>((listening) => server.listen(0, "127.0.0.1", listening));
+  const to = `http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
+  return {
+    /** Runs in the window before its page, and on: posts what the page shows. */
+    script: `setInterval(() => fetch("${to}", { method: "POST", mode: "no-cors", body: document.body?.innerText ?? "" }).catch(() => {}), 250);`,
+    /** The lines the page showed last, in lower case (the status is styled upper case). */
+    lines: () => seen.toLowerCase().split("\n"),
+    close: () => new Promise((closed) => server.close(closed)),
+  };
+}
+
+// The page's text as laid out in the window's web view is read, not its pixels.
+test("the window shows the engine on the test port", async ({ baseURL }) => {
+  test.setTimeout(120_000);
+  const window = await windowText();
+  const shell = startShell(ADDRESS, { BOSSYLIGHTS_UI: baseURL!, BOSSYLIGHTS_WINDOW_SCRIPT: window.script });
+  try {
+    await expect.poll(window.lines, WAIT).toContain("connected");
+    expect(window.lines()).toContain(`engine on ${ADDRESS}`);
+  } finally {
+    await kill(shell);
+    await window.close();
+    if ((await health()) === 200) expect(await request("Stop")).toBe("Stopping");
+    await expect.poll(health, WAIT).toBe("nobody");
+    await expect.poll(gone, WAIT).toBe(true);
   }
 });
 
