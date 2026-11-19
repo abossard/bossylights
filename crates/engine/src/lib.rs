@@ -687,7 +687,7 @@ impl Ticker {
                 *slot = Some(number);
             }
             for number in serve.into_iter().flatten() {
-                self.serve(number, now);
+                self.serve(number);
                 let (handed, now) = (self.start.elapsed(), &mut self.now);
                 self.carried
                     .handed(number.slot(), handed, |time| now.carried(time));
@@ -750,14 +750,16 @@ impl Ticker {
         self.now.attached(output.slot());
     }
 
-    /// Hands a due output its run of universes and counts what happened.
-    fn serve(&mut self, number: OutputNumber, now: Duration) {
+    /// Hands a due output its run of universes and counts what happened. The take is
+    /// stamped on its own: an output served after the render or a slow output counts
+    /// that wait in its lateness and its interval.
+    fn serve(&mut self, number: OutputNumber) {
         let slot = number.slot();
         let Some(Some(output)) = self.now.state.outputs.get(slot).copied() else {
             return;
         };
-        let late = now.saturating_sub(output.due);
-        self.now.late(slot, late);
+        let at = self.start.elapsed();
+        self.now.late(slot, at.saturating_sub(output.due));
         let outcome = match self.devices.get_mut(slot) {
             Some(Some(device)) => device.take(output.universes.of(&self.out)),
             _ => Outcome::Failed,
@@ -765,6 +767,7 @@ impl Ticker {
         self.apply(EngineCommand::Handed {
             output: number,
             outcome,
+            at,
         });
     }
 

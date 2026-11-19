@@ -213,10 +213,12 @@ pub enum EngineCommand {
     Tick {
         now: Duration,
     },
-    /// A frame was handed to an output.
+    /// A frame was handed to an output at `at`, since the engine started: its own time,
+    /// not the wake's, so an output served after a slow one counts that wait.
     Handed {
         output: OutputNumber,
         outcome: Outcome,
+        at: Duration,
     },
     SetChannel {
         channel: Channel,
@@ -322,10 +324,14 @@ pub fn update(
             },
             ..state
         },
-        EngineCommand::Handed { output, outcome } => {
+        EngineCommand::Handed {
+            output,
+            outcome,
+            at,
+        } => {
             let mut outputs = state.outputs;
             if let Some(Some(handed)) = outputs.get_mut(output.slot()) {
-                *handed = handed.handed(outcome, state.now);
+                *handed = handed.handed(outcome, at);
             }
             State { outputs, ..state }
         }
@@ -999,6 +1005,7 @@ mod tests {
                 let handed = EngineCommand::Handed {
                     output: output(number),
                     outcome: Outcome::Accepted,
+                    at: now,
                 };
                 state = update(state, &mut universes, &mut [], &mut [], handed);
             }
@@ -1169,6 +1176,7 @@ mod tests {
             let handed = EngineCommand::Handed {
                 output: number,
                 outcome: Outcome::Accepted,
+                at: now,
             };
             state = update(state, &mut universes, &mut [], &mut [], handed);
         }
