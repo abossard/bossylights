@@ -6,7 +6,7 @@ use engine_core::{
     Unopened,
 };
 use fixture_library::{Fixture, parse};
-use rig::Patch;
+use rig::{Patch, Whole};
 use std::path::Path;
 
 fn text(text: &str) -> Text {
@@ -83,7 +83,9 @@ fn changed_library() -> Vec<Fixture> {
 }
 
 fn empty() -> Patch {
-    Patch::new(Universes::new(2).unwrap(), Lights::new(64).unwrap())
+    // no output here: what an output sends is never asked
+    let whole = Whole(|_| std::num::NonZeroU16::MIN);
+    Patch::new(Universes::new(2).unwrap(), Lights::new(64).unwrap(), whole)
 }
 
 /// A command and the library it is sent with.

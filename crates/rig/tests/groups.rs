@@ -307,7 +307,11 @@ fn a_group_command_makes_new_groups_and_says_what_follows() {
         ),
     ];
     for (before, command, expected, after) in cases {
-        let empty = Patch::new(Universes::new(2).unwrap(), Lights::new(64).unwrap());
+        let empty = Patch::new(
+            Universes::new(2).unwrap(),
+            Lights::new(64).unwrap(),
+            common::whole(),
+        );
         let patch = before.iter().fold(empty, |patch, command| {
             let (new, _) = patch.update(*command, &library).unwrap();
             new.unwrap_or(patch)

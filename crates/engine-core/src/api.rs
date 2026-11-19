@@ -138,7 +138,15 @@ pub enum Refusal {
     /// The fixture would run over universes `first` to `last`, and no output streams
     /// them all as one run.
     NotStreamed { first: u16, last: u16 },
-    /// Then no output would stream every universe fixture `fixture` runs over.
+    /// Output `output` streams the fixture's channel at `universe`, `address` and never
+    /// sends it: its run ends in channels that make no whole unit (a pixel, for some kinds).
+    NotSent {
+        output: u8,
+        universe: u16,
+        address: u16,
+    },
+    /// Then fixture `fixture` would lose a channel: no output would stream every universe
+    /// it runs over, or an output would stream one of its channels and never send it.
     StreamsFixture { fixture: u16 },
     /// The fixture's lights do not fit in the lights the engine has left.
     NoLightsLeft,

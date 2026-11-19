@@ -3,10 +3,12 @@
 #![allow(dead_code, reason = "each test file uses its own part")]
 
 use engine_core::{
-    Channel, ChannelNumbers, Less, LightNumber, Lights, MAX_LIGHTS, Part, Place, Scale, Sense,
-    Take, Universes, Writer,
+    Channel, ChannelNumbers, Color, Less, LightNumber, Lights, MAX_LIGHTS, OutputKind, Part, Place,
+    Scale, Sense, Take, Universes, Writer,
 };
 use fixture_library::{Fixture, Mode, parse};
+use rig::Whole;
+use std::num::NonZeroU16;
 use std::path::PathBuf;
 
 /// The folders of real QLC+ definitions: the fixture library's and the rig's own.
@@ -51,6 +53,22 @@ pub fn mode(file: &str, name: &str) -> Mode {
         .into_iter()
         .find(|m| m.name == name)
         .unwrap_or_else(|| panic!("{file} has no mode {name}"))
+}
+
+/// What outputs send, as `outputs` says: DDP whole pixels, a DMX USB Pro every channel.
+pub const fn whole() -> Whole {
+    Whole(|kind| {
+        let channels = match kind {
+            OutputKind::Ddp {
+                color: Color::Rgb, ..
+            } => 3,
+            OutputKind::Ddp {
+                color: Color::Rgbw, ..
+            } => 4,
+            OutputKind::DmxUsbPro { .. } => 1,
+        };
+        NonZeroU16::new(channels).unwrap()
+    })
 }
 
 pub fn lights() -> Lights {

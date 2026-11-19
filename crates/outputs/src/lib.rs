@@ -26,6 +26,7 @@ pub mod dmx_usb_pro;
 pub use engine_core::{Adapter, Color, Levels, Outcome, OutputKind, Rate, Refusal, Run};
 
 use std::io;
+use std::num::NonZeroU16;
 
 /// An output, opened and ready for the output thread. Made and dropped off it.
 pub trait Device: Send {
@@ -53,15 +54,23 @@ pub fn open(kind: OutputKind) -> io::Result<Box<dyn Device>> {
 pub struct Limits {
     /// The most universes in one output's run.
     pub universes: u16,
+    /// The run's channels go out in whole units of this many: the last channels of a run
+    /// that make no whole unit are never sent. DDP: a pixel, 3 for RGB, 4 for RGBW.
+    pub whole: NonZeroU16,
 }
 
-/// What each kind can send: a DMX USB Pro one universe, DDP every universe an engine has.
+/// What each kind can send: a DMX USB Pro one universe of every channel, DDP every
+/// universe an engine has, in whole pixels.
 pub const fn limits(kind: OutputKind) -> Limits {
     match kind {
-        OutputKind::Ddp { .. } => Limits {
+        OutputKind::Ddp { color, .. } => Limits {
             universes: engine_core::MAX_UNIVERSES,
+            whole: ddp::pixel(color),
         },
-        OutputKind::DmxUsbPro { .. } => Limits { universes: 1 },
+        OutputKind::DmxUsbPro { .. } => Limits {
+            universes: 1,
+            whole: NonZeroU16::MIN,
+        },
     }
 }
 
@@ -101,21 +110,27 @@ mod tests {
         let pro = OutputKind::DmxUsbPro {
             adapter: Adapter::FIRST,
         };
+        let rgbw = OutputKind::Ddp {
+            address: SocketAddrV4::new(Ipv4Addr::LOCALHOST, 4048),
+            color: Color::Rgbw,
+        };
         let too_many = |most| Err(Refusal::TooManyUniverses { most });
-        // (kind, first, count, refused with)
+        // (kind, first, count, refused with, channels of a whole unit)
         let cases = [
-            (pro, 1, 1, Ok(())),
-            (pro, 3, 1, Ok(())),
-            (pro, 1, 2, too_many(1)),
-            (pro, 1, MAX_UNIVERSES, too_many(1)),
-            (ddp, 1, 1, Ok(())),
-            (ddp, 1, MAX_UNIVERSES, Ok(())),
+            (pro, 1, 1, Ok(()), 1),
+            (pro, 3, 1, Ok(()), 1),
+            (pro, 1, 2, too_many(1), 1),
+            (pro, 1, MAX_UNIVERSES, too_many(1), 1),
+            (ddp, 1, 1, Ok(()), 3),
+            (ddp, 1, MAX_UNIVERSES, Ok(()), 3),
+            (rgbw, 1, MAX_UNIVERSES, Ok(()), 4),
         ];
-        for (kind, first, count, expected) in cases {
+        for (kind, first, count, expected, whole) in cases {
             let checked = Universes::new(MAX_UNIVERSES)
                 .and_then(|most| RunNumbers { first, count }.check(most).ok())
                 .map(|run| limits(kind).check(run).map(|_| ()));
             assert_eq!(checked, Some(expected), "{kind:?} {first}, {count}");
+            assert_eq!(limits(kind).whole.get(), whole, "{kind:?}");
         }
     }
 }

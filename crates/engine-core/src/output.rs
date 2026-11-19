@@ -106,6 +106,11 @@ impl RunNumbers {
 }
 
 impl Run {
+    /// The first universe, counted from 1.
+    pub const fn first(self) -> u16 {
+        self.first
+    }
+
     /// How many universes.
     pub const fn count(self) -> u16 {
         self.count

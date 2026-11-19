@@ -421,7 +421,7 @@ fn a_patch_command_makes_a_new_patch_and_says_what_follows() {
         ),
     ];
     for (lights, before, command, expected, after) in cases {
-        let empty = Patch::new(two, lights);
+        let empty = Patch::new(two, lights, common::whole());
         let project = before.iter().fold(empty, |patch, command| {
             let (new, _) = patch.update(*command, &library).unwrap();
             new.unwrap_or(patch)

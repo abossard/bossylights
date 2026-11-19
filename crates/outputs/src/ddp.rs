@@ -14,6 +14,7 @@ use crate::{Color, Device, Levels, Outcome};
 use engine_core::ADDRESSES;
 use std::io::{self, ErrorKind};
 use std::net::{Ipv4Addr, SocketAddrV4, UdpSocket};
+use std::num::NonZeroU16;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
@@ -325,12 +326,21 @@ fn next_sequence(sequence: u8) -> u8 {
     sequence % 15 + 1
 }
 
+/// The channels of one pixel.
+pub(crate) const fn pixel(color: Color) -> NonZeroU16 {
+    let size = match color {
+        Color::Rgb => NonZeroU16::new(3),
+        Color::Rgbw => NonZeroU16::new(4),
+    };
+    match size {
+        Some(size) => size,
+        None => NonZeroU16::MIN,
+    }
+}
+
 /// The bytes of whole pixels in `channels` channels.
 fn data_length(channels: usize, color: Color) -> usize {
-    let size = match color {
-        Color::Rgb => 3,
-        Color::Rgbw => 4,
-    };
+    let size = usize::from(pixel(color).get());
     channels / size * size
 }
 

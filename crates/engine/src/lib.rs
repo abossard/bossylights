@@ -48,7 +48,7 @@ pub use rig::Patch;
 mod snapshot;
 
 use engine_core::{LightRun, Lights, ProjectEffect, ProjectEvent, Writer};
-use rig::PatchEffect;
+use rig::{PatchEffect, Whole};
 
 pub use outputs::Device;
 use snapshot::{Hand, Reader};
@@ -219,7 +219,11 @@ impl Engine {
             open: Some(open),
             commands,
             project: Project::new(universes),
-            patch: Arc::new(Patch::new(universes, LIGHTS)),
+            patch: Arc::new(Patch::new(
+                universes,
+                LIGHTS,
+                Whole(|kind| outputs::limits(kind).whole),
+            )),
             retired: 0,
             shared: Arc::clone(&shared),
             free: free.thread().clone(),
@@ -280,14 +284,14 @@ impl Sender {
         {
             outputs::limits(kind).check(universes)?;
         }
-        // No patch where a fixture runs over universes no output streams as one run: a
-        // change of the outputs that would leave one is refused.
+        // No patch where a fixture loses a channel: a change of the outputs that would
+        // leave one is refused.
         if let Some(
             ProjectEffect::Keep { .. }
             | ProjectEffect::Open { .. }
             | ProjectEffect::Send(EngineCommand::RemoveOutput { .. }),
         ) = effect
-            && let Some((fixture, _, _)) = self.patch.unstreamed(&project)
+            && let Some((fixture, _)) = self.patch.unstreamed(&project)
         {
             return Err(Refusal::StreamsFixture { fixture });
         }
@@ -300,9 +304,8 @@ impl Sender {
             Some(ProjectEffect::Patch(command)) => {
                 let (patch, effects) = self.patch.update(command, library)?;
                 // and a change of the patch that would make one is refused
-                if let Some((_, first, last)) = patch.as_ref().and_then(|p| p.unstreamed(&project))
-                {
-                    return Err(Refusal::NotStreamed { first, last });
+                if let Some((_, reason)) = patch.as_ref().and_then(|p| p.unstreamed(&project)) {
+                    return Err(reason);
                 }
                 let begun = self.follow(effects)?;
                 if let Some(patch) = patch {
@@ -413,7 +416,7 @@ impl Sender {
         let (project, _) = self
             .project
             .update(ProjectEvent::Attached { output, universes })?;
-        if let Some((fixture, _, _)) = self.patch.unstreamed(&project) {
+        if let Some((fixture, _)) = self.patch.unstreamed(&project) {
             return Err(Refusal::StreamsFixture { fixture });
         }
         let command = EngineCommand::Attach {
@@ -430,8 +433,8 @@ impl Sender {
     /// [`Sender::patch`], so it has this engine's universes and lights. Its writers go to
     /// the tick thread. Refused as a change of the patch is: nothing changes.
     pub fn load(&mut self, patch: Patch) -> Result<(), Refusal> {
-        if let Some((_, first, last)) = patch.unstreamed(&self.project) {
-            return Err(Refusal::NotStreamed { first, last });
+        if let Some((_, reason)) = patch.unstreamed(&self.project) {
+            return Err(reason);
         }
         self.follow(vec![PatchEffect::Writers(patch.writers().to_vec())])?;
         self.patch = Arc::new(patch);

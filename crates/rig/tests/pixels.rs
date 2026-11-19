@@ -97,7 +97,7 @@ fn a_fixture_with_heads_is_one_light_per_head_in_the_order_of_the_definition() {
         ),
     ];
     for (command, named, count, layout, expected) in cases {
-        let empty = Patch::new(Universes::ONE, lights());
+        let empty = Patch::new(Universes::ONE, lights(), common::whole());
         let (patch, _) = empty.update(command, &library).unwrap();
         let patch = patch.unwrap();
         let row = patch.fixtures()[0];
@@ -138,7 +138,7 @@ fn a_strip_is_written_like_a_par_without_a_dimmer() {
         ),
     ];
     for (color, expected) in cases {
-        let empty = Patch::new(Universes::ONE, lights());
+        let empty = Patch::new(Universes::ONE, lights(), common::whole());
         let (patch, effects) = empty.update(strip(2, color, 1, 37), &[]).unwrap();
         assert_eq!(effects[0], PatchEffect::Patched { fixture: 1 });
         let said: Vec<String> = patch.unwrap().writers().iter().map(say).collect();
@@ -163,7 +163,7 @@ fn a_strip_that_does_not_fit_is_refused() {
         ),
     ];
     for (pixels, color, universe, address, expected) in cases {
-        let empty = Patch::new(Universes::ONE, few);
+        let empty = Patch::new(Universes::ONE, few, common::whole());
         let refused = empty.update(strip(pixels, color, universe, address), &[]);
         assert_eq!(refused.err(), Some(expected), "{pixels} {color:?}");
     }
@@ -180,13 +180,13 @@ fn a_fixture_runs_on_into_the_next_universe_and_clashes_there() {
         ((2, 1), (1, 511), [vec![2], vec![1]]),
     ];
     for (first, then, expected) in cases {
-        let patch =
-            [first, then]
-                .iter()
-                .fold(Patch::new(two, lights()), |patch, &(universe, address)| {
-                    let command = strip(1, Color::Rgb, universe, address);
-                    patch.update(command, &[]).unwrap().0.unwrap()
-                });
+        let patch = [first, then].iter().fold(
+            Patch::new(two, lights(), common::whole()),
+            |patch, &(universe, address)| {
+                let command = strip(1, Color::Rgb, universe, address);
+                patch.update(command, &[]).unwrap().0.unwrap()
+            },
+        );
         let clashes: Vec<Vec<u16>> = patch
             .fixtures()
             .iter()
@@ -221,22 +221,42 @@ fn a_fixture_over_more_than_one_universe_needs_one_output_that_streams_them_all(
     // strips: pixels, universe, address. Outputs: number, first universe, count
     type Strips = &'static [(u16, u16, u16)];
     type Outputs = &'static [(u8, u16, u16)];
-    // fixture, first universe, last
-    type Unstreamed = Option<(u16, u16, u16)>;
+    type Unstreamed = Option<(u16, Refusal)>;
+    let not_streamed = |fixture, first, last| Some((fixture, Refusal::NotStreamed { first, last }));
     // (strips, outputs, unstreamed)
     let cases: [(Strips, Outputs, Unstreamed); 7] = [
         // 170 RGB pixels fill universe 1 to 510: one universe needs no output
         (&[(170, 1, 1)], &[], None),
-        (&[(171, 1, 1)], &[], Some((1, 1, 2))),
+        (&[(171, 1, 1)], &[], not_streamed(1, 1, 2)),
         (&[(171, 1, 1)], &[(1, 1, 2)], None),
-        (&[(171, 1, 1)], &[(1, 1, 1), (2, 2, 1)], Some((1, 1, 2))),
-        (&[(171, 1, 1)], &[(1, 1, 1), (2, 1, 4)], None),
-        (&[(10, 1, 1), (400, 2, 1)], &[(1, 1, 2)], Some((2, 2, 4))),
+        (
+            &[(171, 1, 1)],
+            &[(1, 1, 1), (2, 2, 1)],
+            not_streamed(1, 1, 2),
+        ),
+        // output 1 sends universe 1 to 510: pixel 171 starts at 511
+        (
+            &[(171, 1, 1)],
+            &[(1, 1, 1), (2, 1, 4)],
+            Some((
+                1,
+                Refusal::NotSent {
+                    output: 1,
+                    universe: 1,
+                    address: 511,
+                },
+            )),
+        ),
+        (
+            &[(10, 1, 1), (400, 2, 1)],
+            &[(1, 1, 2)],
+            not_streamed(2, 2, 4),
+        ),
         (&[(10, 1, 1), (400, 2, 1)], &[(1, 2, 3)], None),
     ];
     for (strips, outputs, expected) in cases {
         let patch = strips.iter().fold(
-            Patch::new(four, lights()),
+            Patch::new(four, lights(), common::whole()),
             |patch, &(pixels, universe, address)| {
                 let command = strip(pixels, Color::Rgb, universe, address);
                 patch.update(command, &[]).unwrap().0.unwrap()

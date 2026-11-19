@@ -22,6 +22,7 @@ function refusalText(refusal: Refusal): string {
   if ("NoSuchUniverse" in refusal) return `NoSuchUniverse: this engine has ${refusal.NoSuchUniverse.universes}`;
   if ("PastTheEnd" in refusal) return `PastTheEnd: its ${refusal.PastTheEnd.channels} channels run past the last universe`;
   if ("NotStreamed" in refusal) return `NotStreamed: no output streams universes ${refusal.NotStreamed.first} to ${refusal.NotStreamed.last}`;
+  if ("NotSent" in refusal) return `NotSent: output ${refusal.NotSent.output} never sends ${refusal.NotSent.universe}:${refusal.NotSent.address}`;
   if ("StreamsFixture" in refusal) return `StreamsFixture: fixture ${refusal.StreamsFixture.fixture} needs it`;
   if ("TooManyMembers" in refusal) return `TooManyMembers: a group has at most ${refusal.TooManyMembers.most}`;
   if ("ShowFileFull" in refusal) return `ShowFileFull: the show file has at most ${refusal.ShowFileFull.most} bytes`;

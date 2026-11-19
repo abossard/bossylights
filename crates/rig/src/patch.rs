@@ -22,8 +22,13 @@
 //! be over the file's most bytes ([`Refusal::ShowFileFull`]): the file always holds the
 //! patch. The file's text is the show file's to write (`crates/show-file`), so its
 //! [`Limit`] brings the measure.
+//!
+//! No fixture loses a channel ([`Patch::unstreamed`]): a fixture over more than one
+//! universe needs one output streaming them all, and every channel of a fixture an
+//! output streams is one it sends. What an output sends is the outputs' to know
+//! (`crates/outputs`), so [`Whole`] brings it in.
 
-use crate::{Unfit, compile, flat, lights_of, strip, unflat};
+use crate::{ADDRESSES, Unfit, compile, flat, lights_of, strip, unflat};
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec;
@@ -31,7 +36,7 @@ use alloc::vec::Vec;
 use core::num::NonZeroU16;
 use engine_core::{
     ChannelNumbers, EngineCommand, Grouped, LightChange, LightNumber, LightRun, Lights, Member,
-    PatchCommand, Patched, Project, Refusal, Target, Universes, Writer,
+    OutputKind, PatchCommand, Patched, Project, Refusal, Target, Universes, Writer,
 };
 use fixture_library::{Fixture, Mode};
 
@@ -49,7 +54,23 @@ pub struct Patch {
     groups: Vec<Group>,
     /// The show file it is kept in, `None` when it is kept in none.
     limit: Option<Limit>,
+    /// What each kind of output sends of its run.
+    whole: Whole,
 }
+
+/// What a kind of output sends of its run: whole units of this many channels, the last
+/// channels that make no whole unit never (a DDP RGB pixel is 3). A calculation of the
+/// outputs', brought in so the patch checks every channel is sent without knowing bytes.
+#[derive(Clone, Copy, Debug)]
+pub struct Whole(pub fn(OutputKind) -> NonZeroU16);
+
+impl PartialEq for Whole {
+    fn eq(&self, other: &Self) -> bool {
+        core::ptr::fn_addr_eq(self.0, other.0)
+    }
+}
+
+impl Eq for Whole {}
 
 /// The show file a patch is kept in: its most bytes, and whether a patch's file is at
 /// most that long. A calculation of the show file's, brought in so the patch measures
@@ -129,8 +150,9 @@ pub enum PatchEffect {
 }
 
 impl Patch {
-    /// An empty patch for an engine of `universes` and `lights`.
-    pub const fn new(universes: Universes, lights: Lights) -> Self {
+    /// An empty patch for an engine of `universes` and `lights`, whose outputs send what
+    /// `whole` says.
+    pub const fn new(universes: Universes, lights: Lights, whole: Whole) -> Self {
         Self {
             universes,
             lights,
@@ -138,6 +160,7 @@ impl Patch {
             writers: Vec::new(),
             groups: Vec::new(),
             limit: None,
+            whole,
         }
     }
 
@@ -443,19 +466,40 @@ impl Patch {
             .collect()
     }
 
-    /// The first fixture that runs over more than one universe with no output of
-    /// `project` streaming them all as one run: its number, its first and its last
-    /// universe. A fixture in one universe needs no output. The front keeps this `None`
-    /// through every change of the patch and of the outputs.
-    pub fn unstreamed(&self, project: &Project) -> Option<(u16, u16, u16)> {
+    /// The first fixture that would lose a channel with the outputs of `project`: its
+    /// number, and why. `NotStreamed`: it runs over more than one universe and no output
+    /// streams them all as one run. `NotSent`: an output streams one of its channels and
+    /// never sends it. A fixture in one universe needs no output. The front keeps this
+    /// `None` through every change of the patch and of the outputs.
+    pub fn unstreamed(&self, project: &Project) -> Option<(u16, Refusal)> {
         self.fixtures.iter().find_map(|e| {
-            let channels = e.mode.channels.len().checked_sub(1)?;
-            let last = unflat(flat(e.at) + channels)?.universe;
-            (last > e.at.universe && !project.streams(e.at.universe, last)).then_some((
-                e.number,
-                e.at.universe,
-                last,
-            ))
+            let first = flat(e.at);
+            let end = first + e.mode.channels.len();
+            let last = unflat(end.checked_sub(1)?)?.universe;
+            if last > e.at.universe && !project.streams(e.at.universe, last) {
+                let first = e.at.universe;
+                return Some((e.number, Refusal::NotStreamed { first, last }));
+            }
+            let unsent = project.sends().find_map(|(output, kind, run)| {
+                let from = flat(ChannelNumbers {
+                    universe: run.first(),
+                    address: 1,
+                });
+                let to = from + usize::from(run.count()) * ADDRESSES;
+                let whole = usize::from(kind.map_or(1, |kind| (self.whole.0)(kind).get()));
+                let sent = from + (to - from) / whole * whole;
+                // its channels from `sent` to `to` are streamed and never sent
+                let lost = first.max(sent);
+                (lost < end.min(to))
+                    .then_some(lost)
+                    .and_then(unflat)
+                    .map(|at| Refusal::NotSent {
+                        output,
+                        universe: at.universe,
+                        address: at.address,
+                    })
+            });
+            unsent.map(|refusal| (e.number, refusal))
         })
     }
 
@@ -519,6 +563,7 @@ impl Patch {
             fixtures,
             groups: self.groups.clone(),
             limit: self.limit,
+            whole: self.whole,
         }
     }
 
