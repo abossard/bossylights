@@ -160,6 +160,10 @@ async fn a_request_that_cannot_be_right_is_refused_and_changes_nothing() {
     send(&mut socket, &add).await;
     assert_eq!(answer(&mut socket).await, json!("Accepted"));
     let refused = |reason: Value| json!({"Refused": {"reason": reason}});
+    let group = |members: usize| {
+        let members = vec![json!({"Fixture": {"fixture": 1}}); members];
+        json!({"Send": {"command": {"SetGroup": {"name": "g", "members": members}}}})
+    };
     let address = udp.local_addr().unwrap().to_string();
     let here = json!({"Ddp": {"address": address, "color": "Rgb"}});
     // (request, reply)
@@ -241,6 +245,13 @@ async fn a_request_that_cannot_be_right_is_refused_and_changes_nothing() {
         ),
         (
             json!({"Send": {"command": "Explode"}}),
+            refused(json!("NotACommand")),
+        ),
+        // a group takes 512 members at most: the 512th is checked, the 513th is no command
+        (group(512), refused(json!("NotPatched"))),
+        (group(513), refused(json!("NotACommand"))),
+        (
+            json!({"Send": {"command": {"SetGroup": {"name": "g", "members": [{"Group": {"group": "g"}}]}}}}),
             refused(json!("NotACommand")),
         ),
         (json!("Hello"), refused(json!("NotACommand"))),

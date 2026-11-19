@@ -23,8 +23,8 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use engine::{
-    API_VERSION, Begun, ChannelLevel, Command, Engine, Patch, Patched, Project, Refusal, Reply,
-    Request, Sender, Snapshot, changes,
+    API_VERSION, Begun, ChannelLevel, Command, Engine, Grouped, Patch, Patched, Project, Refusal,
+    Reply, Request, Sender, Snapshot, changes,
 };
 use engine_core::Library;
 use library::Shelf;
@@ -267,12 +267,13 @@ fn picture(now: &Picture) -> Option<String> {
         project: now.project,
         library: now.library,
         patch: &now.patch.fixtures(),
+        groups: &now.patch.groups(),
         universes: now.snapshot.universes(),
     })
 }
 
 /// `Changed`: the channels that differ from the last picture this connection sent, and
-/// the patch if it is not the one of that picture.
+/// the patch and the groups if the patch is not the one of that picture.
 fn changed(
     pictures: &mut watch::Receiver<Arc<Picture>>,
     subscription: &mut Option<Arc<Picture>>,
@@ -281,13 +282,15 @@ fn changed(
     let now = Arc::clone(&pictures.borrow_and_update());
     let channels: Vec<ChannelLevel> =
         changes(last.snapshot.universes(), now.snapshot.universes()).collect();
-    let fixtures: Option<Vec<Patched>> =
-        (!Arc::ptr_eq(&last.patch, &now.patch)).then(|| now.patch.fixtures());
+    let new = !Arc::ptr_eq(&last.patch, &now.patch);
+    let fixtures: Option<Vec<Patched>> = new.then(|| now.patch.fixtures());
+    let groups: Option<Vec<Grouped>> = new.then(|| now.patch.groups());
     let reply = json(&Reply::Changed {
         state: now.snapshot.state,
         project: now.project,
         library: now.library,
         patch: fixtures.as_deref(),
+        groups: groups.as_deref(),
         channels: &channels,
     });
     *last = now;

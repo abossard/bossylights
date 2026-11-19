@@ -7,9 +7,11 @@
 //! | patch | adds a fixture: the lowest free number, the first free lights from the lowest | no such fixture, no such mode, past the end of the universe, no lights left |
 //! | patch strip | adds a generic strip of N pixels, RGB or RGBW, as patch does | as patch, but never no such fixture or mode |
 //! | move | new address, the same lights: their held values stay | not patched, past the end |
-//! | unpatch | removes it, its lights' held values go | not patched |
+//! | unpatch | removes it, its lights' held values go, and it leaves its groups | not patched |
 //! | rename | | not patched |
-//! | set intensity, set colour | sent for the lights of a fixture, or one light | not patched, no such light |
+//! | set group | makes a group or replaces the one of that name: members in order | a member not patched |
+//! | remove group | | |
+//! | set, release intensity or colour | sent for one light, the lights of a fixture, or of every member of a group | not patched, no such light, no such group |
 //!
 //! Two fixtures on the same channels are allowed: each shows the other in its clashes.
 
@@ -19,8 +21,8 @@ use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 use engine_core::{
-    ChannelNumbers, EngineCommand, LightNumber, LightRun, Lights, PatchCommand, Patched, Project,
-    Refusal, Target, Universes, Writer,
+    ChannelNumbers, EngineCommand, Grouped, LightNumber, LightRun, Lights, Member, PatchCommand,
+    Patched, Project, Refusal, Target, Universes, Writer,
 };
 use fixture_library::{Fixture, Mode};
 
@@ -34,6 +36,15 @@ pub struct Patch {
     fixtures: Vec<Arc<Entry>>,
     /// The writers of every fixture, in the order of their numbers.
     writers: Vec<Writer>,
+    /// In the order they were made. Every member is patched.
+    groups: Vec<Group>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Group {
+    name: String,
+    /// In the order they were set.
+    members: Vec<Member>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -70,6 +81,7 @@ impl Patch {
             lights,
             fixtures: Vec::new(),
             writers: Vec::new(),
+            groups: Vec::new(),
         }
     }
 
@@ -128,14 +140,22 @@ impl Patch {
                 Ok((Some(patch), vec![writers]))
             }
             PatchCommand::Unpatch { fixture } => {
-                let run = self.run(self.entry(fixture)?);
+                let entry = self.entry(fixture)?;
+                let run = self.run(entry);
                 let fixtures = self
                     .fixtures
                     .iter()
                     .filter(|e| e.number != fixture)
                     .cloned()
                     .collect();
-                let patch = self.with(fixtures);
+                let gone = |member: &Member| match *member {
+                    Member::Fixture { fixture: number } => number == fixture,
+                    Member::Light { light } => entry.has(light),
+                };
+                let mut patch = self.with(fixtures);
+                for group in &mut patch.groups {
+                    group.members.retain(|member| !gone(member));
+                }
                 let mut effects = vec![PatchEffect::Writers(patch.writers.clone())];
                 effects
                     .extend(run.map(|lights| PatchEffect::Send(EngineCommand::Darken { lights })));
@@ -146,37 +166,45 @@ impl Patch {
                 let patch = self.changed(fixture, |entry| entry.name = name.as_str().to_string());
                 Ok((Some(patch), vec![]))
             }
-            PatchCommand::SetIntensity { target, intensity } => {
-                let lights = self.target(target)?;
-                let send = EngineCommand::SetIntensity { lights, intensity };
-                Ok((None, vec![PatchEffect::Send(send)]))
-            }
+            PatchCommand::SetIntensity { target, intensity } => self.send(target, |lights| {
+                EngineCommand::SetIntensity { lights, intensity }
+            }),
             PatchCommand::SetColour {
                 target,
                 red,
                 green,
                 blue,
-            } => {
-                let lights = self.target(target)?;
-                let send = EngineCommand::SetColour {
-                    lights,
-                    red,
-                    green,
-                    blue,
-                };
-                Ok((None, vec![PatchEffect::Send(send)]))
-            }
+            } => self.send(target, |lights| EngineCommand::SetColour {
+                lights,
+                red,
+                green,
+                blue,
+            }),
             PatchCommand::ReleaseIntensity { target } => {
-                let send = EngineCommand::ReleaseIntensity {
-                    lights: self.target(target)?,
-                };
-                Ok((None, vec![PatchEffect::Send(send)]))
+                self.send(target, |lights| EngineCommand::ReleaseIntensity { lights })
             }
             PatchCommand::ReleaseColour { target } => {
-                let send = EngineCommand::ReleaseColour {
-                    lights: self.target(target)?,
+                self.send(target, |lights| EngineCommand::ReleaseColour { lights })
+            }
+            PatchCommand::SetGroup { name, members } => {
+                for member in members.as_slice() {
+                    self.member(*member)?;
+                }
+                let group = Group {
+                    name: name.as_str().to_string(),
+                    members: members.as_slice().to_vec(),
                 };
-                Ok((None, vec![PatchEffect::Send(send)]))
+                let mut patch = self.clone();
+                match patch.groups.iter_mut().find(|g| g.name == group.name) {
+                    Some(made) => *made = group,
+                    None => patch.groups.push(group),
+                }
+                Ok((Some(patch), vec![]))
+            }
+            PatchCommand::RemoveGroup { name } => {
+                let mut patch = self.clone();
+                patch.groups.retain(|g| g.name != name.as_str());
+                Ok((Some(patch), vec![]))
             }
         }
     }
@@ -214,6 +242,63 @@ impl Patch {
             Some(patch),
             vec![PatchEffect::Patched { fixture: number }, writers],
         ))
+    }
+
+    /// The command `make` makes for each run of the lights `target` names: one run for a
+    /// light or a fixture, the fewest runs for a group, lowest first.
+    fn send(
+        &self,
+        target: Target,
+        make: impl Fn(LightRun) -> EngineCommand,
+    ) -> Result<(Option<Self>, Vec<PatchEffect>), Refusal> {
+        let runs = match target {
+            Target::Light { light } => vec![self.member(Member::Light { light })?],
+            Target::Fixture { fixture } => vec![self.member(Member::Fixture { fixture })?],
+            Target::Group { group } => {
+                let group = self
+                    .groups
+                    .iter()
+                    .find(|g| g.name == group.as_str())
+                    .ok_or(Refusal::NoSuchGroup)?;
+                let runs = group
+                    .members
+                    .iter()
+                    .map(|member| self.member(*member))
+                    .collect::<Result<Vec<_>, _>>()?;
+                self.joined(runs)
+            }
+        };
+        let effects = runs
+            .into_iter()
+            .map(|run| PatchEffect::Send(make(run)))
+            .collect();
+        Ok((None, effects))
+    }
+
+    /// `runs` as the fewest runs that hold the same lights, lowest first.
+    fn joined(&self, mut runs: Vec<LightRun>) -> Vec<LightRun> {
+        runs.sort_unstable_by_key(|run| run.first().index());
+        let mut joined: Vec<LightRun> = Vec::with_capacity(runs.len());
+        for run in runs {
+            let longer = joined.last().and_then(|last| {
+                let end = last.first().index() + last.count();
+                let to = run.first().index() + run.count();
+                (run.first().index() <= end)
+                    .then(|| {
+                        LightRun::new(
+                            last.first(),
+                            end.max(to) - last.first().index(),
+                            self.lights,
+                        )
+                    })
+                    .flatten()
+            });
+            match (longer, joined.last_mut()) {
+                (Some(longer), Some(last)) => *last = longer,
+                (None, _) | (_, None) => joined.push(run),
+            }
+        }
+        joined
     }
 
     /// Every patched fixture, by number, as the picture shows it.
@@ -254,6 +339,17 @@ impl Patch {
                 last,
             ))
         })
+    }
+
+    /// Every group, in the order they were made, as the picture shows it.
+    pub fn groups(&self) -> Vec<Grouped<'_>> {
+        self.groups
+            .iter()
+            .map(|g| Grouped {
+                name: &g.name,
+                members: &g.members,
+            })
+            .collect()
     }
 
     /// The writers of every fixture, in the order of their numbers.
@@ -303,6 +399,7 @@ impl Patch {
                 .flat_map(|e| e.writers.iter().copied())
                 .collect(),
             fixtures,
+            groups: self.groups.clone(),
         }
     }
 
@@ -328,21 +425,19 @@ impl Patch {
         LightRun::new(entry.first, entry.lights, self.lights)
     }
 
-    /// The lights a light command names.
-    fn target(&self, target: Target) -> Result<LightRun, Refusal> {
-        match target {
-            Target::Fixture { fixture } => {
+    /// The lights of a patched light or fixture.
+    fn member(&self, member: Member) -> Result<LightRun, Refusal> {
+        match member {
+            Member::Fixture { fixture } => {
                 self.run(self.entry(fixture)?).ok_or(Refusal::NotPatched)
             }
-            Target::Light { light } => {
-                let index = light.checked_sub(1).ok_or(Refusal::NoSuchLight)?;
-                self.fixtures
-                    .iter()
-                    .filter(|e| index >= e.first.index() && index - e.first.index() < e.lights)
-                    .find_map(|_| LightNumber::new(index, self.lights))
-                    .and_then(|number| LightRun::new(number, 1, self.lights))
-                    .ok_or(Refusal::NoSuchLight)
-            }
+            Member::Light { light } => self
+                .fixtures
+                .iter()
+                .find(|e| e.has(light))
+                .and_then(|_| LightNumber::new(light.checked_sub(1)?, self.lights))
+                .and_then(|number| LightRun::new(number, 1, self.lights))
+                .ok_or(Refusal::NoSuchLight),
         }
     }
 
@@ -378,6 +473,16 @@ impl Patch {
             .filter(|_| free + needs <= usize::from(self.lights.count()))
             .and_then(|free| LightNumber::new(free, self.lights))
             .ok_or(Refusal::NoLightsLeft)
+    }
+}
+
+impl Entry {
+    /// Whether `light` (counted from 1) is one of its lights.
+    fn has(&self, light: u16) -> bool {
+        light
+            .checked_sub(1)
+            .and_then(|index| index.checked_sub(self.first.index()))
+            .is_some_and(|from| from < self.lights)
     }
 }
 

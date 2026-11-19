@@ -13,7 +13,7 @@
 //! | anything else | `{"Refused": {"reason": "NotACommand"}}` |
 
 use crate::library::{Failure, FixtureKind, Library, Match, ModeChannels, Text};
-use crate::{ChannelLevel, Command, Levels, Patched, Project, State};
+use crate::{ChannelLevel, Command, Grouped, Levels, Patched, Project, State};
 use serde::{Deserialize, Serialize};
 
 /// The version of this API. `GET /version` answers it as text. A client that speaks
@@ -28,7 +28,7 @@ pub const API_VERSION: u16 = 2;
 #[cfg_attr(test, derive(ts_rs::TS))]
 #[expect(
     clippy::large_enum_variant,
-    reason = "a client's command has no heap: `Patch` carries its four names in place. Moved once per request, off the tick thread"
+    reason = "a client's command has no heap: `Patch` carries its four names in place, `SetGroup` its members. Moved once per request, off the tick thread"
 )]
 pub enum Request {
     /// Change the state. Answered at once, before the frame that carries it.
@@ -74,6 +74,8 @@ pub enum Reply<'a> {
         library: Library,
         /// Every patched fixture, by number.
         patch: &'a [Patched<'a>],
+        /// Every group, in the order they were made.
+        groups: &'a [Grouped<'a>],
         universes: &'a [Levels],
     },
     /// A new frame: the state, and the channels whose held level changed since the last
@@ -84,6 +86,8 @@ pub enum Reply<'a> {
         library: Library,
         /// The whole patch when it changed since the last message, else `None`.
         patch: Option<&'a [Patched<'a>]>,
+        /// Every group when the patch changed since the last message, else `None`.
+        groups: Option<&'a [Grouped<'a>]>,
         channels: &'a [ChannelLevel],
     },
     /// The answer to `Search`: at most [`MATCHES`], best first. Empty while the library
@@ -138,4 +142,6 @@ pub enum Refusal {
     NotPatched,
     /// No patched fixture has that light.
     NoSuchLight,
+    /// No group has that name.
+    NoSuchGroup,
 }

@@ -3,7 +3,7 @@
 
 export type Request = { "Send": { command: Command, } } | "Query" | "Subscribe" | "Stop" | { "Search": { text: string, } } | { "Fixture": { maker: string, model: string, } } | "Failures";
 
-export type Command = { "SetChannel": { channel: ChannelNumbers, value: number, } } | { "ReleaseChannel": { channel: ChannelNumbers, } } | "ReleaseAll" | { "Blackout": { on: boolean, } } | { "SetOutput": { output: OutputNumber, kind: OutputKind, universes: RunNumbers, rate: Rate | null, } } | { "RemoveOutput": { output: OutputNumber, } } | { "Patch": { name: string, maker: string, model: string, mode: string, at: ChannelNumbers, } } | { "PatchStrip": { name: string, pixels: Pixels, color: Color, at: ChannelNumbers, } } | { "Move": { fixture: number, at: ChannelNumbers, } } | { "Unpatch": { fixture: number, } } | { "Rename": { fixture: number, name: string, } } | { "SetIntensity": { target: Target, intensity: number, } } | { "SetColour": { target: Target, red: number, green: number, blue: number, } } | { "ReleaseIntensity": { target: Target, } } | { "ReleaseColour": { target: Target, } };
+export type Command = { "SetChannel": { channel: ChannelNumbers, value: number, } } | { "ReleaseChannel": { channel: ChannelNumbers, } } | "ReleaseAll" | { "Blackout": { on: boolean, } } | { "SetOutput": { output: OutputNumber, kind: OutputKind, universes: RunNumbers, rate: Rate | null, } } | { "RemoveOutput": { output: OutputNumber, } } | { "Patch": { name: string, maker: string, model: string, mode: string, at: ChannelNumbers, } } | { "PatchStrip": { name: string, pixels: Pixels, color: Color, at: ChannelNumbers, } } | { "Move": { fixture: number, at: ChannelNumbers, } } | { "Unpatch": { fixture: number, } } | { "Rename": { fixture: number, name: string, } } | { "SetIntensity": { target: Target, intensity: number, } } | { "SetColour": { target: Target, red: number, green: number, blue: number, } } | { "ReleaseIntensity": { target: Target, } } | { "ReleaseColour": { target: Target, } } | { "SetGroup": { name: string, members: Array<Member>, } } | { "RemoveGroup": { name: string, } };
 
 export type ChannelNumbers = { universe: number, address: number, };
 
@@ -27,13 +27,21 @@ export type Reply = "Accepted" | { "Patched": { fixture: number, } } | "Stopping
 /**
  * Every patched fixture, by number.
  */
-patch: Array<Patched>, universes: Array<Levels>, } } | { "Changed": { state: State, project: Project, library: Library, 
+patch: Array<Patched>, 
+/**
+ * Every group, in the order they were made.
+ */
+groups: Array<Grouped>, universes: Array<Levels>, } } | { "Changed": { state: State, project: Project, library: Library, 
 /**
  * The whole patch when it changed since the last message, else `None`.
  */
-patch: Array<Patched> | null, channels: Array<ChannelLevel>, } } | { "Found": { fixtures: Array<Match>, } } | { "Fixture": { maker: string, model: string, kind: FixtureKind, modes: Array<ModeChannels>, } } | { "Failures": { failures: Array<Failure>, } };
+patch: Array<Patched> | null, 
+/**
+ * Every group when the patch changed since the last message, else `None`.
+ */
+groups: Array<Grouped> | null, channels: Array<ChannelLevel>, } } | { "Found": { fixtures: Array<Match>, } } | { "Fixture": { maker: string, model: string, kind: FixtureKind, modes: Array<ModeChannels>, } } | { "Failures": { failures: Array<Failure>, } };
 
-export type Refusal = "NotACommand" | { "NoSuchUniverse": { universes: number, } } | "NoSuchAddress" | "QueueFull" | "CannotOpen" | "NoSuchFixture" | "Opening" | { "TooManyUniverses": { most: number, } } | "NoSuchMode" | { "PastTheEnd": { channels: number, } } | { "NotStreamed": { first: number, last: number, } } | { "StreamsFixture": { fixture: number, } } | "NoLightsLeft" | "NotPatched" | "NoSuchLight";
+export type Refusal = "NotACommand" | { "NoSuchUniverse": { universes: number, } } | "NoSuchAddress" | "QueueFull" | "CannotOpen" | "NoSuchFixture" | "Opening" | { "TooManyUniverses": { most: number, } } | "NoSuchMode" | { "PastTheEnd": { channels: number, } } | { "NotStreamed": { first: number, last: number, } } | { "StreamsFixture": { fixture: number, } } | "NoLightsLeft" | "NotPatched" | "NoSuchLight" | "NoSuchGroup";
 
 export type State = { 
 /**
@@ -101,7 +109,7 @@ outputs: Array<ProjectOutput | null>, };
 
 export type ProjectOutput = { "Kind": { kind: OutputKind, universes: Run, } } | { "Attached": { universes: Run, } };
 
-export type Target = { "Light": { light: number, } } | { "Fixture": { fixture: number, } };
+export type Target = { "Light": { light: number, } } | { "Fixture": { fixture: number, } } | { "Group": { group: string, } };
 
 export type Patched = { 
 /**
@@ -133,5 +141,13 @@ clashes: Array<number>, };
 export type Pixels = number;
 
 export type Layout = { width: number, height: number, };
+
+export type Member = { "Light": { light: number, } } | { "Fixture": { fixture: number, } };
+
+export type Grouped = { name: string, 
+/**
+ * In the order they were set.
+ */
+members: Array<Member>, };
 
 export const API_VERSION = 2;

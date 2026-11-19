@@ -39,7 +39,7 @@ pub use output::{
     Counters, GIVE_UP, MAX_OUTPUTS, OFF_BEAT, Outcome, Output, OutputNumber, Rate, Run, RunNumbers,
     Status,
 };
-pub use patch::{Layout, PatchCommand, Patched, Pixels, Target};
+pub use patch::{Grouped, Layout, Member, Members, PatchCommand, Patched, Pixels, Target};
 pub use project::{Project, ProjectEffect, ProjectEvent, ProjectOutput};
 pub use resolve::{
     Less, Light, LightNumber, LightRun, Lights, MAX_LIGHTS, Part, Place, Scale, Sense, Take,
@@ -120,7 +120,7 @@ pub enum BestEffort {
 #[cfg_attr(test, derive(ts_rs::TS))]
 #[expect(
     clippy::large_enum_variant,
-    reason = "a client's command has no heap: `Patch` carries its four names in place. Moved once per request, off the tick thread"
+    reason = "a client's command has no heap: `Patch` carries its four names in place, `SetGroup` its members. Moved once per request, off the tick thread"
 )]
 pub enum Command {
     /// Hold a channel at a level. It wins over the light that writes it.
@@ -172,9 +172,10 @@ pub enum Command {
         #[cfg_attr(test, ts(type = "string"))]
         name: Text,
     },
-    /// Hold the intensity of a light, or of every light of a fixture. 0 to 65 535 is 0 to 1.
+    /// Hold the intensity of a light, or of every light of a fixture or a group. 0 to
+    /// 65 535 is 0 to 1.
     SetIntensity { target: Target, intensity: u16 },
-    /// Hold the colour of a light, or of every light of a fixture. 16 bits each.
+    /// Hold the colour of a light, or of every light of a fixture or a group. 16 bits each.
     SetColour {
         target: Target,
         red: u16,
@@ -185,6 +186,19 @@ pub enum Command {
     ReleaseIntensity { target: Target },
     /// Let the colour of a light, or of every light of a fixture, go back to black.
     ReleaseColour { target: Target },
+    /// Make a group, or replace the one of this name. Its members are lights or fixtures,
+    /// in the order given, each patched. Unpatching a fixture takes it out of its groups.
+    SetGroup {
+        #[cfg_attr(test, ts(type = "string"))]
+        name: Text,
+        #[cfg_attr(test, ts(type = "Array<Member>"))]
+        members: Members,
+    },
+    /// Remove a group. Nothing happens if there is none.
+    RemoveGroup {
+        #[cfg_attr(test, ts(type = "string"))]
+        name: Text,
+    },
 }
 
 /// What changes the state on the tick thread. The front makes these from a checked
@@ -1328,6 +1342,8 @@ mod tests {
                 Patched::decl(&config),
                 Pixels::decl(&config),
                 Layout::decl(&config),
+                Member::decl(&config),
+                Grouped::decl(&config),
             ]
             .map(|declaration| format!("export {declaration}\n"))
             .join("\n"),

@@ -53,7 +53,7 @@ pub enum ProjectOutput {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[expect(
     clippy::large_enum_variant,
-    reason = "a client's command has no heap: `Patch` carries its four names in place. Moved once per request, off the tick thread"
+    reason = "a client's command has no heap: `Patch` carries its four names in place, `SetGroup` its members. Moved once per request, off the tick thread"
 )]
 pub enum ProjectEvent {
     Client(Command),
@@ -78,7 +78,7 @@ pub enum ProjectEvent {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[expect(
     clippy::large_enum_variant,
-    reason = "a client's command has no heap: `Patch` carries its four names in place. Moved once per request, off the tick thread"
+    reason = "a client's command has no heap: `Patch` carries its four names in place, `SetGroup` its members. Moved once per request, off the tick thread"
 )]
 pub enum ProjectEffect {
     /// Send this to the tick thread.
@@ -204,6 +204,10 @@ impl Project {
                     patch(PatchCommand::ReleaseIntensity { target })
                 }
                 Command::ReleaseColour { target } => patch(PatchCommand::ReleaseColour { target }),
+                Command::SetGroup { name, members } => {
+                    patch(PatchCommand::SetGroup { name, members })
+                }
+                Command::RemoveGroup { name } => patch(PatchCommand::RemoveGroup { name }),
                 Command::RemoveOutput { output } => {
                     self.idle(output)?;
                     let project = self.with(output, |slot, _| *slot = None);
@@ -287,7 +291,7 @@ impl Project {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Channel, ChannelNumbers, RunNumbers, Target, kinds};
+    use crate::{Channel, ChannelNumbers, Member, Members, RunNumbers, Target, Text, kinds};
 
     fn output(number: u8) -> OutputNumber {
         OutputNumber::try_from(number).unwrap()
@@ -330,7 +334,10 @@ mod tests {
         // (events before, event, its effect or why not, output 1 after)
         type Done = Result<Option<ProjectEffect>, Refusal>;
         let target = Target::Fixture { fixture: 3 };
-        let cases: [(Vec<ProjectEvent>, ProjectEvent, Done, Option<ProjectOutput>); 19] = [
+        let name = Text::new("front").unwrap();
+        let members =
+            Members::new(&[Member::Fixture { fixture: 3 }, Member::Light { light: 1 }]).unwrap();
+        let cases: [(Vec<ProjectEvent>, ProjectEvent, Done, Option<ProjectOutput>); 21] = [
             // the patch checks what names a fixture or a light
             (
                 vec![],
@@ -377,6 +384,23 @@ mod tests {
                 Ok(Some(ProjectEffect::Send(EngineCommand::SetChannel {
                     channel: checked(1, 512),
                     value: 7,
+                }))),
+                None,
+            ),
+            (
+                vec![],
+                Client(Command::SetGroup { name, members }),
+                Ok(Some(ProjectEffect::Patch(PatchCommand::SetGroup {
+                    name,
+                    members,
+                }))),
+                None,
+            ),
+            (
+                vec![],
+                Client(Command::RemoveGroup { name }),
+                Ok(Some(ProjectEffect::Patch(PatchCommand::RemoveGroup {
+                    name,
                 }))),
                 None,
             ),
@@ -590,12 +614,10 @@ mod tests {
                 true,
             ),
             (
-                vec![
-                    Attached {
-                        output: output(1),
-                        universes: run(1, 4),
-                    },
-                ],
+                vec![Attached {
+                    output: output(1),
+                    universes: run(1, 4),
+                }],
                 3,
                 4,
                 true,

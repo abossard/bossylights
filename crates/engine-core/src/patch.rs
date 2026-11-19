@@ -8,16 +8,104 @@
 //! ```
 
 use crate::{ChannelNumbers, Color, Text};
+use core::fmt;
+use serde::de::{Deserializer, Error, SeqAccess, Visitor};
 use serde::{Deserialize, Serialize};
 
-/// What a light command names: one light, or every light of a fixture. Counted from 1,
-/// as a client sends them. Not checked yet.
+/// What a light command names: one light, every light of a fixture, or every member of a
+/// group. Counted from 1, as a client sends them. Not checked yet.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub enum Target {
+    Light {
+        light: u16,
+    },
+    Fixture {
+        fixture: u16,
+    },
+    Group {
+        #[cfg_attr(test, ts(type = "string"))]
+        group: Text,
+    },
+}
+
+/// One member of a group: a light, or every light of a fixture. Counted from 1.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub enum Member {
     Light { light: u16 },
     Fixture { fixture: u16 },
+}
+
+/// The members of a group in their order, in place: at most [`Members::MOST`]. A client
+/// sends them as a list; a longer one is not a command.
+#[derive(Clone, Copy)]
+pub struct Members {
+    len: u16,
+    members: [Member; Members::MOST],
+}
+
+impl Members {
+    /// The most members of one group. A member that is a fixture counts once, however
+    /// many lights it has.
+    pub const MOST: usize = 512;
+
+    /// `None` when there are more than [`Members::MOST`].
+    pub fn new(members: &[Member]) -> Option<Self> {
+        let mut all = [Member::Light { light: 0 }; Self::MOST];
+        all.get_mut(..members.len())?.copy_from_slice(members);
+        Some(Self {
+            len: u16::try_from(members.len()).ok()?,
+            members: all,
+        })
+    }
+
+    pub fn as_slice(&self) -> &[Member] {
+        self.members
+            .get(..usize::from(self.len))
+            .unwrap_or_default()
+    }
+}
+
+impl PartialEq for Members {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_slice() == other.as_slice()
+    }
+}
+
+impl Eq for Members {}
+
+impl fmt::Debug for Members {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(self.as_slice(), f)
+    }
+}
+
+impl<'de> Deserialize<'de> for Members {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct List;
+        impl<'de> Visitor<'de> for List {
+            type Value = Members;
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "a list of at most {} members", Members::MOST)
+            }
+            fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Members, A::Error> {
+                let mut members = Members::new(&[]).ok_or_else(|| A::Error::custom("empty"))?;
+                while let Some(member) = seq.next_element::<Member>()? {
+                    let slot = members
+                        .members
+                        .get_mut(usize::from(members.len))
+                        .ok_or_else(|| A::Error::invalid_length(Members::MOST + 1, &self))?;
+                    *slot = member;
+                    members.len += 1;
+                }
+                Ok(members)
+            }
+        }
+        deserializer.deserialize_seq(List)
+    }
 }
 
 /// A client's command that the patch checks: it changes the patch, or names a light the
@@ -25,7 +113,7 @@ pub enum Target {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[expect(
     clippy::large_enum_variant,
-    reason = "a client's command has no heap: `Patch` carries its four names in place. Moved once per request, off the tick thread"
+    reason = "a client's command has no heap: `Patch` carries its four names in place, `SetGroup` its members. Moved once per request, off the tick thread"
 )]
 pub enum PatchCommand {
     Patch {
@@ -67,6 +155,13 @@ pub enum PatchCommand {
     },
     ReleaseColour {
         target: Target,
+    },
+    SetGroup {
+        name: Text,
+        members: Members,
+    },
+    RemoveGroup {
+        name: Text,
     },
 }
 
@@ -124,4 +219,13 @@ pub struct Patched<'a> {
     pub layout: Option<Layout>,
     /// The fixtures that share at least one of its channels. Allowed: the patch shows it.
     pub clashes: &'a [u16],
+}
+
+/// A group, as the picture shows it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct Grouped<'a> {
+    pub name: &'a str,
+    /// In the order they were set.
+    pub members: &'a [Member],
 }

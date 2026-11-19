@@ -1,6 +1,6 @@
 //! End to end over the API: patch the Generic RGB PAR at universe 1, address 37, make it
 //! red: 255 0 0 arrive at 37 to 39 on the DDP socket and on a fake DMX USB Pro (a pseudo
-//! terminal). Unpatch it: 0 0 0.
+//! terminal). Unpatch it: 0 0 0. A group of three PARs made red: nine bytes.
 
 use engine::{Adapter, Device, Engine, Open, OutputKind, Universes};
 use futures_util::{SinkExt, StreamExt};
@@ -96,9 +96,9 @@ async fn command(socket: &mut Socket, command: Value) -> Value {
     answer(socket).await
 }
 
-/// Waits until channels 37 to 39 of universe 1 are `bytes` on the DDP socket and on the
-/// fake adapter. Frames computed while a command travelled may still lack it.
-async fn until_both(udp: &UdpSocket, heard: &Heard, bytes: [u8; 3]) {
+/// Waits until the channels of universe 1 from 37 on are `bytes` on the DDP socket and on
+/// the fake adapter. Frames computed while a command travelled may still lack it.
+async fn until_both<const N: usize>(udp: &UdpSocket, heard: &Heard, bytes: [u8; N]) {
     let started = Instant::now();
     let mut packet = vec![0; 1500];
     let mut ddp = None;
@@ -106,15 +106,15 @@ async fn until_both(udp: &UdpSocket, heard: &Heard, bytes: [u8; 3]) {
         if let Ok(Ok(size)) =
             tokio::time::timeout(Duration::from_millis(100), udp.recv(&mut packet)).await
         {
-            ddp = Some(packet[10 + 36..10 + 39].to_vec()).filter(|_| size >= 10 + 39);
+            ddp = Some(packet[10 + 36..10 + 36 + N].to_vec()).filter(|_| size >= 10 + 36 + N);
         }
-        let dmx = heard.lock().unwrap().map(|c| c[36..39].to_vec());
+        let dmx = heard.lock().unwrap().map(|c| c[36..36 + N].to_vec());
         if ddp.as_deref() == Some(&bytes[..]) && dmx.as_deref() == Some(&bytes[..]) {
             return;
         }
         assert!(
             started.elapsed() < Duration::from_secs(10),
-            "37 to 39: DDP {ddp:?}, DMX {dmx:?}, wanted {bytes:?}"
+            "from 37: DDP {ddp:?}, DMX {dmx:?}, wanted {bytes:?}"
         );
     }
 }
@@ -162,19 +162,19 @@ async fn patch_once_read(socket: &mut Socket, par: &Value) -> Value {
     }
 }
 
-/// Asks until the picture shows `patch`: a picture is of a frame, and the frame after a
-/// command may not be taken yet.
-async fn until_patch(socket: &mut Socket, patch: &Value) {
+/// Asks until the picture shows `wanted` under `key` (`patch`, `groups`): a picture is of
+/// a frame, and the frame after a command may not be taken yet.
+async fn until_picture(socket: &mut Socket, key: &str, wanted: &Value) {
     let started = Instant::now();
     loop {
         send(socket, &json!("Query")).await;
-        let seen = answer(socket).await["Picture"]["patch"].clone();
-        if seen == *patch {
+        let seen = answer(socket).await["Picture"][key].clone();
+        if seen == *wanted {
             return;
         }
         assert!(
             started.elapsed() < Duration::from_secs(10),
-            "the patch: {seen}, wanted {patch}"
+            "the {key}: {seen}, wanted {wanted}"
         );
     }
 }
@@ -207,8 +207,9 @@ async fn a_patched_par_made_red_sends_255_0_0_at_37_on_ddp_and_dmx_and_unpatched
     assert_eq!(command(&mut socket, red).await, json!("Accepted"));
     until_both(&udp, &heard, [255, 0, 0]).await;
 
-    until_patch(
+    until_picture(
         &mut socket,
+        "patch",
         &json!([{
             "fixture": 1, "name": "PAR 3", "maker": "Generic", "model": "Generic RGB",
             "mode": "RGB", "universe": 1, "address": 37, "channels": 3, "first": 1,
@@ -220,7 +221,7 @@ async fn a_patched_par_made_red_sends_255_0_0_at_37_on_ddp_and_dmx_and_unpatched
     let unpatch = json!({"Unpatch": {"fixture": 1}});
     assert_eq!(command(&mut socket, unpatch).await, json!("Accepted"));
     until_both(&udp, &heard, [0, 0, 0]).await;
-    until_patch(&mut socket, &json!([])).await;
+    until_picture(&mut socket, "patch", &json!([])).await;
     stop.store(true, Ordering::Relaxed);
 }
 
@@ -299,6 +300,113 @@ async fn a_red_par_under_raw_38_at_9_sends_255_9_0_released_255_0_0_blackout_0_0
     assert_eq!(
         command(&mut socket, none).await,
         json!({"Refused": {"reason": "NotPatched"}})
+    );
+    stop.store(true, Ordering::Relaxed);
+}
+
+/// A group of three PARs set red: nine bytes. Its order is in the picture and survives a
+/// move; an unpatched PAR leaves it, and the group then sets only the two left.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_group_of_three_pars_made_red_sends_nine_bytes_on_ddp_and_dmx() {
+    let heard: Heard = Arc::new(Mutex::new(None));
+    let stop = Arc::new(AtomicBool::new(false));
+    let address = serve(open(Arc::clone(&heard), Arc::clone(&stop))).await;
+    let mut socket = connect(address).await;
+    let udp = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let ddp = json!({"Ddp": {"address": udp.local_addr().unwrap().to_string(), "color": "Rgb"}});
+    let dmx = json!({"DmxUsbPro": {"adapter": 1}});
+    for (output, kind) in [(1, ddp), (2, dmx)] {
+        let set = json!({"SetOutput": {
+            "output": output, "kind": kind, "universes": {"first": 1, "count": 1}, "rate": null,
+        }});
+        assert_eq!(command(&mut socket, set).await, json!("Accepted"));
+    }
+    assert_eq!(
+        patch_once_read(&mut socket, &par("PAR 1", 37)).await,
+        json!({"Patched": {"fixture": 1}})
+    );
+    for (n, at) in [(2, 40), (3, 43)] {
+        assert_eq!(
+            command(&mut socket, par(&format!("PAR {n}"), at)).await,
+            json!({"Patched": {"fixture": n}})
+        );
+    }
+    let f = |fixture: u16| json!({"Fixture": {"fixture": fixture}});
+    let unpatched = json!({"SetGroup": {"name": "front", "members": [f(1), f(4)]}});
+    assert_eq!(
+        command(&mut socket, unpatched).await,
+        json!({"Refused": {"reason": "NotPatched"}})
+    );
+    let mut subscriber = connect(address).await;
+    send(&mut subscriber, &json!("Subscribe")).await;
+    let front = json!({"SetGroup": {"name": "front", "members": [f(3), f(1), f(2)]}});
+    assert_eq!(command(&mut socket, front).await, json!("Accepted"));
+    // a subscriber gets the groups with the patch that has them, in their order
+    let made = json!([{"name": "front", "members": [f(3), f(1), f(2)]}]);
+    let started = Instant::now();
+    loop {
+        let message = tokio::time::timeout(Duration::from_secs(5), subscriber.next())
+            .await
+            .expect("a message within 5 s")
+            .unwrap()
+            .unwrap();
+        let reply: Value = serde_json::from_str(message.to_text().unwrap()).unwrap();
+        if reply["Changed"]["groups"] == made {
+            break;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "no Changed with the groups"
+        );
+    }
+    until_picture(&mut socket, "groups", &made).await;
+    let group = json!({"Group": {"group": "front"}});
+    // (command, bytes at 37 to 45 after it)
+    let steps = [
+        (
+            json!({"SetIntensity": {"target": group, "intensity": 65535}}),
+            [0, 0, 0, 0, 0, 0, 0, 0, 0],
+        ),
+        (
+            json!({"SetColour": {"target": group, "red": 65535, "green": 0, "blue": 0}}),
+            [255, 0, 0, 255, 0, 0, 255, 0, 0],
+        ),
+        (
+            json!({"Move": {"fixture": 1, "at": {"universe": 1, "address": 100}}}),
+            [0, 0, 0, 255, 0, 0, 255, 0, 0],
+        ),
+        (
+            json!({"Unpatch": {"fixture": 2}}),
+            [0, 0, 0, 0, 0, 0, 255, 0, 0],
+        ),
+        (
+            json!({"Move": {"fixture": 1, "at": {"universe": 1, "address": 37}}}),
+            [255, 0, 0, 0, 0, 0, 255, 0, 0],
+        ),
+        (
+            json!({"SetColour": {"target": group, "red": 0, "green": 65535, "blue": 0}}),
+            [0, 255, 0, 0, 0, 0, 0, 255, 0],
+        ),
+    ];
+    for (step, bytes) in steps {
+        assert_eq!(
+            command(&mut socket, step.clone()).await,
+            json!("Accepted"),
+            "{step}"
+        );
+        until_both(&udp, &heard, bytes).await;
+    }
+    let left = json!([{"name": "front", "members": [f(3), f(1)]}]);
+    until_picture(&mut socket, "groups", &left).await;
+    assert_eq!(
+        command(&mut socket, json!({"RemoveGroup": {"name": "front"}})).await,
+        json!("Accepted")
+    );
+    until_picture(&mut socket, "groups", &json!([])).await;
+    let gone = json!({"SetColour": {"target": group, "red": 0, "green": 0, "blue": 0}});
+    assert_eq!(
+        command(&mut socket, gone).await,
+        json!({"Refused": {"reason": "NoSuchGroup"}})
     );
     stop.store(true, Ordering::Relaxed);
 }
