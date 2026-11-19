@@ -87,7 +87,10 @@ fn each_property_goes_to_its_channels() {
     let x4 = mode("GLP-Impression-X4.qxf", "Normal");
     let platinum = mode("Elation-Platinum-Spot-5R.qxf", "Basic");
     let mac = mode("Martin-MAC-2000-Wash.qxf", "8-bit with Color Wheel 2");
-    let cases: [Case; 17] = [
+    let stairville = mode("Stairville-BS-280-R10-BeamSpot.qxf", "15 Channel");
+    let alpha = mode("Clay-Paky-Alpha-Spot-575-HPE.qxf", "Option 16b");
+    let rush = mode("Martin-Rush-MH5-Profile.qxf", "Mode 1");
+    let cases: [Case; 22] = [
         (
             &elation,
             aimed,
@@ -139,6 +142,19 @@ fn each_property_goes_to_its_channels() {
         (&platinum, shows(None, Some(gobo(2, 1))), &[(6, 3)]),
         (&platinum, shows(None, Some(gobo(2, 2))), &[(6, 11)]),
         (&platinum, shows(None, Some(gobo(1, 1))), &[(4, 4)]),
+        // a wheel whose gobos are named "Gobo 2" without a preset is wheel 1: 5 to 8,
+        // and the next wheel is wheel 2: open, Gobo 1, then Gobo 2 at 13 to 19
+        (
+            &stairville,
+            gobos([Some(2), Some(3), None]),
+            &[(6, 6), (7, 16)],
+        ),
+        // "No gobo" is open, slot 1: 0 to 7. Gobo 1 is slot 2: 8 to 15
+        (&alpha, shows(None, Some(gobo(1, 1))), &[(9, 3)]),
+        (&alpha, shows(None, Some(gobo(1, 2))), &[(9, 11)]),
+        // "Open - Gobo selection" is open, slot 1: 0 to 4. Gobo 1 is slot 2: 5 to 9
+        (&rush, shows(None, Some(gobo(1, 1))), &[(6, 2)]),
+        (&rush, shows(None, Some(gobo(1, 2))), &[(6, 7)]),
         // zoom travels 0 to 244, big to small: 245 to 251 is "no changes"
         (&mac, zoomed(0xFA00), &[(9, 5)]),
         (&mac, zoomed(0), &[(9, 244)]),
@@ -392,12 +408,17 @@ fn each_hybrid_holds_its_wheel_where_the_mix_goes_through() {
     let x4 = "GLP-Impression-X4.qxf";
     let mac = "Martin-MAC-2000-Wash.qxf";
     let adj = "American-DJ-Ultra-Bar-6.qxf";
+    let alpha = "Clay-Paky-Alpha-Spot-575-HPE.qxf";
     let mix = "Colors adjustable via RGBW";
     // RGB beside colour macros without a bypass: a static white would override the mix
     let refused = || Err(Unfit::Refused(unsupported(1, Property::Colour)));
     let expected: &[Row] = &[
         (adj, "6 Channels mode", 4, refused()),
         (adj, "8 Channels mode", 4, refused()),
+        // CMY: the wheel's white
+        (alpha, "Option 16b", 5, Ok((17, "white"))),
+        (alpha, "Option Stnd", 5, Ok((17, "white"))),
+        (alpha, "Option Extn", 5, Ok((17, "white"))),
         (x4, "Normal", 5, Ok((3, mix))),
         (x4, "Compress", 5, Ok((3, mix))),
         // CMY: wheel 1 open white at 0, not "Random color CMY, fast" at 244 to 247

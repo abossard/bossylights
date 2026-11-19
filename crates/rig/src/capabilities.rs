@@ -11,7 +11,8 @@
 //! | Word | Is |
 //! |---|---|
 //! | colour wheel | a colour channel with at least one static colour (`ColorMacro`) |
-//! | gobo wheel | a gobo channel with at least one gobo that does not shake |
+//! | gobo wheel | a gobo channel with at least one gobo that does not shake: a gobo preset, or a range without a preset named "Gobo" and a number |
+//! | open gobo | a range without a preset named open, no gobo, open gobo, gobo open or "open - gobo selection" |
 //! | neutral slot | white, or a range without a preset named open, white, no function, no colour or off. It shows white |
 //! | bypass | a range without a preset that is neutral, or starts the channel and names the mix (RGB, CMY, mix) and no effect (random, cycle, fast, slow, speed, sound, music). Else, when the light mixes only cyan, magenta and yellow, its white slot: open. Over red, green, blue or white a static white is a fixed white that overrides the mix |
 //! | slot byte | the lower midpoint of its range: 20 to 29 is 24 |
@@ -156,12 +157,6 @@ pub fn supports(writers: &[Writer], runs: &[LightRun], values: &Light) -> Result
         wheel: bool,
         shown: bool,
     }
-    let within = |light: LightNumber| {
-        runs.iter().any(|run| {
-            let first = run.first().index();
-            (first..first.saturating_add(run.count())).contains(&light.index())
-        })
-    };
     // by light and property index: the property and what was seen of it
     let mut seen: BTreeMap<(u16, usize), (Property, Seen)> = BTreeMap::new();
     let mut note = |light: LightNumber, property: Property, wheel: bool, shown: bool| {
@@ -171,32 +166,24 @@ pub fn supports(writers: &[Writer], runs: &[LightRun], values: &Light) -> Result
         entry.wheel |= wheel;
         entry.shown |= shown;
     };
-    // the light of the `Picks` whose slots follow, when it is one of `runs`
-    let mut wheel: Option<LightNumber> = None;
     for writer in writers {
-        let slot_of = match *writer {
-            Writer::Takes { light, take, .. } => {
-                wheel = None;
-                let mixed = matches!(take.of, Part::Red | Part::Green | Part::Blue | Part::Shared);
-                if mixed && within(light) {
-                    note(light, Property::Colour, false, true);
-                }
-                None
-            }
-            Writer::Picks { light, .. } => {
-                wheel = Some(light).filter(|&light| within(light));
-                None
-            }
-            Writer::Fixed { .. } => {
-                wheel = None;
-                None
-            }
-            Writer::ColourSlot { .. } => Some(Property::Colour),
-            Writer::GoboSlot { gobo, .. } => Some(Property::Gobo(gobo.wheel)),
-        };
-        if let (Some(property), Some(light)) = (slot_of, wheel) {
-            note(light, property, true, writer.slot(values).is_some());
+        if let Writer::Takes { light, take, .. } = *writer
+            && matches!(take.of, Part::Red | Part::Green | Part::Blue | Part::Shared)
+            && within(runs, light)
+        {
+            note(light, Property::Colour, false, true);
         }
+    }
+    for (light, writer) in slots(writers, runs) {
+        let property = match *writer {
+            Writer::GoboSlot { gobo, .. } => Property::Gobo(gobo.wheel),
+            // `slots` gives slots only
+            Writer::ColourSlot { .. }
+            | Writer::Takes { .. }
+            | Writer::Picks { .. }
+            | Writer::Fixed { .. } => Property::Colour,
+        };
+        note(light, property, true, writer.slot(values).is_some());
     }
     match seen
         .into_iter()
@@ -205,6 +192,67 @@ pub fn supports(writers: &[Writer], runs: &[LightRun], values: &Light) -> Result
         Some(((light, _), (property, _))) => Err(unsupported(light.saturating_add(1), property)),
         None => Ok(()),
     }
+}
+
+/// The check of a look of a show file before version 4, which held one gobo, a wheel and a
+/// slot, as that engine checked it: refused on the first light of `runs` with a gobo wheel
+/// and no slot `slot` on wheel `wheel`. No wheel past [`Wheel::COUNT`] is shown now: on a
+/// light with a gobo wheel it is refused, named as [`Wheel::LAST`].
+pub fn shows_one_gobo(
+    writers: &[Writer],
+    runs: &[LightRun],
+    wheel: u8,
+    slot: u8,
+) -> Result<(), Refusal> {
+    // by light: whether a slot of a gobo wheel shows it
+    let mut shown: BTreeMap<u16, bool> = BTreeMap::new();
+    for (light, writer) in slots(writers, runs) {
+        if let Writer::GoboSlot { gobo, .. } = *writer {
+            let held = u8::from(gobo.wheel) == wheel && gobo.slot == slot;
+            *shown.entry(light.index()).or_default() |= held;
+        }
+    }
+    match shown.into_iter().find(|&(_, shown)| !shown) {
+        Some((light, _)) => Err(unsupported(
+            light.saturating_add(1),
+            Property::Gobo(Wheel::new(wheel).unwrap_or(Wheel::LAST)),
+        )),
+        None => Ok(()),
+    }
+}
+
+/// Whether `light` is one of `runs`.
+fn within(runs: &[LightRun], light: LightNumber) -> bool {
+    runs.iter().any(|run| {
+        let first = run.first().index();
+        (first..first.saturating_add(run.count())).contains(&light.index())
+    })
+}
+
+/// Each slot of a wheel of a light of `runs`, with that light: the writers after its
+/// `Picks`.
+fn slots<'a>(
+    writers: &'a [Writer],
+    runs: &'a [LightRun],
+) -> impl Iterator<Item = (LightNumber, &'a Writer)> + 'a {
+    writers
+        .iter()
+        .scan(None, move |wheel: &mut Option<LightNumber>, writer| {
+            Some(match *writer {
+                Writer::Picks { light, .. } => {
+                    *wheel = Some(light).filter(|&light| within(runs, light));
+                    None
+                }
+                Writer::Takes { .. } | Writer::Fixed { .. } => {
+                    *wheel = None;
+                    None
+                }
+                Writer::ColourSlot { .. } | Writer::GoboSlot { .. } => {
+                    wheel.map(|light| (light, writer))
+                }
+            })
+        })
+        .flatten()
 }
 
 /// Whether a channel that does this adds light to a mix.
@@ -253,8 +301,24 @@ fn colour_slots(channel: &fixture_library::Channel) -> Vec<(Rgb, u8)> {
 /// The byte of each slot of a gobo wheel, slot 1 first: each gobo that does not shake,
 /// and open without a preset. None without a gobo.
 fn gobo_slots(channel: &fixture_library::Channel) -> Vec<u8> {
-    let gobo = |r: &&Range| matches!(r.does, Some(Does::Gobo { shakes: false, .. }));
-    let open = |r: &&Range| r.does.is_none() && r.label.trim().eq_ignore_ascii_case("open");
+    /// The names of open without a preset.
+    const OPEN: [&str; 5] = [
+        "open",
+        "no gobo",
+        "open gobo",
+        "gobo open",
+        "open - gobo selection",
+    ];
+    let gobo = |r: &&Range| {
+        matches!(r.does, Some(Does::Gobo { shakes: false, .. }))
+            || r.does.is_none() && names_a_gobo(&r.label)
+    };
+    let open = |r: &&Range| {
+        r.does.is_none()
+            && OPEN
+                .iter()
+                .any(|name| r.label.trim().eq_ignore_ascii_case(name))
+    };
     if !channel.ranges.iter().any(|r| gobo(&r)) {
         return Vec::new();
     }
@@ -264,6 +328,17 @@ fn gobo_slots(channel: &fixture_library::Channel) -> Vec<u8> {
         .filter(|r| gobo(r) || open(r))
         .map(midpoint)
         .collect()
+}
+
+/// Whether a label names one gobo: "Gobo 2" or "Gobo2", not "Gobo 2 shake".
+fn names_a_gobo(label: &str) -> bool {
+    let label = label.trim();
+    label
+        .get(..4)
+        .filter(|word| word.eq_ignore_ascii_case("gobo"))
+        .and_then(|_| label.get(4..))
+        .map(str::trim_start)
+        .is_some_and(|number| !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// The byte of the neutral slot of a colour wheel: white, or open.

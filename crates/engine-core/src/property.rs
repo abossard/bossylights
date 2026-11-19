@@ -8,12 +8,13 @@
 //! | colour | red, green and blue: one colour, whether a fixture mixes it or picks it on a wheel | yes |
 //! | position | pan and tilt, always together | yes |
 //! | zoom | how wide | yes |
-//! | gobo, one per wheel | the slot on that wheel, counted from 1 | no: a choice |
+//! | gobo, one per wheel | the slot on that wheel, counted from 1: 0 is not read | no: a choice |
 //!
 //! Absent (`None`) lets another source through. Zero and black are values: they claim
 //! the property.
 
-use serde::{Deserialize, Serialize};
+use core::num::NonZeroU8;
+use serde::{Deserialize, Deserializer, Serialize};
 
 /// One property of a light: one winner each, never half of one. Each gobo wheel is its
 /// own property: two wheels show two gobos at once.
@@ -63,6 +64,9 @@ impl Wheel {
     /// past it stays at its channel's default.
     pub const COUNT: usize = 3;
 
+    /// The last wheel: [`Wheel::COUNT`].
+    pub const LAST: Self = Self(3);
+
     /// Wheel `number`, counted from 1, or `None` past [`Wheel::COUNT`].
     pub const fn new(number: u8) -> Option<Self> {
         if number >= 1 && number as usize <= Self::COUNT {
@@ -107,7 +111,7 @@ pub struct Light {
     #[serde(default)]
     pub zoom: Option<u16>,
     /// The slot of each gobo wheel, wheel 1 first.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "slots")]
     pub gobos: [Option<u8>; Wheel::COUNT],
 }
 
@@ -240,7 +244,19 @@ pub struct Position {
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub struct Gobo {
     pub wheel: Wheel,
+    #[serde(deserialize_with = "slot")]
     pub slot: u8,
+}
+
+/// A slot as it is read: counted from 1, so 0 is no slot on any wheel.
+fn slot<'de, D: Deserializer<'de>>(read: D) -> Result<u8, D::Error> {
+    NonZeroU8::deserialize(read).map(NonZeroU8::get)
+}
+
+/// The slot of each wheel as it is read, each counted from 1.
+fn slots<'de, D: Deserializer<'de>>(read: D) -> Result<[Option<u8>; Wheel::COUNT], D::Error> {
+    <[Option<NonZeroU8>; Wheel::COUNT]>::deserialize(read)
+        .map(|slots| slots.map(|slot| slot.map(NonZeroU8::get)))
 }
 
 #[cfg(test)]
@@ -368,7 +384,9 @@ mod tests {
             let got = base.with(property, &from);
             for other in Property::ALL {
                 let source = if other == property { &from } else { &base };
-                assert_eq!(got.has(other), source.has(other), "{property:?} {other:?}");
+                // the value of `other` alone: wheel 3 holds 6, not 1
+                let only = |light: &Light| Light::DARK.with(other, light);
+                assert_eq!(only(&got), only(source), "{property:?} {other:?}");
             }
         }
         assert_eq!(base.with(Property::Intensity, &from).intensity, Some(7));

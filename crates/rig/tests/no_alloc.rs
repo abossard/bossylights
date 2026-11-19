@@ -82,11 +82,14 @@ fn main() {
                     tilt: step.wrapping_mul(11),
                 }),
                 zoom: Some(step.wrapping_mul(13)),
-                // every other frame the other wheel
-                gobos: if frame % 2 == 0 {
-                    [Some(1 + u8::try_from(step % 8).unwrap()), None, None]
-                } else {
-                    [None, Some(1 + u8::try_from(step % 8).unwrap()), None]
+                // wheel 1, wheel 2, then both at once
+                gobos: {
+                    let slot = Some(1 + u8::try_from(step % 8).unwrap());
+                    match frame % 3 {
+                        0 => [slot, None, None],
+                        1 => [None, slot, None],
+                        _ => [slot, slot, None],
+                    }
                 },
             };
         }

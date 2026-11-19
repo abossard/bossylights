@@ -47,7 +47,7 @@ extern crate alloc;
 mod capabilities;
 mod patch;
 
-pub use capabilities::supports;
+pub use capabilities::{shows_one_gobo, supports};
 pub use patch::{Limit, Patch, PatchEffect, Placed, Unplaced, Whole};
 
 use capabilities::Wheels;

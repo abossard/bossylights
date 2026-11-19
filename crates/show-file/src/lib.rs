@@ -37,7 +37,7 @@
 //! | `version` | [`VERSION`]. A newer one is not read |
 //! | `patch` | each fixture by number: its name, its mode (a key of `modes`), where, its first light |
 //! | `groups` | in the order they were made, each member a light or a fixture |
-//! | `looks` | each saved look by number: its name and its step, the slot of each gobo wheel in `gobos`. Version 1 has none. Versions 2 and 3 hold one `gobo` of a wheel and a slot: read as that wheel's slot, a wheel no light has (past 3) left out, as it showed nothing |
+//! | `looks` | each saved look by number: its name and its step, the slot of each gobo wheel in `gobos`. Version 1 has none. Versions 2 and 3 hold one `gobo` of a wheel and a slot, read and checked as those engines did: read as that wheel's slot. A gobo a light with a gobo wheel cannot show is refused, a wheel past 3 among them (no wheel past 3 is shown now); on lights without a gobo wheel it showed nothing and is left out |
 //! | `rules` | the Mixer's three settings. Versions 1 and 2 have none: the defaults |
 //! | `modes` | each mode a fixture is patched in, with its maker and model, by key |
 //!
@@ -64,12 +64,11 @@ use alloc::collections::BTreeMap;
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
-use alloc::vec;
 use alloc::vec::Vec;
 use core::num::{NonZeroU16, NonZeroU32};
 use engine_core::{
-    ChannelNumbers, LOOKS, Member, Members, MixRules, PatchCommand, Refusal, Saved, Text, Unopened,
-    Wheel,
+    ChannelNumbers, LOOKS, Light, Member, Members, MixRules, PatchCommand, Position, Refusal, Rgb,
+    Saved, Step, Target, Text, Unopened, Wheel,
 };
 use fixture_library::Mode;
 use looks::Looks;
@@ -276,14 +275,13 @@ pub fn read(text: &str, empty: &Patch) -> Result<(Patch, Looks), Unopened> {
         });
     }
     let file = if version.get() < 4 {
-        let mut file: serde_json::Value = serde_json::from_str(text).map_err(broken)?;
-        one_gobo_per_wheel(&mut file);
-        // broken after all: where the text is
-        serde_json::from_value(file)
-            .or_else(|_| serde_json::from_str(text))
+        serde_json::from_str::<File<Before4>>(text)
             .map_err(broken)?
+            .with_looks(Before4::now)
     } else {
-        serde_json::from_str(text).map_err(broken)?
+        serde_json::from_str::<File<Saved>>(text)
+            .map_err(broken)?
+            .with_looks(|saved| (saved, None))
     };
     let File {
         version: _,
@@ -327,52 +325,96 @@ pub fn read(text: &str, empty: &Patch) -> Result<(Patch, Looks), Unopened> {
         }
     }
     let mut looks = Looks::new().with_rules(rules);
-    for saved in saved {
+    for (saved, one) in saved {
         let refused = |reason| Unopened::Refused { reason };
         if looks.get(saved.look).is_some() {
             return Err(refused(Refusal::LookInUse { look: saved.look }));
         }
         looks = looks.put(saved, &patch).map_err(refused)?;
+        if let Some(OneGobo { wheel, slot }) = one {
+            let runs = patch.runs(saved.step.target).map_err(refused)?;
+            rig::shows_one_gobo(patch.writers(), &runs, wheel, slot).map_err(refused)?;
+        }
     }
     write(&patch, &looks).map(|_| (patch, looks)).ok_or(too_big)
 }
 
-/// The looks of a file before version 4, each `"gobo": {"wheel": 1, "slot": 3}` as
-/// `"gobos": [3, null, null]`. A wheel past [`Wheel::COUNT`] no light has: left out. A
-/// `gobo` that is not a wheel and a slot stays, so the file is broken as it was.
-fn one_gobo_per_wheel(file: &mut serde_json::Value) {
-    /// A gobo as versions 2 and 3 have it.
-    #[derive(Deserialize)]
-    #[serde(deny_unknown_fields)]
-    struct OneGobo {
-        wheel: u8,
-        slot: u8,
-    }
-    let Some(looks) = file
-        .get_mut("looks")
-        .and_then(serde_json::Value::as_array_mut)
-    else {
-        return;
-    };
-    let values = looks
-        .iter_mut()
-        .filter_map(|look| look.pointer_mut("/step/values"))
-        .filter_map(serde_json::Value::as_object_mut);
-    for values in values {
-        let Some(gobo) = values.remove("gobo") else {
-            continue;
-        };
-        let Ok(one) = serde_json::from_value::<Option<OneGobo>>(gobo.clone()) else {
-            values.insert("gobo".to_string(), gobo);
-            continue;
-        };
-        let mut gobos = vec![serde_json::Value::Null; Wheel::COUNT];
-        if let Some(OneGobo { wheel, slot }) = one
+/// A look of a file before version 4: one `gobo`, a wheel and a slot, read as that
+/// engine read it.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Before4 {
+    look: u16,
+    name: Text,
+    step: StepBefore4,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StepBefore4 {
+    target: Target,
+    values: LightBefore4,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LightBefore4 {
+    #[serde(default)]
+    intensity: Option<u16>,
+    #[serde(default)]
+    colour: Option<Rgb>,
+    #[serde(default)]
+    position: Option<Position>,
+    #[serde(default)]
+    zoom: Option<u16>,
+    #[serde(default)]
+    gobo: Option<OneGobo>,
+}
+
+/// The one gobo of a look before version 4.
+#[derive(Clone, Copy, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OneGobo {
+    wheel: u8,
+    slot: u8,
+}
+
+impl Before4 {
+    /// The look now, its gobo as the slot of its wheel, and the gobo to check as that
+    /// engine checked it. A gobo no wheel can hold now (a wheel past [`Wheel::COUNT`],
+    /// slot 0) is left out: the check refuses it on a light with a gobo wheel.
+    fn now(self) -> (Saved, Option<OneGobo>) {
+        let LightBefore4 {
+            intensity,
+            colour,
+            position,
+            zoom,
+            gobo,
+        } = self.step.values;
+        let mut gobos = [None; Wheel::COUNT];
+        if let Some(OneGobo { wheel, slot }) = gobo
+            && slot > 0
             && let Some(held) = Wheel::new(wheel).and_then(|wheel| gobos.get_mut(wheel.index()))
         {
-            *held = slot.into();
+            *held = Some(slot);
         }
-        values.insert("gobos".to_string(), gobos.into());
+        let values = Light {
+            intensity,
+            colour,
+            position,
+            zoom,
+            gobos,
+        };
+        let step = Step {
+            target: self.step.target,
+            values,
+        };
+        let saved = Saved {
+            look: self.look,
+            name: self.name,
+            step,
+        };
+        (saved, gobo)
     }
 }
 
@@ -412,21 +454,36 @@ struct Head {
     version: NonZeroU32,
 }
 
-/// The whole file as it is read. A key it does not know: the file is broken.
+/// The whole file as it is read, each look an `L`. A key it does not know: the file is
+/// broken.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct File {
-    #[expect(dead_code, reason = "read first, by `Head`: here so the key is known")]
+struct File<L> {
+    /// Read first, by `Head`: here so the key is known.
     version: NonZeroU32,
     patch: Vec<RowIn>,
     groups: Vec<GroupIn>,
     /// Version 1 has none.
-    #[serde(default)]
-    looks: Vec<Saved>,
+    #[serde(default = "Vec::new")]
+    looks: Vec<L>,
     /// Versions 1 and 2 have none: the defaults.
     #[serde(default)]
     rules: MixRules,
     modes: BTreeMap<String, DefinitionIn>,
+}
+
+impl<L> File<L> {
+    /// The file with each look made by `now`.
+    fn with_looks<M>(self, now: impl Fn(L) -> M) -> File<M> {
+        File {
+            version: self.version,
+            patch: self.patch,
+            groups: self.groups,
+            looks: self.looks.into_iter().map(now).collect(),
+            rules: self.rules,
+            modes: self.modes,
+        }
+    }
 }
 
 #[derive(Deserialize)]

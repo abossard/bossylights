@@ -16,3 +16,6 @@ the Apache License 2.0 (`COPYING` in the repository root, copied here as
 | `GLP-Impression-X4.qxf` | GLP | a hybrid: RGBW beside a colour wheel whose bypass is 0 to 7, fixed white at 112 to 119 |
 | `Elation-Platinum-Spot-5R.qxf` | Elation | gobo wheels whose open range has no preset |
 | `Martin-MAC-2000-Wash.qxf` | Martin | a zoom that travels 0 to 244, big to small, then "no changes" |
+| `Stairville-BS-280-R10-BeamSpot.qxf` | Stairville | gobo wheel 1 named "Gobo 1" without presets, before a wheel with presets |
+| `Clay-Paky-Alpha-Spot-575-HPE.qxf` | Clay_Paky | gobo wheels whose open range is named "No gobo" |
+| `Martin-Rush-MH5-Profile.qxf` | Martin | a gobo wheel whose open range is named "Open - Gobo selection" |
