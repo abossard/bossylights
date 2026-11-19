@@ -86,7 +86,7 @@ Workers share one checkout of `main`. The design keeps them apart: a slice that 
 | A brief arrived before a worker's clear, the clear was lost | the worker clears itself at the end of a slice; brief only an empty worker |
 | A worker's question was answered while it kept building, the answer came too late | the pre-check settles rules before the brief; a worker that asks waits for the answer on that box |
 | A push carried another worker's commit | `git log origin/main..` before every push |
-| e2e ports (7798, 7799, 5299) clash between sessions | rerun on "already in use" |
+| e2e ports clash between sessions | gone: every run takes free ports (`e2e/ports.ts`) |
 | The orchestrator's own check used another target folder, e2e found no binary | verify with the default target folder |
 | "Allow it and flag it" was overruled | a command that would make an invalid project is refused, and so is a later command that would break it |
 

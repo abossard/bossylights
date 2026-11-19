@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { createSocket } from "node:dgram";
 import { createServer } from "node:http";
-import { ENGINE } from "../playwright.config";
+import { ENGINE } from "./ports";
 
 test("the counter from the engine advances", async ({ page }) => {
   await page.goto(`/?engine=ws://${ENGINE}/api`);

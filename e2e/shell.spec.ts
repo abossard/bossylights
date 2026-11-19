@@ -1,12 +1,13 @@
 // The real shell and engine processes: the engine outlives the window (#107).
-// Its own port, so it never meets the engine of `npm run dev` or the other tests.
+// Its own free port, so it never meets the engine of `npm run dev`, the other tests or another run.
 import { expect, test } from "@playwright/test";
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import { createSocket } from "node:dgram";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import { NOWHERE, SHELL_ENGINE } from "./ports";
 
-const ADDRESS = "127.0.0.1:7798";
+const ADDRESS = SHELL_ENGINE;
 const SHELL = `target/debug/bossylights${process.platform === "win32" ? ".exe" : ""}`;
 const WAIT = { timeout: 30_000 };
 
@@ -186,7 +187,7 @@ test("another engine version on the port: the shell says so and starts nothing",
 test("an engine of its own that ends at start: the shell does not say the window talks to it", async () => {
   test.setTimeout(120_000);
   // An address of no machine here (TEST-NET-1): nothing answers on it, and the engine cannot listen on it.
-  const nowhere = "192.0.2.1:7797";
+  const nowhere = NOWHERE;
   const shell = startShell(nowhere);
   try {
     await expect.poll(shell.said, WAIT).toContain(`the window has no engine on ${nowhere}`);

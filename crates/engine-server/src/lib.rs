@@ -8,7 +8,8 @@
 //! | `GET /api` | WebSocket: `Send`, `Query`, `Subscribe`, `Stop`, `Search`, `Fixture`, `Failures` in, JSON replies out |
 //!
 //! The plain routes allow any origin, so a web page can read them: they change nothing.
-//! The WebSocket commands the lights, so only the pages in `ORIGINS` may open it, and
+//! The WebSocket commands the lights, so only the pages in `ORIGINS` and in the
+//! comma-separated `BOSSYLIGHTS_ORIGINS` (one more page per test run) may open it, and
 //! clients that are no web page (they send no `Origin`). Any other page gets 403.
 
 #![forbid(unsafe_code)]
@@ -73,6 +74,9 @@ pub async fn serve(
         stop,
         pictures,
         shelf,
+        origins: std::env::var("BOSSYLIGHTS_ORIGINS")
+            .map(|list| list.split(',').map(str::to_owned).collect())
+            .unwrap_or_default(),
     });
     let any = || [(ACCESS_CONTROL_ALLOW_ORIGIN, "*")];
     let routes = Router::new()
@@ -97,6 +101,8 @@ pub async fn serve(
 }
 
 struct Api {
+    /// Pages allowed besides `ORIGINS`, from the environment at start.
+    origins: Vec<String>,
     /// The engine front; connections take turns. Nobody holds it while a device opens.
     /// The tick thread never sees this lock.
     sender: Mutex<Sender>,
@@ -181,7 +187,10 @@ async fn connect(
     State(api): State<Arc<Api>>,
 ) -> Response {
     match headers.get(ORIGIN) {
-        Some(origin) if !ORIGINS.iter().any(|allowed| origin == allowed) => {
+        Some(origin)
+            if !ORIGINS.iter().any(|allowed| origin == allowed)
+                && !api.origins.iter().any(|allowed| origin == allowed.as_str()) =>
+        {
             StatusCode::FORBIDDEN.into_response()
         }
         _ => socket.on_upgrade(move |socket| talk(socket, api)),

@@ -1,8 +1,8 @@
 import { defineConfig } from "@playwright/test";
+// Free ports for every run (`e2e/ports.ts`): next to `npm run dev` and next to another run.
+import { ENGINE, UI, UI_PORT } from "./e2e/ports";
 
-// Ports differ from the dev ones (7744, 5174), so tests run next to `npm run dev`.
-export const ENGINE = "127.0.0.1:7799";
-const UI = "http://127.0.0.1:5299";
+export { ENGINE };
 
 export default defineConfig({
   testDir: "e2e",
@@ -14,7 +14,7 @@ export default defineConfig({
       timeout: 600_000, // first run compiles the engine
     },
     {
-      command: "vite ui --port 5299 --strictPort",
+      command: `vite ui --port ${UI_PORT} --strictPort`,
       url: UI,
     },
   ],
