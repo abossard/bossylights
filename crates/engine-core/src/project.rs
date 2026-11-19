@@ -166,6 +166,17 @@ impl Project {
                     mode,
                     at,
                 }),
+                Command::PatchStrip {
+                    name,
+                    pixels,
+                    color,
+                    at,
+                } => patch(PatchCommand::PatchStrip {
+                    name,
+                    pixels,
+                    color,
+                    at,
+                }),
                 Command::Move { fixture, at } => patch(PatchCommand::Move { fixture, at }),
                 Command::Unpatch { fixture } => patch(PatchCommand::Unpatch { fixture }),
                 Command::Rename { fixture, name } => patch(PatchCommand::Rename { fixture, name }),

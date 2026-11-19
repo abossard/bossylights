@@ -7,9 +7,9 @@
 //! patch + command + library --Patch::update--> new patch + effects | Refusal
 //! ```
 //!
-//! A fixture is one or more lights. A mode without pixels is one light. A mode with N
-//! pixels is N + 1: the fixture itself first, for the channels no pixel has (a master
-//! dimmer), then each pixel with its own channels.
+//! A fixture is one or more lights. A mode without heads is one light. A mode with N
+//! heads (pixels) is one light per head in the order of the definition, after the fixture
+//! itself when some channel is in no head (a master dimmer): N + 1, else N.
 //!
 //! Each channel of a light, by what it does and what else the light has:
 //!
@@ -40,13 +40,14 @@ mod patch;
 
 pub use patch::{Patch, PatchEffect};
 
+use alloc::format;
 use alloc::vec;
 use alloc::vec::Vec;
 use engine_core::{
-    ADDRESSES, Channel, ChannelNumbers, Less, LightNumber, Lights, Part, Place, Refusal, Scale,
-    Sense, Take, Universes, Writer,
+    ADDRESSES, Channel, ChannelNumbers, Color, Less, LightNumber, Lights, Part, Pixels, Place,
+    Refusal, Scale, Sense, Take, Universes, Writer,
 };
-use fixture_library::{Byte, Function, Mode};
+use fixture_library::{Byte, Function, Layout, Mode};
 
 /// A mode at an address, compiled.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -88,14 +89,16 @@ pub fn compile(
         })
         .collect::<Option<Vec<_>>>()
         .ok_or(Unfit::TooManyLights { needs })?;
-    let owners = owners(mode);
+    let mut of_light: Vec<Vec<(usize, &fixture_library::Channel)>> = vec![vec![]; needs];
+    for ((index, channel), owner) in mode.channels.iter().enumerate().zip(owners(mode)) {
+        if let Some(channels) = of_light.get_mut(owner) {
+            channels.push((index, channel));
+        }
+    }
     let mut writers: Vec<Option<Writer>> = vec![None; mode.channels.len()];
-    for (owner, number) in numbers.iter().enumerate() {
-        let mine = |&(index, _): &(usize, _)| owners.get(index) == Some(&owner);
-        let channels: Vec<(usize, &fixture_library::Channel)> =
-            mode.channels.iter().enumerate().filter(mine).collect();
+    for (channels, number) in of_light.iter().zip(&numbers) {
         let has = Has::of(channels.iter().map(|(_, c)| *c));
-        for &(index, channel) in &channels {
+        for &(index, channel) in channels {
             let (Some(slot), Some(&place)) = (writers.get_mut(index), places.get(index)) else {
                 continue;
             };
@@ -104,7 +107,7 @@ pub fn compile(
                 Byte::Fine => None,
             };
         }
-        for &(index, channel) in &channels {
+        for &(index, channel) in channels {
             let (Byte::Fine, Some(&place)) = (channel.byte, places.get(index)) else {
                 continue;
             };
@@ -123,9 +126,72 @@ pub fn compile(
     })
 }
 
-/// How many lights `mode` makes: the fixture itself, and one per pixel.
+/// How many lights `mode` makes: one per head, and the fixture itself when it has a
+/// channel of its own.
 fn lights_of(mode: &Mode) -> usize {
-    mode.pixels.len() + 1
+    mode.pixels.len() + usize::from(has_own(mode))
+}
+
+/// True when the fixture itself is a light: it has no heads, or a channel in none.
+fn has_own(mode: &Mode) -> bool {
+    mode.pixels.is_empty() || heads(mode).contains(&None)
+}
+
+/// The head of each channel, `None` for a channel in no head. A channel two heads name
+/// is the later one's.
+fn heads(mode: &Mode) -> Vec<Option<usize>> {
+    let mut heads = vec![None; mode.channels.len()];
+    for (head, channels) in mode.pixels.iter().enumerate() {
+        for &channel in channels {
+            if let Some(slot) = heads.get_mut(usize::from(channel)) {
+                *slot = Some(head);
+            }
+        }
+    }
+    heads
+}
+
+/// A generic strip of `pixels` pixels without a definition file: its model's name, and a
+/// mode of one head per pixel (red, green, blue, and white for `Rgbw`) in one row.
+fn strip(pixels: Pixels, color: Color) -> (&'static str, Mode) {
+    let (model, functions): (_, &[Function]) = match color {
+        Color::Rgb => (
+            "RGB strip",
+            &[Function::Red, Function::Green, Function::Blue],
+        ),
+        Color::Rgbw => (
+            "RGBW strip",
+            &[Function::Red, Function::Green, Function::Blue, Function::White],
+        ),
+    };
+    let channel = |function: &Function| fixture_library::Channel {
+        name: format!("{function:?}"),
+        function: function.clone(),
+        byte: Byte::Coarse,
+        default: None,
+        direction: None,
+        ranges: vec![],
+    };
+    let size = functions.len();
+    let mode = Mode {
+        name: format!("{} pixels", pixels.count()),
+        channels: (0..pixels.count())
+            .flat_map(|_| functions.iter().map(channel))
+            .collect(),
+        pixels: (0..usize::from(pixels.count()))
+            .map(|pixel| {
+                (pixel * size..(pixel + 1) * size)
+                    .filter_map(|c| u16::try_from(c).ok())
+                    .collect()
+            })
+            .collect(),
+        layout: Some(Layout {
+            width: pixels.count(),
+            height: 1,
+        }),
+        degrees: None,
+    };
+    (model, mode)
 }
 
 /// Adds `fine` to a writer that takes a light into one byte. False for any other.
@@ -142,39 +208,46 @@ fn join(writer: &mut Option<Writer>, fine: Channel) -> bool {
     }
 }
 
-/// The channel of each of the `count` channels from `at`, all in one universe.
+/// The channel of each of the `count` channels from `at`. Past address 512 a fixture runs
+/// on at address 1 of the next universe, as an output streams a run of universes.
 fn places(count: usize, at: ChannelNumbers, universes: Universes) -> Result<Vec<Channel>, Unfit> {
     at.check(universes).map_err(Unfit::Refused)?;
-    if usize::from(at.address) + count > ADDRESSES + 1 {
+    let start = flat(at);
+    if start + count > usize::from(universes.count()) * ADDRESSES {
         return Err(Unfit::PastTheEnd { channels: count });
     }
-    (0..count)
-        .map(|offset| {
-            let address = u16::try_from(offset)
-                .ok()
-                .and_then(|offset| at.address.checked_add(offset))
-                .ok_or(Unfit::PastTheEnd { channels: count })?;
-            ChannelNumbers {
-                universe: at.universe,
-                address,
-            }
-            .check(universes)
-            .map_err(Unfit::Refused)
+    (start..start + count)
+        .map(|channel| {
+            unflat(channel)
+                .ok_or(Unfit::PastTheEnd { channels: count })?
+                .check(universes)
+                .map_err(Unfit::Refused)
         })
         .collect()
 }
 
-/// Which light owns each channel: 0 for the fixture itself, 1 + the pixel for a pixel's.
+/// A channel counted from 0 over every universe in a row: `at` must be checked.
+pub(crate) fn flat(at: ChannelNumbers) -> usize {
+    usize::from(at.universe.saturating_sub(1)) * ADDRESSES
+        + usize::from(at.address.saturating_sub(1))
+}
+
+/// The channel `flat` counts, as a client counts it.
+fn unflat(flat: usize) -> Option<ChannelNumbers> {
+    Some(ChannelNumbers {
+        universe: u16::try_from(flat / ADDRESSES + 1).ok()?,
+        address: u16::try_from(flat % ADDRESSES + 1).ok()?,
+    })
+}
+
+/// Which light owns each channel, counted from the fixture's first: the fixture itself
+/// is 0 when it is a light, then each head in order.
 fn owners(mode: &Mode) -> Vec<usize> {
-    let mut owners = vec![0; mode.channels.len()];
-    for (pixel, channels) in mode.pixels.iter().enumerate() {
-        for &channel in channels {
-            if let Some(owner) = owners.get_mut(usize::from(channel)) {
-                *owner = pixel + 1;
-            }
-        }
-    }
-    owners
+    let first_head = usize::from(has_own(mode));
+    heads(mode)
+        .into_iter()
+        .map(|head| head.map_or(0, |head| first_head + head))
+        .collect()
 }
 
 /// What else a light's channels do, which changes how each is written.

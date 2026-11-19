@@ -7,7 +7,7 @@
 //!                                                                    EngineCommand
 //! ```
 
-use crate::{ChannelNumbers, Text};
+use crate::{ChannelNumbers, Color, Text};
 use serde::{Deserialize, Serialize};
 
 /// What a light command names: one light, or every light of a fixture. Counted from 1,
@@ -33,6 +33,12 @@ pub enum PatchCommand {
         maker: Text,
         model: Text,
         mode: Text,
+        at: ChannelNumbers,
+    },
+    PatchStrip {
+        name: Text,
+        pixels: Pixels,
+        color: Color,
         at: ChannelNumbers,
     },
     Move {
@@ -64,6 +70,37 @@ pub enum PatchCommand {
     },
 }
 
+/// How many pixels a generic strip has: 1 or more. 0 does not parse.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(try_from = "u16")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(type = "number"))]
+pub struct Pixels(u16);
+
+impl Pixels {
+    pub const fn count(self) -> u16 {
+        self.0
+    }
+}
+
+impl TryFrom<u16> for Pixels {
+    type Error = &'static str;
+    fn try_from(count: u16) -> Result<Self, Self::Error> {
+        if count >= 1 {
+            Ok(Self(count))
+        } else {
+            Err("a strip has 1 pixel or more")
+        }
+    }
+}
+
+/// The heads of a bar or a panel in a grid: `width` by `height` cells, one per head.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct Layout {
+    pub width: u16,
+    pub height: u16,
+}
+
 /// A patched fixture, as the picture shows it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
@@ -82,6 +119,9 @@ pub struct Patched<'a> {
     /// Its lights, numbered from `first` (counted from 1).
     pub first: u16,
     pub lights: u16,
+    /// The grid of its heads, `None` for a fixture without heads or a definition that
+    /// gives none that fits. Its heads are its last lights, row by row.
+    pub layout: Option<Layout>,
     /// The fixtures that share at least one of its channels. Allowed: the patch shows it.
     pub clashes: &'a [u16],
 }

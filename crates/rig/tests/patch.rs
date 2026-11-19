@@ -174,7 +174,7 @@ fn a_patch_command_makes_a_new_patch_and_says_what_follows() {
         (
             many,
             vec![],
-            par("X", 1, 511),
+            par("X", 2, 511),
             Err(Refusal::PastTheEnd { channels: 3 }),
             &[],
         ),
@@ -260,7 +260,7 @@ fn a_patch_command_makes_a_new_patch_and_says_what_follows() {
             vec![par_3],
             PatchCommand::Move {
                 fixture: 1,
-                at: at(1, 511),
+                at: at(2, 511),
             },
             Err(Refusal::PastTheEnd { channels: 3 }),
             &["1 PAR 3: Generic RGB, RGB at 1.37 (3) lights 1+1 clashes []"],

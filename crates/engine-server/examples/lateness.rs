@@ -9,11 +9,13 @@
 //! | normal | 2, 1 | 60 s | `cargo run -q --release -p engine-server --example lateness` |
 //! | at the limits the API allows | 16, 64 | 30 s | `cargo run -q --release -p engine-server --example lateness -- limits` |
 //! | 10 000 lights, each a Generic RGB, on 59 of 64 universes | 1, 64 | 60 s | `cargo run -q --release -p engine-server --example lateness -- lights` |
+//! | 10 000 pixels, one generic RGB strip over 59 of 64 universes | 1, 64 | 60 s | `cargo run -q --release -p engine-server --example lateness -- pixels` |
 
 use engine::{
     Begun, ChannelNumbers, Color, Command, Engine, Fixture, MAX_OUTPUTS, MAX_UNIVERSES, OutputKind,
     OutputNumber, Rate, Refusal, RunNumbers, Sender, Target, Text, Universes,
 };
+use engine_core::Pixels;
 use std::net::{SocketAddr, UdpSocket};
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -24,33 +26,49 @@ use std::time::{Duration, Instant};
 #[path = "../src/report_line.rs"]
 mod report_line;
 
-/// How many outputs, how many universes each, for how long, with how many lights patched.
+/// How many outputs, how many universes each, for how long, with what patched.
 struct Setup {
     outputs: u8,
     universes: u16,
     run: Duration,
-    lights: u16,
+    lights: Lights,
+}
+
+/// What is patched, each light lit in a colour of its own.
+#[derive(Clone, Copy)]
+enum Lights {
+    /// This many Generic RGB, 170 to a universe.
+    Pars(u16),
+    /// One generic RGB strip of this many pixels from universe 1, address 1.
+    Strip(u16),
 }
 
 const NORMAL: Setup = Setup {
     outputs: 2,
     universes: 1,
     run: Duration::from_secs(60),
-    lights: 0,
+    lights: Lights::Pars(0),
 };
 
 const LIMITS: Setup = Setup {
     outputs: MAX_OUTPUTS as u8,
     universes: MAX_UNIVERSES,
     run: Duration::from_secs(30),
-    lights: 0,
+    lights: Lights::Pars(0),
 };
 
 const LIGHTS: Setup = Setup {
     outputs: 1,
     universes: MAX_UNIVERSES,
     run: Duration::from_secs(60),
-    lights: 10_000,
+    lights: Lights::Pars(10_000),
+};
+
+const PIXELS: Setup = Setup {
+    outputs: 1,
+    universes: MAX_UNIVERSES,
+    run: Duration::from_secs(60),
+    lights: Lights::Strip(10_000),
 };
 
 fn main() -> ExitCode {
@@ -58,8 +76,11 @@ fn main() -> ExitCode {
         None => NORMAL,
         Some("limits") => LIMITS,
         Some("lights") => LIGHTS,
+        Some("pixels") => PIXELS,
         Some(other) => {
-            eprintln!("lateness: unknown run {other:?}; none, \"limits\" or \"lights\"");
+            eprintln!(
+                "lateness: unknown run {other:?}; none, \"limits\", \"lights\" or \"pixels\""
+            );
             return ExitCode::FAILURE;
         }
     };
@@ -140,53 +161,76 @@ fn run(setup: &Setup) -> Result<String, String> {
     Ok(format!("{} {} {off}", p99.as_micros(), worst.as_micros()))
 }
 
-/// Patches `lights` Generic RGB, 170 to a universe, each lit in a colour of its own.
-fn patch(sender: &mut Sender, lights: u16) -> Result<(), String> {
+/// Patches `lights`, each lit in a colour of its own.
+fn patch(sender: &mut Sender, lights: Lights) -> Result<(), String> {
     let library: Vec<Fixture> = vec![
         fixture_library::parse("Generic-Generic-RGB.qxf", GENERIC_RGB)
             .map_err(|e| format!("{e:?}"))?,
     ];
     let text = |text| Text::new(text).ok_or("a short text");
-    let started = Instant::now();
-    for n in 0..lights {
-        let target = Target::Fixture { fixture: n + 1 };
-        let commands = [
-            Command::Patch {
-                name: text("PAR")?,
-                maker: text("Generic")?,
-                model: text("Generic RGB")?,
-                mode: text("RGB")?,
-                at: ChannelNumbers {
-                    universe: 1 + n / 170,
-                    address: 1 + 3 * (n % 170),
-                },
-            },
-            Command::SetIntensity {
-                target,
-                intensity: u16::MAX,
-            },
-            Command::SetColour {
-                target,
-                red: n.wrapping_mul(97),
-                green: n.wrapping_mul(193),
-                blue: n.wrapping_mul(389),
-            },
-        ];
-        for command in commands {
-            // A full queue empties within a wake: send again.
-            loop {
-                match sender.begin(command, &library) {
-                    Ok(Begun::Queued | Begun::Patched { .. }) => break,
-                    Err(Refusal::QueueFull) => thread::sleep(Duration::from_millis(1)),
-                    Ok(Begun::Opening(_)) => return Err("a light opened a device".into()),
-                    Err(refused) => return Err(format!("light {n}: refused: {refused:?}")),
-                }
+    let mut send = |command, n| {
+        // A full queue empties within a wake: send again.
+        loop {
+            match sender.begin(command, &library) {
+                Ok(Begun::Queued | Begun::Patched { .. }) => return Ok(()),
+                Err(Refusal::QueueFull) => thread::sleep(Duration::from_millis(1)),
+                Ok(Begun::Opening(_)) => return Err("a light opened a device".to_string()),
+                Err(refused) => return Err(format!("light {n}: refused: {refused:?}")),
             }
         }
-    }
-    if lights > 0 {
+    };
+    let colour = |target, n: u16| Command::SetColour {
+        target,
+        red: n.wrapping_mul(97),
+        green: n.wrapping_mul(193),
+        blue: n.wrapping_mul(389),
+    };
+    let full = |target| Command::SetIntensity {
+        target,
+        intensity: u16::MAX,
+    };
+    let started = Instant::now();
+    let count = match lights {
+        Lights::Pars(count) => {
+            for n in 0..count {
+                let target = Target::Fixture { fixture: n + 1 };
+                let par = Command::Patch {
+                    name: text("PAR")?,
+                    maker: text("Generic")?,
+                    model: text("Generic RGB")?,
+                    mode: text("RGB")?,
+                    at: ChannelNumbers {
+                        universe: 1 + n / 170,
+                        address: 1 + 3 * (n % 170),
+                    },
+                };
+                for command in [par, full(target), colour(target, n)] {
+                    send(command, n)?;
+                }
+            }
+            count
+        }
+        Lights::Strip(count) => {
+            let strip = Command::PatchStrip {
+                name: text("Strip")?,
+                pixels: Pixels::try_from(count)?,
+                color: Color::Rgb,
+                at: ChannelNumbers {
+                    universe: 1,
+                    address: 1,
+                },
+            };
+            send(strip, 0)?;
+            send(full(Target::Fixture { fixture: 1 }), 0)?;
+            for n in 0..count {
+                send(colour(Target::Light { light: n + 1 }, n), n)?;
+            }
+            count
+        }
+    };
+    if count > 0 {
         eprintln!(
-            "patched {lights} lights in {} ms",
+            "patched {count} lights in {} ms",
             started.elapsed().as_millis()
         );
     }

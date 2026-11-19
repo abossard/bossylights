@@ -1,5 +1,6 @@
 //! Proves the tick thread allocates nothing per wake, also while it serves two outputs at
-//! different rates, resolves 512 patched lights, takes commands, swaps in new writers and
+//! different rates, resolves 512 patched lights and a strip of 100 pixels over two
+//! universes, takes commands, swaps in new writers and
 //! hands a reader a snapshot on every frame. A counting allocator sees every allocation in
 //! this process, except those of the front while it sends: a light or patch command
 //! allocates there (the patch is a calculation on the heap), never on the tick thread. The
@@ -14,9 +15,10 @@ mod counting;
 mod mock;
 
 use engine::{
-    Begun, ChannelNumbers, Command, Engine, Fixture, Rate, RunNumbers, Sender, Target, Text,
-    Universes,
+    Begun, ChannelNumbers, Color, Command, Engine, Fixture, Rate, RunNumbers, Sender, Target,
+    Text, Universes,
 };
+use engine_core::Pixels;
 
 /// 512 lights: Generic RGB in its mode RGB, 170 to a universe.
 const LIGHTS: u16 = 512;
@@ -75,6 +77,24 @@ fn main() {
             mock::wait_until("no frame went by", || engine.latest().state.frame > seen);
         }
     }
+    // and a strip of 100 pixels that runs from universe 3 into 4, lit
+    let strip = Command::PatchStrip {
+        name: text("Strip"),
+        pixels: Pixels::try_from(100).expect("100 pixels"),
+        color: Color::Rgb,
+        at: ChannelNumbers {
+            universe: 3,
+            address: 500,
+        },
+    };
+    assert!(send(&mut sender, strip, &library), "the strip is patched");
+    let full = Command::SetIntensity {
+        target: Target::Fixture {
+            fixture: LIGHTS + 1,
+        },
+        intensity: u16::MAX,
+    };
+    assert!(send(&mut sender, full, &library), "the strip is lit");
     // Thread start-up may allocate: wait until both outputs were served.
     mock::wait_until("the outputs were never served", || {
         let outputs = engine.latest().state.outputs;
@@ -118,7 +138,7 @@ fn main() {
         pictures += 1;
     }
     let state = engine.latest().state;
-    let lit = engine.latest().lights()[..usize::from(LIGHTS)]
+    let lit = engine.latest().lights()[..usize::from(LIGHTS) + 100]
         .iter()
         .filter(|light| light.intensity == u16::MAX)
         .count();
@@ -128,7 +148,11 @@ fn main() {
 
     assert!(ticks >= 5, "too few ticks to prove anything: {ticks}");
     assert_eq!(pictures, 256, "the reader saw every frame it waited for");
-    assert_eq!(lit, usize::from(LIGHTS), "every patched light is held lit");
+    assert_eq!(
+        lit,
+        usize::from(LIGHTS) + 100,
+        "every patched light is held lit"
+    );
     let accepted = state.outputs.map(|o| o.map(|o| o.counters.accepted));
     assert!(
         accepted[..2].iter().all(|n| n.is_some_and(|n| n > 5)),

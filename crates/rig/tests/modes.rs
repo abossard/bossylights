@@ -176,7 +176,9 @@ fn a_mode_that_does_not_fit_is_refused() {
     let cases = [
         (&martin, 1, 499, 0, Ok(13)),
         (&martin, 2, 499, 0, Ok(13)),
-        (&martin, 1, 500, 0, Err(Unfit::PastTheEnd { channels: 14 })),
+        // past 512 it runs on at the next universe's address 1, but there is no third
+        (&martin, 1, 500, 0, Ok(13)),
+        (&martin, 2, 500, 0, Err(Unfit::PastTheEnd { channels: 14 })),
         (
             &martin,
             1,

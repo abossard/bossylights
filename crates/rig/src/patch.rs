@@ -5,6 +5,7 @@
 //! | Command | Does | Refused when |
 //! |---|---|---|
 //! | patch | adds a fixture: the lowest free number, the first free lights from the lowest | no such fixture, no such mode, past the end of the universe, no lights left |
+//! | patch strip | adds a generic strip of N pixels, RGB or RGBW, as patch does | as patch, but never no such fixture or mode |
 //! | move | new address, the same lights: their held values stay | not patched, past the end |
 //! | unpatch | removes it, its lights' held values go | not patched |
 //! | rename | | not patched |
@@ -12,7 +13,7 @@
 //!
 //! Two fixtures on the same channels are allowed: each shows the other in its clashes.
 
-use crate::{Unfit, compile, lights_of};
+use crate::{Unfit, compile, flat, lights_of, strip};
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec;
@@ -96,31 +97,18 @@ impl Patch {
                     .iter()
                     .find(|m| m.name == mode.as_str())
                     .ok_or(Refusal::NoSuchMode)?;
-                let number = self.free_number().ok_or(Refusal::NoLightsLeft)?;
-                let first = self.free_lights(lights_of(mode))?;
-                let rigged =
-                    compile(mode, at, first, self.universes, self.lights).map_err(refusal)?;
-                let entry = Entry {
-                    number,
-                    name: name.as_str().to_string(),
-                    maker: fixture.maker.clone(),
-                    model: fixture.model.clone(),
-                    mode: mode.clone(),
-                    at,
-                    first,
-                    lights: rigged.lights,
-                    writers: rigged.writers,
-                    clashes: vec![],
-                };
-                let mut fixtures = self.fixtures.clone();
-                let place = fixtures.partition_point(|e| e.number < number);
-                fixtures.insert(place, Arc::new(entry));
-                let patch = self.with(fixtures);
-                let writers = PatchEffect::Writers(patch.writers.clone());
-                Ok((
-                    Some(patch),
-                    vec![PatchEffect::Patched { fixture: number }, writers],
-                ))
+                self.add(name.as_str(), &fixture.maker, &fixture.model, mode.clone(), at)
+            }
+            PatchCommand::PatchStrip {
+                name,
+                pixels,
+                color,
+                at,
+            } => {
+                // a strip longer than the lights left is refused before it is built
+                self.free_lights(usize::from(pixels.count()))?;
+                let (model, mode) = strip(pixels, color);
+                self.add(name.as_str(), "Generic", model, mode, at)
             }
             PatchCommand::Move { fixture, at } => {
                 let entry = self.entry(fixture)?;
@@ -187,6 +175,41 @@ impl Patch {
         }
     }
 
+    /// Adds `mode` at `at` under the lowest free number, on the first free lights.
+    fn add(
+        &self,
+        name: &str,
+        maker: &str,
+        model: &str,
+        mode: Mode,
+        at: ChannelNumbers,
+    ) -> Result<(Option<Self>, Vec<PatchEffect>), Refusal> {
+        let number = self.free_number().ok_or(Refusal::NoLightsLeft)?;
+        let first = self.free_lights(lights_of(&mode))?;
+        let rigged = compile(&mode, at, first, self.universes, self.lights).map_err(refusal)?;
+        let entry = Entry {
+            number,
+            name: name.to_string(),
+            maker: maker.to_string(),
+            model: model.to_string(),
+            mode,
+            at,
+            first,
+            lights: rigged.lights,
+            writers: rigged.writers,
+            clashes: vec![],
+        };
+        let mut fixtures = self.fixtures.clone();
+        let place = fixtures.partition_point(|e| e.number < number);
+        fixtures.insert(place, Arc::new(entry));
+        let patch = self.with(fixtures);
+        let writers = PatchEffect::Writers(patch.writers.clone());
+        Ok((
+            Some(patch),
+            vec![PatchEffect::Patched { fixture: number }, writers],
+        ))
+    }
+
     /// Every patched fixture, by number, as the picture shows it.
     pub fn fixtures(&self) -> Vec<Patched<'_>> {
         self.fixtures
@@ -202,6 +225,10 @@ impl Patch {
                 channels: u16::try_from(e.mode.channels.len()).unwrap_or(u16::MAX),
                 first: e.first.index().saturating_add(1),
                 lights: e.lights,
+                layout: e.mode.layout.map(|l| engine_core::Layout {
+                    width: l.width,
+                    height: l.height,
+                }),
                 clashes: &e.clashes,
             })
             .collect()
@@ -214,20 +241,17 @@ impl Patch {
 
     /// This patch with these fixtures: their writers and clashes made anew.
     fn with(&self, mut fixtures: Vec<Arc<Entry>>) -> Self {
-        let mut spans: Vec<(u16, u16, u16, u16)> = fixtures
+        // (first channel, channels, number), channels counted over every universe in a row
+        let mut spans: Vec<(usize, usize, u16)> = fixtures
             .iter()
-            .map(|e| {
-                let channels = u16::try_from(e.mode.channels.len()).unwrap_or(u16::MAX);
-                let last = e.at.address.saturating_add(channels.saturating_sub(1));
-                (e.at.universe, e.at.address, last, e.number)
-            })
-            .filter(|&(_, first, last, _)| last >= first)
+            .map(|e| (flat(e.at), e.mode.channels.len(), e.number))
+            .filter(|&(_, channels, _)| channels > 0)
             .collect();
         spans.sort_unstable();
         let mut pairs = vec![];
-        for (i, &(universe, _, last, number)) in spans.iter().enumerate() {
-            for &(other_universe, other_first, _, other) in spans.iter().skip(i + 1) {
-                if other_universe != universe || other_first > last {
+        for (i, &(first, channels, number)) in spans.iter().enumerate() {
+            for &(other_first, _, other) in spans.iter().skip(i + 1) {
+                if other_first >= first + channels {
                     break;
                 }
                 pairs.push((number, other));

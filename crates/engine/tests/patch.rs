@@ -138,7 +138,7 @@ fn a_patch_the_front_refuses_changes_nothing() {
     // no library on `send`: a patch finds no fixture
     assert_eq!(sender.send(par("X", 1, 1)), Err(Refusal::NoSuchFixture));
     assert_eq!(
-        send(&mut sender, par("X", 1, 511)),
+        send(&mut sender, par("X", 2, 511)),
         Err(Refusal::PastTheEnd { channels: 3 })
     );
     assert_eq!(

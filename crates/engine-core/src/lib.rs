@@ -39,7 +39,7 @@ pub use output::{
     Counters, GIVE_UP, MAX_OUTPUTS, OFF_BEAT, Outcome, Output, OutputNumber, Rate, Run, RunNumbers,
     Status,
 };
-pub use patch::{PatchCommand, Patched, Target};
+pub use patch::{Layout, PatchCommand, Patched, Pixels, Target};
 pub use project::{Project, ProjectEffect, ProjectEvent, ProjectOutput};
 pub use resolve::{
     Less, Light, LightNumber, LightRun, Lights, MAX_LIGHTS, Part, Place, Scale, Sense, Take,
@@ -152,6 +152,15 @@ pub enum Command {
         model: Text,
         #[cfg_attr(test, ts(type = "string"))]
         mode: Text,
+        at: ChannelNumbers,
+    },
+    /// Add a generic strip of `pixels` pixels, each red, green, blue (and white for
+    /// `Rgbw`), from `at` on: one light per pixel, no definition file. As `Patch` otherwise.
+    PatchStrip {
+        #[cfg_attr(test, ts(type = "string"))]
+        name: Text,
+        pixels: Pixels,
+        color: Color,
         at: ChannelNumbers,
     },
     /// Give a fixture a new address. Its lights keep their numbers and held values.
@@ -1317,6 +1326,8 @@ mod tests {
                 ProjectOutput::decl(&config),
                 Target::decl(&config),
                 Patched::decl(&config),
+                Pixels::decl(&config),
+                Layout::decl(&config),
             ]
             .map(|declaration| format!("export {declaration}\n"))
             .join("\n"),
