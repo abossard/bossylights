@@ -19,3 +19,21 @@ the Apache License 2.0 (`COPYING` in the repository root, copied here as
 | `Stairville-BS-280-R10-BeamSpot.qxf` | Stairville | gobo wheel 1 named "Gobo 1" without presets, before a wheel with presets |
 | `Clay-Paky-Alpha-Spot-575-HPE.qxf` | Clay_Paky | gobo wheels whose open range is named "No gobo" |
 | `Martin-Rush-MH5-Profile.qxf` | Martin | a gobo wheel whose open range is named "Open - Gobo selection" |
+| `American-DJ-VPar.qxf` | American_DJ | a hybrid whose colour macro at 0 is "Off" with a black preset: the macro is off |
+| `Showtec-Spectral-850-RGBA-Tour.qxf` | Showtec | a hybrid whose colour macro at 0 is "Not functional" with a white preset |
+| `Robe-Robin-Spikie.qxf` | Robe | a hybrid whose colour macro at 0 is "No function (0=default)" with a white preset |
+| `EK-R3-Wash.qxf` | EK | a hybrid whose colour macro at 0 is "Macro Color OFF" |
+| `Cameo-Q-Spot-15-RGBW.qxf` | Cameo | a hybrid whose colour macro at 0 is "Colour off" |
+| `Chauvet-Ovation-CYC-1-FC.qxf` | Chauvet | a hybrid with two colour macros, each "None" at 0 |
+| `Eliminator-Lighting-Stealth-Beam.qxf` | Eliminator_Lighting | a hybrid whose colour macro at 0 is "Nothing" |
+| `Martin-MAC-301-Wash.qxf` | Martin | a hybrid whose colour macro at 0 is "Inactive" |
+| `MARQ-Colormax-Par64.qxf` | MARQ | a hybrid whose colour macro at 0 is "No function (overrides Ch. 2–4)" |
+| `Briteq-BT-Theatre-261FC.qxf` | Briteq | a hybrid whose colour macro at 0 is "No function - no filter, color channels used" |
+| `Cameo-HydraBeam-4000.qxf` | Cameo | heads whose colour macro at 0 names the channels they mix with ("Channel 11-14") |
+| `Stairville-CLB4-RGB-Compact-LED-Bar-4.qxf` | Stairville | a colour macro at 0 named "All LEDs Set via Channels 1-3" |
+| `Stairville-MH-100-Beam-36x3-LED.qxf` | Stairville | colour macros at 0 named "All LEDs off" with a black preset: refused |
+| `Stairville-AF-180-LED-Fogger-Co2-FX.qxf` | Stairville | a colour effect at 0 named "All LEDs off": refused |
+| `Contest-SFX-HO150QC.qxf` | Contest | a colour macro at 0 named "LED off": refused |
+| `American-DJ-WiFly-EXR-HEX5-IP.qxf` | American_DJ | a colour macro at 0 named "Off/Color change/fade 1/Slow to fast": refused |
+| `American-DJ-QA5-IP.qxf` | American_DJ | a colour macro at 0 named "Color 1 (off)": refused |
+| `Equinox-Party-Par-LED-PAR-56.qxf` | Equinox | a colour macro at 0 named "Blackout": refused |

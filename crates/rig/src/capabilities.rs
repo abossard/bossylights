@@ -14,7 +14,7 @@
 //! | gobo wheel | a gobo channel with at least one gobo that does not shake: a gobo preset, or a range without a preset named "Gobo" and a number |
 //! | open gobo | a range without a preset named open, no gobo, open gobo, gobo open or "open - gobo selection" |
 //! | neutral slot | white, or a range without a preset named open, white, no function, no colour or off. It shows white |
-//! | bypass | a range without a preset that is neutral, or starts the channel and names the mix (RGB, CMY, mix) and no effect (random, cycle, fast, slow, speed, sound, music). Else, when the light mixes only cyan, magenta and yellow, its white slot: open. Over red, green, blue or white a static white is a fixed white that overrides the mix |
+//! | bypass | a range without a preset that is neutral, or starts the channel and names the mix (RGB, CMY, mix) and no effect (random, cycle, fast, slow, speed, sound, music), or names the channels the light mixes with ("Channel 11-14"). Or the range at 0, whatever its preset, that turns the macro off (off, none, nothing, no function, not functional, inactive), never one that names black, blackout or the LEDs, two things ("OFF/Color") or a slot ("Color 1 (off)"). Else, when the light mixes only cyan, magenta and yellow, its white slot: open. Over red, green, blue or white a static white is a fixed white that overrides the mix |
 //! | slot byte | the lower midpoint of its range: 20 to 29 is 24 |
 //!
 //! A light refuses a colour or a gobo when it has a wheel for it but no slot that shows it
@@ -32,8 +32,9 @@ use fixture_library::{Byte, Does, Function, Range};
 
 /// The wheels of one light.
 pub(crate) struct Wheels {
-    /// The light mixes colour: red, green, blue, white, cyan, magenta or yellow.
-    mixes: bool,
+    /// The mode's channel index of each channel the light mixes colour with: red, green,
+    /// blue, white, cyan, magenta or yellow. None when it does not mix.
+    mixers: Vec<usize>,
     /// The light adds light to mix: red, green, blue or white.
     adds: bool,
     /// Every colour of the light's colour wheels, each once, in channel and range order.
@@ -55,7 +56,10 @@ impl Wheels {
             }
         }
         Self {
-            mixes: coarse().any(|(_, c)| mixes(&c.function)),
+            mixers: coarse()
+                .filter(|(_, c)| mixes(&c.function))
+                .map(|&(index, _)| index)
+                .collect(),
             adds: coarse().any(|(_, c)| adds(&c.function)),
             colours,
             gobos: coarse()
@@ -80,9 +84,9 @@ impl Wheels {
                 light.index().saturating_add(1),
                 Property::Colour,
             ));
-            if self.mixes {
+            if !self.mixers.is_empty() {
                 return Some(
-                    bypass(channel, self.adds)
+                    bypass(channel, self.adds, &self.mixers)
                         .map(|value| vec![Writer::Fixed { at, value }])
                         .ok_or(refused),
                 );
@@ -349,16 +353,79 @@ fn neutral(channel: &fixture_library::Channel) -> Option<u8> {
         .map(|(_, value)| value)
 }
 
-/// The byte where a hybrid's colour wheel lets the mix through: a range without a preset
-/// that is neutral or lets the mix through. Else its neutral slot, unless the light `adds`
-/// light to mix: then a static white is a fixed white over the mix, and none.
-fn bypass(channel: &fixture_library::Channel, adds: bool) -> Option<u8> {
+/// The byte where a hybrid's colour wheel lets the mix of `mixers` through: a range
+/// without a preset that is neutral or lets the mix through, or the range at 0 that turns
+/// the macro off. Else its neutral slot, unless the light `adds` light to mix: then a static
+/// white is a fixed white over the mix, and none.
+fn bypass(channel: &fixture_library::Channel, adds: bool, mixers: &[usize]) -> Option<u8> {
     channel
         .ranges
         .iter()
-        .find(|range| is_neutral(range) || lets_the_mix_through(range))
+        .find(|range| {
+            is_neutral(range)
+                || lets_the_mix_through(range)
+                || names_the_mix(range, mixers)
+                || turns_the_macro_off(range)
+        })
         .map(midpoint)
         .or_else(|| neutral(channel).filter(|_| !adds))
+}
+
+/// The range at 0 of a colour macro, whatever its preset (white, black or none), when its
+/// label says the macro is off: off, none, nothing, no function, not functional or
+/// inactive. Never when it names black, blackout or the LEDs ("All LEDs off" is dark), more
+/// than one thing ("OFF/Color") or a slot ("Color 1 (off)").
+fn turns_the_macro_off(range: &Range) -> bool {
+    const OFF: [&[&str]; 6] = [
+        &["off"],
+        &["none"],
+        &["nothing"],
+        &["no", "function"],
+        &["not", "functional"],
+        &["inactive"],
+    ];
+    const DARK: [&str; 4] = ["black", "blackout", "led", "leds"];
+    const SLOTS: [&str; 3] = ["color", "colour", "macro"];
+    let label = range.label.to_ascii_lowercase();
+    let words: Vec<&str> = label
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .collect();
+    let says = |phrase: &[&str]| words.windows(phrase.len()).any(|seen| seen == phrase);
+    let names_a_slot = words.windows(2).any(|pair| match pair {
+        [word, number] => SLOTS.contains(word) && number.bytes().all(|b| b.is_ascii_digit()),
+        _ => false,
+    });
+    range.min == 0
+        && !label.contains('/')
+        && !words.iter().any(|word| DARK.contains(word))
+        && !names_a_slot
+        && OFF.iter().any(|phrase| says(phrase))
+}
+
+/// A range at 0 without a preset that names channels of the mode, each one of `mixers`:
+/// "Use channels 29-32 to control colour", "All LEDs Set via Channels 1-3".
+fn names_the_mix(range: &Range, mixers: &[usize]) -> bool {
+    range.min == 0
+        && range.does.is_none()
+        && channels_named(&range.label).is_some_and(|(first, last)| {
+            first <= last
+                && (first..=last).all(|number| {
+                    number
+                        .checked_sub(1)
+                        .is_some_and(|index| mixers.contains(&index))
+                })
+        })
+}
+
+/// The channels a label names, counted from 1: "Channels 1-3" is 1 to 3.
+fn channels_named(label: &str) -> Option<(usize, usize)> {
+    let label = label.to_ascii_lowercase();
+    let (_, after) = label.split_once("channel")?;
+    let after = after.strip_prefix('s').unwrap_or(after);
+    let (first, rest) = after.split_once('-')?;
+    let last = rest.split(|c: char| !c.is_ascii_digit()).next()?;
+    Some((first.trim().parse().ok()?, last.parse().ok()?))
 }
 
 /// A range without a preset at the start of its channel that names the mix (RGB, CMY,

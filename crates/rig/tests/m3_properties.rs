@@ -378,6 +378,79 @@ fn a_hybrid_binds_its_companions_to_neutral_or_is_refused() {
     }
 }
 
+/// A hybrid's colour macro at 0 lets the mix through when its label says the macro is off,
+/// whatever its preset, or names the channels the light mixes with. Red held: the red
+/// channel and the macro's byte, or the refusal.
+#[test]
+fn a_hybrid_macro_at_0_is_neutral_by_its_label() {
+    let black = r##"Preset="ColorMacro" Res1="#000000""##;
+    let white = r##"Preset="ColorMacro" Res1="#ffffff""##;
+    let amber = r##"Preset="ColorMacro" Res1="#ffcf8f""##;
+    let refused = || Err(Unfit::Refused(unsupported(1, Property::Colour)));
+    // (the range at 0: label and preset, then red and the macro's byte, or the refusal)
+    type Case<'a> = (&'a str, &'a str, Result<[u8; 2], Unfit>);
+    let cases: [Case; 24] = [
+        ("Macro Color OFF", "", Ok([255, 4])),
+        ("Colour off", "", Ok([255, 4])),
+        ("Off (no function)", "", Ok([255, 4])),
+        ("None", "", Ok([255, 4])),
+        ("Nothing", "", Ok([255, 4])),
+        ("Inactive", "", Ok([255, 4])),
+        ("No function (overrides Ch. 2\u{2013}4)", "", Ok([255, 4])),
+        ("Off", black, Ok([255, 4])),
+        ("Not functional", white, Ok([255, 4])),
+        ("No function (0=default)", white, Ok([255, 4])),
+        // names the channel the light mixes with
+        ("Use channel 1-1 to control colour", "", Ok([255, 4])),
+        // names the macro itself, or a channel the mode does not have
+        ("Channel 2-2", "", refused()),
+        ("Channels 1-3", "", refused()),
+        // channels backwards, or a colour of its own beside them
+        ("Channel 2-1", "", refused()),
+        ("Use channel 1-1", black, refused()),
+        // dark, or more than the macro off
+        ("Black", black, refused()),
+        ("Blackout", "", refused()),
+        ("LEDs off (blackout)", black, refused()),
+        ("All LEDs off", black, refused()),
+        ("LED off", "", refused()),
+        ("OFF/Color", "", refused()),
+        ("Color 1 (off)", "", refused()),
+        ("Bastard amber", amber, refused()),
+        ("White", white, refused()),
+    ];
+    for (label, preset, expected) in cases {
+        let channels = format!(
+            r##"<Channel Name="Red" Preset="IntensityRed"/><Channel Name="Macro"><Group Byte="0">Colour</Group>
+  <Capability Min="0" Max="9" {preset}>{label}</Capability>
+  <Capability Min="10" Max="19" Preset="ColorMacro" Res1="#ff0000">Red</Capability></Channel>"##
+        );
+        let mode = made(&channels, &["Red", "Macro"]);
+        let found = compile(&mode, at(1), light(0), Universes::ONE, lights()).map(|rigged| {
+            let red = Light {
+                intensity: Some(FULL),
+                colour: Some(RED),
+                ..Light::DARK
+            };
+            let mut out = [Levels::ZERO];
+            resolve(&[red], &rigged.writers, &mut out);
+            [out[0].0[0], out[0].0[1]]
+        });
+        assert_eq!(found, expected, "{label}");
+    }
+}
+
+/// The range at 0 must be the one that turns the macro off: off at 10 is not.
+#[test]
+fn a_hybrid_macro_off_past_0_is_no_bypass() {
+    let channels = r##"<Channel Name="Red" Preset="IntensityRed"/><Channel Name="Macro"><Group Byte="0">Colour</Group>
+  <Capability Min="0" Max="9" Preset="ColorMacro" Res1="#ff0000">Red</Capability>
+  <Capability Min="10" Max="19">Macro off</Capability></Channel>"##;
+    let mode = made(channels, &["Red", "Macro"]);
+    let found = compile(&mode, at(1), light(0), Universes::ONE, lights()).map(|_| ());
+    assert_eq!(found, Err(Unfit::Refused(unsupported(1, Property::Colour))));
+}
+
 /// Every hybrid of the test definitions, red held: the byte each colour wheel holds and
 /// the range it is in. Never a range that moves the wheel or picks a colour of its own.
 #[test]
@@ -409,18 +482,89 @@ fn each_hybrid_holds_its_wheel_where_the_mix_goes_through() {
     let mac = "Martin-MAC-2000-Wash.qxf";
     let adj = "American-DJ-Ultra-Bar-6.qxf";
     let alpha = "Clay-Paky-Alpha-Spot-575-HPE.qxf";
+    let qa5 = "American-DJ-QA5-IP.qxf";
+    let hex5 = "American-DJ-WiFly-EXR-HEX5-IP.qxf";
+    let vpar = "American-DJ-VPar.qxf";
+    let briteq = "Briteq-BT-Theatre-261FC.qxf";
+    let hydra = "Cameo-HydraBeam-4000.qxf";
+    let ovation = "Chauvet-Ovation-CYC-1-FC.qxf";
+    let ek = "EK-R3-Wash.qxf";
+    let mac301 = "Martin-MAC-301-Wash.qxf";
+    let spikie = "Robe-Robin-Spikie.qxf";
+    let spectral = "Showtec-Spectral-850-RGBA-Tour.qxf";
+    let mh100 = "Stairville-MH-100-Beam-36x3-LED.qxf";
     let mix = "Colors adjustable via RGBW";
+    let no_filter = "No function - no filter, color channels used";
+    let default = "No function (0=default)";
     // RGB beside colour macros without a bypass: a static white would override the mix
     let refused = || Err(Unfit::Refused(unsupported(1, Property::Colour)));
     let expected: &[Row] = &[
+        // a slot at 0 ("Color 1 (off)"), and a colour temperature at 0
+        (qa5, "10 Channel", 8, refused()),
+        (qa5, "11 Channel", 8, refused()),
+        (qa5, "11 Channel", 10, refused()),
+        // bastard amber at 0
         (adj, "6 Channels mode", 4, refused()),
         (adj, "8 Channels mode", 4, refused()),
+        // "Off" with a black preset: the macro is off
+        (vpar, "7 Channel", 7, Ok((7, "Off"))),
+        (vpar, "6 Channel", 6, Ok((7, "Off"))),
+        // "Off/Color change/fade 1/Slow to fast": more than off
+        (hex5, "11 Channel", 10, refused()),
+        (hex5, "12 Channel", 10, refused()),
+        (briteq, "12 Channel CMY", 7, Ok((2, no_filter))),
+        (briteq, "14 Channel Full 8bit", 6, Ok((2, no_filter))),
+        (briteq, "21 Channel Full 16bit", 7, Ok((2, no_filter))),
+        // heads without a mix of their own: a wheel, unheld at its default
+        (hydra, "32 Channel", 8, Ok((0, "Channel 29-32"))),
+        (hydra, "32 Channel", 14, Ok((0, "Channel 29-32"))),
+        (hydra, "32 Channel", 20, Ok((0, "Channel 29-32"))),
+        (hydra, "32 Channel", 26, Ok((0, "Channel 29-32"))),
+        // heads that mix: the range at 0 names their own red, green, blue and white
+        (hydra, "56 Channel", 8, Ok((15, "Channel 11-14"))),
+        (hydra, "56 Channel", 22, Ok((15, "Channel 25-28"))),
+        (hydra, "56 Channel", 36, Ok((15, "Channel 39-42"))),
+        (hydra, "56 Channel", 50, Ok((15, "Channel 53-56"))),
+        (
+            "Cameo-Q-Spot-15-RGBW.qxf",
+            "9 Channel",
+            8,
+            Ok((2, "Colour off")),
+        ),
+        (ovation, "10 Channel", 9, Ok((2, "None"))),
+        (ovation, "10 Channel", 10, Ok((2, "None"))),
+        (ovation, "12 Channel", 8, Ok((2, "None"))),
+        (ovation, "12 Channel", 9, Ok((2, "None"))),
+        (ovation, "16 Channel", 14, Ok((2, "None"))),
+        (ovation, "16 Channel", 15, Ok((2, "None"))),
         // CMY: the wheel's white
         (alpha, "Option 16b", 5, Ok((17, "white"))),
         (alpha, "Option Stnd", 5, Ok((17, "white"))),
         (alpha, "Option Extn", 5, Ok((17, "white"))),
+        // "LED off": dark
+        ("Contest-SFX-HO150QC.qxf", "8 Channel", 7, refused()),
+        (ek, "16 Channel", 6, Ok((4, "Macro Color OFF"))),
+        (ek, "20 Channel", 10, Ok((4, "Macro Color OFF"))),
+        (
+            "Eliminator-Lighting-Stealth-Beam.qxf",
+            "17 Channel",
+            9,
+            Ok((3, "Nothing")),
+        ),
+        (
+            "Equinox-Party-Par-LED-PAR-56.qxf",
+            "6 Channel",
+            4,
+            refused(),
+        ),
         (x4, "Normal", 5, Ok((3, mix))),
         (x4, "Compress", 5, Ok((3, mix))),
+        (
+            "MARQ-Colormax-Par64.qxf",
+            "8-Channel",
+            6,
+            Ok((7, "No function (overrides Ch. 2\u{2013}4)")),
+        ),
         // CMY: wheel 1 open white at 0, not "Random color CMY, fast" at 244 to 247
         (mac, "8-bit with Color Wheel 2", 7, Ok((0, "White"))),
         (mac, "8-bit with Color Wheel 2", 8, Ok((249, "No function"))),
@@ -433,7 +577,31 @@ fn each_hybrid_holds_its_wheel_where_the_mix_goes_through() {
             Ok((249, "No function")),
         ),
         (mac, "16-bit with Dimmer Wheel", 7, Ok((0, "White"))),
-        // 0 to 7 is "OFF/Color": neither neutral nor naming the mix
+        (mac301, "Standard 8bit", 13, Ok((0, "Inactive"))),
+        (mac301, "Standard 16bit", 16, Ok((0, "Inactive"))),
+        // "No function" with a white preset: the macro is off
+        (spikie, "Standard 16-bit (RGB)", 9, Ok((0, default))),
+        (spikie, "Reduced 8-bit (RGB)", 9, Ok((0, default))),
+        (spikie, "Standard 16-bit (CMY)", 9, Ok((0, default))),
+        (spikie, "Reduced 8-bit (CMY)", 9, Ok((0, default))),
+        (spectral, "8 channel", 6, Ok((6, "Not functional"))),
+        (spectral, "15 channel", 11, Ok((6, "Not functional"))),
+        // "All LEDs off": dark
+        (
+            "Stairville-AF-180-LED-Fogger-Co2-FX.qxf",
+            "7 Channel",
+            3,
+            refused(),
+        ),
+        (
+            "Stairville-CLB4-RGB-Compact-LED-Bar-4.qxf",
+            "7 Channel",
+            4,
+            Ok((4, "All LEDs Set via Channels 1-3")),
+        ),
+        (mh100, "14-Ch Mode", 11, refused()),
+        (mh100, "14-Ch Mode", 12, refused()),
+        // 0 to 7 is "OFF/Color": more than off
         ("XStatic-X-240Bar-RGB.qxf", "7 Channel", 5, refused()),
     ];
     let mut found = Vec::new();
