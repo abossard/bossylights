@@ -11,7 +11,7 @@
 mod common;
 
 use common::{Heard, Socket, answer, command, connect, open, send};
-use engine::{Engine, Event, Universes, Wakes};
+use engine::{Engine, Event, Outcome, Universes, Wakes};
 use serde_json::{Value, json};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -22,20 +22,27 @@ const RED: [u8; 3] = [255, 0, 0];
 const GREEN: [u8; 3] = [0, 255, 0];
 const BLUE: [u8; 3] = [0, 0, 255];
 
+/// One desk at a time: frames on four fake adapters at once miss the wire under load.
+static ONE_AT_A_TIME: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// A served engine on a stepped clock with the PAR, the fake adapter at 60 Hz, and
 /// looks 1 red, 2 green, 3 blue on the PAR. Times are in ms from `zero`.
 struct Desk {
+    _turn: tokio::sync::MutexGuard<'static, ()>,
     socket: Socket,
     wakes: Wakes,
     heard: Heard,
     stop: Arc<AtomicBool>,
-    /// Frames handed to the adapter so far.
+    /// Frames handed to the adapter so far, and those of them dropped: its thread had
+    /// no spare box.
     handed: usize,
+    dropped: usize,
     zero: Duration,
 }
 
 impl Desk {
     async fn new() -> Self {
+        let turn = ONE_AT_A_TIME.lock().await;
         let heard: Heard = Arc::new(Mutex::new(Vec::new()));
         let stop = Arc::new(AtomicBool::new(false));
         let opens = open(Some(Arc::clone(&heard)), Arc::clone(&stop));
@@ -78,21 +85,19 @@ impl Desk {
         accepted(s, json!({"SetInternalTempo": {"bpm": 120}})).await;
         block_in_place(|| wakes.hold()).unwrap();
         let mut desk = Self {
+            _turn: turn,
             socket,
             wakes,
             heard,
             stop,
             handed: 0,
+            dropped: 0,
             zero: Duration::ZERO,
         };
         // every command so far applied, then time zero a second on
         let now = block_in_place(|| desk.wakes.wake()).unwrap();
         desk.zero = now + Duration::from_secs(1);
-        for event in desk.wakes.events() {
-            if let Event::Handed { .. } = event {
-                desk.handed += 1;
-            }
-        }
+        desk.count();
         desk
     }
 
@@ -100,20 +105,48 @@ impl Desk {
         self.zero + Duration::from_millis(ms)
     }
 
+    /// Counts the frames handed over and dropped since last asked. The frame due at the
+    /// one handed over in the wake at `at`, if any, and whether it was dropped.
+    fn count_at(&mut self, at: Duration) -> (Option<Duration>, bool) {
+        let (mut due_now, mut dropped) = (None, Vec::new());
+        for event in self.wakes.events() {
+            match event {
+                Event::Handed {
+                    at: handed, due, ..
+                } => {
+                    self.handed += 1;
+                    if handed == at {
+                        due_now = Some(due);
+                    }
+                }
+                Event::Came {
+                    outcome: Outcome::Dropped,
+                    due,
+                    ..
+                } => {
+                    self.dropped += 1;
+                    dropped.push(due);
+                }
+                Event::Came { .. } => {}
+            }
+        }
+        (due_now, due_now.is_some_and(|due| dropped.contains(&due)))
+    }
+
+    fn count(&mut self) {
+        self.count_at(Duration::MAX);
+    }
+
     /// Lets a wake through at `ms`. What the PAR shows in the frame it handed the
-    /// adapter then, once it is on the wire; `None` if the adapter was not due.
+    /// adapter then, once it is on the wire; `None` if the adapter was not due or had
+    /// no spare box for it.
     async fn at(&mut self, ms: u64) -> Option<[u8; 3]> {
         let at = self.time(ms);
         assert_eq!(block_in_place(|| self.wakes.wake_at(at)).unwrap(), at);
-        let mut served = false;
-        for event in self.wakes.events() {
-            if let Event::Handed { at: handed, .. } = event {
-                self.handed += 1;
-                served |= handed == at;
-            }
-        }
+        let (due, dropped) = self.count_at(at);
+        let served = due.is_some() && !dropped;
         let started = Instant::now();
-        while self.heard.lock().unwrap().len() != self.handed {
+        while self.heard.lock().unwrap().len() + self.dropped < self.handed {
             assert!(
                 started.elapsed() < Duration::from_secs(10),
                 "frames not on the wire"
