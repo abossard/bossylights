@@ -36,15 +36,18 @@ pub struct Snapshot {
     holds: [ChannelSet; MAX_UNIVERSES as usize],
     /// The held values per light, by light number.
     lights: [Light; MAX_LIGHTS as usize],
-    /// How late each output's frames were handed over, since it was attached.
+    /// How late each output's device was handed its frames, since it was attached.
     lateness: [Times<LATENESS_BUCKETS>; MAX_OUTPUTS],
+    /// Frames handed to each output's own thread, since it was attached.
+    handed: [u64; MAX_OUTPUTS],
     /// The time from a send to the frame that carries it, per output that carries it.
     latency: Times<LATENCY_BUCKETS>,
     /// Commands applied, so far: the first this many the sender queued.
     applied: u64,
 }
 
-/// How late an output's frames were handed over, so far.
+/// How late an output's device was handed its frames, so far: on the output's own
+/// thread, as the send begins.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Lateness {
     pub p99: Duration,
@@ -61,6 +64,7 @@ impl Snapshot {
             holds: [ChannelSet::NONE; MAX_UNIVERSES as usize],
             lights: [Light::DARK; MAX_LIGHTS as usize],
             lateness: [Times::ZERO; MAX_OUTPUTS],
+            handed: [0; MAX_OUTPUTS],
             latency: Times::ZERO,
             applied: 0,
         }
@@ -85,13 +89,20 @@ impl Snapshot {
         &self.lights
     }
 
-    /// How late this output's frames were handed over. `None` before its first.
+    /// How late this output's device was handed its frames. `None` before its first.
     pub fn lateness(&self, output: OutputNumber) -> Option<Lateness> {
         let times = self.lateness.get(output.slot())?;
         Some(Lateness {
             p99: times.percentile(99)?,
             worst: times.worst,
         })
+    }
+
+    /// Frames handed to this output's own thread since it was attached, this wake's
+    /// too. What came of each is counted in its counters once its thread is done with it,
+    /// a wake or so later: the frame this picture's levels went out in is this number.
+    pub fn handed(&self, output: OutputNumber) -> u64 {
+        self.handed.get(output.slot()).copied().unwrap_or(0)
     }
 
     /// The time from a send to the frame that carries it, for 95 of 100 commands:
@@ -128,10 +139,20 @@ impl Snapshot {
         }
     }
 
-    /// A new device at `output`: its lateness starts afresh.
+    /// A frame went to `output`'s own thread.
+    pub(crate) fn handed_one(&mut self, output: usize) {
+        if let Some(handed) = self.handed.get_mut(output) {
+            *handed = handed.wrapping_add(1);
+        }
+    }
+
+    /// A new device at `output`: its lateness and frames start afresh.
     pub(crate) fn attached(&mut self, output: usize) {
         if let Some(times) = self.lateness.get_mut(output) {
             *times = Times::ZERO;
+        }
+        if let Some(handed) = self.handed.get_mut(output) {
+            *handed = 0;
         }
     }
 

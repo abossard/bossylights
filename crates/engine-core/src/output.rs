@@ -203,7 +203,7 @@ pub struct Output {
     #[serde(skip)]
     #[cfg_attr(test, ts(skip))]
     pub due: Duration,
-    /// When its last frame was handed over.
+    /// When its last frame reached its device, or was dropped.
     #[serde(skip)]
     #[cfg_attr(test, ts(skip))]
     pub last: Option<Duration>,
@@ -227,12 +227,21 @@ impl Output {
         }
     }
 
-    /// After a frame was handed over at `now`: state, counters, and when the next is due.
-    pub fn handed(self, outcome: Outcome, now: Duration) -> Self {
+    /// A frame went to the output's own thread at `now`: when the next is due.
+    pub fn handed(self, now: Duration) -> Self {
+        Self {
+            due: crate::next_frame(self.due, now, self.rate.period()),
+            ..self
+        }
+    }
+
+    /// What came of a frame on the output's own thread, its device handed it at `at` (or
+    /// it was dropped then): state, counters and the interval since the last.
+    pub fn sent(self, outcome: Outcome, at: Duration) -> Self {
         let period = self.rate.period();
         let off = self
             .last
-            .is_some_and(|last| now.saturating_sub(last).abs_diff(period) > OFF_BEAT);
+            .is_some_and(|last| at.saturating_sub(last).abs_diff(period) > OFF_BEAT);
         let counters = self.counters;
         Self {
             status: self.status.after(outcome),
@@ -242,8 +251,7 @@ impl Output {
                 failed: counters.failed + u64::from(outcome == Outcome::Failed),
                 off_beat: counters.off_beat + u64::from(off),
             },
-            due: crate::next_frame(self.due, now, period),
-            last: Some(now),
+            last: Some(at),
             ..self
         }
     }
@@ -288,7 +296,7 @@ mod tests {
     }
 
     #[test]
-    fn handed_counts_judges_the_interval_and_moves_the_status() {
+    fn sent_counts_judges_the_interval_and_moves_the_status() {
         let ms = Duration::from_millis;
         let us = Duration::from_micros;
         let ns = Duration::from_nanos;
@@ -297,7 +305,7 @@ mod tests {
             ..fresh(Rate::Sixty)
         };
         let period = Rate::Sixty.period();
-        // (output, outcome, handed at, counters: accepted, dropped, failed, off beat, status after)
+        // (output, outcome, sent at, counters: accepted, dropped, failed, off beat, status after)
         let cases = [
             (
                 fresh(Rate::Sixty),
@@ -350,19 +358,48 @@ mod tests {
             ), // 1 ns more: off beat
         ];
         for (output, outcome, at, [accepted, dropped, failed, off_beat], status) in cases {
-            let handed = output.handed(outcome, at);
+            let sent = output.sent(outcome, at);
             let expected = Counters {
                 accepted,
                 dropped,
                 failed,
                 off_beat,
             };
-            assert_eq!(handed.counters, expected, "{outcome:?} at {at:?}");
-            assert_eq!(handed.status, status, "{outcome:?} at {at:?}");
-            assert_eq!(handed.last, Some(at));
+            assert_eq!(sent.counters, expected, "{outcome:?} at {at:?}");
+            assert_eq!(sent.status, status, "{outcome:?} at {at:?}");
+            assert_eq!(sent.last, Some(at));
             assert_eq!(
-                handed.due,
-                crate::next_frame(output.due, at, output.rate.period())
+                sent.due, output.due,
+                "the hand-over moves the due, not the send"
+            );
+        }
+    }
+
+    #[test]
+    fn handed_moves_only_the_due() {
+        let ms = Duration::from_millis;
+        let period = Rate::Sixty.period();
+        let at_100 = Output {
+            due: ms(100),
+            last: Some(ms(90)),
+            ..fresh(Rate::Sixty)
+        };
+        // (handed at, next due)
+        let cases = [
+            (ms(100), ms(100) + period),
+            (ms(101), ms(100) + period), // a little late: the beat holds
+            (ms(100) + period * 20, ms(100) + period * 21), // far behind: starts over
+        ];
+        for (at, due) in cases {
+            let handed = at_100.handed(at);
+            assert_eq!(handed.due, due, "{at:?}");
+            assert_eq!(
+                Output {
+                    due: at_100.due,
+                    ..handed
+                },
+                at_100,
+                "only the due moves"
             );
         }
     }

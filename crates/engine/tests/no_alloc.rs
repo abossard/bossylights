@@ -1,11 +1,13 @@
-//! Proves the tick thread allocates nothing per wake, also while it serves two outputs at
-//! different rates, resolves 512 patched lights and a strip of 100 pixels over two
-//! universes, takes commands, swaps in new writers, takes a group of 256 runs and
-//! hands a reader a snapshot on every frame. And that it frees nothing: the old writers,
-//! runs and a replaced device go to the free thread. A counting allocator sees every
-//! allocation in this process, except those of the front while it sends: a light, patch or
-//! attach command allocates there (the patch is a calculation on the heap, a device is
-//! boxed), never on the tick thread. It counts the frees of the tick thread apart, by its
+//! Proves the tick thread and each output's own thread allocate nothing per wake, also
+//! while they serve two outputs at different rates, resolve 512 patched lights and a strip
+//! of 100 pixels over two universes, take commands, swap in new writers, take a group of
+//! 256 runs and hand a reader a snapshot on every frame. And that the tick frees nothing:
+//! the old writers, runs and a replaced device with its thread go to the free thread. A
+//! counting allocator sees every allocation in this process, except those of the front
+//! while it sends: a light, patch or attach command allocates there (the patch is a
+//! calculation on the heap, a device is boxed and gets a thread and frame boxes), never on
+//! the tick thread. A new output's thread allocates as the system starts it, on itself,
+//! before the attach returns: those count as the front's too. It counts the frees of the tick thread apart, by its
 //! name. The outputs are attached and the lights patched before the window (the writers
 //! compiled on the sending thread). In the window the main thread sends and reads
 //! snapshots, which allocates nothing, and sleeps, so any allocation counted is the tick's
@@ -135,6 +137,7 @@ fn main() {
     });
 
     let (allocations, tick_frees) = (counting::allocations(), counting::tick_frees());
+    let mut attaching = 0;
     let frame = engine.latest().state.frame;
     for value in 0..=255 {
         let channel = ChannelNumbers {
@@ -168,7 +171,9 @@ fn main() {
         }
         if value % 64 == 32 {
             // a new device for output 1: the tick swaps it in and sends the old one back
+            let before = counting::allocations();
             counting::uncounted(|| mock::attach(&mut sender, universes, 1, run, Rate::Sixty));
+            attaching += counting::allocations() - before;
         }
         // Pace the commands by the tick: a reader on every frame waits for the next picture.
         let seen = engine.latest().state.frame;
@@ -186,12 +191,15 @@ fn main() {
         .filter(|light| light.colour.is_some_and(|c| c.green == u16::MAX))
         .count();
     let ticks = state.frame - frame;
-    let new_allocations = counting::allocations() - allocations;
+    let new_allocations = counting::allocations() - allocations - attaching;
     let new_tick_frees = counting::tick_frees() - tick_frees;
     drop(engine);
 
     assert!(ticks >= 5, "too few ticks to prove anything: {ticks}");
-    assert!(ticks >= 256, "a frame went by for each of 256 commands: {ticks}");
+    assert!(
+        ticks >= 256,
+        "a frame went by for each of 256 commands: {ticks}"
+    );
     assert_eq!(
         lit,
         usize::from(LIGHTS) + 100,

@@ -2,16 +2,17 @@
 //!
 //! One tick thread owns the state and serves every output. It wakes when the next output
 //! is due (or on a steady beat when none is set), applies the waiting commands, computes
-//! the frame and hands each due output its run of universes. The logic lives in
-//! `engine-core` (no `std`, no `alloc`); this crate is the thin action around it.
+//! the frame and hands each due output its run of universes. Each output sends on a
+//! thread of its own (`lane.rs`), so the tick never waits behind a send. The logic lives
+//! in `engine-core` (no `std`, no `alloc`); this crate is the thin action around it.
 //!
 //! ```text
-//! Sender::send ---- command (+ device: opened, then attach) --> queue --> tick thread --> outputs
-//!               (+ writers: the patch, compiled by the Rig)             |
-//!               (+ runs: the lights of a group)                         |
-//! free thread: retired devices, writers, runs freed here <-- return q. -+
-//!                                                                       |
-//! Engine::latest, fresh --- an empty box ---> queue --> tick thread       |
+//! Sender::send ---- command (+ device: opened, its thread started) --> queue --> tick thread --> each output's thread --> device
+//!               (+ writers: the patch, compiled by the Rig)                    |   <-- what came of each frame --+
+//!               (+ runs: the lights of a group)                                |
+//! free thread: retired outputs, writers, runs freed here <-- return q. --------+
+//!                                                                              |
+//! Engine::latest, fresh --- an empty box ---> queue --> tick thread              |
 //!                       <-- the box, filled -- queue <-- one wake's picture
 //! ```
 //!
@@ -20,10 +21,10 @@
 //! | No | Check |
 //! |---|---|
 //! | locks | `clippy.toml` bans every std type that locks, here and in `outputs`. Commands, devices and snapshots come and go through `rtrb`, wait-free |
-//! | allocation | `engine-core` has no `alloc`; buffers and snapshot boxes are made in `start`; devices are opened by the `Sender` and freed by the free thread; `tests/no_alloc.rs` counts every allocation while it ticks, serves outputs, takes commands and a reader asks for a snapshot on every frame |
-//! | blocking calls, files, network | `engine-core` has no `std`; `clippy.toml` bans files, sockets, processes, stdin here and in `rt-thread`. The only send is an output's non-blocking `take`. The only wait is `thread::sleep`, then a spin, until the next output is due |
+//! | allocation | `engine-core` has no `alloc`; buffers and snapshot boxes are made in `start`; devices are opened, their threads and frame boxes made by the `Sender` and freed by the free thread; `tests/no_alloc.rs` counts every allocation, on every thread, while it ticks, serves outputs, takes commands and a reader asks for a snapshot on every frame |
+//! | blocking calls, files, network | `engine-core` has no `std`; `clippy.toml` bans files, sockets, processes, stdin here and in `rt-thread`. The tick sends nothing: it copies the frame into a spare box of the output's thread. The only wait is `thread::sleep`, then a spin, until the next output is due |
 //! | logging | `clippy.toml` bans print macros and stdout/stderr; no logger dependency |
-//! | calls outward | `clippy.toml` bans channels and condvars; the tick thread fills the boxes readers sent and wakes no reader. An output's `take` may wake the output's own port thread (`unpark`, wait-free) |
+//! | calls outward | `clippy.toml` bans channels and condvars; the tick thread fills the boxes readers sent and wakes no reader. It wakes an output's own thread when it hands it a frame (`unpark`, wait-free) |
 
 #![forbid(unsafe_code)]
 #![deny(
@@ -51,6 +52,8 @@ use engine_core::{LightRun, Lights, ProjectEffect, ProjectEvent, Writer};
 use rig::{PatchEffect, Whole};
 
 pub use outputs::Device;
+mod lane;
+use lane::Lane;
 use snapshot::{Hand, Reader};
 pub use snapshot::{Lateness, Snapshot};
 use std::hint;
@@ -103,6 +106,8 @@ pub struct Sender {
     shared: Arc<Shared>,
     free: Thread,
     start: Instant,
+    /// The engine's universes: an output's frame boxes hold every one.
+    universes: Universes,
 }
 
 /// Opens the device for an output kind, off the tick thread. The engine's own is
@@ -143,8 +148,8 @@ struct Sent {
 /// What a command brings the tick thread, made before it is sent.
 enum Brings {
     Nothing,
-    /// An opened device, for `Attach`.
-    Device(Box<dyn Device>),
+    /// An opened device on its own thread, for `Attach`.
+    Device(Box<Lane>),
     /// The writers of the patch, for `Writers`.
     Writers(Vec<Writer>),
     /// The runs of a group, for `Runs`.
@@ -157,7 +162,7 @@ enum Brings {
     reason = "held only to be dropped on the free thread, never read"
 )]
 enum Retired {
-    Device(Box<dyn Device>),
+    Device(Box<Lane>),
     Writers(Vec<Writer>),
     Runs(Vec<LightRun>),
 }
@@ -231,6 +236,7 @@ impl Engine {
             shared: Arc::clone(&shared),
             free: free.thread().clone(),
             start,
+            universes,
         };
         let engine = Self {
             shared,
@@ -394,8 +400,9 @@ impl Sender {
             rate,
         };
         let sent = device
+            .and_then(|device| Lane::start(device, self.universes, self.start).map(Box::new))
             .map_err(|_| Refusal::CannotOpen)
-            .and_then(|device| self.push(attach, Brings::Device(device)));
+            .and_then(|lane| self.push(attach, Brings::Device(lane)));
         let event = match sent {
             Ok(()) => ProjectEvent::Opened { output, kind },
             Err(_) => ProjectEvent::OpenFailed { output },
@@ -408,7 +415,7 @@ impl Sender {
 
     /// Puts an opened device on the tick thread as `output`, in place of the one there:
     /// a test's own device, whose kind the project does not know. Its counters start at
-    /// zero.
+    /// zero. `CannotOpen` when the system gives the device no thread.
     pub fn attach(
         &mut self,
         output: OutputNumber,
@@ -427,7 +434,10 @@ impl Sender {
             universes,
             rate,
         };
-        self.push(command, Brings::Device(device))?;
+        let lane = Lane::start(device, self.universes, self.start)
+            .map(Box::new)
+            .map_err(|_| Refusal::CannotOpen)?;
+        self.push(command, Brings::Device(lane))?;
         self.project = project;
         Ok(())
     }
@@ -473,6 +483,7 @@ impl Sender {
             EngineCommand::RemoveOutput { output } => (Some(output), true),
             EngineCommand::Tick { .. }
             | EngineCommand::Handed { .. }
+            | EngineCommand::Sent { .. }
             | EngineCommand::SetChannel { .. }
             | EngineCommand::ReleaseChannel { .. }
             | EngineCommand::ReleaseAll
@@ -509,15 +520,15 @@ impl Sender {
     }
 }
 
-/// Frees a device the tick thread did not take on a thread of its own: closing a port can
-/// take long, and the sender may be shared behind a lock. Without a thread from the
-/// system, it is freed here after all. Writers are freed here.
+/// Frees a device the tick thread did not take, and stops its thread, on a thread of its
+/// own: closing a port can take long, and the sender may be shared behind a lock. Without
+/// a thread from the system, it is freed here after all. Writers are freed here.
 fn free_elsewhere(brings: Brings) {
-    if let Brings::Device(device) = brings {
+    if let Brings::Device(lane) = brings {
         drop(
             thread::Builder::new()
                 .name("free a refused device".into())
-                .spawn(move || drop(device)),
+                .spawn(move || drop(lane)),
         );
     }
 }
@@ -585,8 +596,8 @@ struct Ticker {
     shared: Arc<Shared>,
     commands: rtrb::Consumer<Sent>,
     retired: rtrb::Producer<Retired>,
-    /// By output number, beside `State::outputs`.
-    devices: [Option<Box<dyn Device>>; MAX_OUTPUTS],
+    /// Each output's own thread, by output number, beside `State::outputs`.
+    devices: [Option<Box<Lane>>; MAX_OUTPUTS],
     /// The patch's writers: lights to bytes, every frame.
     writers: Vec<Writer>,
     /// The state, the held levels and what was counted: what readers get a copy of.
@@ -697,6 +708,7 @@ impl Ticker {
                 &self.writers,
                 &mut self.out,
             );
+            self.back();
             let mut serve = [None; MAX_OUTPUTS];
             for (slot, number) in serve.iter_mut().zip(due(&self.now.state, now)) {
                 *slot = Some(number);
@@ -765,25 +777,58 @@ impl Ticker {
         self.now.attached(output.slot());
     }
 
-    /// Hands a due output its run of universes and counts what happened. The take is
-    /// stamped on its own: an output served after the render or a slow output counts
-    /// that wait in its lateness and its interval.
+    /// Hands a due output its run of universes, and when its next is due, on to its own
+    /// thread. What comes of it is counted when its thread hands the box back ([`Ticker::back`]). With no spare
+    /// box, the device is still on older frames: this one is dropped and counted now.
     fn serve(&mut self, number: OutputNumber) {
         let slot = number.slot();
         let Some(Some(output)) = self.now.state.outputs.get(slot).copied() else {
             return;
         };
         let at = self.start.elapsed();
-        self.now.late(slot, at.saturating_sub(output.due));
-        let outcome = match self.devices.get_mut(slot) {
-            Some(Some(device)) => device.take(output.universes.of(&self.out)),
-            _ => Outcome::Failed,
+        self.apply(EngineCommand::Handed { output: number, at });
+        let next = match self.now.state.outputs.get(slot) {
+            Some(Some(handed)) => handed.due,
+            _ => at,
         };
-        self.apply(EngineCommand::Handed {
-            output: number,
-            outcome,
-            at,
-        });
+        let frame = output.universes.of(&self.out);
+        let dropped = match self.devices.get_mut(slot) {
+            Some(Some(lane)) => match lane.hand(frame, output.due, next) {
+                lane::Hand::Handed => {
+                    self.now.handed_one(slot);
+                    None
+                }
+                lane::Hand::Full => Some(Outcome::Dropped),
+            },
+            _ => Some(Outcome::Failed),
+        };
+        if let Some(outcome) = dropped {
+            self.now.late(slot, at.saturating_sub(output.due));
+            self.apply(EngineCommand::Sent {
+                output: number,
+                outcome,
+                at,
+            });
+        }
+    }
+
+    /// Counts what came of the frames each output's thread handed back since the last
+    /// wake: the outcome, and how late the device was handed each.
+    fn back(&mut self) {
+        let Self { devices, now, .. } = self;
+        for (lane, number) in devices.iter_mut().zip(1..) {
+            let (Some(lane), Ok(output)) = (lane, OutputNumber::try_from(number)) else {
+                continue;
+            };
+            lane.back(|sent| {
+                now.late(output.slot(), sent.at.saturating_sub(sent.due));
+                now.update(EngineCommand::Sent {
+                    output,
+                    outcome: sent.outcome,
+                    at: sent.at,
+                });
+            });
+        }
     }
 
     fn apply(&mut self, command: EngineCommand) {

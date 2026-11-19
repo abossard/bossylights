@@ -145,11 +145,23 @@ async fn set_channel_reaches_the_state_stream_and_the_ddp_socket_in_the_next_fra
             .is_some_and(|c| c.contains(&expected))
         {
             let output = &changed["state"]["outputs"][0];
-            assert_eq!(output["status"], json!("Running"));
             assert_eq!(output["rate"], json!("60"), "the default for DDP");
             assert!(output["counters"]["accepted"].as_u64() > Some(0));
             break;
         }
+    }
+    // The packet is checked above; the status may come a wake later: what came of a frame is
+    // counted when its box comes back from the output's thread (#174).
+    let started = Instant::now();
+    loop {
+        let reply = next(&mut socket).await;
+        if reply["Changed"]["state"]["outputs"][0]["status"] == json!("Running") {
+            break;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "the output never ran"
+        );
     }
 }
 
@@ -249,7 +261,10 @@ async fn a_request_that_cannot_be_right_is_refused_and_changes_nothing() {
         ),
         // a group takes 512 members at most: the 512th is checked, the 513th is refused
         (group(512), refused(json!("NotPatched"))),
-        (group(513), refused(json!({"TooManyMembers": {"most": 512}}))),
+        (
+            group(513),
+            refused(json!({"TooManyMembers": {"most": 512}})),
+        ),
         (
             json!({"Send": {"command": {"SetGroup": {"name": "g", "members": [{"Group": {"group": "g"}}]}}}}),
             refused(json!("NotACommand")),

@@ -85,6 +85,7 @@ fn said(effect: &PatchEffect) -> String {
         }
         other @ (EngineCommand::Tick { .. }
         | EngineCommand::Handed { .. }
+        | EngineCommand::Sent { .. }
         | EngineCommand::SetChannel { .. }
         | EngineCommand::ReleaseChannel { .. }
         | EngineCommand::ReleaseAll

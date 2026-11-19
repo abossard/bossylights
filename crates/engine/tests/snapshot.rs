@@ -3,7 +3,7 @@
 
 mod mock;
 
-use engine::{ChannelNumbers, Command, Engine, Rate, RunNumbers, Universes};
+use engine::{ChannelNumbers, Command, Engine, OutputNumber, Rate, RunNumbers, Universes};
 
 fn set(value: u8) -> Command {
     Command::SetChannel {
@@ -25,32 +25,43 @@ fn every_picture_is_one_wake_its_frame_outputs_and_levels_belong_together() {
         let run = RunNumbers { first: 1, count };
         let heard = mock::attach(&mut sender, universes, 1, run, rate);
         heard.two_more_frames();
-        // One output: each wake hands it one frame, so frame less accepted stays the same.
+        let output = OutputNumber::try_from(1).unwrap();
+        // One output: each wake hands it one frame, so frame less handed stays the same.
         let mut wakes_before = None;
-        let mut pictures = 0;
+        // (frame the picture's levels went out in, the level of channel 1 they hold)
+        let mut pictures = vec![];
         for value in 1..=40 {
             assert_eq!(sender.send(set(value)), Ok(()));
             // Reads while the tick thread applies the commands, every picture checked.
             mock::wait_until("the command never reached a picture", || {
                 let picture = engine.latest();
-                let Some(output) = picture.state.outputs[0] else {
+                if picture.state.outputs[0].is_none() {
                     return false;
-                };
-                pictures += 1;
-                let accepted = output.counters.accepted;
+                }
+                let handed = picture.handed(output);
                 let frame = picture.state.frame;
-                let before = *wakes_before.get_or_insert(frame - accepted);
-                assert_eq!(frame - accepted, before, "{rate:?}: frame {frame}");
+                let before = *wakes_before.get_or_insert(frame - handed);
+                assert_eq!(frame - handed, before, "{rate:?}: frame {frame}");
                 let held = picture.universes()[0].0[0];
-                assert_eq!(
-                    heard.first_channel_of(accepted),
-                    Some(held),
-                    "{rate:?}: frame {frame} holds {held}, its output's frame {accepted} carried another"
-                );
+                pictures.push((handed, held));
                 held == value
             });
         }
-        assert!(pictures >= 40, "{rate:?}: {pictures} pictures");
+        assert!(
+            pictures.len() >= 40,
+            "{rate:?}: {} pictures",
+            pictures.len()
+        );
+        // The output's thread sends each frame a little after its wake.
+        let last = pictures.iter().map(|(handed, _)| *handed).max().unwrap();
+        mock::wait_until("the output never got its frames", || heard.frames() >= last);
+        for (handed, held) in pictures {
+            assert_eq!(
+                heard.first_channel_of(handed),
+                Some(held),
+                "{rate:?}: a picture holds {held}, its output's frame {handed} carried another"
+            );
+        }
     }
 }
 

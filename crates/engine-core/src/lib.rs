@@ -207,7 +207,7 @@ pub enum Command {
 }
 
 /// What changes the state on the tick thread. The front makes these from a checked
-/// [`Command`]; the tick thread makes `Tick` and `Handed` itself. No kind gets here: a
+/// [`Command`]; the tick thread makes `Tick`, `Handed` and `Sent` itself. No kind gets here: a
 /// device is opened first and arrives with `Attach`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EngineCommand {
@@ -215,9 +215,15 @@ pub enum EngineCommand {
     Tick {
         now: Duration,
     },
-    /// A frame was handed to an output at `at`, since the engine started: its own time,
-    /// not the wake's, so an output served after a slow one counts that wait.
+    /// A frame went to an output's own thread at `at`, since the engine started: its
+    /// next frame is due a period on.
     Handed {
+        output: OutputNumber,
+        at: Duration,
+    },
+    /// What came of a frame on an output's own thread: its device was handed it at `at`,
+    /// or it was dropped then. Moves the output's state and counters.
+    Sent {
         output: OutputNumber,
         outcome: Outcome,
         at: Duration,
@@ -326,14 +332,21 @@ pub fn update(
             },
             ..state
         },
-        EngineCommand::Handed {
+        EngineCommand::Handed { output, at } => {
+            let mut outputs = state.outputs;
+            if let Some(Some(handed)) = outputs.get_mut(output.slot()) {
+                *handed = handed.handed(at);
+            }
+            State { outputs, ..state }
+        }
+        EngineCommand::Sent {
             output,
             outcome,
             at,
         } => {
             let mut outputs = state.outputs;
-            if let Some(Some(handed)) = outputs.get_mut(output.slot()) {
-                *handed = handed.handed(outcome, at);
+            if let Some(Some(sent)) = outputs.get_mut(output.slot()) {
+                *sent = sent.sent(outcome, at);
             }
             State { outputs, ..state }
         }
@@ -1024,7 +1037,6 @@ mod tests {
             for &number in &served {
                 let handed = EngineCommand::Handed {
                     output: output(number),
-                    outcome: Outcome::Accepted,
                     at: now,
                 };
                 state = update(state, &mut universes, &mut [], &mut [], handed);
@@ -1195,7 +1207,6 @@ mod tests {
         for number in served {
             let handed = EngineCommand::Handed {
                 output: number,
-                outcome: Outcome::Accepted,
                 at: now,
             };
             state = update(state, &mut universes, &mut [], &mut [], handed);

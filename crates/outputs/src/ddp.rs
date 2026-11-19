@@ -364,11 +364,24 @@ fn header(sequence: u8, color: Color, offset: usize, length: usize, last: bool) 
     [flags, sequence, kind, DESTINATION, o0, o1, o2, o3, l0, l1]
 }
 
-/// Copies the channels from `offset` of the frame's stream into `out`.
+/// Copies the channels from `offset` of the frame's stream into `out`, a universe's slice
+/// at a time (a byte at a time took 20 to 40 µs of a 64-universe frame, #130). Past the
+/// frame's end, `out` keeps what it held.
 fn channels(frame: &[Levels], offset: usize, out: &mut [u8]) {
-    let stream = frame.iter().flat_map(|universe| universe.0.iter());
-    for (byte, level) in out.iter_mut().zip(stream.skip(offset)) {
-        *byte = *level;
+    let mut done = 0;
+    while let Some(rest) = out.get_mut(done..).filter(|rest| !rest.is_empty()) {
+        let at = offset + done;
+        let Some(from) = frame
+            .get(at / ADDRESSES)
+            .and_then(|universe| universe.0.get(at % ADDRESSES..))
+        else {
+            return;
+        };
+        let n = from.len().min(rest.len());
+        if let (Some(to), Some(from)) = (rest.get_mut(..n), from.get(..n)) {
+            to.copy_from_slice(from);
+        }
+        done += n;
     }
 }
 
@@ -454,11 +467,14 @@ mod tests {
         // (offset, length, bytes)
         let cases = [
             (510, 3, vec![1, 2, 3]),
+            (511, 2, vec![2, 3]),
+            (512, 1, vec![3]),
             (0, 2, vec![0, 0]),
-            (1023, 2, vec![0, 0]),
+            (1023, 2, vec![0, 9]), // past the frame: left as it was
+            (1024, 1, vec![9]),
         ];
         for (offset, length, expected) in cases {
-            let mut out = vec![0; length];
+            let mut out = vec![9; length];
             channels(&frame, offset, &mut out);
             assert_eq!(out, expected, "{offset}");
         }

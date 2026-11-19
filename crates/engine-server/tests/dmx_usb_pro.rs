@@ -283,11 +283,20 @@ fn a_dmx_usb_pro_output_is_set_again_replaced_and_moved_through_send() {
         };
         assert_eq!(sender.send(set), Ok(()), "{commands:?}");
         hear(&mut end, level);
-        let state = engine.fresh().state;
-        let running = state
-            .outputs
-            .iter()
-            .position(|o| o.is_some_and(|o| o.status == Status::Running));
+        // The level is heard above; the status may come a wake later: what came of a frame is
+        // counted when its box comes back from the output's thread (#174).
+        let started = Instant::now();
+        let running = loop {
+            let state = engine.latest().state;
+            let running = state
+                .outputs
+                .iter()
+                .position(|o| o.is_some_and(|o| o.status == Status::Running));
+            if running.is_some() || started.elapsed() > Duration::from_secs(5) {
+                break running;
+            }
+            thread::sleep(Duration::from_millis(1)); // poll
+        };
         assert_eq!(running, Some(usize::from(drives) - 1), "{commands:?}");
     }
 }
