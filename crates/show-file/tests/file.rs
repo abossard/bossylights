@@ -144,10 +144,6 @@ fn a_patch_written_and_read_back_is_the_same_patch() {
         ),
         ("a strip, no definition", vec![lib(strip(30))]),
         (
-            "two fixtures on the same channels",
-            vec![lib(par("PAR 1", 1)), lib(par("PAR 2", 2))],
-        ),
-        (
             "one fixture in two versions of its mode",
             vec![
                 lib(par("PAR 1", 1)),
@@ -270,6 +266,12 @@ fn a_file_that_fails_a_check_of_the_commands_is_not_read() {
             r#""first":2"#,
             r#""first":65"#,
             refused(Refusal::NoLightsLeft),
+        ),
+        (
+            "on the channels of another",
+            r#""universe":1,"address":4"#,
+            r#""universe":1,"address":3"#,
+            refused(Refusal::Overlaps { fixture: 1 }),
         ),
         (
             "the number of another",

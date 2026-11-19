@@ -4,16 +4,17 @@
 //!
 //! | Command | Does | Refused when |
 //! |---|---|---|
-//! | patch | adds a fixture: the lowest free number, the first free lights from the lowest | no such fixture, no such mode, past the end of the universe, no lights left |
+//! | patch | adds a fixture: the lowest free number, the first free lights from the lowest | no such fixture, no such mode, past the end of the universe, on another fixture's channels, no lights left |
 //! | patch strip | adds a generic strip of N pixels, RGB or RGBW, as patch does | as patch, but never no such fixture or mode |
-//! | move | new address, the same lights: their held values stay | not patched, past the end |
+//! | move | new address, the same lights: their held values stay | not patched, past the end, on another fixture's channels |
 //! | unpatch | removes it, its lights' held values go, and it leaves its groups | not patched |
 //! | rename | | not patched |
 //! | set group | makes a group or replaces the one of that name: members in order | a member not patched |
 //! | remove group | | |
 //! | set, release intensity or colour | sent for one light, the lights of a fixture, or of every member of a group: a group as one effect, all its runs in one frame | not patched, no such light, no such group |
 //!
-//! Two fixtures on the same channels are allowed: each shows the other in its clashes.
+//! No two fixtures share a channel: a patch, move or show file that would make two is
+//! refused ([`Refusal::Overlaps`]), so every channel has one writer.
 //!
 //! A show file's fixtures come back with [`Patch::restore`]: each at its own number and
 //! lights, checked as patch checks them, and refused when it has another's number or light.
@@ -107,8 +108,6 @@ struct Entry {
     first: LightNumber,
     lights: u16,
     writers: Vec<Writer>,
-    /// The numbers of the fixtures on any of its channels, lowest first.
-    clashes: Vec<u16>,
 }
 
 /// A fixture as a show file keeps it: its number and its lights as they were.
@@ -237,6 +236,7 @@ impl Patch {
                 let entry = self.entry(fixture)?;
                 let rigged = compile(&entry.mode, at, entry.first, self.universes, self.lights)
                     .map_err(refusal)?;
+                self.free_channels(fixture, at, entry.mode.channels.len())?;
                 let patch = self.changed(fixture, |entry| {
                     entry.at = at;
                     entry.writers = rigged.writers;
@@ -320,6 +320,9 @@ impl Patch {
                 .ok_or((number, Unplaced::Refused(Refusal::NoLightsLeft)))?;
             let rigged = compile(&p.mode, p.at, first, self.universes, self.lights)
                 .map_err(|unfit| (number, Unplaced::Refused(refusal(unfit))))?;
+            if let Some(fixture) = on(&fixtures, number, p.at, p.mode.channels.len()) {
+                return Err((number, Unplaced::Refused(Refusal::Overlaps { fixture })));
+            }
             let entry = Entry {
                 number,
                 name: p.name,
@@ -330,7 +333,6 @@ impl Patch {
                 first,
                 lights: rigged.lights,
                 writers: rigged.writers,
-                clashes: vec![],
             };
             if fixtures
                 .iter()
@@ -361,6 +363,7 @@ impl Patch {
         let number = self.free_number().ok_or(Refusal::NoLightsLeft)?;
         let first = self.free_lights(lights_of(&mode))?;
         let rigged = compile(&mode, at, first, self.universes, self.lights).map_err(refusal)?;
+        self.free_channels(number, at, mode.channels.len())?;
         let entry = Entry {
             number,
             name: name.to_string(),
@@ -371,7 +374,6 @@ impl Patch {
             first,
             lights: rigged.lights,
             writers: rigged.writers,
-            clashes: vec![],
         };
         let mut fixtures = self.fixtures.clone();
         let place = fixtures.partition_point(|e| e.number < number);
@@ -461,7 +463,6 @@ impl Patch {
                     width: l.width,
                     height: l.height,
                 }),
-                clashes: &e.clashes,
             })
             .collect()
     }
@@ -519,40 +520,8 @@ impl Patch {
         &self.writers
     }
 
-    /// This patch with these fixtures: their writers and clashes made anew.
-    fn with(&self, mut fixtures: Vec<Arc<Entry>>) -> Self {
-        // (first channel, channels, number), channels counted over every universe in a row
-        let mut spans: Vec<(usize, usize, u16)> = fixtures
-            .iter()
-            .map(|e| (flat(e.at), e.mode.channels.len(), e.number))
-            .filter(|&(_, channels, _)| channels > 0)
-            .collect();
-        spans.sort_unstable();
-        let mut pairs = vec![];
-        for (i, &(first, channels, number)) in spans.iter().enumerate() {
-            for &(other_first, _, other) in spans.iter().skip(i + 1) {
-                if other_first >= first + channels {
-                    break;
-                }
-                pairs.push((number, other));
-                pairs.push((other, number));
-            }
-        }
-        pairs.sort_unstable();
-        pairs.dedup();
-        for entry in &mut fixtures {
-            let from = pairs.partition_point(|&(of, _)| of < entry.number);
-            let to = pairs.partition_point(|&(of, _)| of <= entry.number);
-            let clashes: Vec<u16> = pairs
-                .get(from..to)
-                .unwrap_or_default()
-                .iter()
-                .map(|&(_, with)| with)
-                .collect();
-            if entry.clashes != clashes {
-                Arc::make_mut(entry).clashes = clashes;
-            }
-        }
+    /// This patch with these fixtures: their writers made anew.
+    fn with(&self, fixtures: Vec<Arc<Entry>>) -> Self {
         Self {
             universes: self.universes,
             lights: self.lights,
@@ -605,6 +574,18 @@ impl Patch {
         }
     }
 
+    /// Refused when a fixture other than `number` has one of the `channels` channels from
+    /// `at`, which must be checked.
+    fn free_channels(
+        &self,
+        number: u16,
+        at: ChannelNumbers,
+        channels: usize,
+    ) -> Result<(), Refusal> {
+        on(&self.fixtures, number, at, channels)
+            .map_or(Ok(()), |fixture| Err(Refusal::Overlaps { fixture }))
+    }
+
     /// The lowest number no fixture has.
     fn free_number(&self) -> Option<u16> {
         let mut number = 1_u16;
@@ -655,6 +636,20 @@ impl Entry {
         let (other_from, other_to) = (other.first.index(), other.first.index() + other.lights);
         from < other_to && other_from < to
     }
+}
+
+/// The lowest number of `fixtures` other than `number` that has one of the `channels`
+/// channels from `at` (checked), counted over every universe in a row.
+fn on(fixtures: &[Arc<Entry>], number: u16, at: ChannelNumbers, channels: usize) -> Option<u16> {
+    let (from, to) = (flat(at), flat(at) + channels);
+    fixtures
+        .iter()
+        .filter(|e| e.number != number)
+        .find(|e| {
+            let first = flat(e.at);
+            first < to && from < first + e.mode.channels.len()
+        })
+        .map(|e| e.number)
 }
 
 /// Why a fixture does not fit, as the client is told.

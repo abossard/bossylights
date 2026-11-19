@@ -44,11 +44,20 @@ fn library() -> Vec<Fixture> {
     vec![fixture_library::parse("Generic-Generic-RGB.qxf", GENERIC_RGB).expect("it reads")]
 }
 
-/// Light `n` of the 512 (from 0) at its place: 170 to a universe, 3 channels each.
+/// Light `n` of the 512 (from 0) at its place, 3 channels each: 170 to each of universes
+/// 1 to 3, the last two at the end of universe 4, after the strip (no two fixtures share
+/// a channel).
 fn place(n: u16) -> ChannelNumbers {
-    ChannelNumbers {
-        universe: 1 + n / 170,
-        address: 1 + 3 * (n % 170),
+    if n < 510 {
+        ChannelNumbers {
+            universe: 1 + n / 170,
+            address: 1 + 3 * (n % 170),
+        }
+    } else {
+        ChannelNumbers {
+            universe: 4,
+            address: 507 + 3 * (n - 510),
+        }
     }
 }
 
@@ -88,7 +97,7 @@ fn main() {
         color: Color::Rgb,
         at: ChannelNumbers {
             universe: 3,
-            address: 500,
+            address: 511,
         },
     };
     assert!(send(&mut sender, strip, &library), "the strip is patched");

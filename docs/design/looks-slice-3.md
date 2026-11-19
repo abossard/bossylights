@@ -133,7 +133,7 @@ Every decision below belongs to **`crates/engine-core/src/mix.rs`**. Playback su
 | Brightness setting | Optionally take the highest 16-bit brightness **within the winning rank**. Equal values use start order for winner readback. | A bright Autopilot cannot overpower a dim Manual hold. |
 | Manual end | `UntilRelease` keeps the source’s own sample. `UntilStop` removes it at `StopLook` or `EndGrab`. `EndFlash` and explicit release remove the addressed instance immediately. | Latching a pad, ending a flash and lifting a direct control have distinct outcomes. |
 | Show or Autopilot end | `Reveal` removes the contribution. `Stay` freezes it at its original rank and order until released or restarted. | Release reveals the source underneath at its current position. |
-| Channel | Blackout forces zero. A held raw byte, including zero, wins over resolved light. Gate 2 supplies the shared-channel seam. | The physical collision belongs to Q48. M3 rank tests use distinct fixture addresses. |
+| Channel | Blackout forces zero. A held raw byte, including zero, wins over resolved light. No row between two lights: patches never overlap and a channel two heads name is one property of the fixture, so every channel has one writer (decision 48, #173). | DMX is resolved at the look stage: who wins is decided per light property, never per channel. |
 
 The three settings are saved. An edit takes effect on the applying frame. Switching to `UntilStop` or `Reveal` clears the corresponding stopped holds. [Owner’s five rules](who-wins.md)
 

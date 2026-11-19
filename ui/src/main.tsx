@@ -25,6 +25,7 @@ function refusalText(refusal: Refusal): string {
   if ("NotSent" in refusal) return `NotSent: output ${refusal.NotSent.output} never sends ${refusal.NotSent.universe}:${refusal.NotSent.address}`;
   if ("StreamsFixture" in refusal) return `StreamsFixture: fixture ${refusal.StreamsFixture.fixture} needs it`;
   if ("TooManyMembers" in refusal) return `TooManyMembers: a group has at most ${refusal.TooManyMembers.most}`;
+  if ("Overlaps" in refusal) return `Overlaps: on a channel of fixture ${refusal.Overlaps.fixture}`;
   if ("ShowFileFull" in refusal) return `ShowFileFull: the show file has at most ${refusal.ShowFileFull.most} bytes`;
   return `TooManyUniverses: this kind takes at most ${refusal.TooManyUniverses.most}`;
 }

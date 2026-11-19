@@ -52,6 +52,21 @@ sequenceDiagram
 | Position | pan, pan fine, tilt, tilt fine | coarse from one look, fine from another: the head jitters |
 | Dimmer | one | nothing |
 
+## One writer per channel
+
+Decided with the owner on 2026-11-19 (decision 48): DMX is resolved at the look stage. Nothing decides between two lights on one channel, because it never happens.
+
+```mermaid
+flowchart LR
+  L["looks"] --> M["Mixer<br/>one winner per<br/>light property"] --> R["Rig<br/>one writer<br/>per channel"] --> D["DMX bytes"]
+```
+
+| Case | What happens |
+|---|---|
+| Two fixtures on one channel | refused at patch, move and show file open (`Overlaps`) |
+| A channel two heads of one fixture name | a property of the fixture itself (a master dimmer, a strobe): one writer |
+| A raw channel held, blackout | win over the light's byte: the Mixer's only channel rows |
+
 ## One place
 
 | Where | What |

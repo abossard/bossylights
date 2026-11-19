@@ -156,7 +156,7 @@ async fn a_strip_of_300_rgbw_pixels_on_universes_1_to_3_pixel_171_green_sends_0_
         &json!([{
             "fixture": 1, "name": "Strip", "maker": "Generic", "model": "RGBW strip",
             "mode": "300 pixels", "universe": 1, "address": 1, "channels": 1200, "first": 1,
-            "lights": 300, "layout": {"width": 300, "height": 1}, "clashes": [],
+            "lights": 300, "layout": {"width": 300, "height": 1},
         }]),
     )
     .await;

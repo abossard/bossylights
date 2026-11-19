@@ -7,9 +7,9 @@
 //! | 2 | a raw channel held on the DMX screen | the light that writes that channel, until released |
 //! | 3 | a held value of a light | its default |
 //!
-//! Two lights on one channel (two heads of a fixture that name it, or two fixtures that
-//! share it): not decided yet, decision page question 48. Today the later wins: the later
-//! fixture, or the later head of one fixture.
+//! Two lights never reach one channel (decision 48): the patch refuses two fixtures on
+//! one channel, and the Rig makes a channel two heads name the fixture's own, one writer.
+//! Who wins between lights is decided per light property, before the Rig.
 
 /// What wants a channel this frame, and how strongly.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -48,12 +48,8 @@ pub const fn mix(first: Want, then: Want) -> Want {
         (Default(_) | Light(_), Raw(level)) | (Raw(level), Default(_) | Light(_)) => Raw(level),
         // 3: a held value of a light wins over its default
         (Default(_), Light(level)) | (Light(level), Default(_)) => Light(level),
-        // 48, open: two lights on one channel (two heads, or two fixtures): the later wins.
-        // A coarse and fine pair is mixed byte by byte, so a rule that compares levels
-        // (highest wins) could take the coarse byte of one light and the fine of the other.
-        (Light(_), Light(_)) => then,
-        // the same rank otherwise: the later wins
-        (Default(_), Default(_)) | (Raw(_), Raw(_)) => then,
+        // the same rank: the later wins. Two lights never meet here (decision 48)
+        (Default(_), Default(_)) | (Light(_), Light(_)) | (Raw(_), Raw(_)) => then,
     }
 }
 
@@ -118,20 +114,6 @@ mod tests {
                 7,
             ),
             ("3 a light over nothing", Default(0), Light(7), Light(7), 7),
-            (
-                "48 two lights on one channel: the later, decision 48 open",
-                Light(255),
-                Light(0),
-                Light(0),
-                0,
-            ),
-            (
-                "48 two lights on one channel: the later, decision 48 open",
-                Light(0),
-                Light(255),
-                Light(255),
-                255,
-            ),
         ];
         for (row, first, then, winner, level) in cases {
             assert_eq!(mix(first, then), winner, "{row}: {first:?} then {then:?}");

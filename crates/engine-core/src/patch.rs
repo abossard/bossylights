@@ -248,8 +248,6 @@ pub struct Patched<'a> {
     /// The grid of its heads, `None` for a fixture without heads or a definition that
     /// gives none that fits. Its heads are its last lights, row by row.
     pub layout: Option<Layout>,
-    /// The fixtures that share at least one of its channels. Allowed: the patch shows it.
-    pub clashes: &'a [u16],
 }
 
 /// A group, as the picture shows it.

@@ -233,51 +233,83 @@ fn every_channel_is_written_once() {
     }
 }
 
-/// A dimmer two heads name (14 modes of the QLC+ library, GLP JDC1 among them): each head
-/// is a light with its own writer on it, and the Mixer decides between them.
+/// A channel two heads name (14 modes of the QLC+ library, GLP JDC1 among them) is the
+/// fixture's own: the fixture is a light, its one writer writes the channel, and no two
+/// writers ever reach it.
 #[test]
-fn a_channel_two_heads_name_is_written_by_both() {
-    const SHARED: &str = r#"<?xml version="1.0"?>
-<FixtureDefinition xmlns="http://www.qlcplus.org/FixtureDefinition">
- <Manufacturer>Test</Manufacturer><Model>Shared</Model><Type>LED Bar (Pixels)</Type>
- <Channel Name="Dimmer" Preset="IntensityDimmer"/>
- <Mode Name="Shared">
-  <Channel Number="0">Dimmer</Channel>
-  <Head><Channel>0</Channel></Head>
-  <Head><Channel>0</Channel></Head>
- </Mode>
-</FixtureDefinition>"#;
-    const FULL: Light = Light {
+fn a_channel_two_heads_name_is_the_fixtures_own() {
+    const RED: Light = Light {
         intensity: u16::MAX,
         red: u16::MAX,
-        green: u16::MAX,
-        blue: u16::MAX,
+        green: 0,
+        blue: 0,
     };
-    let fixture = fixture_library::parse("shared.qxf", SHARED.as_bytes()).unwrap();
-    let rigged = compile(
-        &fixture.modes[0],
-        at(37),
-        light(0),
-        Universes::ONE,
-        lights(),
-    )
-    .unwrap();
-    assert_eq!(rigged.lights, 2, "each head is a light");
-    assert_eq!(
-        rigged.writers.iter().map(say).collect::<Vec<_>>(),
-        ["37 light 0: intensity", "37 light 1: intensity"]
-    );
-    // (heads shown, byte 37)
-    let cases = [
-        ([Light::DARK, Light::DARK], 0),
-        ([Light::DARK, FULL], 255),
-        ([FULL, FULL], 255),
-        // the later head wins: mix row 48, decision 48 open
-        ([FULL, Light::DARK], 0),
+    const FULL: Light = Light {
+        intensity: u16::MAX,
+        ..Light::DARK
+    };
+    let dimmer = r#"<Channel Name="Shared" Preset="IntensityDimmer"/>"#;
+    let strobe = r#"<Channel Name="Shared"><Group Byte="0">Shutter</Group>
+  <Capability Min="0" Max="7" Preset="ShutterClose">Closed</Capability>
+  <Capability Min="8" Max="255" Preset="ShutterOpen">Open</Capability></Channel>"#;
+    // (kind, the shared channel, writers in words, bytes 37 to 39 with the fixture full,
+    // head 1 red, head 2 dark)
+    let cases: [(&str, &str, [&str; 3], [u8; 3]); 2] = [
+        (
+            "shared dimmer",
+            dimmer,
+            [
+                "37 light 0: intensity",
+                "38 light 1: red × intensity",
+                "39 light 2: red × intensity",
+            ],
+            [255, 255, 0],
+        ),
+        (
+            "shared strobe",
+            strobe,
+            [
+                "37 = 8",
+                "38 light 1: red × intensity",
+                "39 light 2: red × intensity",
+            ],
+            [8, 255, 0],
+        ),
     ];
-    for (shown, expected) in cases {
+    for (kind, shared, writers, bytes) in cases {
+        let definition = format!(
+            r#"<?xml version="1.0"?>
+<FixtureDefinition xmlns="http://www.qlcplus.org/FixtureDefinition">
+ <Manufacturer>Test</Manufacturer><Model>Shared</Model><Type>LED Bar (Pixels)</Type>
+ {shared}
+ <Channel Name="Red 1" Preset="IntensityRed"/>
+ <Channel Name="Red 2" Preset="IntensityRed"/>
+ <Mode Name="Shared">
+  <Channel Number="0">Shared</Channel>
+  <Channel Number="1">Red 1</Channel>
+  <Channel Number="2">Red 2</Channel>
+  <Head><Channel>0</Channel><Channel>1</Channel></Head>
+  <Head><Channel>0</Channel><Channel>2</Channel></Head>
+ </Mode>
+</FixtureDefinition>"#
+        );
+        let fixture = fixture_library::parse("shared.qxf", definition.as_bytes()).unwrap();
+        let rigged = compile(
+            &fixture.modes[0],
+            at(37),
+            light(0),
+            Universes::ONE,
+            lights(),
+        )
+        .unwrap();
+        assert_eq!(rigged.lights, 3, "{kind}: the fixture, then each head");
+        assert_eq!(
+            rigged.writers.iter().map(say).collect::<Vec<_>>(),
+            writers,
+            "{kind}"
+        );
         let mut out = [Levels::ZERO];
-        resolve(&shown, &rigged.writers, &mut out);
-        assert_eq!(out[0].0[36], expected, "{shown:?}");
+        resolve(&[FULL, RED, Light::DARK], &rigged.writers, &mut out);
+        assert_eq!(out[0].0[36..39], bytes, "{kind}");
     }
 }

@@ -9,7 +9,8 @@
 //!
 //! A fixture is one or more lights. A mode without heads is one light. A mode with N
 //! heads (pixels) is one light per head in the order of the definition, after the fixture
-//! itself when some channel is in no head (a master dimmer): N + 1, else N.
+//! itself when some channel is in no head or in more than one (a master dimmer): N + 1,
+//! else N.
 //!
 //! Each channel of a light, by what it does and what else the light has:
 //!
@@ -23,8 +24,9 @@
 //! | shutter, strobe | fixed: the value that lets light out |
 //! | anything else | fixed: its default, else 0 |
 //!
-//! Every channel of the mode is written by one writer of each light that has it. A channel
-//! two heads name has a writer from each, and the Mixer decides (`engine_core` mix).
+//! Every channel of the mode is written by one writer. A channel two heads name is the
+//! fixture's own (a shared dimmer, a strobe): the fixture's light writes it, so no two
+//! writers reach one channel (decision 48, `docs/design/who-wins.md`).
 
 #![no_std]
 #![forbid(unsafe_code)]
@@ -91,11 +93,9 @@ pub fn compile(
         .collect::<Option<Vec<_>>>()
         .ok_or(Unfit::TooManyLights { needs })?;
     let mut of_light: Vec<Vec<(usize, &fixture_library::Channel)>> = vec![vec![]; needs];
-    for ((index, channel), owners) in mode.channels.iter().enumerate().zip(owners(mode)) {
-        for owner in owners {
-            if let Some(channels) = of_light.get_mut(owner) {
-                channels.push((index, channel));
-            }
+    for ((index, channel), owner) in mode.channels.iter().enumerate().zip(owners(mode)) {
+        if let Some(channels) = of_light.get_mut(owner) {
+            channels.push((index, channel));
         }
     }
     let mut writers: Vec<(usize, Writer)> = Vec::new();
@@ -130,8 +130,7 @@ pub fn compile(
                 .filter_map(|(&(index, _), slot)| slot.map(|writer| (index, writer))),
         );
     }
-    // In channel order, and on a channel two heads name, the earlier head's writer first:
-    // the Mixer decides between them (`engine_core` mix, question 48).
+    // in channel order
     writers.sort_by_key(|&(index, _)| index);
     Ok(Rigged {
         writers: writers.into_iter().map(|(_, writer)| writer).collect(),
@@ -147,13 +146,13 @@ fn lights_of(mode: &Mode) -> usize {
 
 /// True when the fixture itself is a light: it has no heads, or a channel in none.
 fn has_own(mode: &Mode) -> bool {
-    mode.pixels.is_empty() || heads(mode).iter().any(Vec::is_empty)
+    mode.pixels.is_empty() || heads(mode).iter().any(Option::is_none)
 }
 
-/// The heads of each channel, in order, none for a channel in no head. A channel two
-/// heads name is written by both.
-fn heads(mode: &Mode) -> Vec<Vec<usize>> {
-    let mut heads = vec![Vec::new(); mode.channels.len()];
+/// The one head of each channel. `None` for a channel in no head, and for one two heads
+/// name: it is the fixture's own.
+fn heads(mode: &Mode) -> Vec<Option<usize>> {
+    let mut heads: Vec<Vec<usize>> = vec![Vec::new(); mode.channels.len()];
     for (head, channels) in mode.pixels.iter().enumerate() {
         for &channel in channels {
             if let Some(slot) = heads.get_mut(usize::from(channel))
@@ -164,6 +163,12 @@ fn heads(mode: &Mode) -> Vec<Vec<usize>> {
         }
     }
     heads
+        .into_iter()
+        .map(|heads| match heads.as_slice() {
+            &[head] => Some(head),
+            _ => None,
+        })
+        .collect()
 }
 
 /// A generic strip of `pixels` pixels without a definition file: its model's name, and a
@@ -260,19 +265,13 @@ pub(crate) fn unflat(flat: usize) -> Option<ChannelNumbers> {
     })
 }
 
-/// The lights that write each channel, counted from the fixture's first: the fixture
+/// The light that writes each channel, counted from the fixture's first: the fixture
 /// itself is 0 when it is a light, then each head in order.
-fn owners(mode: &Mode) -> Vec<Vec<usize>> {
+fn owners(mode: &Mode) -> Vec<usize> {
     let first_head = usize::from(has_own(mode));
     heads(mode)
         .into_iter()
-        .map(|heads| {
-            if heads.is_empty() {
-                vec![0]
-            } else {
-                heads.into_iter().map(|head| first_head + head).collect()
-            }
-        })
+        .map(|head| head.map_or(0, |head| first_head + head))
         .collect()
 }
 

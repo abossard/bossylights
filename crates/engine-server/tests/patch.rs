@@ -226,7 +226,7 @@ async fn a_patched_par_made_red_sends_255_0_0_at_37_on_ddp_and_dmx_and_unpatched
         &json!([{
             "fixture": 1, "name": "PAR 3", "maker": "Generic", "model": "Generic RGB",
             "mode": "RGB", "universe": 1, "address": 37, "channels": 3, "first": 1,
-            "lights": 1, "layout": null, "clashes": [],
+            "lights": 1, "layout": null,
         }]),
     )
     .await;

@@ -170,29 +170,25 @@ fn a_strip_that_does_not_fit_is_refused() {
 }
 
 #[test]
-fn a_fixture_runs_on_into_the_next_universe_and_clashes_there() {
+fn a_fixture_that_runs_on_into_the_next_universe_overlaps_there() {
     let two = Universes::new(2).unwrap();
-    // (patched first, then, clashes of each)
+    // (patched first, then, refused or not)
     let cases = [
         // channels 1.511 1.512 2.1 meet 2.1 2.2 2.3
-        ((1, 511), (2, 1), [vec![2], vec![1]]),
-        ((1, 510), (2, 1), [vec![], vec![]]),
-        ((2, 1), (1, 511), [vec![2], vec![1]]),
+        ((1, 511), (2, 1), Err(Refusal::Overlaps { fixture: 1 })),
+        ((1, 510), (2, 1), Ok(())),
+        ((2, 1), (1, 511), Err(Refusal::Overlaps { fixture: 1 })),
     ];
     for (first, then, expected) in cases {
-        let patch = [first, then].iter().fold(
-            Patch::new(two, lights(), common::whole()),
-            |patch, &(universe, address)| {
-                let command = strip(1, Color::Rgb, universe, address);
-                patch.update(command, &[]).unwrap().0.unwrap()
-            },
-        );
-        let clashes: Vec<Vec<u16>> = patch
-            .fixtures()
-            .iter()
-            .map(|f| f.clashes.to_vec())
-            .collect();
-        assert_eq!(clashes, expected, "{first:?} then {then:?}");
+        let patch = Patch::new(two, lights(), common::whole());
+        let (patch, _) = patch
+            .update(strip(1, Color::Rgb, first.0, first.1), &[])
+            .unwrap();
+        let updated = patch
+            .unwrap()
+            .update(strip(1, Color::Rgb, then.0, then.1), &[])
+            .map(|_| ());
+        assert_eq!(updated, expected, "{first:?} then {then:?}");
     }
 }
 

@@ -148,6 +148,8 @@ pub enum Refusal {
     /// Then fixture `fixture` would lose a channel: no output would stream every universe
     /// it runs over, or an output would stream one of its channels and never send it.
     StreamsFixture { fixture: u16 },
+    /// The fixture would be on a channel of fixture `fixture`: no two fixtures share one.
+    Overlaps { fixture: u16 },
     /// The fixture's lights do not fit in the lights the engine has left.
     NoLightsLeft,
     /// No fixture is patched with that number.
