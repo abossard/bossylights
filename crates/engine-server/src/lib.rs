@@ -26,7 +26,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use engine::{
     API_VERSION, Begun, ChannelLevel, Command, Engine, Grouped, Looks, Patch, Patched, Project,
-    Refusal, Reply, Request, Saved, Sender, Snapshot, changes,
+    Refusal, Reply, Request, SavedLook, Sender, Snapshot, changes,
 };
 use engine_core::{HeldLight, Library, ShowFile, held_lights, light_changes};
 use library::Shelf;
@@ -454,7 +454,7 @@ fn changed(
     let new = !Arc::ptr_eq(&last.patch, &now.patch);
     let fixtures: Option<Vec<Patched>> = new.then(|| now.patch.fixtures());
     let groups: Option<Vec<Grouped>> = new.then(|| now.patch.groups());
-    let looks: Option<Vec<Saved>> =
+    let looks: Option<Vec<SavedLook>> =
         (!Arc::ptr_eq(&last.looks, &now.looks)).then(|| now.looks.all());
     let reply = json(&Reply::Changed {
         state: now.snapshot.state,

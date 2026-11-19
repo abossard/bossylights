@@ -11,7 +11,7 @@
 //!
 //! ```text
 //! {
-//!   "version": 4,
+//!   "version": 5,
 //!   "patch": [
 //!     {"fixture":1,"name":"PAR 1","mode":"Generic / Generic RGB / RGB","at":{"universe":1,"address":37},"first":1}
 //!   ],
@@ -37,7 +37,7 @@
 //! | `version` | [`VERSION`]. A newer one is not read |
 //! | `patch` | each fixture by number: its name, its mode (a key of `modes`), where, its first light |
 //! | `groups` | in the order they were made, each member a light or a fixture |
-//! | `looks` | each saved look by number: its name and its step, the slot of each gobo wheel in `gobos`. Version 1 has none. Versions 2 and 3 hold one `gobo` of a wheel and a slot, read and checked as those engines did: read as that wheel's slot. A gobo a light with a gobo wheel cannot show is refused, a wheel past 3 among them (no wheel past 3 is shown now); on lights without a gobo wheel it showed nothing and is left out |
+//! | `looks` | each saved look by number: its name and either a sequence of references (version 5) or its step, the slot of each gobo wheel in `gobos`. Version 1 has none. Versions 2 and 3 hold one `gobo` of a wheel and a slot, read and checked as those engines did: read as that wheel's slot. A gobo a light with a gobo wheel cannot show is refused, a wheel past 3 among them (no wheel past 3 is shown now); on lights without a gobo wheel it showed nothing and is left out |
 //! | `rules` | the Mixer's three settings. Versions 1 and 2 have none: the defaults |
 //! | `modes` | each mode a fixture is patched in, with its maker and model, by key |
 //!
@@ -68,7 +68,7 @@ use alloc::vec::Vec;
 use core::num::{NonZeroU16, NonZeroU32};
 use engine_core::{
     ChannelNumbers, LOOKS, Light, Member, Members, MixRules, PatchCommand, Position, Refusal, Rgb,
-    Saved, Step, Target, Text, Unopened, Wheel,
+    Saved, SavedLook, Sequence, Step, Target, Text, Unopened, Wheel,
 };
 use fixture_library::Mode;
 use looks::Looks;
@@ -77,7 +77,7 @@ use serde::{Deserialize, Serialize};
 
 /// The version of the file this engine writes and reads. Raise it with every change an
 /// engine of the old version would read wrong. An engine never reads a newer file.
-pub const VERSION: u32 = 4;
+pub const VERSION: u32 = 5;
 
 /// The longest file, in bytes: 64 MiB. Far over any show, so no show meets it, and a file
 /// of gigabytes is not read whole at start.
@@ -104,9 +104,9 @@ pub const LIMIT: Limit = Limit {
     encode,
 };
 
-/// The longest line of a look: a name and a group of [`Text::MOST`] bytes, each byte
-/// escaped, and every property given.
-pub const LOOK_MOST: usize = 2048;
+/// Room for a look's escaped name, target and properties, or its 64 full references.
+/// Each reference takes under 112 bytes even with the longest valid numeric fields.
+pub const LOOK_MOST: usize = 2048 + 112 * Sequence::MOST;
 
 /// How much longer the line of the Mixer's settings may be than the defaults' line,
 /// which a patch is measured with.
@@ -277,9 +277,16 @@ pub fn read(text: &str, empty: &Patch) -> Result<(Patch, Looks), Unopened> {
     let file = if version.get() < 4 {
         serde_json::from_str::<File<Before4>>(text)
             .map_err(broken)?
-            .with_looks(Before4::now)
-    } else {
+            .with_looks(|old| {
+                let (saved, gobo) = old.now();
+                (saved.into(), gobo.map(|one| (saved.step.target, one)))
+            })
+    } else if version.get() == 4 {
         serde_json::from_str::<File<Saved>>(text)
+            .map_err(broken)?
+            .with_looks(|saved| (saved.into(), None))
+    } else {
+        serde_json::from_str::<File<SavedLook>>(text)
             .map_err(broken)?
             .with_looks(|saved| (saved, None))
     };
@@ -324,18 +331,16 @@ pub fn read(text: &str, empty: &Patch) -> Result<(Patch, Looks), Unopened> {
             patch = changed;
         }
     }
-    let mut looks = Looks::new().with_rules(rules);
-    for (saved, one) in saved {
-        let refused = |reason| Unopened::Refused { reason };
-        if looks.get(saved.look).is_some() {
-            return Err(refused(Refusal::LookInUse { look: saved.look }));
-        }
-        looks = looks.put(saved, &patch).map_err(refused)?;
-        if let Some(OneGobo { wheel, slot }) = one {
-            let runs = patch.runs(saved.step.target).map_err(refused)?;
+    let refused = |reason| Unopened::Refused { reason };
+    let mut rows = Vec::with_capacity(saved.len());
+    for (row, legacy) in saved {
+        if let Some((target, OneGobo { wheel, slot })) = legacy {
+            let runs = patch.runs(target).map_err(refused)?;
             rig::shows_one_gobo(patch.writers(), &runs, wheel, slot).map_err(refused)?;
         }
+        rows.push(row);
     }
+    let looks = Looks::restore(rows, rules, &patch).map_err(refused)?;
     write(&patch, &looks).map(|_| (patch, looks)).ok_or(too_big)
 }
 
@@ -542,5 +547,99 @@ fn broken(error: serde_json::Error) -> Unopened {
     Unopened::Broken {
         line: u32::try_from(error.line()).unwrap_or(u32::MAX),
         column: u32::try_from(error.column()).unwrap_or(u32::MAX),
+    }
+}
+
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "each checked fixture and canonical file is required by the test"
+)]
+mod sequence_tests {
+    use super::*;
+    use engine_core::{Color, Lights, Pixels, Universes};
+    use rig::Whole;
+
+    #[test]
+    fn a_saved_row_with_two_definition_keys_is_broken_even_if_one_is_null() {
+        let empty = Patch::new(
+            Universes::new(1).unwrap(),
+            Lights::new(8).unwrap(),
+            Whole(|_| NonZeroU16::MIN),
+        );
+        let file = write(&empty, &Looks::new()).unwrap();
+        for fields in [
+            r#""step":{"target":{"Light":{"light":1}},"values":{}},"sequence":null"#,
+            r#""step":null,"sequence":{"items":[{"look":3}]}"#,
+        ] {
+            let row = format!(r#""looks": [{{"look":1,"name":"two",{fields}}}]"#);
+            let both = file.replace(r#""looks": []"#, &row);
+            assert!(
+                matches!(read(&both, &empty), Err(Unopened::Broken { .. })),
+                "{fields}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_longest_sequence_fits_its_reserved_room() {
+        use engine_core::{Definition, Repeat, SequenceItem, Speed, Use};
+        let item = SequenceItem {
+            look: u16::MAX,
+            width: u16::MAX,
+            transition: 100,
+            usage: Use {
+                speed: Speed::Double,
+                repeat: Repeat::Once,
+                spread: 100,
+            },
+        };
+        let saved = SavedLook {
+            look: u16::MAX,
+            name: Text::new(&"\u{1}".repeat(Text::MOST)).unwrap(),
+            definition: Definition::Sequence(Sequence::new(&[item; Sequence::MOST]).unwrap()),
+        };
+        let line = serde_json::to_string(&saved).unwrap();
+        assert!(line.len() <= LOOK_MOST, "{} bytes", line.len());
+    }
+
+    #[test]
+    fn saved_sequences_can_refer_to_later_rows() {
+        let empty = Patch::new(
+            Universes::new(1).unwrap(),
+            Lights::new(8).unwrap(),
+            Whole(|_| NonZeroU16::MIN),
+        );
+        let patch = empty
+            .update(
+                PatchCommand::PatchStrip {
+                    name: Text::new("PAR").unwrap(),
+                    pixels: Pixels::try_from(1).unwrap(),
+                    color: Color::Rgb,
+                    at: ChannelNumbers {
+                        universe: 1,
+                        address: 1,
+                    },
+                },
+                &[],
+            )
+            .unwrap()
+            .0
+            .unwrap();
+        let step = Saved {
+            look: 9,
+            name: Text::new("rest").unwrap(),
+            step: Step {
+                target: Target::Fixture { fixture: 1 },
+                values: Light::DARK,
+            },
+        };
+        let step_file = write(&patch, &Looks::new().put(step, &patch).unwrap()).unwrap();
+        let sequence = r#"{"look":1,"name":"parent","sequence":{"items":[{"look":9}]}}"#;
+        let whole = step_file.replace("\"looks\": [", &format!("\"looks\": [\n    {sequence},"));
+        let (_, read_back) = read(&whole, &empty).unwrap();
+        assert_eq!(read_back.all().len(), 2);
+        let canonical = write(&patch, &read_back).unwrap();
+        assert_eq!(read(&canonical, &empty), Ok((patch, read_back)));
     }
 }

@@ -236,13 +236,36 @@ impl Project {
                         step,
                     })),
                 )),
+                Command::PutSequence {
+                    look,
+                    name,
+                    sequence,
+                } => look_effect(LookCommand::PutSequence {
+                    look,
+                    name,
+                    sequence,
+                }),
                 Command::RemoveLook { look } => Ok((
                     self,
                     Some(ProjectEffect::Look(LookCommand::RemoveLook { look })),
                 )),
-                Command::StartLook { look, rank, when } => {
-                    look_effect(LookCommand::StartLook { look, rank, when })
-                }
+                Command::StartLook { look, rank, when } => look_effect(LookCommand::StartLook {
+                    look,
+                    rank,
+                    when,
+                    usage: crate::Use::default(),
+                }),
+                Command::StartUse {
+                    look,
+                    rank,
+                    when,
+                    usage,
+                } => look_effect(LookCommand::StartLook {
+                    look,
+                    rank,
+                    when,
+                    usage,
+                }),
                 Command::SetInternalTempo { bpm } => send(EngineCommand::Feed { bpm }),
                 Command::TapTempo => send(EngineCommand::Tap),
                 Command::ReleaseTempo => send(EngineCommand::ReleaseTempo),

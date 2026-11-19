@@ -38,7 +38,7 @@ How an output gets on and off the tick thread:
 
 ## API
 
-Version 2. `GET /health` (`ok` while the engine runs) and the WebSocket `GET /api`. Types: `ui/src/engine-api.ts`, generated from `crates/engine-core/src/api.rs`.
+Version 9. `GET /version` returns the API version. `GET /health` returns `ok` while the engine runs. Clients send commands on the WebSocket at `GET /api`. Generate the TypeScript types in `ui/src/engine-api.ts` with `UPDATE_TS=1 cargo test -p engine-core`.
 
 | Who may open `/api` | Why |
 |---|---|
@@ -66,18 +66,35 @@ The list is `ORIGINS` in `crates/engine-server/src/lib.rs`. No pairing or token 
 | `SetOutput` (output 1 to 16, kind, universes, rate) | adds or replaces an output. Kind `{"Ddp": {"address": "ip:port", "color": "Rgb" or "Rgbw"}}` or `{"DmxUsbPro": {"adapter": 1}}` (the first ENTTEC DMX USB Pro by USB identity, in the order of their USB serial numbers, when the output first finds one; an adapter not there yet is no error, the output is NotFound until it is plugged in; from then on the output finds that same adapter by its serial, so a lost adapter never comes back as another). Adapters count from 1: 0 is `NotACommand`. Universes `{"first": 1, "count": 3}`, sent as one stream of channels. A DMX USB Pro takes one universe: more is refused with `{"TooManyUniverses": {"most": 1}}`. DDP RGB sends whole pixels: 510 of each universe's 512 channels. Rate `"30"`, `"44"`, `"60"` or `null`: 60 for DDP, 44 for the DMX USB Pro |
 | `RemoveOutput` (output) | removes it. Refused with `{"StreamsFixture": {"fixture": 1}}` when a fixture over more than one universe would be left with no output that streams them all; so is a `SetOutput` that changes the run |
 
-Looks and who wins (`docs/design/looks-slice-3.md`, the Mixer's table in `engine-core/src/mix.rs`): per property of each light, Manual over Show over Autopilot, then the latest start. A direct hold is Manual. The picture's `state.plays` lists each play with its `rank`, `state` (`{"Waiting": {"beat": 12}}`, `Playing` or `Kept`) and `start` (the clock's `elapsed` at its start), `state.rules` the settings the frame applies, `state.clock` the beat clock at the frame: `bpm`, `feed`, `source` (`Feed`, `OneTap` or `Tapped`), `beat` (the grid: a whole number is a beat, a multiple of 4 a bar) and `elapsed` (beats since the engine started; a play's own beat is `elapsed` less its `start`). API 8.
+Looks and who wins (`docs/design/looks-slice-3.md`, the Mixer's table in `engine-core/src/mix.rs`): per property of each light, Manual over Show over Autopilot, then the latest start. A direct hold is Manual. The picture's `state.plays` lists each play with its `rank`, `state` (`{"Waiting": {"beat": 12}}`, `Playing` or `Kept`) and `start` (the clock's `elapsed` at its start), `state.rules` the settings the frame applies, `state.clock` the beat clock at the frame: `bpm`, `feed`, `source` (`Feed`, `OneTap` or `Tapped`), `beat` (the grid: a whole number is a beat, a multiple of 4 a bar) and `elapsed` (beats since the engine started; a play's own beat is `elapsed` less its `start`).
 
 | Command | Does | Refused |
 |---|---|---|
-| `StartLook` (look, rank `"Manual"`, `"Show"` or `"Autopilot"`, Manual when left out, when `"Now"`, `"Beat"` or `"Bar"`, now when left out) | answered `{"Started": {"play": {"slot": 0, "generation": 1}}}`. The look at that rank, playing or kept, starts afresh in its slot; another rank plays on its own. On a beat or bar it waits for the first one of the grid on or after the request (on the grid: at once) and plays from the frame of that crossing; a late wake starts each crossed launch at its own crossing, in the order of their beats, then of their requests | `NoSuchLook`, `PlayFull`, `QueueFull` |
-| `StopLook` (play) | Manual: kept (`UntilRelease`) or ended (`UntilStop`). Show, Autopilot: ended (`Reveal`) or kept (`Stay`). Waiting: cancelled, gone from the picture; under a rule that keeps, it holds its slot until released, as a kept play does. Kept or ended: nothing | |
+| `PutSequence` (look, name, sequence) | saves an ordered list of linked looks. Editing a step or sequence updates its running parents on the applying frame. Each keeps its start time and order | `NoSuchLook`, `WrongLookKind`, `LookCycle`, `InvalidTiming`, `WorkLimit` |
+| `StartLook` (look, rank, when, use) | returns `{"Started": {"play": {"slot": 0, "generation": 1}}}`. Rank defaults to `Manual`, with `Show` and `Autopilot` available. Start defaults to `Now`. `Beat` and `Bar` launch at the first matching boundary on or after the request. A fresh start replaces that look at that rank | `NoSuchLook`, `InvalidTiming`, `PlayFull`, `WorkLimit`, `QueueFull` |
+| `StopLook` (play) | Cancels a waiting play. For a playing look, `UntilRelease` keeps its Manual sample and `Stay` keeps its Show or Autopilot sample. A rest, `UntilStop` or `Reveal` ends the play | |
 | `EndFlash` (play) | ends a Manual play at once. Another rank or an ended play: nothing | |
 | `ReleaseHold` (play) | ends a play, playing or kept. Ended: nothing. Needs only a place in the command queue, with every play slot taken | |
 | `SetMixRules` (rules: `brightness` `"Latest"` or `"Highest"`, `manual_end` `"UntilRelease"` or `"UntilStop"`, `other_end` `"Reveal"` or `"Stay"`) | saved with the show. `Highest`: the brightest within the winning rank. A switch to `UntilStop` or `Reveal` ends the kept plays of those ranks | |
 | `SetInternalTempo` (bpm, 30 to 300) | the internal feed's tempo: the tempo now, unless taps set it. 124 at start, not saved | outside 30 to 300: `NotACommand` |
 | `TapTempo` | a tap at the time the engine takes it (no client time). It marks a beat: at an exact beat the grid keeps its number, else it moves on to the next. A second tap 200 ms to 2 s later sets the tempo for every play (`Tapped`) until `ReleaseTempo`; under 200 ms is a bounce, ignored; one tap alone lapses after 2 s; a tap after a longer gap aligns the grid at the tempo now. The elapsed count never jumps | |
 | `ReleaseTempo` | the feed's latest tempo again, at the grid's phase now | |
+
+A sequence referencing looks 1 and 2 fades from the first into the second over one beat.
+
+```json
+{"Send":{"command":{"PutSequence":{"look":3,"name":"Red to blue","sequence":{"items":[{"look":1},{"look":2,"width":32,"transition":50}]}}}}}
+```
+
+| Field | Meaning | Default |
+|---|---|---|
+| Item `width` | 1 to 65,535 sixteenths of a beat | 16 (one beat) |
+| Item `transition` | Percent of the incoming item's width spent blending common continuous properties. Discrete properties cut at entry | 0 |
+| `use.speed` | `Half`, `Normal` or `Double` | `Normal` |
+| `use.repeat` | `Loop` or `Once`. A nested once-use holds its last sample until the item's end. A standalone step holds until stopped or released | `Loop` |
+| `use.spread` | 0 through 100 percent across the ordered target. Timed looks offset phase. Step items delay entry | 0 |
+
+Each sequence item and each `StartLook` accepts its own `use`. A stop samples the play at the stop event. A once-use ends with its final sample, even if the next wake comes later. An empty step supplies a rest.
 
 The patch: a fixture of the library at an address. The front checks each command against it and the library, compiles the writers (`rig`) and swaps them in on the tick thread as it swaps a device.
 

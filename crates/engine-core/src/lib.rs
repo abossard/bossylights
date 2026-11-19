@@ -17,7 +17,9 @@
 mod api;
 mod channel;
 mod clock;
+mod evaluate;
 pub use clock::{BEATS_PER_BAR, Bpm, Clock, Reading, Source, When, beats};
+pub use evaluate::{Binding, Item, MAX_DEPTH, Node, Program};
 mod kinds;
 mod library;
 mod mix;
@@ -33,7 +35,10 @@ mod property;
 mod resolve;
 mod show;
 
-pub use api::{API_VERSION, MATCHES, Refusal, Reply, Request};
+pub use api::{
+    API_VERSION, Definition, MATCHES, Refusal, Repeat, Reply, Request, SavedLook, Sequence,
+    SequenceItem, Speed, Use,
+};
 pub use channel::{
     ADDRESSES, Channel, ChannelLevel, ChannelNumbers, ChannelSet, Levels, MAX_UNIVERSES, Universes,
     changes,
@@ -261,13 +266,26 @@ pub enum Command {
         name: Text,
         step: Step,
     },
+    PutSequence {
+        look: u16,
+        #[cfg_attr(test, ts(type = "string"))]
+        name: Text,
+        sequence: Sequence,
+    },
     /// Remove a saved look that no play uses. Nothing happens if there is none.
     RemoveLook { look: u16 },
     /// Play a saved look at `rank`, Manual when not given: answered `Started` with its
     /// play. The look playing or kept at that rank already starts afresh, as the latest
     /// start; another rank plays on its own.
-    StartLook {
+    #[serde(skip)]
+    #[cfg_attr(test, ts(skip))]
+    StartLook { look: u16, rank: Rank, when: When },
+    #[serde(rename = "StartLook")]
+    StartUse {
         look: u16,
+        #[serde(default, rename = "use")]
+        #[cfg_attr(test, ts(optional = nullable))]
+        usage: Use,
         #[serde(default)]
         #[cfg_attr(test, ts(optional = nullable))]
         rank: Rank,
@@ -1967,6 +1985,12 @@ mod tests {
                 GrabId::decl(&config),
                 Step::decl(&config),
                 Saved::decl(&config),
+                SavedLook::decl(&config),
+                Sequence::decl(&config),
+                SequenceItem::decl(&config),
+                Use::decl(&config),
+                Speed::decl(&config),
+                Repeat::decl(&config),
                 PlayId::decl(&config),
                 Play::decl(&config),
                 Rank::decl(&config),

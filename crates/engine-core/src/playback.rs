@@ -18,9 +18,9 @@
 //! unless its request was sent at that instant too, then it keeps its request's order. So
 //! starts at one instant go by the order they were asked in, launches first.
 //!
-//! A play's values come as a plan the front compiled off the tick thread: its step's
-//! values on the runs of lights its target names ([`Entry`]). Who wins a light's
-//! property between plays and direct holds, and what a stop keeps: `mix.rs`.
+//! The Mixer reads one source sample per sounding play. A step supplies static runs.
+//! A sequence supplies entries sampled at its local beat. A natural end or stop can
+//! freeze that sample. The Mixer owns rank, start priority and the end rules.
 
 use crate::clock::{Clock, When, beats};
 use crate::library::Text;
@@ -47,7 +47,7 @@ pub struct Step {
     pub values: Light,
 }
 
-/// A saved look, as the picture and the show file show it.
+/// A saved step row, also read from earlier show files.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(test, derive(ts_rs::TS))]
@@ -63,13 +63,18 @@ pub struct Saved {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[expect(
     clippy::large_enum_variant,
-    reason = "a client's command has no heap: `PutStep` carries its name and step in place. Moved once per request, off the tick thread"
+    reason = "bounded look definitions travel inline in a client command, off the tick thread"
 )]
 pub enum LookCommand {
     PutStep {
         look: u16,
         name: Text,
         step: Step,
+    },
+    PutSequence {
+        look: u16,
+        name: Text,
+        sequence: crate::Sequence,
     },
     RemoveLook {
         look: u16,
@@ -78,6 +83,7 @@ pub enum LookCommand {
         look: u16,
         rank: Rank,
         when: When,
+        usage: crate::Use,
     },
     StopLook {
         play: PlayId,
@@ -307,6 +313,11 @@ impl Plays {
                 *slot = None;
             }
         }
+    }
+
+    /// The play using this reserved slot on the tick thread.
+    pub fn at(&self, slot: usize) -> Option<Play> {
+        self.0.get(slot).copied().flatten()
     }
 
     /// Whether a play is in `slot`.

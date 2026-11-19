@@ -4,8 +4,9 @@
 //! 256 runs, start, restart, replan and release a play of a step over that group, grab,
 //! update, end (kept or let go) and release a direct hold on one run and on two, clear the
 //! kept ones by a change of the rules, mix it with the direct holds and hand a reader a
-//! snapshot on every frame. And that the tick
-//! frees nothing: the old writers, runs, plans and a replaced device with its thread go to
+//! snapshot on every frame. Linked sequences also run, replan and end inside the
+//! counting window. With the stepped clock all 32 once-uses finish between wakes.
+//! The tick frees nothing: the old writers, runs, plans and a replaced device with its thread go to
 //! the free thread. A
 //! counting allocator sees every allocation in this process, except those of the front
 //! while it sends: a light, patch, look or attach command allocates there (the patch and a
@@ -411,6 +412,51 @@ fn main() {
         .step_by(2)
         .filter(|light| light.colour.is_some_and(|c| c.green == u16::MAX))
         .count();
+    // Nested transition, a shared step replan, and a once-use frozen between wakes.
+    // Start and finish inside the allocator window on the production tick.
+    counting::uncounted(|| {
+        use engine_core::{Repeat, Sequence, SequenceItem, Use};
+        sender
+            .send(Command::SetMixRules {
+                rules: MixRules::default(),
+            })
+            .unwrap();
+        for (look, child) in [(2, 1), (3, 2)] {
+            let item = SequenceItem {
+                look: child,
+                width: 1,
+                transition: 100,
+                ..Default::default()
+            };
+            sender
+                .send(Command::PutSequence {
+                    look,
+                    name: text("linked"),
+                    sequence: Sequence::new(&[item, item]).unwrap(),
+                })
+                .unwrap();
+        }
+        sender
+            .send(Command::StartUse {
+                look: 3,
+                rank: Rank::Manual,
+                when: engine::When::Now,
+                usage: Use {
+                    repeat: Repeat::Once,
+                    ..Default::default()
+                },
+            })
+            .unwrap();
+        sender.send(step(12345)).unwrap();
+    });
+    mock::wait_until("the linked sequence finished and kept its sample", || {
+        engine
+            .latest()
+            .state
+            .plays
+            .iter()
+            .any(|p| p.look == 3 && p.state == engine::PlayState::Kept)
+    });
     // a Manual play live as all is released
     let start = Command::StartLook {
         look: 1,
@@ -494,4 +540,141 @@ fn main() {
         new_tick_frees, 0,
         "{ticks} ticks made {new_tick_frees} frees on the tick thread"
     );
+    #[cfg(feature = "test-support")]
+    linked_ends();
+}
+
+/// Queue two replacement revisions while every once-use crosses its end between wakes.
+#[cfg(feature = "test-support")]
+fn linked_ends() {
+    use engine_core::{PLAYS, PlayState, Repeat, Sequence, SequenceItem, Use, When};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    let (mut engine, mut sender, wakes) =
+        Engine::start_stepped(Universes::new(1).unwrap(), Box::new(outputs::open)).unwrap();
+    wakes.hold().unwrap();
+    let name = text("once");
+    let leaf = |intensity| Command::PutStep {
+        look: 0,
+        name,
+        step: Step {
+            target: Target::Light { light: 1 },
+            values: Light {
+                intensity: Some(intensity),
+                ..Light::DARK
+            },
+        },
+    };
+    let start = |sender: &mut Sender, slot: usize, rank| match begin(
+        sender,
+        Command::StartUse {
+            look: slot as u16 + 1,
+            rank,
+            when: When::Now,
+            usage: Use {
+                repeat: Repeat::Once,
+                ..Default::default()
+            },
+        },
+        &[],
+    ) {
+        Ok(Begun::Started { play }) => play,
+        _ => panic!("once-use must start"),
+    };
+    sender
+        .send(Command::PatchStrip {
+            name,
+            pixels: Pixels::try_from(1).unwrap(),
+            color: Color::Rgb,
+            at: ChannelNumbers {
+                universe: 1,
+                address: 1,
+            },
+        })
+        .unwrap();
+    sender.send(leaf(0)).unwrap();
+    let sequence = Sequence::new(&[SequenceItem::default()]).unwrap();
+    for look in 1..=PLAYS as u16 {
+        sender
+            .send(Command::PutSequence {
+                look,
+                name,
+                sequence,
+            })
+            .unwrap();
+    }
+    // Warm the worker threads and wait for a complete return trip before counting.
+    let old = Arc::downgrade(&sender.looks().plan(1).unwrap());
+    let prime = start(&mut sender, 0, Rank::Manual);
+    sender.send(Command::ReleaseHold { play: prime }).unwrap();
+    sender.send(leaf(1)).unwrap();
+    let mut at = wakes.wake().unwrap();
+    mock::wait_until("the priming plan was never reclaimed", || {
+        old.strong_count() == 0
+    });
+
+    let counters = || (counting::allocations(), counting::tick_frees());
+    let before = counters();
+    let mut previous = [prime; PLAYS];
+    let mut value = 1;
+    for rank in [Rank::Manual, Rank::Show] {
+        let ids: [PlayId; PLAYS] = std::array::from_fn(|slot| start(&mut sender, slot, rank));
+        wakes.wake_at(at).unwrap();
+        if rank == Rank::Show {
+            for (fresh, old) in ids.iter().zip(previous) {
+                assert_eq!(fresh.slot, old.slot);
+                assert_ne!(fresh.generation, old.generation);
+            }
+        }
+        at += Duration::from_secs(2);
+        wakes.set_time(at);
+        for next in [value + 1, value + 2] {
+            assert!(send(&mut sender, leaf(next), &[]));
+        }
+        // Let the front forget one Show generation before the queued swaps arrive.
+        // Only the tick now owns its superseded middle plan.
+        if rank == Rank::Show {
+            assert!(send(
+                &mut sender,
+                Command::ReleaseHold { play: ids[0] },
+                &[]
+            ));
+        }
+        engine.latest();
+        wakes.wake_at(at).unwrap();
+        let snapshot = engine.latest();
+        if rank == Rank::Manual {
+            assert_eq!(snapshot.state.plays.iter().count(), PLAYS);
+            assert!(
+                snapshot
+                    .state
+                    .plays
+                    .iter()
+                    .all(|p| p.state == PlayState::Kept)
+            );
+            assert_eq!(snapshot.lights()[0].intensity, Some(value));
+            for play in ids {
+                assert!(send(&mut sender, Command::ReleaseHold { play }, &[]));
+            }
+        } else {
+            assert_eq!(snapshot.state.plays.iter().count(), 0);
+            assert_eq!(snapshot.lights()[0].intensity, None);
+        }
+        previous = ids;
+        value += 2;
+    }
+    // The 31 naturally revealed generations and the released one all have room again.
+    for (slot, old) in previous.iter().enumerate() {
+        let fresh = start(&mut sender, slot, Rank::Show);
+        assert_eq!(fresh.slot, old.slot);
+        assert_ne!(fresh.generation, old.generation);
+    }
+    wakes.wake_at(at).unwrap();
+    assert_eq!(
+        counters(),
+        before,
+        "linked ends allocated or freed on the tick"
+    );
+    wakes.run();
 }

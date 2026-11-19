@@ -1,17 +1,5 @@
-//! Saved looks, off the tick thread: each checked against the patch when saved, and
-//! compiled into a plan when it plays. A look is a step for now (`docs/design/looks-slice-3.md`).
-//!
-//! ```text
-//! PutStep --check target--> Looks --compile against the patch--> plan (entries) --> tick
-//! ```
-//!
-//! | A change | Refused when |
-//! |---|---|
-//! | save a step | its target names nothing patched or an empty group, or [`LOOKS`] are saved |
-//! | change the patch or a group | a saved look's target would name nothing or no light, or a play's lights would change |
-//! | remove a look | a play uses it |
-//!
-//! The Mixer's settings ([`MixRules`]) are saved beside the looks.
+//! The saved look graph and its immutable playback plans. Edits compile off the tick
+//! thread. A new revision shares every plan outside the edited look's parent chain.
 
 #![no_std]
 #![forbid(unsafe_code)]
@@ -24,89 +12,377 @@
 
 extern crate alloc;
 
-use alloc::boxed::Box;
-use alloc::collections::BTreeMap;
+mod compile;
+mod sequence;
+
+use alloc::collections::{BTreeMap, BTreeSet};
+use alloc::sync::Arc;
 use alloc::vec::Vec;
-use engine_core::{Entry, LOOKS, MixRules, Refusal, Saved, Step};
+use engine_core::{Definition, LOOKS, MixRules, Refusal, SavedLook};
 use rig::Patch;
 
-/// The saved looks, by number, and the Mixer's settings. A change makes new looks: a
-/// reader keeps the ones it has.
+pub use compile::{PLAN_BYTES, Plan, WORK_LIMIT, compile};
+
+/// Definitions and plans belong to one revision. The sender can start any look by
+/// sharing its precompiled plan, even while another revision is being prepared.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Looks(BTreeMap<u16, Saved>, MixRules);
+pub struct Looks {
+    saved: BTreeMap<u16, Arc<SavedLook>>,
+    plans: BTreeMap<u16, Arc<Plan>>,
+    rules: MixRules,
+}
 
 impl Looks {
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// The Mixer's settings saved with the looks.
     pub const fn rules(&self) -> MixRules {
-        self.1
+        self.rules
     }
 
-    /// The looks with `rules` in place of the settings.
     pub fn with_rules(&self, rules: MixRules) -> Self {
-        Self(self.0.clone(), rules)
-    }
-
-    /// Every saved look, by number.
-    pub fn all(&self) -> Vec<Saved> {
-        self.0.values().copied().collect()
-    }
-
-    pub fn get(&self, look: u16) -> Option<&Saved> {
-        self.0.get(&look)
-    }
-
-    /// The looks with `saved` in place of the one of its number. Refused when its target
-    /// names nothing in `patch`, or a new number would make more than [`LOOKS`].
-    pub fn put(&self, saved: Saved, patch: &Patch) -> Result<Self, Refusal> {
-        if !self.0.contains_key(&saved.look) && self.0.len() >= LOOKS {
-            return Err(Refusal::TooManyLooks {
-                most: u16::try_from(LOOKS).unwrap_or(u16::MAX),
-            });
+        Self {
+            rules,
+            ..self.clone()
         }
-        compile(&saved.step, patch)?;
-        let mut looks = self.0.clone();
-        looks.insert(saved.look, saved);
-        Ok(Self(looks, self.1))
     }
 
-    /// The looks without `look`. The caller checks no play uses it.
-    pub fn remove(&self, look: u16) -> Self {
-        let mut looks = self.0.clone();
-        looks.remove(&look);
-        Self(looks, self.1)
+    pub fn all(&self) -> Vec<SavedLook> {
+        self.saved.values().map(|saved| **saved).collect()
     }
 
-    /// Whether every saved look still names something in `patch`: `LookInUse` names the
-    /// first that would not.
+    pub fn get(&self, look: u16) -> Option<&SavedLook> {
+        self.saved.get(&look).map(Arc::as_ref)
+    }
+
+    /// Already compiled against this revision's patch.
+    pub fn plan(&self, look: u16) -> Result<Arc<Plan>, Refusal> {
+        self.plans.get(&look).cloned().ok_or(Refusal::NoSuchLook)
+    }
+
+    /// A replacement is atomic across every parent, even when the change makes a
+    /// parent's transitive expansion too large.
+    pub fn put(&self, saved: impl Into<SavedLook>, patch: &Patch) -> Result<Self, Refusal> {
+        let saved = saved.into();
+        if let Some(previous) = self.get(saved.look) {
+            if core::mem::discriminant(&previous.definition)
+                != core::mem::discriminant(&saved.definition)
+            {
+                return Err(Refusal::WrongLookKind);
+            }
+        } else {
+            Self::room(self.saved.len())?;
+        }
+        let look = saved.look;
+        let mut next = self.clone();
+        next.saved.insert(look, Arc::new(saved));
+        let mut parents = BTreeSet::from([look]);
+        loop {
+            let before = parents.len();
+            for saved in next.saved.values() {
+                if let Definition::Sequence(sequence) = &saved.definition
+                    && sequence
+                        .as_slice()
+                        .iter()
+                        .any(|item| parents.contains(&item.look))
+                {
+                    parents.insert(saved.look);
+                }
+            }
+            if parents.len() == before {
+                break;
+            }
+        }
+        next.recompile(patch, &parents, false)?;
+        Ok(next)
+    }
+
+    fn room(count: usize) -> Result<(), Refusal> {
+        if count >= LOOKS {
+            Err(Refusal::TooManyLooks { most: LOOKS as u16 })
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Restore the complete graph before following references. File order is by ID,
+    /// so a child can occur after its parents.
+    pub fn restore(
+        saved: impl IntoIterator<Item = SavedLook>,
+        rules: MixRules,
+        patch: &Patch,
+    ) -> Result<Self, Refusal> {
+        let mut all = Self {
+            rules,
+            ..Self::default()
+        };
+        for saved in saved {
+            if all.saved.contains_key(&saved.look) {
+                return Err(Refusal::LookInUse { look: saved.look });
+            }
+            Self::room(all.saved.len())?;
+            all.saved.insert(saved.look, Arc::new(saved));
+        }
+        let ids = all.saved.keys().copied().collect();
+        all.recompile(patch, &ids, false)?;
+        Ok(all)
+    }
+
+    /// Remove an unreferenced definition. The sender also checks play reservations.
+    pub fn remove(&self, look: u16) -> Result<Self, Refusal> {
+        if let Some(parent) = self.saved.values().find(|saved| {
+            matches!(&saved.definition, Definition::Sequence(sequence) if sequence.as_slice().iter().any(|item| item.look == look))
+        }) {
+            return Err(Refusal::LookInUse { look: parent.look });
+        }
+        let mut next = self.clone();
+        next.saved.remove(&look);
+        next.plans.remove(&look);
+        Ok(next)
+    }
+
+    /// Compile the whole graph against a prospective patch. A failed rebind names
+    /// the definition that would no longer play.
+    pub fn rebind(&self, patch: &Patch) -> Result<Self, Refusal> {
+        let mut next = self.clone();
+        next.recompile(patch, &self.saved.keys().copied().collect(), true)?;
+        Ok(next)
+    }
+
     pub fn check(&self, patch: &Patch) -> Result<(), Refusal> {
-        match self
-            .0
-            .values()
-            .find(|saved| compile(&saved.step, patch).is_err())
-        {
-            Some(saved) => Err(Refusal::LookInUse { look: saved.look }),
-            None => Ok(()),
+        self.rebind(patch).map(drop)
+    }
+
+    fn recompile(
+        &mut self,
+        patch: &Patch,
+        roots: &BTreeSet<u16>,
+        rebinding: bool,
+    ) -> Result<(), Refusal> {
+        // Count unaffected roots first. A valid edit may shrink one parent and grow
+        // another. Never charge the replaced roots to the prospective revision.
+        let mut bytes = self
+            .plans
+            .iter()
+            .filter(|(look, _)| !roots.contains(look))
+            .map(|(_, plan)| plan.bytes())
+            .sum::<usize>();
+        for &look in roots {
+            let plan = Plan::build(self, look, patch, PLAN_BYTES - bytes).map_err(|reason| {
+                if rebinding && reason != Refusal::WorkLimit {
+                    Refusal::LookInUse { look }
+                } else {
+                    reason
+                }
+            })?;
+            bytes += plan.bytes();
+            if self.plans.get(&look).is_none_or(|prior| **prior != plan) {
+                self.plans.insert(look, Arc::new(plan));
+            }
         }
+        Ok(())
     }
 }
 
-/// The plan of `step` in `patch`: its values on each run of lights its target names.
-/// `EmptyGroup` when it names no light.
-pub fn compile(step: &Step, patch: &Patch) -> Result<Box<[Entry]>, Refusal> {
-    let runs = patch.runs(step.target)?;
-    if runs.is_empty() {
-        return Err(Refusal::EmptyGroup);
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    reason = "the test fixture supplies the named looks and bound lights"
+)]
+mod tests {
+    use super::*;
+    use core::num::NonZeroU16;
+    use engine_core::{
+        ChannelNumbers, Color, Definition, Light, Lights, PatchCommand, Pixels, SavedLook,
+        Sequence, SequenceItem, Target, Text, Universes, Use,
+    };
+    use engine_core::{Saved, Step};
+    use rig::Whole;
+
+    fn patch() -> Patch {
+        let empty = Patch::new(
+            Universes::new(1).unwrap(),
+            Lights::new(32).unwrap(),
+            Whole(|_| NonZeroU16::MIN),
+        );
+        empty
+            .update(
+                PatchCommand::PatchStrip {
+                    name: Text::new("strip").unwrap(),
+                    pixels: Pixels::try_from(3).unwrap(),
+                    color: Color::Rgb,
+                    at: ChannelNumbers {
+                        universe: 1,
+                        address: 1,
+                    },
+                },
+                &[],
+            )
+            .unwrap()
+            .0
+            .unwrap()
     }
-    rig::supports(patch.writers(), &runs, &step.values)?;
-    Ok(runs
-        .into_iter()
-        .map(|lights| Entry {
-            lights,
-            values: step.values,
-        })
-        .collect())
+
+    fn leaf(look: u16) -> Saved {
+        Saved {
+            look,
+            name: Text::new("rest").unwrap(),
+            step: Step {
+                target: Target::Fixture { fixture: 1 },
+                values: Light::DARK,
+            },
+        }
+    }
+
+    fn item(look: u16) -> SequenceItem {
+        SequenceItem {
+            look,
+            width: 16,
+            transition: 0,
+            usage: Use::default(),
+        }
+    }
+
+    fn sequence(look: u16, items: &[SequenceItem]) -> SavedLook {
+        SavedLook {
+            look,
+            name: Text::new("sequence").unwrap(),
+            definition: Definition::Sequence(Sequence::new(items).unwrap()),
+        }
+    }
+
+    #[test]
+    fn an_invalid_edit_is_refused_as_a_whole() {
+        let patch = patch();
+        let looks = Looks::new().put(leaf(1), &patch).unwrap();
+        let looks = looks.put(sequence(2, &[item(1)]), &patch).unwrap();
+        let looks = looks.put(sequence(3, &[item(2); 64]), &patch).unwrap();
+        let looks = looks.put(sequence(4, &[item(3); 64]), &patch).unwrap();
+        for (name, invalid, reason) in [
+            (
+                "cycle through a parent",
+                sequence(2, &[item(4)]),
+                Refusal::LookCycle,
+            ),
+            (
+                "step to sequence",
+                sequence(1, &[item(2)]),
+                Refusal::WrongLookKind,
+            ),
+            ("sequence to step", leaf(2).into(), Refusal::WrongLookKind),
+            ("absent child", sequence(2, &[item(9)]), Refusal::NoSuchLook),
+            (
+                "zero width",
+                sequence(
+                    2,
+                    &[SequenceItem {
+                        width: 0,
+                        ..item(1)
+                    }],
+                ),
+                Refusal::InvalidTiming,
+            ),
+            (
+                "transition past 100",
+                sequence(
+                    2,
+                    &[SequenceItem {
+                        transition: 101,
+                        ..item(1)
+                    }],
+                ),
+                Refusal::InvalidTiming,
+            ),
+            (
+                "spread past 100",
+                sequence(
+                    2,
+                    &[SequenceItem {
+                        usage: Use {
+                            spread: 101,
+                            ..Use::default()
+                        },
+                        ..item(1)
+                    }],
+                ),
+                Refusal::InvalidTiming,
+            ),
+            (
+                "reverse expansion past limit",
+                sequence(2, &[item(1); 64]),
+                Refusal::WorkLimit,
+            ),
+        ] {
+            let before = looks.clone();
+            assert_eq!(looks.put(invalid, &patch), Err(reason), "{name}");
+            assert_eq!(before, looks, "{name}");
+        }
+        assert_eq!(looks.remove(1), Err(Refusal::LookInUse { look: 2 }));
+    }
+
+    #[test]
+    fn compiled_spread_keeps_the_first_occurrence_in_saved_group_order() {
+        use engine_core::{Entry, Member, Members};
+        let group = Text::new("front").unwrap();
+        for (members, expected) in [
+            ([3, 1, 3, 2], [Some(22), Some(22), Some(11)]),
+            ([1, 2, 2, 3], [Some(11), Some(22), Some(22)]),
+        ] {
+            let patch = patch()
+                .update(
+                    PatchCommand::SetGroup {
+                        name: group,
+                        members: Members::new(&members.map(|light| Member::Light { light }))
+                            .unwrap(),
+                    },
+                    &[],
+                )
+                .unwrap()
+                .0
+                .unwrap();
+            let mut looks = Looks::new();
+            for (id, value) in [(1, 11), (2, 22)] {
+                let mut saved = leaf(id);
+                saved.step.target = Target::Group { group };
+                saved.step.values.intensity = Some(value);
+                looks = looks.put(saved, &patch).unwrap();
+            }
+            let looks = looks.put(sequence(3, &[item(1), item(2)]), &patch).unwrap();
+            let plan = looks.plan(3).unwrap();
+            let initial = Entry {
+                lights: patch.runs(Target::Light { light: 1 }).unwrap()[0],
+                values: Light::DARK,
+            };
+            let mut scratch = alloc::vec![initial; plan.lights()];
+            let spread = Use {
+                spread: 100,
+                ..Use::default()
+            };
+            assert!(plan.sample(1 << 31, spread, &mut scratch));
+            assert_eq!(
+                plan.entries(&scratch)
+                    .iter()
+                    .map(|e| e.values.intensity)
+                    .collect::<Vec<_>>(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn a_shared_subgraph_cannot_hide_a_path_past_eight_looks() {
+        let patch = patch();
+        let mut looks = Looks::new().put(leaf(1), &patch).unwrap();
+        for id in 2..=8 {
+            looks = looks.put(sequence(id, &[item(id - 1)]), &patch).unwrap();
+        }
+        for children in [[item(2), item(8)], [item(8), item(2)]] {
+            assert_eq!(
+                looks.put(sequence(9, &children), &patch),
+                Err(Refusal::WorkLimit)
+            );
+        }
+    }
 }
