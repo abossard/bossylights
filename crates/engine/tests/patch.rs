@@ -397,3 +397,55 @@ fn a_light_let_go_does_not_veto_an_update_of_the_lights_still_held() {
     heard.two_more_frames();
     assert_eq!(bytes(&heard, 1, 1), [0, 0, 0]);
 }
+
+#[test]
+fn a_kept_plays_frozen_lights_cannot_be_unpatched_under_it() {
+    let red_on = |fixture| Command::PutStep {
+        look: 1,
+        name: text("red"),
+        step: engine_core::Step {
+            target: Target::Fixture { fixture },
+            values: engine::Light {
+                intensity: Some(u16::MAX),
+                colour: Some(Rgb {
+                    red: u16::MAX,
+                    ..Rgb::BLACK
+                }),
+                ..engine::Light::DARK
+            },
+        },
+    };
+    // (stopped first, unpatching A, then on A's channels)
+    let cases = [
+        (true, Err(Refusal::LookInUse { look: 1 }), [255, 0, 0]),
+        (false, Ok(None), [0, 0, 0]),
+    ];
+    for (stopped, unpatched, on_a) in cases {
+        let (_engine, mut sender, heard) = start();
+        assert_eq!(send(&mut sender, par("A", 1, 1)), Ok(Some(1)));
+        assert_eq!(send(&mut sender, par("B", 1, 4)), Ok(Some(2)));
+        assert_eq!(send(&mut sender, red_on(1)), Ok(None));
+        let start = Command::StartLook {
+            look: 1,
+            rank: engine::Rank::Manual,
+        };
+        let Ok(Begun::Started { play }) = sender.begin(start, &library()) else {
+            panic!("look 1 plays");
+        };
+        if stopped {
+            // kept under UntilRelease: its plan stays red on A
+            assert_eq!(send(&mut sender, Command::StopLook { play }), Ok(None));
+        }
+        assert_eq!(send(&mut sender, red_on(2)), Ok(None), "stopped {stopped}");
+        assert_eq!(
+            send(&mut sender, Command::Unpatch { fixture: 1 }),
+            unpatched,
+            "stopped {stopped}"
+        );
+        if unpatched.is_ok() {
+            assert_eq!(send(&mut sender, par("C", 1, 1)), Ok(Some(1)));
+        }
+        heard.two_more_frames();
+        assert_eq!(bytes(&heard, 1, 1), on_a, "stopped {stopped}");
+    }
+}

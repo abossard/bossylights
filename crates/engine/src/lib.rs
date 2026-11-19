@@ -293,6 +293,7 @@ enum Change {
         look: u16,
         looks: Looks,
         plan: Box<[Entry]>,
+        step: engine_core::Step,
     },
     RemoveLook {
         look: u16,
@@ -302,6 +303,7 @@ enum Change {
         look: u16,
         rank: Rank,
         plan: Box<[Entry]>,
+        step: engine_core::Step,
     },
     StopLook {
         play: PlayId,
@@ -416,6 +418,7 @@ impl Base {
                     look,
                     looks: self.looks.put(Saved { look, name, step }, &self.patch)?,
                     plan: looks::compile(&step, &self.patch)?,
+                    step,
                 }
             }
             LookCommand::RemoveLook { look } => Change::RemoveLook {
@@ -428,6 +431,7 @@ impl Base {
                     look,
                     rank,
                     plan: looks::compile(&saved.step, &self.patch)?,
+                    step: saved.step,
                 }
             }
             LookCommand::StopLook { play } => Change::StopLook { play },
@@ -462,6 +466,8 @@ struct Live {
     look: u16,
     rank: Rank,
     state: PlayState,
+    /// The step its plan was compiled from: a kept play's stays as it was.
+    step: engine_core::Step,
 }
 
 /// Between the threads of the engine. Atomics only.
@@ -662,12 +668,20 @@ impl Sender {
                 effects,
                 moved,
             } => {
-                // a change of the patch never moves a play, playing or kept
+                // a change of the patch never moves a play, playing or kept: a kept
+                // play's frozen plan is checked as well as the saved step
                 if let Some(look) = moved
                     .into_iter()
                     .find(|&look| self.uses(look).next().is_some())
                 {
                     return Err(Refusal::LookInUse { look });
+                }
+                if let Some(new) = &patch
+                    && let Some(live) = self.plays.iter().flatten().find(|live| {
+                        looks::compile(&live.step, &self.patch) != looks::compile(&live.step, new)
+                    })
+                {
+                    return Err(Refusal::LookInUse { look: live.look });
                 }
                 let begun = self.follow(effects)?;
                 if let Some(patch) = patch {
@@ -675,19 +689,38 @@ impl Sender {
                 }
                 begun
             }
-            Change::PutStep { look, looks, plan } => {
+            Change::PutStep {
+                look,
+                looks,
+                plan,
+                step,
+            } => {
                 // a play of the look takes the new plan, keeping its start; a kept one
-                // keeps its values
+                // keeps its values. Every play's plan is queued at once, so one wake
+                // takes all of them or none.
                 let playing: Vec<PlayId> = self
                     .uses(look)
                     .filter(|live| live.state == PlayState::Playing)
                     .map(|live| live.play)
                     .collect();
                 self.room(playing.len(), playing.len())?;
-                for play in playing {
-                    self.push(EngineCommand::Plan { play }, Brings::Plan(plan.clone()))?;
+                let Ok(chunk) = self.commands.write_chunk_uninit(playing.len()) else {
+                    return Err(Refusal::QueueFull);
+                };
+                let at = self.clock.now();
+                let sent = chunk.fill_from_iter(playing.iter().map(|&play| Sent {
+                    command: EngineCommand::Plan { play },
+                    at,
+                    brings: Brings::Plan(plan.clone()),
+                }));
+                self.sent += sent as u64;
+                self.retired += sent as u64; // the old plans are on their way back
+                for live in self.plays.iter_mut().flatten() {
+                    if playing.contains(&live.play) {
+                        live.step = step;
+                    }
                 }
-                self.free.unpark(); // the old plans are on their way back
+                self.free.unpark();
                 self.looks = Arc::new(looks);
                 Begun::Queued
             }
@@ -698,7 +731,12 @@ impl Sender {
                 self.looks = Arc::new(looks);
                 Begun::Queued
             }
-            Change::StartLook { look, rank, plan } => {
+            Change::StartLook {
+                look,
+                rank,
+                plan,
+                step,
+            } => {
                 // a fresh start of the look at this rank, playing or kept, takes its slot
                 let slot = self
                     .plays
@@ -721,6 +759,7 @@ impl Sender {
                         look,
                         rank,
                         state: PlayState::Playing,
+                        step,
                     });
                 }
                 Begun::Started { play }
