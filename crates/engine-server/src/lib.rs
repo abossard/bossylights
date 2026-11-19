@@ -551,6 +551,7 @@ mod tests {
         let Begun::Started { play } = change(Command::StartLook {
             look: 1,
             rank: engine::Rank::Manual,
+            when: engine::When::Now,
         }) else {
             panic!("look 1 plays");
         };

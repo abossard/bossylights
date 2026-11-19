@@ -41,8 +41,8 @@ pub use engine_core::{
     Refusal, Reply, Request, Run, RunNumbers, State, Status, Target, Text, Universes, changes,
 };
 pub use engine_core::{
-    Brightness, GrabId, Light, ManualEnd, MixRules, OtherEnd, PlayId, PlayState, Property, Rank,
-    Rgb, Saved, Value,
+    Bpm, Brightness, GrabId, Light, ManualEnd, MixRules, OtherEnd, PlayId, PlayState, Property,
+    Rank, Rgb, Saved, Source, Value, When,
 };
 use engine_core::{
     EngineCommand, Histogram, LATENCY_BUCKETS, LATENESS_BUCKETS, MAX_LIGHTS, bucket, due, frame,
@@ -130,7 +130,10 @@ pub const fn edits(command: &Command) -> bool {
         | Command::StartLook { .. }
         | Command::StopLook { .. }
         | Command::EndFlash { .. }
-        | Command::ReleaseHold { .. } => false,
+        | Command::ReleaseHold { .. }
+        | Command::SetInternalTempo { .. }
+        | Command::TapTempo
+        | Command::ReleaseTempo => false,
     }
 }
 
@@ -302,6 +305,7 @@ enum Change {
     StartLook {
         look: u16,
         rank: Rank,
+        when: When,
         plan: Box<[Entry]>,
         step: engine_core::Step,
     },
@@ -425,11 +429,12 @@ impl Base {
                 look,
                 looks: self.looks.remove(look),
             },
-            LookCommand::StartLook { look, rank } => {
+            LookCommand::StartLook { look, rank, when } => {
                 let saved = self.looks.get(look).ok_or(Refusal::NoSuchLook)?;
                 Change::StartLook {
                     look,
                     rank,
+                    when,
                     plan: looks::compile(&saved.step, &self.patch)?,
                     step: saved.step,
                 }
@@ -734,6 +739,7 @@ impl Sender {
             Change::StartLook {
                 look,
                 rank,
+                when,
                 plan,
                 step,
             } => {
@@ -749,7 +755,12 @@ impl Sender {
                 let generation = self.generation.wrapping_add(1);
                 let play = PlayId::new(slot, generation).ok_or(Refusal::PlayFull)?;
                 self.push(
-                    EngineCommand::Start { play, look, rank },
+                    EngineCommand::Start {
+                        play,
+                        look,
+                        rank,
+                        when,
+                    },
                     Brings::Plan(plan),
                 )?;
                 self.generation = generation;
@@ -1122,7 +1133,11 @@ impl Sender {
             | EngineCommand::Keep { .. }
             | EngineCommand::Rules { .. }
             | EngineCommand::Plan { .. }
-            | EngineCommand::Release { .. } => (None, false),
+            | EngineCommand::Release { .. }
+            | EngineCommand::Settle { .. }
+            | EngineCommand::Tap
+            | EngineCommand::ReleaseTempo
+            | EngineCommand::Feed { .. } => (None, false),
         };
         // What goes back now: a start, the plan of a play in its slot; a new plan or a
         // release, the play's plan. A plan the tick thread keeps has its return kept from
@@ -1361,11 +1376,14 @@ impl Ticker {
                 let Ok(sent) = self.commands.pop() else {
                     break;
                 };
+                // in time order: what the grid reached before it was sent comes first
+                self.apply(EngineCommand::Settle { at: sent.at });
                 self.apply(sent.command);
                 self.swap(sent.command, sent.brings);
                 self.carried.applied(sent.at);
                 self.now.applied_one();
             }
+            self.apply(EngineCommand::Settle { at: now });
 
             let plans = &self.plans;
             self.now.show(
@@ -1816,6 +1834,7 @@ mod tests {
                 let start = Command::StartLook {
                     look,
                     rank: Rank::Manual,
+                    when: When::Now,
                 };
                 match sender.begin(start, &[]) {
                     Ok(Begun::Started { play }) => plays.push(play),
@@ -1842,6 +1861,7 @@ mod tests {
             let restart = Command::StartLook {
                 look: 1,
                 rank: Rank::Manual,
+                when: When::Now,
             };
             while once_drained(&mut engine, &mut sender, restart).is_ok() {}
             assert_eq!(

@@ -186,6 +186,7 @@ fn main() {
     let (allocations, tick_frees) = (counting::allocations(), counting::tick_frees());
     let mut attaching = 0;
     let mut play: Option<PlayId> = None;
+    let mut launched = false;
     let frame = engine.latest().state.frame;
     for value in 0..=255 {
         let channel = ChannelNumbers {
@@ -209,6 +210,42 @@ fn main() {
             // the runs of the group, in place: applied in one wake
             assert!(send(&mut sender, green, &library), "the group goes green");
         }
+        if value % 16 == 2 {
+            // the tempo: a feed, taps, a release; an Autopilot play on the next beat or
+            // bar, started afresh (the waiting one's plan goes back), stopped every other
+            // time: kept or cancelled under Stay, ended under Reveal
+            let bpm = engine::Bpm::new(30 + u16::from(value)).unwrap();
+            assert!(
+                send(&mut sender, Command::SetInternalTempo { bpm }, &library),
+                "the feed"
+            );
+            assert!(send(&mut sender, Command::TapTempo, &library), "a tap");
+            if value % 32 == 18 {
+                assert!(
+                    send(&mut sender, Command::ReleaseTempo, &library),
+                    "released"
+                );
+            }
+            let start = Command::StartLook {
+                look: 1,
+                rank: Rank::Autopilot,
+                when: if value % 64 < 32 {
+                    engine::When::Beat
+                } else {
+                    engine::When::Bar
+                },
+            };
+            let Ok(Begun::Started { play: waits }) = begin(&mut sender, start, &library) else {
+                panic!("look 1 waits at Autopilot");
+            };
+            if value % 32 == 2 {
+                let stop = Command::StopLook { play: waits };
+                assert!(
+                    send(&mut sender, stop, &library),
+                    "the Autopilot play stops"
+                );
+            }
+        }
         if value % 16 == 4 {
             // a start, or a fresh start in the play's slot: the old plan goes back
             let start = begin(
@@ -216,6 +253,7 @@ fn main() {
                 Command::StartLook {
                     look: 1,
                     rank: Rank::Manual,
+                    when: engine::When::Now,
                 },
                 &library,
             );
@@ -267,6 +305,7 @@ fn main() {
             let start = Command::StartLook {
                 look: 1,
                 rank: Rank::Show,
+                when: engine::When::Now,
             };
             let Ok(Begun::Started { play: shown }) = begin(&mut sender, start, &library) else {
                 panic!("look 1 starts at Show");
@@ -342,6 +381,10 @@ fn main() {
         // Pace the commands by the tick: a reader on every frame waits for the next picture.
         let seen = engine.latest().state.frame;
         mock::wait_until("no frame went by", || engine.latest().state.frame > seen);
+        launched |=
+            engine.latest().state.plays.iter().any(|play| {
+                play.rank == Rank::Autopilot && play.state == engine::PlayState::Playing
+            });
     }
     let state = engine.latest().state;
     let lit = engine.latest().lights()[..usize::from(LIGHTS) + 100]
@@ -358,6 +401,7 @@ fn main() {
     let start = Command::StartLook {
         look: 1,
         rank: Rank::Manual,
+        when: engine::When::Now,
     };
     assert!(
         matches!(
@@ -398,6 +442,7 @@ fn main() {
     drop(engine);
 
     assert!(ticks >= 5, "too few ticks to prove anything: {ticks}");
+    assert!(launched, "no play waiting for a beat launched");
     assert!(
         ticks >= 256,
         "a frame went by for each of 256 commands: {ticks}"

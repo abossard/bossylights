@@ -154,6 +154,7 @@ impl Front {
         let Ok(Begun::Started { play }) = front.begin(Command::StartLook {
             look: 1,
             rank: engine::Rank::Manual,
+            when: engine::When::Now,
         }) else {
             panic!("look 1 plays");
         };
@@ -206,6 +207,7 @@ impl Front {
             let started = self.begin(Command::StartLook {
                 look,
                 rank: engine::Rank::Manual,
+                when: engine::When::Now,
             });
             assert!(
                 matches!(started, Ok(Begun::Started { .. })),
@@ -285,6 +287,7 @@ fn a_refused_admission_keeps_the_project_the_looks_and_the_next_frame() {
             |_| Command::StartLook {
                 look: 2,
                 rank: engine::Rank::Manual,
+                when: engine::When::Now,
             },
             Before::Admitted(save_three),
             Refusal::Stale,
@@ -319,6 +322,7 @@ fn a_refused_admission_keeps_the_project_the_looks_and_the_next_frame() {
             |_| Command::StartLook {
                 look: 2,
                 rank: engine::Rank::Manual,
+                when: engine::When::Now,
             },
             Before::Full,
             Refusal::QueueFull,
@@ -335,6 +339,7 @@ fn a_refused_admission_keeps_the_project_the_looks_and_the_next_frame() {
             |_| Command::StartLook {
                 look: 2,
                 rank: engine::Rank::Manual,
+                when: engine::When::Now,
             },
             Before::PlaysFull,
             Refusal::PlayFull,
@@ -457,6 +462,7 @@ fn with_every_play_slot_taken_a_release_and_a_fresh_start_need_only_room_in_the_
                 let started = front.begin(Command::StartLook {
                     look: 2,
                     rank: engine::Rank::Manual,
+                    when: engine::When::Now,
                 });
                 assert!(matches!(started, Ok(Begun::Started { .. })));
             },
@@ -468,6 +474,7 @@ fn with_every_play_slot_taken_a_release_and_a_fresh_start_need_only_room_in_the_
                 let started = front.begin(Command::StartLook {
                     look: 1,
                     rank: engine::Rank::Manual,
+                    when: engine::When::Now,
                 });
                 let Ok(Begun::Started { play: again }) = started else {
                     panic!("look 1 starts again: {:?}", started.err());
@@ -571,6 +578,7 @@ impl Served {
             Command::StartLook {
                 look: 1,
                 rank: engine::Rank::Manual,
+                when: engine::When::Now,
             },
             &library,
         ) else {

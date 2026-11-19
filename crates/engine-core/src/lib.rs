@@ -16,6 +16,8 @@
 
 mod api;
 mod channel;
+mod clock;
+pub use clock::{BEATS_PER_BAR, Bpm, Clock, Reading, Source, When, beats};
 mod kinds;
 mod library;
 mod mix;
@@ -92,6 +94,9 @@ pub struct State {
     #[serde(skip)]
     #[cfg_attr(test, ts(skip))]
     pub order: u64,
+    /// The beat clock, settled to the frame's time.
+    #[cfg_attr(test, ts(type = "Reading"))]
+    pub clock: Clock,
 }
 
 impl State {
@@ -111,6 +116,7 @@ impl State {
                 other_end: OtherEnd::Reveal,
             },
             order: 1,
+            clock: Clock::START,
         }
     }
 }
@@ -260,6 +266,11 @@ pub enum Command {
         #[serde(default)]
         #[cfg_attr(test, ts(optional = nullable))]
         rank: Rank,
+        /// At once when not given, or on the next beat or bar of the grid: then the
+        /// play waits, and plays from the frame of that crossing.
+        #[serde(default)]
+        #[cfg_attr(test, ts(optional = nullable))]
+        when: When,
     },
     /// Stop a play under the Mixer's end rule ([`MixRules`]): kept, or ended. A kept or
     /// ended play is a harmless no-op.
@@ -273,6 +284,13 @@ pub enum Command {
     /// Save the Mixer's three settings at once. Switching to `UntilStop` or `Reveal`
     /// ends the kept plays of those ranks.
     SetMixRules { rules: MixRules },
+    /// The internal feed's tempo, 30 to 300 beats a minute: the tempo, unless taps set it.
+    SetInternalTempo { bpm: Bpm },
+    /// A tap at the time the engine takes it: it marks a beat, and a second one 200 ms
+    /// to 2 s later sets the tempo for every play, until `ReleaseTempo`.
+    TapTempo,
+    /// The feed's tempo again, from the grid's phase now.
+    ReleaseTempo,
 }
 
 /// What changes the state on the tick thread. The front makes these from a checked
@@ -345,8 +363,10 @@ pub enum EngineCommand {
         play: PlayId,
         look: u16,
         rank: Rank,
+        when: When,
     },
-    /// `play` is kept: its values stay at its rank and start.
+    /// `play` is kept: its values stay at its rank and start. A waiting play is
+    /// cancelled.
     Keep {
         play: PlayId,
     },
@@ -362,6 +382,18 @@ pub enum EngineCommand {
     /// `play` ends; its plan goes back to be freed.
     Release {
         play: PlayId,
+    },
+    /// Time reaches `at`, if it was not there yet: the commands sent by then are
+    /// applied, the waiting plays whose beat the grid reaches launch, one tap lapses.
+    /// The tick settles before each command at the time it was sent, and at the frame.
+    Settle {
+        at: Duration,
+    },
+    /// A tap, at the time the clock was settled to.
+    Tap,
+    ReleaseTempo,
+    Feed {
+        bpm: Bpm,
     },
 }
 
@@ -508,10 +540,25 @@ pub fn update(
             run.of(lights).fill(Held::NONE);
             state
         }
-        EngineCommand::Start { play, look, rank } => {
+        EngineCommand::Start {
+            play,
+            look,
+            rank,
+            when,
+        } => {
             let mut plays = state.plays;
-            plays.start(play, look, rank, state.order);
-            State { plays, ..held }
+            let order = plays.start(
+                (play, look, rank),
+                when,
+                &state.clock,
+                state.now,
+                state.order,
+            );
+            State {
+                plays,
+                order,
+                ..state
+            }
         }
         EngineCommand::Keep { play } => {
             let mut plays = state.plays;
@@ -535,6 +582,33 @@ pub fn update(
             plays.release(play);
             State { plays, ..state }
         }
+        EngineCommand::Settle { at } => launch(State {
+            clock: state.clock.settle(at),
+            ..state
+        }),
+        EngineCommand::Tap => launch(State {
+            clock: state.clock.tap(),
+            ..state
+        }),
+        EngineCommand::ReleaseTempo => State {
+            clock: state.clock.release(),
+            ..state
+        },
+        EngineCommand::Feed { bpm } => State {
+            clock: state.clock.set_feed(bpm),
+            ..state
+        },
+    }
+}
+
+/// The waiting plays whose beat the grid reached by now play.
+fn launch(state: State) -> State {
+    let mut plays = state.plays;
+    let order = plays.launch(&state.clock, state.order);
+    State {
+        plays,
+        order,
+        ..state
     }
 }
 
@@ -731,6 +805,327 @@ mod tests {
     fn tick(ms: u64) -> EngineCommand {
         EngineCommand::Tick {
             now: Duration::from_millis(ms),
+        }
+    }
+
+    /// One wake at `now`: the commands sent by then, each settled at the time it was
+    /// sent, then the frame's time, as the tick applies them.
+    fn wake(state: State, now: u64, sent: &[(u64, EngineCommand)]) -> State {
+        let apply = |state, command| update(state, &mut [], &mut [], &mut [], command);
+        let mut state = apply(state, tick(now));
+        for (at, command) in sent {
+            let at = Duration::from_millis(*at);
+            state = apply(state, EngineCommand::Settle { at });
+            state = apply(state, *command);
+        }
+        apply(
+            state,
+            EngineCommand::Settle {
+                at: Duration::from_millis(now),
+            },
+        )
+    }
+
+    /// An engine with the feed at 120 beats a minute: beat n at n * 500 ms.
+    fn at_120() -> State {
+        wake(
+            CALM,
+            0,
+            &[(
+                0,
+                EngineCommand::Feed {
+                    bpm: Bpm::new(120).unwrap(),
+                },
+            )],
+        )
+    }
+
+    /// A count of the clock is `beats`, to a millionth of a beat.
+    fn close(count: u64, want: f64) -> bool {
+        (beats(count) - want).abs() < 1e-6
+    }
+
+    fn play(slot: usize) -> PlayId {
+        PlayId::new(slot, 1).unwrap()
+    }
+
+    #[test]
+    fn a_waiting_play_launches_on_its_beat_in_time_order() {
+        let start = |slot, when| EngineCommand::Start {
+            play: play(slot),
+            look: 7,
+            rank: Rank::Manual,
+            when,
+        };
+        let keep = EngineCommand::Keep { play: play(0) };
+        let release = EngineCommand::Release { play: play(0) };
+        let tap = EngineCommand::Tap;
+        let (beat, bar, now) = (When::Beat, When::Bar, When::Now);
+        let waits = |beat| PlayState::Waiting { beat };
+        let (playing, kept) = (PlayState::Playing, PlayState::Kept);
+        type Wakes<'a> = &'a [(u64, &'a [(u64, EngineCommand)])];
+        // (name, wakes, plays after the last, the latest start that sounds)
+        type Case<'a> = (&'a str, Wakes<'a>, &'a [(usize, PlayState)], Option<usize>);
+        let cases: [Case; 19] = [
+            (
+                "a beat, before it",
+                &[(1100, &[(1100, start(0, beat))]), (1499, &[])],
+                &[(0, waits(3))],
+                None,
+            ),
+            (
+                "a beat, on it",
+                &[(1100, &[(1100, start(0, beat))]), (1500, &[])],
+                &[(0, playing)],
+                Some(0),
+            ),
+            (
+                "a beat, asked on the grid",
+                &[(1500, &[(1500, start(0, beat))])],
+                &[(0, playing)],
+                Some(0),
+            ),
+            (
+                "a beat, asked on the grid, late",
+                &[(1600, &[(1500, start(0, beat))])],
+                &[(0, playing)],
+                Some(0),
+            ),
+            (
+                "a bar, through the beats",
+                &[
+                    (2600, &[(2600, start(0, bar))]),
+                    (3000, &[]),
+                    (3500, &[]),
+                    (3999, &[]),
+                ],
+                &[(0, waits(8))],
+                None,
+            ),
+            (
+                "a bar, on it",
+                &[(2600, &[(2600, start(0, bar))]), (3000, &[]), (4000, &[])],
+                &[(0, playing)],
+                Some(0),
+            ),
+            (
+                "kept while waiting: cancelled",
+                &[
+                    (1100, &[(1100, start(0, beat))]),
+                    (1200, &[(1200, keep)]),
+                    (2000, &[]),
+                ],
+                &[],
+                None,
+            ),
+            (
+                "released while waiting",
+                &[
+                    (1100, &[(1100, start(0, beat))]),
+                    (1200, &[(1200, release)]),
+                    (2000, &[]),
+                ],
+                &[],
+                None,
+            ),
+            (
+                "kept after its crossing, in a late wake",
+                &[(1100, &[(1100, start(0, beat))]), (1600, &[(1550, keep)])],
+                &[(0, kept)],
+                Some(0),
+            ),
+            (
+                "kept before its crossing, in a late wake",
+                &[(1100, &[(1100, start(0, beat))]), (1600, &[(1450, keep)])],
+                &[],
+                None,
+            ),
+            (
+                "kept on its crossing: it launched first",
+                &[(1100, &[(1100, start(0, beat))]), (1600, &[(1500, keep)])],
+                &[(0, kept)],
+                Some(0),
+            ),
+            (
+                "two boundaries in one late wake: the later beat starts later",
+                &[
+                    (1100, &[(1100, start(0, bar)), (1100, start(1, beat))]),
+                    (2100, &[]),
+                ],
+                &[(0, playing), (1, playing)],
+                Some(0),
+            ),
+            (
+                "two on one beat: the later request starts later",
+                &[
+                    (1100, &[(1100, start(0, beat)), (1100, start(1, beat))]),
+                    (1500, &[]),
+                ],
+                &[(0, playing), (1, playing)],
+                Some(1),
+            ),
+            (
+                "sent before the crossing, at once: the launch is later",
+                &[
+                    (1100, &[(1100, start(0, beat))]),
+                    (1600, &[(1200, start(1, now))]),
+                ],
+                &[(0, playing), (1, playing)],
+                Some(0),
+            ),
+            (
+                "sent after the crossing, at once: it is later",
+                &[
+                    (1100, &[(1100, start(0, beat))]),
+                    (1600, &[(1550, start(1, now))]),
+                ],
+                &[(0, playing), (1, playing)],
+                Some(1),
+            ),
+            (
+                "a tap supplies the crossing",
+                &[(1100, &[(1100, start(0, beat))]), (1300, &[(1300, tap)])],
+                &[(0, playing)],
+                Some(0),
+            ),
+            (
+                "an off-grid tap moves a bar's crossing: before it",
+                &[
+                    (2600, &[(2600, start(0, bar))]),
+                    (3150, &[(3150, tap)]),
+                    (3649, &[]),
+                ],
+                &[(0, waits(8))],
+                None,
+            ),
+            (
+                "an off-grid tap moves a bar's crossing: on it",
+                &[
+                    (2600, &[(2600, start(0, bar))]),
+                    (3150, &[(3150, tap)]),
+                    (3650, &[]),
+                ],
+                &[(0, playing)],
+                Some(0),
+            ),
+            (
+                "started again while waiting: waits afresh",
+                &[
+                    (1100, &[(1100, start(0, beat))]),
+                    (1200, &[(1200, start(0, bar))]),
+                    (1500, &[]),
+                ],
+                &[(0, waits(4))],
+                None,
+            ),
+        ];
+        for (name, wakes, plays, latest) in cases {
+            let mut state = at_120();
+            for (now, sent) in wakes {
+                state = wake(state, *now, sent);
+            }
+            let now: Vec<_> = state
+                .plays
+                .iter()
+                .map(|play| (play.play.slot(), play.state))
+                .collect();
+            assert_eq!(now, plays, "{name}");
+            let last = state.plays.sounding().max_by_key(|play| play.order);
+            assert_eq!(last.map(|play| play.play.slot()), latest, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_cancelled_play_keeps_its_slot_until_it_is_released() {
+        let start = EngineCommand::Start {
+            play: play(0),
+            look: 7,
+            rank: Rank::Show,
+            when: When::Bar,
+        };
+        let state = wake(at_120(), 1100, &[(1100, start)]);
+        let state = wake(
+            state,
+            1200,
+            &[(1200, EngineCommand::Keep { play: play(0) })],
+        );
+        assert!(state.plays.has(0) && state.plays.iter().next().is_none());
+        // its plan goes back as a kept play's would: the rules that end kept plays end it
+        let reveal = MixRules {
+            other_end: OtherEnd::Reveal,
+            ..state.rules
+        };
+        let ended = wake(
+            state,
+            1300,
+            &[(1300, EngineCommand::Rules { rules: reveal })],
+        );
+        assert!(!ended.plays.has(0));
+        let released = wake(
+            state,
+            1300,
+            &[(1300, EngineCommand::Release { play: play(0) })],
+        );
+        assert!(!released.plays.has(0));
+        // and it never sounds: past its bar, nothing launched
+        let later = wake(state, 2500, &[]);
+        assert!(later.plays.sounding().next().is_none());
+    }
+
+    #[test]
+    fn a_play_starts_at_its_crossing_and_a_tap_moves_no_running_play() {
+        let start = |when| EngineCommand::Start {
+            play: play(0),
+            look: 7,
+            rank: Rank::Manual,
+            when,
+        };
+        // at once: beat zero in its applying frame, the wake at 1600
+        let state = wake(at_120(), 1600, &[(1100, start(When::Now))]);
+        assert!(close(state.plays.iter().next().unwrap().start, 3.2));
+        // on a beat in a late wake: from its crossing at 1500, 0.2 beats on by the frame
+        let state = wake(at_120(), 1100, &[(1100, start(When::Beat))]);
+        let state = wake(state, 1600, &[]);
+        assert!(close(state.plays.iter().next().unwrap().start, 3.0));
+        // a tap at 1700 moves the grid from 3.4 to 4; the elapsed count runs on
+        let untapped = wake(state, 1700, &[]);
+        let tapped = wake(state, 1700, &[(1700, EngineCommand::Tap)]);
+        assert_eq!(tapped.clock.elapsed_now(), untapped.clock.elapsed_now());
+        assert!(close(untapped.clock.grid(), 3.4) && close(tapped.clock.grid(), 4.0));
+        assert_eq!(tapped.plays, untapped.plays);
+    }
+
+    #[test]
+    fn taps_drained_in_one_wake_count_at_their_own_times() {
+        let cases = [
+            (
+                "750 ms apart",
+                1100,
+                1850,
+                Source::Tapped {
+                    at: Duration::from_millis(1850),
+                },
+                750,
+            ),
+            (
+                "sent at once: a bounce",
+                1100,
+                1100,
+                Source::OneTap {
+                    at: Duration::from_millis(1100),
+                },
+                500,
+            ),
+        ];
+        for (name, first, second, source, period) in cases {
+            let tap = EngineCommand::Tap;
+            let state = wake(at_120(), 2000, &[(first, tap), (second, tap)]);
+            assert_eq!(state.clock.source(), source, "{name}");
+            assert_eq!(
+                state.clock.period(),
+                Duration::from_millis(period),
+                "{name}"
+            );
         }
     }
 
@@ -1502,6 +1897,9 @@ mod tests {
                 Play::decl(&config),
                 Rank::decl(&config),
                 PlayState::decl(&config),
+                When::decl(&config),
+                Bpm::decl(&config),
+                Reading::decl(&config),
                 MixRules::decl(&config),
                 Brightness::decl(&config),
                 ManualEnd::decl(&config),

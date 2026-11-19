@@ -429,6 +429,7 @@ fn a_kept_plays_frozen_lights_cannot_be_unpatched_under_it() {
         let start = Command::StartLook {
             look: 1,
             rank: engine::Rank::Manual,
+            when: engine::When::Now,
         };
         let Ok(Begun::Started { play }) = sender.begin(start, &library()) else {
             panic!("look 1 plays");

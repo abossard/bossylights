@@ -1,0 +1,303 @@
+//! M3 T5 (#169) end to end over the API: launch on a beat or bar, read on a fake DMX USB
+//! Pro. One Generic RGB PAR at 1:1 plays red; looks start green or blue on the grid. The
+//! production tick runs on a clock the test sets wake by wake (`Wakes::wake_at`), so a
+//! tap or a request is sent at an exact time: at the time of the last wake.
+//!
+//! ```text
+//! 120 BPM --tap 0, tap 750--> 80 BPM, 1.5 beats --green on a beat--> green at 1500
+//!         --release at 1500--> 120 BPM --blue on a beat--> blue at 2000
+//! ```
+
+mod common;
+
+use common::{Heard, Socket, answer, command, connect, open, send};
+use engine::{Engine, Event, Universes, Wakes};
+use serde_json::{Value, json};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+use tokio::task::block_in_place;
+
+const RED: [u8; 3] = [255, 0, 0];
+const GREEN: [u8; 3] = [0, 255, 0];
+const BLUE: [u8; 3] = [0, 0, 255];
+
+/// A served engine on a stepped clock with the PAR, the fake adapter at 60 Hz, and
+/// looks 1 red, 2 green, 3 blue on the PAR. Times are in ms from `zero`.
+struct Desk {
+    socket: Socket,
+    wakes: Wakes,
+    heard: Heard,
+    stop: Arc<AtomicBool>,
+    /// Frames handed to the adapter so far.
+    handed: usize,
+    zero: Duration,
+}
+
+impl Desk {
+    async fn new() -> Self {
+        let heard: Heard = Arc::new(Mutex::new(Vec::new()));
+        let stop = Arc::new(AtomicBool::new(false));
+        let opens = open(Some(Arc::clone(&heard)), Arc::clone(&stop));
+        let (engine, sender, wakes) =
+            Engine::start_stepped(Universes::new(1).unwrap(), opens).unwrap();
+        let definitions = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../fixture-library/tests/definitions");
+        let mut socket = connect(common::serve(engine, sender, Some(definitions)).await).await;
+        let s = &mut socket;
+        accepted(
+            s,
+            json!({"SetOutput": {
+                "output": 1, "kind": {"DmxUsbPro": {"adapter": 1}},
+                "universes": {"first": 1, "count": 1}, "rate": "60",
+            }}),
+        )
+        .await;
+        let patch = json!({"Patch": {
+            "name": "PAR", "maker": "Generic", "model": "Generic RGB",
+            "mode": "RGB", "at": {"universe": 1, "address": 1},
+        }});
+        let started = Instant::now();
+        while command(s, patch.clone()).await != json!({"Patched": {"fixture": 1}}) {
+            assert!(started.elapsed() < Duration::from_secs(10), "no library");
+        }
+        for (look, colour) in [(1, RED), (2, GREEN), (3, BLUE)] {
+            let [red, green, blue] = colour.map(|byte| u16::from(byte) * 257);
+            accepted(
+                s,
+                json!({"PutStep": {"look": look, "name": format!("look {look}"), "step": {
+                    "target": {"Fixture": {"fixture": 1}},
+                    "values": {
+                        "intensity": 65535,
+                        "colour": {"red": red, "green": green, "blue": blue},
+                    },
+                }}}),
+            )
+            .await;
+        }
+        accepted(s, json!({"SetInternalTempo": {"bpm": 120}})).await;
+        block_in_place(|| wakes.hold()).unwrap();
+        let mut desk = Self {
+            socket,
+            wakes,
+            heard,
+            stop,
+            handed: 0,
+            zero: Duration::ZERO,
+        };
+        // every command so far applied, then time zero a second on
+        let now = block_in_place(|| desk.wakes.wake()).unwrap();
+        desk.zero = now + Duration::from_secs(1);
+        for event in desk.wakes.events() {
+            if let Event::Handed { .. } = event {
+                desk.handed += 1;
+            }
+        }
+        desk
+    }
+
+    fn time(&self, ms: u64) -> Duration {
+        self.zero + Duration::from_millis(ms)
+    }
+
+    /// Lets a wake through at `ms`. What the PAR shows in the frame it handed the
+    /// adapter then, once it is on the wire; `None` if the adapter was not due.
+    async fn at(&mut self, ms: u64) -> Option<[u8; 3]> {
+        let at = self.time(ms);
+        assert_eq!(block_in_place(|| self.wakes.wake_at(at)).unwrap(), at);
+        let mut served = false;
+        for event in self.wakes.events() {
+            if let Event::Handed { at: handed, .. } = event {
+                self.handed += 1;
+                served |= handed == at;
+            }
+        }
+        let started = Instant::now();
+        while self.heard.lock().unwrap().len() != self.handed {
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "frames not on the wire"
+            );
+            tokio::task::yield_now().await;
+        }
+        let last = self
+            .heard
+            .lock()
+            .unwrap()
+            .last()
+            .map(|c| [c[0], c[1], c[2]]);
+        served.then_some(last).flatten()
+    }
+
+    /// What the PAR shows at `ms`, in a frame handed over then.
+    async fn shows(&mut self, ms: u64) -> [u8; 3] {
+        let shown = self.at(ms).await;
+        shown.unwrap_or_else(|| panic!("no frame at {ms} ms"))
+    }
+
+    /// The state of the picture painted last.
+    async fn query(&mut self) -> Value {
+        send(&mut self.socket, &json!("Query")).await;
+        answer(&mut self.socket).await["Picture"]["state"].clone()
+    }
+
+    /// The picture at `ms`. The server paints the frame of the first wake after it
+    /// asks for one: wakes at `ms` until a frame of one of them is painted.
+    async fn picture(&mut self, ms: u64) -> Value {
+        self.at(ms).await;
+        let first = self.wakes.woke();
+        let started = Instant::now();
+        loop {
+            let state = self.query().await;
+            if state["frame"].as_u64().unwrap() >= first {
+                return state;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "not painted: {state}"
+            );
+            self.at(ms).await;
+        }
+    }
+
+    /// Sends `sent`: accepted.
+    async fn send(&mut self, sent: Value) {
+        accepted(&mut self.socket, sent).await;
+    }
+
+    /// Starts look `look` `when`: its play.
+    async fn start(&mut self, look: u16, when: &str) -> Value {
+        let sent = json!({"StartLook": {"look": look, "when": when}});
+        let started = command(&mut self.socket, sent).await;
+        let play = started["Started"]["play"].clone();
+        assert!(play.is_object(), "look {look} {when}: {started}");
+        play
+    }
+
+    async fn stop(mut self) {
+        send(&mut self.socket, &json!("Stop")).await;
+        self.wakes.run();
+        self.stop.store(true, Ordering::Relaxed);
+    }
+}
+
+async fn accepted(socket: &mut Socket, sent: Value) {
+    assert_eq!(
+        command(socket, sent.clone()).await,
+        json!("Accepted"),
+        "{sent}"
+    );
+}
+
+/// The beats a play has run in a picture.
+fn own_beat(state: &Value, look: u64) -> f64 {
+    let play = state["plays"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|play| play["look"] == look)
+        .unwrap_or_else(|| panic!("no play of look {look}: {state}"));
+    state["clock"]["elapsed"].as_f64().unwrap() - play["start"].as_f64().unwrap()
+}
+
+fn close(seen: f64, want: f64) -> bool {
+    (seen - want).abs() < 1e-6
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn taps_set_the_tempo_and_launches_land_on_the_tapped_and_the_fed_beat() {
+    let mut desk = Desk::new().await;
+    // a tap at 0 and red at once, both sent at 0
+    desk.at(0).await;
+    desk.start(1, "Now").await;
+    desk.send(json!("TapTempo")).await;
+    let state = desk.picture(0).await;
+    assert_eq!(state["clock"]["bpm"], 120.0, "{state}");
+    assert_eq!(state["clock"]["source"], "OneTap", "{state}");
+    // the second tap at 750: 80 BPM, 1.5 beats on
+    desk.at(750).await;
+    desk.send(json!("TapTempo")).await;
+    let state = desk.picture(750).await;
+    assert_eq!(state["clock"]["bpm"], 80.0, "{state}");
+    assert_eq!(state["clock"]["source"], "Tapped");
+    assert!(close(own_beat(&state, 1), 1.5), "{state}");
+    // green on the next beat, asked at 760: the tapped beat at 1500
+    desk.at(760).await;
+    desk.start(2, "Beat").await;
+    assert_eq!(desk.shows(780).await, RED);
+    assert_eq!(desk.shows(1480).await, RED);
+    assert_eq!(desk.shows(1500).await, GREEN);
+    // released at 1500: the feed's beat at 2000; blue asked at 1520
+    desk.send(json!("ReleaseTempo")).await;
+    let state = desk.picture(1520).await;
+    assert_eq!(state["clock"]["bpm"], 120.0, "{state}");
+    assert_eq!(state["clock"]["source"], "Feed");
+    desk.start(3, "Beat").await;
+    assert_eq!(desk.shows(1540).await, GREEN);
+    assert_eq!(desk.shows(1980).await, GREEN);
+    assert_eq!(desk.shows(2000).await, BLUE);
+    desk.stop().await;
+}
+
+/// Beat `n` of the grid after `zero`, in ms: the grid was at `first` then, 500 ms a beat.
+fn beat_at(first: u64, n: u64) -> u64 {
+    (n - first) * 500
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_bar_waits_two_crossings_in_one_wake_start_in_order_and_a_tap_moves_one_once() {
+    let mut desk = Desk::new().await;
+    // a tap at 0 puts a beat there; red at once
+    desk.at(0).await;
+    desk.start(1, "Now").await;
+    desk.send(json!("TapTempo")).await;
+    let first = desk.picture(0).await["clock"]["beat"].as_f64().unwrap() as u64;
+    let bar = first.div_ceil(4) * 4 + 4; // a bar at least four beats on
+    // a bar launch, asked off the grid: red through every beat before it
+    let asked = beat_at(first, bar - 4) + 100;
+    desk.at(asked).await;
+    let blue = desk.start(3, "Bar").await;
+    for beat in bar - 3..bar {
+        assert_eq!(desk.shows(beat_at(first, beat)).await, RED, "beat {beat}");
+    }
+    assert_eq!(desk.shows(beat_at(first, bar)).await, BLUE, "bar {bar}");
+    desk.send(json!({"ReleaseHold": {"play": blue}})).await;
+    // blue on the next bar asked first, green on the next beat after: one late wake
+    // crosses both; green started first, so blue, started later, wins
+    let asked = beat_at(first, bar) + 100;
+    desk.at(asked).await;
+    let blue = desk.start(3, "Bar").await;
+    let green = desk.start(2, "Beat").await;
+    assert_eq!(desk.shows(beat_at(first, bar + 1) - 20).await, RED);
+    assert_eq!(desk.shows(beat_at(first, bar + 4) + 20).await, BLUE);
+    desk.send(json!({"ReleaseHold": {"play": blue}})).await;
+    desk.send(json!({"ReleaseHold": {"play": green}})).await;
+    // green on the next bar, at 4 bars on; a tap 200 ms past a beat moves the grid on
+    // by 0.6 beats once: green comes 300 ms early, and red's own beat runs on
+    let bar = bar + 4;
+    let asked = beat_at(first, bar) + 100;
+    desk.at(asked).await;
+    let green = desk.start(2, "Bar").await;
+    let tap = beat_at(first, bar + 2) + 200;
+    let before = own_beat(&desk.picture(tap).await, 1);
+    desk.send(json!("TapTempo")).await;
+    let after = own_beat(&desk.picture(tap).await, 1);
+    assert!(
+        close(before, after),
+        "red's beat jumped: {before} to {after}"
+    );
+    let moved = beat_at(first, bar + 4) - 300;
+    assert_eq!(desk.shows(moved - 20).await, RED);
+    assert_eq!(desk.shows(moved).await, GREEN);
+    let state = desk.picture(beat_at(first, bar + 4)).await;
+    let plays: Vec<_> = state["plays"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|play| play["look"] == 2)
+        .map(|play| (play["play"].clone(), play["state"].clone()))
+        .collect();
+    assert_eq!(plays, [(green, json!("Playing"))], "{state}");
+    assert_eq!(desk.shows(beat_at(first, bar + 4) + 20).await, GREEN);
+    desk.stop().await;
+}

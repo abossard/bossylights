@@ -3,7 +3,12 @@
 
 export type Request = { "Send": { command: Command, } } | "Query" | "Subscribe" | "Stop" | { "Search": { text: string, } } | { "Fixture": { maker: string, model: string, } } | "Failures";
 
-export type Command = { "SetChannel": { channel: ChannelNumbers, value: number, } } | { "ReleaseChannel": { channel: ChannelNumbers, } } | "ReleaseChannels" | "ReleaseAll" | { "Blackout": { on: boolean, } } | { "SetOutput": { output: OutputNumber, kind: OutputKind, universes: RunNumbers, rate: Rate | null, } } | { "RemoveOutput": { output: OutputNumber, } } | { "Patch": { name: string, maker: string, model: string, mode: string, at: ChannelNumbers, } } | { "PatchStrip": { name: string, pixels: Pixels, color: Color, at: ChannelNumbers, } } | { "Move": { fixture: number, at: ChannelNumbers, } } | { "Unpatch": { fixture: number, } } | { "Rename": { fixture: number, name: string, } } | { "SetIntensity": { target: Target, intensity: number, } } | { "SetColour": { target: Target, red: number, green: number, blue: number, } } | { "ReleaseIntensity": { target: Target, } } | { "ReleaseColour": { target: Target, } } | { "SetProperty": { target: Target, value: Value, } } | { "UpdateGrab": { grab: GrabId, value: Value, } } | { "EndGrab": { grab: GrabId, } } | { "ReleaseProperty": { target: Target, property: Property, } } | { "SetGroup": { name: string, members: Array<Member>, } } | { "RemoveGroup": { name: string, } } | { "PutStep": { look: number, name: string, step: Step, } } | { "RemoveLook": { look: number, } } | { "StartLook": { look: number, rank?: Rank, } } | { "StopLook": { play: PlayId, } } | { "EndFlash": { play: PlayId, } } | { "ReleaseHold": { play: PlayId, } } | { "SetMixRules": { rules: MixRules, } };
+export type Command = { "SetChannel": { channel: ChannelNumbers, value: number, } } | { "ReleaseChannel": { channel: ChannelNumbers, } } | "ReleaseChannels" | "ReleaseAll" | { "Blackout": { on: boolean, } } | { "SetOutput": { output: OutputNumber, kind: OutputKind, universes: RunNumbers, rate: Rate | null, } } | { "RemoveOutput": { output: OutputNumber, } } | { "Patch": { name: string, maker: string, model: string, mode: string, at: ChannelNumbers, } } | { "PatchStrip": { name: string, pixels: Pixels, color: Color, at: ChannelNumbers, } } | { "Move": { fixture: number, at: ChannelNumbers, } } | { "Unpatch": { fixture: number, } } | { "Rename": { fixture: number, name: string, } } | { "SetIntensity": { target: Target, intensity: number, } } | { "SetColour": { target: Target, red: number, green: number, blue: number, } } | { "ReleaseIntensity": { target: Target, } } | { "ReleaseColour": { target: Target, } } | { "SetProperty": { target: Target, value: Value, } } | { "UpdateGrab": { grab: GrabId, value: Value, } } | { "EndGrab": { grab: GrabId, } } | { "ReleaseProperty": { target: Target, property: Property, } } | { "SetGroup": { name: string, members: Array<Member>, } } | { "RemoveGroup": { name: string, } } | { "PutStep": { look: number, name: string, step: Step, } } | { "RemoveLook": { look: number, } } | { "StartLook": { look: number, rank?: Rank, 
+/**
+ * At once when not given, or on the next beat or bar of the grid: then the
+ * play waits, and plays from the frame of that crossing.
+ */
+when?: When, } } | { "StopLook": { play: PlayId, } } | { "EndFlash": { play: PlayId, } } | { "ReleaseHold": { play: PlayId, } } | { "SetMixRules": { rules: MixRules, } } | { "SetInternalTempo": { bpm: Bpm, } } | "TapTempo" | "ReleaseTempo";
 
 export type ChannelNumbers = { universe: number, address: number, };
 
@@ -92,7 +97,11 @@ plays: Array<Play>,
 /**
  * The Mixer's settings as this frame applies them.
  */
-rules: MixRules, };
+rules: MixRules, 
+/**
+ * The beat clock, settled to the frame's time.
+ */
+clock: Reading, };
 
 export type Priority = "RealTime" | { "BestEffort": { reason: BestEffort, } };
 
@@ -130,11 +139,37 @@ export type Saved = { look: number, name: string, step: Step, };
 
 export type PlayId = { slot: number, generation: number, };
 
-export type Play = { play: PlayId, look: number, rank: Rank, state: PlayState, };
+export type Play = { play: PlayId, look: number, rank: Rank, state: PlayState, 
+/**
+ * In beats, as the picture shows it.
+ */
+start: number, };
 
 export type Rank = "Autopilot" | "Show" | "Manual";
 
-export type PlayState = "Playing" | "Kept";
+export type PlayState = { "Waiting": { beat: number } } | "Playing" | "Kept" | "Cancelled";
+
+export type When = "Now" | "Beat" | "Bar";
+
+export type Bpm = number;
+
+export type Reading = { 
+/**
+ * The tempo in charge.
+ */
+bpm: number, 
+/**
+ * The internal feed's tempo.
+ */
+feed: Bpm, source: "Feed" | "OneTap" | "Tapped", 
+/**
+ * Where the grid is, in beats: a whole number is a beat, a multiple of four a bar.
+ */
+beat: number, 
+/**
+ * Beats elapsed since the engine started. A play's own beat is this less its start.
+ */
+elapsed: number, };
 
 export type MixRules = { brightness: Brightness, manual_end: ManualEnd, other_end: OtherEnd, };
 
@@ -225,4 +260,4 @@ export type ShowFile = "None" | "Kept" | "NotSaved" | { "LeftAlone": { why: Unop
 
 export type Unopened = "CannotRead" | { "Broken": { line: number, column: number, } } | { "Newer": { version: number, } } | { "Taken": { fixture: number, } } | { "Refused": { reason: Refusal, } } | { "TooBig": { most: number, } };
 
-export const API_VERSION = 7;
+export const API_VERSION = 8;

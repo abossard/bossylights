@@ -209,6 +209,8 @@ mod stepped {
         cut: AtomicU64,
         at_cut: AtomicU64,
         released: AtomicU64,
+        /// The time the next wake takes in place of the one asked for, if not 0.
+        jump: AtomicU64,
     }
 
     impl Steps {
@@ -247,7 +249,10 @@ mod stepped {
                     }
                 }
             }
-            let until = u64::try_from(until.as_nanos()).unwrap_or(u64::MAX);
+            let until = match self.jump.swap(0, SeqCst) {
+                0 => u64::try_from(until.as_nanos()).unwrap_or(u64::MAX),
+                at => at,
+            };
             self.now.fetch_max(until, SeqCst);
             self.woke.store(wait, SeqCst);
         }
@@ -288,6 +293,7 @@ mod stepped {
             cut: AtomicU64::new(0),
             at_cut: AtomicU64::new(0),
             released: AtomicU64::new(0),
+            jump: AtomicU64::new(0),
         });
         let (events, read) = rtrb::RingBuffer::new(EVENTS);
         let clock = Clock {
@@ -322,6 +328,20 @@ mod stepped {
             self.steps.granted.store(wake, SeqCst);
             self.until(|steps| steps.waits.load(SeqCst) > wake)?;
             Ok(self.steps.now())
+        }
+
+        /// Lets the next wake through at `at`, early or late, in place of the time the
+        /// engine asked for; never before the last wake. Returns its frame time once the
+        /// tick waits again.
+        pub fn wake_at(&self, at: Duration) -> io::Result<Duration> {
+            let at = u64::try_from(at.as_nanos()).unwrap_or(u64::MAX).max(1);
+            self.steps.jump.store(at, SeqCst);
+            self.wake()
+        }
+
+        /// The number of the last wake: the frame it made.
+        pub fn woke(&self) -> u64 {
+            self.steps.woke.load(SeqCst)
         }
 
         /// Lets the next wake through and holds it at its cutoff: what is sent now is

@@ -78,11 +78,24 @@ async fn once_read(socket: &mut Socket, sent: &Value) -> Value {
 
 /// Waits until the picture at `pointer` is `wanted`: a picture may be a frame behind
 /// the wire.
+/// `seen` without the plays' start beats, which hang on when each frame was.
+fn timeless(mut seen: Value) -> Value {
+    for play in seen.as_array_mut().into_iter().flatten() {
+        if let Some(play) = play.as_object_mut() {
+            play.remove("start");
+        }
+    }
+    seen
+}
+
 async fn until_picture(socket: &mut Socket, pointer: &str, wanted: &Value) {
     let started = Instant::now();
     loop {
         send(socket, &json!("Query")).await;
-        let seen = answer(socket).await["Picture"].pointer(pointer).cloned();
+        let seen = answer(socket).await["Picture"]
+            .pointer(pointer)
+            .cloned()
+            .map(timeless);
         if seen.as_ref() == Some(wanted) {
             return;
         }

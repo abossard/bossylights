@@ -105,7 +105,11 @@ fn said(effect: &PatchEffect) -> String {
         | EngineCommand::Keep { .. }
         | EngineCommand::Rules { .. }
         | EngineCommand::Plan { .. }
-        | EngineCommand::Release { .. }) => format!("{other:?}"),
+        | EngineCommand::Release { .. }
+        | EngineCommand::Settle { .. }
+        | EngineCommand::Tap
+        | EngineCommand::ReleaseTempo
+        | EngineCommand::Feed { .. }) => format!("{other:?}"),
     };
     let runs = |change: LightChange, runs: &[LightRun]| {
         [what(change)]

@@ -240,9 +240,12 @@ impl Project {
                     self,
                     Some(ProjectEffect::Look(LookCommand::RemoveLook { look })),
                 )),
-                Command::StartLook { look, rank } => {
-                    look_effect(LookCommand::StartLook { look, rank })
+                Command::StartLook { look, rank, when } => {
+                    look_effect(LookCommand::StartLook { look, rank, when })
                 }
+                Command::SetInternalTempo { bpm } => send(EngineCommand::Feed { bpm }),
+                Command::TapTempo => send(EngineCommand::Tap),
+                Command::ReleaseTempo => send(EngineCommand::ReleaseTempo),
                 Command::StopLook { play } => look_effect(LookCommand::StopLook { play }),
                 Command::EndFlash { play } => look_effect(LookCommand::EndFlash { play }),
                 Command::ReleaseHold { play } => look_effect(LookCommand::ReleaseHold { play }),

@@ -99,7 +99,8 @@ pub const fn stops(rank: Rank, rules: MixRules) -> End {
 /// Whether a play at `rank` in `state` is kept and `rules` no longer keep it: switching
 /// to `UntilStop` or `Reveal` clears the stopped holds of those ranks.
 pub const fn unkept(rank: Rank, state: PlayState, rules: MixRules) -> bool {
-    matches!(state, PlayState::Kept) && matches!(stops(rank, rules), End::Remove)
+    matches!(state, PlayState::Kept | PlayState::Cancelled)
+        && matches!(stops(rank, rules), End::Remove)
 }
 
 /// Who holds a light's property: a rank and a start order.
@@ -295,7 +296,7 @@ pub fn show<'a>(
             });
         }
     }
-    for play in plays.iter() {
+    for play in plays.sounding() {
         let claim = Claim {
             rank: play.rank,
             order: play.order,
@@ -434,9 +435,11 @@ mod tests {
 #[cfg(test)]
 mod properties {
     use super::*;
+    use crate::clock::{Clock, When};
     use crate::playback::{PLAYS, PlayId, Plays};
     use crate::property::{Gobo, Position, Rgb, Value, Wheel};
     use crate::resolve::{LightNumber, LightRun, Lights};
+    use core::time::Duration;
 
     const RED: Rgb = Rgb {
         red: u16::MAX,
@@ -536,7 +539,13 @@ mod properties {
         for (n, (rank, order, state, values)) in sources.iter().enumerate() {
             let slot = (first + n * (PLAYS - 1)) % PLAYS;
             let id = PlayId::new(slot, 1).unwrap();
-            plays.start(id, 7, *rank, *order);
+            plays.start(
+                (id, 7, *rank),
+                When::Now,
+                &Clock::START,
+                Duration::ZERO,
+                *order,
+            );
             if *state == PlayState::Kept {
                 plays.keep(id);
             }
