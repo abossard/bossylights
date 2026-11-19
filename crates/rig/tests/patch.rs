@@ -107,6 +107,7 @@ fn said(effect: &PatchEffect) -> String {
             format!("release intensity {}", run(*lights))
         }
         PatchEffect::Send(other) => format!("{other:?}"),
+        PatchEffect::Runs { change, runs } => format!("{change:?} {runs:?}"),
     }
 }
 

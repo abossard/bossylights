@@ -48,8 +48,14 @@ pub struct Members {
 }
 
 impl Members {
-    /// The most members of one group. A member that is a fixture counts once, however
-    /// many lights it has.
+    /// The most members of one group: 512. A member that is a fixture counts once,
+    /// however many lights it has, so a strip of any length is one member.
+    ///
+    /// Why a limit: `engine-core` has no heap, so a client's command carries the members
+    /// in place, 4 bytes each: 512 make [`crate::Command`] about 2 KB, moved once per
+    /// request, off the tick thread. More are refused at set group
+    /// ([`crate::Refusal::TooManyMembers`]), never at set light: a set on a group of any
+    /// size goes to the tick thread as one command.
     pub const MOST: usize = 512;
 
     /// `None` when there are more than [`Members::MOST`].
@@ -85,25 +91,50 @@ impl fmt::Debug for Members {
 
 impl<'de> Deserialize<'de> for Members {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        struct List;
-        impl<'de> Visitor<'de> for List {
-            type Value = Members;
-            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                write!(f, "a list of at most {} members", Members::MOST)
-            }
-            fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Members, A::Error> {
-                let mut members = Members::new(&[]).ok_or_else(|| A::Error::custom("empty"))?;
-                while let Some(member) = seq.next_element::<Member>()? {
-                    let slot = members
-                        .members
-                        .get_mut(usize::from(members.len))
-                        .ok_or_else(|| A::Error::invalid_length(Members::MOST + 1, &self))?;
-                    *slot = member;
-                    members.len += 1;
-                }
-                Ok(members)
-            }
+        match MemberList::deserialize(deserializer)? {
+            MemberList::Fits(members) => Ok(members),
+            MemberList::TooMany => Err(D::Error::invalid_length(Members::MOST + 1, &List)),
         }
+    }
+}
+
+/// The members of a group as a client sends them: a list that fits, or one of more than
+/// [`Members::MOST`], refused at set group.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "no heap in a client's command: the members travel in place (`Members::MOST` says why)"
+)]
+pub enum MemberList {
+    Fits(Members),
+    TooMany,
+}
+
+/// Reads a list of members, all of it, past [`Members::MOST`] too.
+struct List;
+
+impl<'de> Visitor<'de> for List {
+    type Value = MemberList;
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "a list of at most {} members", Members::MOST)
+    }
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<MemberList, A::Error> {
+        let mut members = Members::new(&[]).ok_or_else(|| A::Error::custom("empty"))?;
+        while let Some(member) = seq.next_element::<Member>()? {
+            let Some(slot) = members.members.get_mut(usize::from(members.len)) else {
+                // the rest is read too: a list of the right shape is refused at set group
+                while seq.next_element::<Member>()?.is_some() {}
+                return Ok(MemberList::TooMany);
+            };
+            *slot = member;
+            members.len += 1;
+        }
+        Ok(MemberList::Fits(members))
+    }
+}
+
+impl<'de> Deserialize<'de> for MemberList {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         deserializer.deserialize_seq(List)
     }
 }

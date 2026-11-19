@@ -23,6 +23,7 @@ function refusalText(refusal: Refusal): string {
   if ("PastTheEnd" in refusal) return `PastTheEnd: its ${refusal.PastTheEnd.channels} channels run past the last universe`;
   if ("NotStreamed" in refusal) return `NotStreamed: no output streams universes ${refusal.NotStreamed.first} to ${refusal.NotStreamed.last}`;
   if ("StreamsFixture" in refusal) return `StreamsFixture: fixture ${refusal.StreamsFixture.fixture} needs it`;
+  if ("TooManyMembers" in refusal) return `TooManyMembers: a group has at most ${refusal.TooManyMembers.most}`;
   return `TooManyUniverses: this kind takes at most ${refusal.TooManyUniverses.most}`;
 }
 

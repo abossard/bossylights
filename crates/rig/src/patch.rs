@@ -11,7 +11,7 @@
 //! | rename | | not patched |
 //! | set group | makes a group or replaces the one of that name: members in order | a member not patched |
 //! | remove group | | |
-//! | set, release intensity or colour | sent for one light, the lights of a fixture, or of every member of a group | not patched, no such light, no such group |
+//! | set, release intensity or colour | sent for one light, the lights of a fixture, or of every member of a group: a group as one effect, all its runs in one frame | not patched, no such light, no such group |
 //!
 //! Two fixtures on the same channels are allowed: each shows the other in its clashes.
 //!
@@ -25,8 +25,8 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::num::NonZeroU16;
 use engine_core::{
-    ChannelNumbers, EngineCommand, Grouped, LightNumber, LightRun, Lights, Member, PatchCommand,
-    Patched, Project, Refusal, Target, Universes, Writer,
+    ChannelNumbers, EngineCommand, Grouped, LightChange, LightNumber, LightRun, Lights, Member,
+    PatchCommand, Patched, Project, Refusal, Target, Universes, Writer,
 };
 use fixture_library::{Fixture, Mode};
 
@@ -66,7 +66,6 @@ struct Entry {
     clashes: Vec<u16>,
 }
 
-/// What follows a change, as data, in the order the front does it.
 /// A fixture as a show file keeps it: its number and its lights as they were.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Placed {
@@ -89,6 +88,7 @@ pub enum Unplaced {
     Refused(Refusal),
 }
 
+/// What follows a change, as data, in the order the front does it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PatchEffect {
     /// The fixture was patched with this number: the reply says it.
@@ -97,6 +97,11 @@ pub enum PatchEffect {
     Writers(Vec<Writer>),
     /// Send this to the tick thread.
     Send(EngineCommand),
+    /// Make `change` to each of these runs, all in one frame: a group of more than one run.
+    Runs {
+        change: LightChange,
+        runs: Vec<LightRun>,
+    },
 }
 
 impl Patch {
@@ -192,26 +197,19 @@ impl Patch {
                 let patch = self.changed(fixture, |entry| entry.name = name.as_str().to_string());
                 Ok((Some(patch), vec![]))
             }
-            PatchCommand::SetIntensity { target, intensity } => self.send(target, |lights| {
-                EngineCommand::SetIntensity { lights, intensity }
-            }),
+            PatchCommand::SetIntensity { target, intensity } => {
+                self.send(target, LightChange::SetIntensity { intensity })
+            }
             PatchCommand::SetColour {
                 target,
                 red,
                 green,
                 blue,
-            } => self.send(target, |lights| EngineCommand::SetColour {
-                lights,
-                red,
-                green,
-                blue,
-            }),
+            } => self.send(target, LightChange::SetColour { red, green, blue }),
             PatchCommand::ReleaseIntensity { target } => {
-                self.send(target, |lights| EngineCommand::ReleaseIntensity { lights })
+                self.send(target, LightChange::ReleaseIntensity)
             }
-            PatchCommand::ReleaseColour { target } => {
-                self.send(target, |lights| EngineCommand::ReleaseColour { lights })
-            }
+            PatchCommand::ReleaseColour { target } => self.send(target, LightChange::ReleaseColour),
             PatchCommand::SetGroup { name, members } => {
                 for member in members.as_slice() {
                     self.member(*member)?;
@@ -234,6 +232,7 @@ impl Patch {
             }
         }
     }
+
     /// This patch with `placed` added, each fixture at its own number and first light.
     /// All or none: the first that does not fit, by its number, and why.
     pub fn restore(&self, placed: Vec<Placed>) -> Result<Self, (u16, Unplaced)> {
@@ -276,7 +275,6 @@ impl Patch {
         self.entry(fixture).ok().map(|e| &e.mode)
     }
 
-
     /// Adds `mode` at `at` under the lowest free number, on the first free lights.
     fn add(
         &self,
@@ -312,12 +310,12 @@ impl Patch {
         ))
     }
 
-    /// The command `make` makes for each run of the lights `target` names: one run for a
-    /// light or a fixture, the fewest runs for a group, lowest first.
+    /// `change` for the lights `target` names: one run for a light or a fixture, the
+    /// fewest runs for a group, lowest first. A group of more than one run is one effect.
     fn send(
         &self,
         target: Target,
-        make: impl Fn(LightRun) -> EngineCommand,
+        change: LightChange,
     ) -> Result<(Option<Self>, Vec<PatchEffect>), Refusal> {
         let runs = match target {
             Target::Light { light } => vec![self.member(Member::Light { light })?],
@@ -336,10 +334,11 @@ impl Patch {
                 self.joined(runs)
             }
         };
-        let effects = runs
-            .into_iter()
-            .map(|run| PatchEffect::Send(make(run)))
-            .collect();
+        let effects = match runs.as_slice() {
+            [] => vec![],
+            [run] => vec![PatchEffect::Send(change.on(*run))],
+            [_, _, ..] => vec![PatchEffect::Runs { change, runs }],
+        };
         Ok((None, effects))
     }
 

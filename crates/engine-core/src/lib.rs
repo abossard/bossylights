@@ -40,7 +40,9 @@ pub use output::{
     Counters, GIVE_UP, MAX_OUTPUTS, OFF_BEAT, Outcome, Output, OutputNumber, Rate, Run, RunNumbers,
     Status,
 };
-pub use patch::{Grouped, Layout, Member, Members, PatchCommand, Patched, Pixels, Target};
+pub use patch::{
+    Grouped, Layout, Member, MemberList, Members, PatchCommand, Patched, Pixels, Target,
+};
 pub use project::{Project, ProjectEffect, ProjectEvent, ProjectOutput};
 pub use resolve::{
     Less, Light, LightNumber, LightRun, Lights, MAX_LIGHTS, Part, Place, Scale, Sense, Take,
@@ -194,7 +196,7 @@ pub enum Command {
         #[cfg_attr(test, ts(type = "string"))]
         name: Text,
         #[cfg_attr(test, ts(type = "Array<Member>"))]
-        members: Members,
+        members: MemberList,
     },
     /// Remove a group. Nothing happens if there is none.
     RemoveGroup {
@@ -261,6 +263,40 @@ pub enum EngineCommand {
     Darken {
         lights: LightRun,
     },
+    /// The runs of a group arrive with this command: each takes `change`, all in the
+    /// same wake, so one frame shows all of them or none. Alone it changes nothing.
+    Runs {
+        change: LightChange,
+    },
+}
+
+/// What a light command does to each light it names, without naming them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LightChange {
+    SetIntensity { intensity: u16 },
+    SetColour { red: u16, green: u16, blue: u16 },
+    ReleaseIntensity,
+    ReleaseColour,
+}
+
+impl LightChange {
+    /// The command that makes this change to the lights of `run`.
+    pub const fn on(self, run: LightRun) -> EngineCommand {
+        match self {
+            Self::SetIntensity { intensity } => EngineCommand::SetIntensity {
+                lights: run,
+                intensity,
+            },
+            Self::SetColour { red, green, blue } => EngineCommand::SetColour {
+                lights: run,
+                red,
+                green,
+                blue,
+            },
+            Self::ReleaseIntensity => EngineCommand::ReleaseIntensity { lights: run },
+            Self::ReleaseColour => EngineCommand::ReleaseColour { lights: run },
+        }
+    }
 }
 
 /// What must happen outside after an update, as data. None exist yet.
@@ -347,7 +383,7 @@ pub fn update(
             },
             None,
         ),
-        EngineCommand::Writers => (state, None),
+        EngineCommand::Writers | EngineCommand::Runs { .. } => (state, None),
         EngineCommand::SetIntensity {
             lights: run,
             intensity,

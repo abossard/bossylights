@@ -5,9 +5,10 @@
 mod mock;
 
 use engine::{
-    Begun, ChannelNumbers, Command, Engine, Fixture, Rate, Refusal, RunNumbers, Sender, Target,
-    Text, Universes,
+    Begun, ChannelNumbers, Color, Command, Engine, Fixture, Member, MemberList, Members, QUEUE,
+    Rate, Refusal, RunNumbers, Sender, Target, Text, Universes,
 };
+use engine_core::Pixels;
 use mock::Heard;
 use std::sync::Arc;
 
@@ -148,4 +149,61 @@ fn a_patch_the_front_refuses_changes_nothing() {
     assert_eq!(sender.patch(), before);
     heard.two_more_frames();
     assert_eq!(bytes(&heard, 1, 37), [255, 0, 0]);
+}
+
+#[test]
+fn a_group_of_more_runs_than_a_wake_takes_lands_in_one_frame_all_or_none() {
+    let universes = Universes::new(4).unwrap();
+    let (_engine, mut sender) = Engine::start(universes).unwrap();
+    let run = RunNumbers { first: 1, count: 4 };
+    let heard = mock::attach(&mut sender, universes, 1, run, Rate::Sixty);
+    // 600 pixels over universes 1 to 4, every second one in "odd": 300 runs of one light
+    let strip = Command::PatchStrip {
+        name: text("Strip"),
+        pixels: Pixels::try_from(600).unwrap(),
+        color: Color::Rgb,
+        at: at(1, 1),
+    };
+    assert_eq!(send(&mut sender, strip), Ok(Some(1)));
+    let full = Command::SetIntensity {
+        target: Target::Fixture { fixture: 1 },
+        intensity: u16::MAX,
+    };
+    assert_eq!(send(&mut sender, full), Ok(None));
+    let odd: Vec<Member> = (1..=600)
+        .step_by(2)
+        .map(|light| Member::Light { light })
+        .collect();
+    assert!(odd.len() > QUEUE, "more runs than a wake takes commands");
+    let group = Command::SetGroup {
+        name: text("odd"),
+        members: MemberList::Fits(Members::new(&odd).unwrap()),
+    };
+    assert_eq!(send(&mut sender, group), Ok(None));
+    let target = Target::Group { group: text("odd") };
+    let red = Command::SetColour {
+        target,
+        red: u16::MAX,
+        green: 0,
+        blue: 0,
+    };
+    let release = Command::ReleaseColour { target };
+    heard.two_more_frames();
+    let first = heard.frames() + 1;
+    for _ in 0..20 {
+        for (command, lit) in [(red, odd.len()), (release, 0)] {
+            assert_eq!(send(&mut sender, command), Ok(None), "{command:?}");
+            mock::wait_until("the group never showed", || {
+                heard.lit_of(heard.frames()) == Some(lit)
+            });
+        }
+    }
+    let last = heard.frames();
+    for n in first..=last {
+        let lit = heard.lit_of(n).unwrap();
+        assert!(
+            lit == 0 || lit == odd.len(),
+            "frame {n} shows {lit} of the group"
+        );
+    }
 }

@@ -247,9 +247,9 @@ async fn a_request_that_cannot_be_right_is_refused_and_changes_nothing() {
             json!({"Send": {"command": "Explode"}}),
             refused(json!("NotACommand")),
         ),
-        // a group takes 512 members at most: the 512th is checked, the 513th is no command
+        // a group takes 512 members at most: the 512th is checked, the 513th is refused
         (group(512), refused(json!("NotPatched"))),
-        (group(513), refused(json!("NotACommand"))),
+        (group(513), refused(json!({"TooManyMembers": {"most": 512}}))),
         (
             json!({"Send": {"command": {"SetGroup": {"name": "g", "members": [{"Group": {"group": "g"}}]}}}}),
             refused(json!("NotACommand")),

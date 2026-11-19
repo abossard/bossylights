@@ -73,22 +73,44 @@ fn library() -> Vec<Fixture> {
 }
 
 /// An effect in words: `colour 0+3` (first light from 0, count), `writers 6`, `darken 1+1`.
+/// The runs of a group sent as one: `colour 0+1 2+1`.
 fn said(effect: &PatchEffect) -> String {
     let run = |run: LightRun| format!("{}+{}", run.first().index(), run.count());
+    let word = |command: EngineCommand| match command {
+        EngineCommand::Darken { lights } => format!("darken {}", run(lights)),
+        EngineCommand::SetColour { lights, .. } => format!("colour {}", run(lights)),
+        EngineCommand::SetIntensity { lights, .. } => format!("intensity {}", run(lights)),
+        EngineCommand::ReleaseIntensity { lights } => {
+            format!("release intensity {}", run(lights))
+        }
+        other @ (EngineCommand::Tick { .. }
+        | EngineCommand::Handed { .. }
+        | EngineCommand::SetChannel { .. }
+        | EngineCommand::ReleaseChannel { .. }
+        | EngineCommand::ReleaseAll
+        | EngineCommand::Blackout { .. }
+        | EngineCommand::Attach { .. }
+        | EngineCommand::RemoveOutput { .. }
+        | EngineCommand::Writers
+        | EngineCommand::ReleaseColour { .. }
+        | EngineCommand::Runs { .. }) => format!("{other:?}"),
+    };
     match effect {
         PatchEffect::Patched { fixture } => format!("patched {fixture}"),
         PatchEffect::Writers(writers) => format!("writers {}", writers.len()),
-        PatchEffect::Send(EngineCommand::Darken { lights }) => format!("darken {}", run(*lights)),
-        PatchEffect::Send(EngineCommand::SetColour { lights, .. }) => {
-            format!("colour {}", run(*lights))
+        PatchEffect::Send(command) => word(*command),
+        PatchEffect::Runs { change, runs } => {
+            let rest: Vec<String> = runs.iter().skip(1).map(|r| run(*r)).collect();
+            let first = runs
+                .first()
+                .map(|r| word(change.on(*r)))
+                .unwrap_or_default();
+            [first]
+                .into_iter()
+                .chain(rest)
+                .collect::<Vec<_>>()
+                .join(" ")
         }
-        PatchEffect::Send(EngineCommand::SetIntensity { lights, .. }) => {
-            format!("intensity {}", run(*lights))
-        }
-        PatchEffect::Send(EngineCommand::ReleaseIntensity { lights }) => {
-            format!("release intensity {}", run(*lights))
-        }
-        PatchEffect::Send(other) => format!("{other:?}"),
     }
 }
 
@@ -224,7 +246,7 @@ fn a_group_command_makes_new_groups_and_says_what_follows() {
             Ok(&["patched 5", "writers 38"]),
             &["front: F3 F1 F2", "back: L6 L5 F1"],
         ),
-        // set light takes a group: its lights in the fewest runs, lowest first
+        // set light takes a group: its lights in the fewest runs, lowest first, sent as one
         (
             with(&[front]),
             red("front"),
@@ -234,7 +256,7 @@ fn a_group_command_makes_new_groups_and_says_what_follows() {
         (
             with(&[set("odd", &[f(3), f(1)])]),
             red("odd"),
-            Ok(&["colour 0+1", "colour 2+1"]),
+            Ok(&["colour 0+1 2+1"]),
             &["odd: F3 F1"],
         ),
         (
@@ -251,7 +273,7 @@ fn a_group_command_makes_new_groups_and_says_what_follows() {
                 },
                 intensity: 9,
             },
-            Ok(&["intensity 0+1", "intensity 4+2"]),
+            Ok(&["intensity 0+1 4+2"]),
             &["back: L6 L5 F1"],
         ),
         (

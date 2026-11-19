@@ -16,8 +16,8 @@
 //! ```
 
 use crate::{
-    Command, EngineCommand, MAX_OUTPUTS, OutputKind, OutputNumber, PatchCommand, Rate, Refusal,
-    Run, Universes,
+    Command, EngineCommand, MAX_OUTPUTS, MemberList, Members, OutputKind, OutputNumber,
+    PatchCommand, Rate, Refusal, Run, Universes,
 };
 use serde::Serialize;
 
@@ -204,9 +204,12 @@ impl Project {
                     patch(PatchCommand::ReleaseIntensity { target })
                 }
                 Command::ReleaseColour { target } => patch(PatchCommand::ReleaseColour { target }),
-                Command::SetGroup { name, members } => {
-                    patch(PatchCommand::SetGroup { name, members })
-                }
+                Command::SetGroup { name, members } => match members {
+                    MemberList::Fits(members) => patch(PatchCommand::SetGroup { name, members }),
+                    MemberList::TooMany => Err(Refusal::TooManyMembers {
+                        most: u16::try_from(Members::MOST).unwrap_or(u16::MAX),
+                    }),
+                },
                 Command::RemoveGroup { name } => patch(PatchCommand::RemoveGroup { name }),
                 Command::RemoveOutput { output } => {
                     self.idle(output)?;
@@ -291,7 +294,9 @@ impl Project {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Channel, ChannelNumbers, Member, Members, RunNumbers, Target, Text, kinds};
+    use crate::{
+        Channel, ChannelNumbers, Member, MemberList, Members, RunNumbers, Target, Text, kinds,
+    };
 
     fn output(number: u8) -> OutputNumber {
         OutputNumber::try_from(number).unwrap()
@@ -337,7 +342,7 @@ mod tests {
         let name = Text::new("front").unwrap();
         let members =
             Members::new(&[Member::Fixture { fixture: 3 }, Member::Light { light: 1 }]).unwrap();
-        let cases: [(Vec<ProjectEvent>, ProjectEvent, Done, Option<ProjectOutput>); 21] = [
+        let cases: [(Vec<ProjectEvent>, ProjectEvent, Done, Option<ProjectOutput>); 22] = [
             // the patch checks what names a fixture or a light
             (
                 vec![],
@@ -389,11 +394,23 @@ mod tests {
             ),
             (
                 vec![],
-                Client(Command::SetGroup { name, members }),
+                Client(Command::SetGroup {
+                    name,
+                    members: MemberList::Fits(members),
+                }),
                 Ok(Some(ProjectEffect::Patch(PatchCommand::SetGroup {
                     name,
                     members,
                 }))),
+                None,
+            ),
+            (
+                vec![],
+                Client(Command::SetGroup {
+                    name,
+                    members: MemberList::TooMany,
+                }),
+                Err(Refusal::TooManyMembers { most: 512 }),
                 None,
             ),
             (

@@ -148,4 +148,6 @@ pub enum Refusal {
     NoSuchLight,
     /// No group has that name.
     NoSuchGroup,
+    /// A group has at most `most` members ([`crate::Members::MOST`] says why).
+    TooManyMembers { most: u16 },
 }

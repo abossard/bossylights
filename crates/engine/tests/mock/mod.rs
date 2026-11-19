@@ -1,6 +1,7 @@
 //! A device written in a test, through the same door every output kind uses: the
 //! `Device` trait and `Sender::attach`. It takes every frame, counts it and keeps the
-//! last one (up to two universes) in atomics, and the first channel of each frame.
+//! last one (up to two universes) in atomics, and the first channel of each frame and how
+//! many of its channels are not zero.
 
 #![allow(dead_code, reason = "each test binary uses only part of it")]
 
@@ -8,7 +9,7 @@ use engine::{
     ADDRESSES, Device, Levels, Outcome, OutputNumber, Rate, RunNumbers, Sender, Universes,
 };
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -20,6 +21,8 @@ pub struct Heard {
     levels: [AtomicU8; 2 * ADDRESSES],
     /// The first channel of frame `n` (counted from 1) at `n % HISTORY`.
     history: [AtomicU8; HISTORY],
+    /// The channels not zero in frame `n` at `n % HISTORY`.
+    lit: [AtomicUsize; HISTORY],
 }
 
 impl Heard {
@@ -37,6 +40,13 @@ impl Heard {
     pub fn first_channel_of(&self, n: u64) -> Option<u8> {
         let kept = (1..=self.frames()).contains(&n) && self.frames() - n < HISTORY as u64;
         kept.then(|| self.history[(n % HISTORY as u64) as usize].load(Ordering::Relaxed))
+    }
+
+    /// How many channels of frame `n` are not zero, counted from 1, if it is one of the
+    /// last kept.
+    pub fn lit_of(&self, n: u64) -> Option<usize> {
+        let kept = (1..=self.frames()).contains(&n) && self.frames() - n < HISTORY as u64;
+        kept.then(|| self.lit[(n % HISTORY as u64) as usize].load(Ordering::Relaxed))
     }
 
     /// Waits until two more frames arrived: the one that may have been computed while
@@ -71,6 +81,12 @@ impl Device for Mock {
         let n = self.0.frames.load(Ordering::Relaxed) + 1;
         let first = frame.first().map_or(0, |universe| universe.0[0]);
         self.0.history[(n % HISTORY as u64) as usize].store(first, Ordering::Relaxed);
+        let lit = frame
+            .iter()
+            .flat_map(|u| u.0.iter())
+            .filter(|l| **l > 0)
+            .count();
+        self.0.lit[(n % HISTORY as u64) as usize].store(lit, Ordering::Relaxed);
         self.0.frames.store(n, Ordering::Release);
         Outcome::Accepted
     }
@@ -88,6 +104,7 @@ pub fn attach(
         frames: AtomicU64::new(0),
         levels: [const { AtomicU8::new(0) }; 2 * ADDRESSES],
         history: [const { AtomicU8::new(0) }; HISTORY],
+        lit: [const { AtomicUsize::new(0) }; HISTORY],
     });
     let output = OutputNumber::try_from(output).unwrap();
     let run = run.check(universes).unwrap();

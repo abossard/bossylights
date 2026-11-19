@@ -8,7 +8,8 @@
 //! ```text
 //! Sender::send ---- command (+ device: opened, then attach) --> queue --> tick thread --> outputs
 //!               (+ writers: the patch, compiled by the Rig)             |
-//! free thread: retired devices and writers freed here <-- return queue -+
+//!               (+ runs: the lights of a group)                         |
+//! free thread: retired devices, writers, runs freed here <-- return q. -+
 //!                                                                       |
 //! Engine::latest, fresh --- an empty box ---> queue --> tick thread       |
 //!                       <-- the box, filled -- queue <-- one wake's picture
@@ -34,9 +35,10 @@
 
 pub use engine_core::{
     ADDRESSES, API_VERSION, Adapter, BEAT, BestEffort, ChannelLevel, ChannelNumbers, Color,
-    Command, Counters, Grouped, Levels, MAX_LIGHTS, MAX_OUTPUTS, MAX_UNIVERSES, Member, Members,
-    Outcome, Output, OutputKind, OutputNumber, Patched, Priority, Project, ProjectOutput, Rate,
-    Refusal, Reply, Request, Run, RunNumbers, State, Status, Target, Text, Universes, changes,
+    Command, Counters, Grouped, Levels, MAX_LIGHTS, MAX_OUTPUTS, MAX_UNIVERSES, Member, MemberList,
+    Members, Outcome, Output, OutputKind, OutputNumber, Patched, Priority, Project, ProjectOutput,
+    Rate, Refusal, Reply, Request, Run, RunNumbers, State, Status, Target, Text, Universes,
+    changes,
 };
 pub use engine_core::{
     EngineCommand, Histogram, LATENCY_BUCKETS, LATENESS_BUCKETS, bucket, due, frame, next_wake,
@@ -46,7 +48,7 @@ pub use fixture_library::Fixture;
 pub use rig::Patch;
 mod snapshot;
 
-use engine_core::{Lights, ProjectEffect, ProjectEvent, Writer};
+use engine_core::{LightRun, Lights, ProjectEffect, ProjectEvent, Writer};
 use rig::PatchEffect;
 
 pub use outputs::Device;
@@ -144,6 +146,8 @@ enum Brings {
     Device(Box<dyn Device>),
     /// The writers of the patch, for `Writers`.
     Writers(Vec<Writer>),
+    /// The runs of a group, for `Runs`.
+    Runs(Vec<LightRun>),
 }
 
 /// What goes back from the tick thread, to be freed on the free thread.
@@ -154,6 +158,7 @@ enum Brings {
 enum Retired {
     Device(Box<dyn Device>),
     Writers(Vec<Writer>),
+    Runs(Vec<LightRun>),
 }
 
 /// What came of [`Sender::begin`].
@@ -359,6 +364,9 @@ impl Sender {
                     self.free.unpark(); // the old writers are on their way back
                 }
                 PatchEffect::Send(command) => self.push(command, Brings::Nothing)?,
+                PatchEffect::Runs { change, runs } => {
+                    self.push(EngineCommand::Runs { change }, Brings::Runs(runs))?;
+                }
             }
         }
         Ok(begun)
@@ -443,7 +451,7 @@ impl Sender {
 
     /// Queues `command` with what it `brings`. A device `Attach` brings and
     /// `RemoveOutput` send the old one back; `Attach` with no device keeps it. `Writers`
-    /// send the old writers back.
+    /// send the old writers back, `Runs` the runs it brought.
     fn push(&mut self, command: EngineCommand, brings: Brings) -> Result<(), Refusal> {
         // The output this command changes, and whether the device there goes back.
         let (changes, sends_back) = match command {
@@ -458,13 +466,14 @@ impl Sender {
             | EngineCommand::ReleaseAll
             | EngineCommand::Blackout { .. }
             | EngineCommand::Writers
+            | EngineCommand::Runs { .. }
             | EngineCommand::SetIntensity { .. }
             | EngineCommand::SetColour { .. }
             | EngineCommand::ReleaseIntensity { .. }
             | EngineCommand::ReleaseColour { .. }
             | EngineCommand::Darken { .. } => (None, false),
         };
-        let retires = matches!(command, EngineCommand::Writers)
+        let retires = matches!(command, EngineCommand::Writers | EngineCommand::Runs { .. })
             || sends_back && changes.is_some_and(|output| self.project.output(output).is_some());
         if retires && on_their_way(&self.shared, self.retired) >= RETIRED as u64 {
             self.free.unpark();
@@ -695,12 +704,23 @@ impl Ticker {
     /// For `Attach` and `RemoveOutput`: puts the device brought at the output, sends the
     /// old one back to be freed and starts the output's lateness afresh. `Attach` without
     /// a device keeps the one there. For `Writers`: the writers brought take the place of
-    /// the old ones, which go back. Others change nothing.
+    /// the old ones, which go back. For `Runs`: each run brought takes the change, in this
+    /// wake, and the runs go back. Others change nothing.
     fn swap(&mut self, command: EngineCommand, brings: Brings) {
         let (device, writers) = match brings {
             Brings::Nothing => (None, None),
             Brings::Device(device) => (Some(device), None),
             Brings::Writers(writers) => (None, Some(writers)),
+            Brings::Runs(runs) => {
+                if let EngineCommand::Runs { change } = command {
+                    for run in &runs {
+                        self.apply(change.on(*run));
+                    }
+                }
+                // The queue has room for every box a wake can retire (see `start`).
+                let _ = self.retired.push(Retired::Runs(runs));
+                return;
+            }
         };
         if let (EngineCommand::Writers, Some(writers)) = (command, writers) {
             let old = std::mem::replace(&mut self.writers, writers);

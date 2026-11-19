@@ -1,6 +1,6 @@
 //! Proves the tick thread allocates nothing per wake, also while it serves two outputs at
 //! different rates, resolves 512 patched lights and a strip of 100 pixels over two
-//! universes, takes commands, swaps in new writers and
+//! universes, takes commands, swaps in new writers, takes a group of 256 runs and
 //! hands a reader a snapshot on every frame. A counting allocator sees every allocation in
 //! this process, except those of the front while it sends: a light or patch command
 //! allocates there (the patch is a calculation on the heap), never on the tick thread. The
@@ -15,8 +15,8 @@ mod counting;
 mod mock;
 
 use engine::{
-    Begun, ChannelNumbers, Color, Command, Engine, Fixture, Rate, RunNumbers, Sender, Target, Text,
-    Universes,
+    Begun, ChannelNumbers, Color, Command, Engine, Fixture, Member, MemberList, Members, Rate,
+    RunNumbers, Sender, Target, Text, Universes,
 };
 use engine_core::Pixels;
 
@@ -97,6 +97,24 @@ fn main() {
         intensity: u16::MAX,
     };
     assert!(send(&mut sender, full, &library), "the strip is lit");
+    // every second light, from light 2: 256 runs of one light, sent as one command
+    let even: Vec<Member> = (2..=LIGHTS)
+        .step_by(2)
+        .map(|light| Member::Light { light })
+        .collect();
+    let group = Command::SetGroup {
+        name: text("even"),
+        members: MemberList::Fits(Members::new(&even).expect("256 members")),
+    };
+    assert!(send(&mut sender, group, &library), "the group is made");
+    let green = Command::SetColour {
+        target: Target::Group {
+            group: text("even"),
+        },
+        red: 0,
+        green: u16::MAX,
+        blue: 0,
+    };
     // Thread start-up may allocate: wait until both outputs were served.
     mock::wait_until("the outputs were never served", || {
         let outputs = engine.latest().state.outputs;
@@ -126,6 +144,10 @@ fn main() {
             send(&mut sender, colour, &library),
             "a colour for light {light}"
         );
+        if value % 16 == 8 {
+            // the runs of the group: applied in one wake and sent back to be freed
+            assert!(send(&mut sender, green, &library), "the group goes green");
+        }
         if value % 16 == 0 {
             // new writers: the tick swaps them in and sends the old ones back
             let back = Command::Move {
@@ -144,6 +166,12 @@ fn main() {
         .iter()
         .filter(|light| light.intensity == u16::MAX)
         .count();
+    let green_lights = engine.latest().lights()[..usize::from(LIGHTS)]
+        .iter()
+        .skip(1)
+        .step_by(2)
+        .filter(|light| light.green == u16::MAX)
+        .count();
     let ticks = state.frame - frame;
     let new_allocations = counting::allocations() - allocations;
     drop(engine);
@@ -154,6 +182,11 @@ fn main() {
         lit,
         usize::from(LIGHTS) + 100,
         "every patched light is held lit"
+    );
+    assert_eq!(
+        green_lights,
+        even.len(),
+        "every light of the group is green"
     );
     let accepted = state.outputs.map(|o| o.map(|o| o.counters.accepted));
     assert!(
