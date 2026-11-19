@@ -17,7 +17,7 @@
 
 use crate::{
     Command, EngineCommand, LookCommand, MAX_OUTPUTS, MemberList, Members, OutputKind,
-    OutputNumber, PatchCommand, Rate, Refusal, Run, Universes,
+    OutputNumber, PatchCommand, Property, Rate, Refusal, Rgb, Run, Universes, Value,
 };
 use serde::Serialize;
 
@@ -190,24 +190,37 @@ impl Project {
                 Command::Move { fixture, at } => patch(PatchCommand::Move { fixture, at }),
                 Command::Unpatch { fixture } => patch(PatchCommand::Unpatch { fixture }),
                 Command::Rename { fixture, name } => patch(PatchCommand::Rename { fixture, name }),
-                Command::SetIntensity { target, intensity } => {
-                    patch(PatchCommand::SetIntensity { target, intensity })
-                }
+                Command::SetIntensity { target, intensity } => patch(PatchCommand::Grab {
+                    target,
+                    value: Value::Intensity(intensity),
+                }),
                 Command::SetColour {
                     target,
                     red,
                     green,
                     blue,
-                } => patch(PatchCommand::SetColour {
+                } => patch(PatchCommand::Grab {
                     target,
-                    red,
-                    green,
-                    blue,
+                    value: Value::Colour(Rgb { red, green, blue }),
                 }),
-                Command::ReleaseIntensity { target } => {
-                    patch(PatchCommand::ReleaseIntensity { target })
+                Command::SetProperty { target, value } => {
+                    patch(PatchCommand::Grab { target, value })
                 }
-                Command::ReleaseColour { target } => patch(PatchCommand::ReleaseColour { target }),
+                Command::ReleaseIntensity { target } => patch(PatchCommand::Release {
+                    target,
+                    property: Property::Intensity,
+                }),
+                Command::ReleaseColour { target } => patch(PatchCommand::Release {
+                    target,
+                    property: Property::Colour,
+                }),
+                Command::ReleaseProperty { target, property } => {
+                    patch(PatchCommand::Release { target, property })
+                }
+                Command::UpdateGrab { grab, value } => {
+                    look_effect(LookCommand::UpdateGrab { grab, value })
+                }
+                Command::EndGrab { grab } => look_effect(LookCommand::EndGrab { grab }),
                 Command::SetGroup { name, members } => match members {
                     MemberList::Fits(members) => patch(PatchCommand::SetGroup { name, members }),
                     MemberList::TooMany => Err(Refusal::TooManyMembers {
@@ -399,25 +412,27 @@ mod tests {
                     target,
                     intensity: 9,
                 }),
-                Ok(Some(ProjectEffect::Patch(PatchCommand::SetIntensity {
+                Ok(Some(ProjectEffect::Patch(PatchCommand::Grab {
                     target,
-                    intensity: 9,
+                    value: Value::Intensity(9),
                 }))),
                 None,
             ),
             (
                 vec![],
                 Client(Command::ReleaseIntensity { target }),
-                Ok(Some(ProjectEffect::Patch(PatchCommand::ReleaseIntensity {
+                Ok(Some(ProjectEffect::Patch(PatchCommand::Release {
                     target,
+                    property: Property::Intensity,
                 }))),
                 None,
             ),
             (
                 vec![],
                 Client(Command::ReleaseColour { target }),
-                Ok(Some(ProjectEffect::Patch(PatchCommand::ReleaseColour {
+                Ok(Some(ProjectEffect::Patch(PatchCommand::Release {
                     target,
+                    property: Property::Colour,
                 }))),
                 None,
             ),

@@ -5,7 +5,7 @@
 
 mod common;
 
-use common::{Heard, Socket, answer, command, connect, open, send};
+use common::{Heard, Socket, answer, command, connect, open, send, taken};
 use engine::{Engine, Universes};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
@@ -128,7 +128,7 @@ async fn a_saved_red_step_plays_255_0_0_releases_and_replays_after_a_restart() {
         once_read(&mut socket, &par).await,
         json!({"Patched": {"fixture": 1}})
     );
-    assert_eq!(command(&mut socket, full.clone()).await, json!("Accepted"));
+    assert!(taken(&command(&mut socket, full.clone()).await));
     // a look of nothing patched is refused, and nothing is saved
     let nowhere = json!({"PutStep": {"look": 2, "name": "x", "step": {
         "target": {"Fixture": {"fixture": 9}}, "values": {"colour": red},
@@ -181,7 +181,7 @@ async fn a_saved_red_step_plays_255_0_0_releases_and_replays_after_a_restart() {
     until_picture(&mut socket, "/show", &json!("Kept")).await;
     until_picture(&mut socket, "/state/plays", &json!([])).await;
     until_picture(&mut socket, "/looks/0/name", &json!("red")).await;
-    assert_eq!(command(&mut socket, full).await, json!("Accepted"));
+    assert!(taken(&command(&mut socket, full).await));
     let started = command(&mut socket, start).await;
     assert!(started["Started"]["play"].is_object(), "{started}");
     until_dmx(&heard, [255, 0, 0]).await;

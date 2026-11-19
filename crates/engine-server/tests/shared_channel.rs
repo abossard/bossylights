@@ -3,6 +3,9 @@
 //! fixture full and head 1 red send 255 255 0 at 37 to 39 on the DDP socket. A PAR on
 //! the fixture's channels is refused, `Overlaps`.
 
+mod common;
+
+use common::taken;
 use engine::{Engine, Universes};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
@@ -148,7 +151,7 @@ async fn a_dimmer_two_heads_name_is_the_fixtures_own_light_and_nothing_overlaps_
     let full = |target: Value| json!({"SetIntensity": {"target": target, "intensity": 65535}});
     let red = json!({"SetColour": {"target": light(2), "red": 65535, "green": 0, "blue": 0}});
     for set in [full(light(1)), full(light(2)), red] {
-        assert_eq!(command(&mut socket, set).await, json!("Accepted"));
+        assert!(taken(&command(&mut socket, set).await));
     }
     until(&udp, [255, 255, 0]).await;
 }

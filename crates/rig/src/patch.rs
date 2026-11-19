@@ -36,8 +36,8 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::num::NonZeroU16;
 use engine_core::{
-    ChannelNumbers, EngineCommand, Grouped, Light, LightChange, LightNumber, LightRun, Lights,
-    Member, OutputKind, PatchCommand, Patched, Project, Refusal, Rgb, Target, Universes, Writer,
+    ChannelNumbers, EngineCommand, Grouped, LightChange, LightNumber, LightRun, Lights, Member,
+    OutputKind, PatchCommand, Patched, Project, Refusal, Target, Universes, Value, Writer,
 };
 use fixture_library::{Fixture, Mode};
 
@@ -154,6 +154,8 @@ pub enum PatchEffect {
         change: LightChange,
         runs: Vec<LightRun>,
     },
+    /// A new grab of `value` on these runs, lowest first: the front gives it its ID.
+    Grab { value: Value, runs: Vec<LightRun> },
 }
 
 impl Patch {
@@ -303,26 +305,17 @@ impl Patch {
                 let patch = self.changed(fixture, |entry| entry.name = name.as_str().to_string());
                 Ok((Some(patch), vec![]))
             }
-            PatchCommand::SetIntensity { target, intensity } => {
-                self.send(target, LightChange::SetIntensity { intensity })
+            PatchCommand::Grab { target, value } => {
+                let runs = self.runs(target)?;
+                if runs.is_empty() {
+                    return Err(Refusal::EmptyGroup); // a grab holds at least one light
+                }
+                self.supports(&runs, value)?;
+                Ok((None, vec![PatchEffect::Grab { value, runs }]))
             }
-            PatchCommand::SetColour {
-                target,
-                red,
-                green,
-                blue,
-            } => {
-                let shows = Light {
-                    colour: Some(Rgb { red, green, blue }),
-                    ..Light::DARK
-                };
-                supports(&self.writers, &self.runs(target)?, &shows)?;
-                self.send(target, LightChange::SetColour { red, green, blue })
+            PatchCommand::Release { target, property } => {
+                self.send(target, LightChange::Release { property })
             }
-            PatchCommand::ReleaseIntensity { target } => {
-                self.send(target, LightChange::ReleaseIntensity)
-            }
-            PatchCommand::ReleaseColour { target } => self.send(target, LightChange::ReleaseColour),
             PatchCommand::SetGroup { name, members } => {
                 for member in members.as_slice() {
                     self.member(*member)?;
@@ -444,6 +437,11 @@ impl Patch {
             [_, _, ..] => vec![PatchEffect::Runs { change, runs }],
         };
         Ok((None, effects))
+    }
+
+    /// `Unsupported` when a light of `runs` cannot show `value`.
+    pub fn supports(&self, runs: &[LightRun], value: Value) -> Result<(), Refusal> {
+        supports(&self.writers, runs, &value.light())
     }
 
     /// The lights `target` names: one run for a light or a fixture, the fewest runs for a

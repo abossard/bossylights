@@ -209,6 +209,23 @@ async fn a_gobo_cuts_to_its_slot_and_a_colour_not_on_the_wheel_is_refused() {
         command(&mut socket, direct).await,
         json!({"Refused": {"reason": {"Unsupported": {"light": 1, "property": "Colour"}}}})
     );
+    // a grab of red, then black as its update: refused too, and let go
+    let fixture = json!({"Fixture": {"fixture": 1}});
+    let red = json!({"Colour": {"red": 65535, "green": 0, "blue": 0}});
+    let grabbed = command(
+        &mut socket,
+        json!({"SetProperty": {"target": fixture, "value": red}}),
+    )
+    .await;
+    let grab = grabbed["Grabbed"]["grab"].clone();
+    assert!(grab.is_object(), "{grabbed}");
+    let update = json!({"UpdateGrab": {"grab": grab, "value": {"Colour": black["colour"]}}});
+    assert_eq!(
+        command(&mut socket, update).await,
+        json!({"Refused": {"reason": {"Unsupported": {"light": 1, "property": "Colour"}}}})
+    );
+    let release = json!({"ReleaseProperty": {"target": fixture, "property": "Colour"}});
+    assert_eq!(command(&mut socket, release).await, json!("Accepted"));
     let gobo = json!({"gobo": {"wheel": 2, "slot": 9}});
     let step = json!({"PutStep": {"look": 9, "name": "no slot 9", "step": {
         "target": {"Fixture": {"fixture": 1}}, "values": gobo,

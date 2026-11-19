@@ -12,9 +12,9 @@
 //! property between plays and direct holds, and what a stop keeps: `mix.rs`.
 
 use crate::library::Text;
-use crate::mix::MixRules;
+use crate::mix::{GrabId, MixRules};
 use crate::patch::Target;
-use crate::property::Light;
+use crate::property::{Light, Value};
 use crate::resolve::LightRun;
 use serde::{Deserialize, Serialize};
 
@@ -76,6 +76,13 @@ pub enum LookCommand {
     },
     /// Every Manual play, every direct hold and every raw channel let go.
     ReleaseAll,
+    UpdateGrab {
+        grab: GrabId,
+        value: Value,
+    },
+    EndGrab {
+        grab: GrabId,
+    },
     SetMixRules {
         rules: MixRules,
     },

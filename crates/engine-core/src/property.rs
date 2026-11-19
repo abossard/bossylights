@@ -103,6 +103,43 @@ impl Light {
     }
 }
 
+/// One value of one property: what a direct grab holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub enum Value {
+    Intensity(u16),
+    Colour(Rgb),
+    Position(Position),
+    Zoom(u16),
+    Gobo(Gobo),
+}
+
+impl Value {
+    /// The property it is a value of.
+    pub const fn property(self) -> Property {
+        match self {
+            Self::Intensity(_) => Property::Intensity,
+            Self::Colour(_) => Property::Colour,
+            Self::Position(_) => Property::Position,
+            Self::Zoom(_) => Property::Zoom,
+            Self::Gobo(_) => Property::Gobo,
+        }
+    }
+
+    /// A light with this value and nothing else.
+    pub const fn light(self) -> Light {
+        let mut light = Light::DARK;
+        match self {
+            Self::Intensity(level) => light.intensity = Some(level),
+            Self::Colour(rgb) => light.colour = Some(rgb),
+            Self::Position(position) => light.position = Some(position),
+            Self::Zoom(level) => light.zoom = Some(level),
+            Self::Gobo(gobo) => light.gobo = Some(gobo),
+        }
+        light
+    }
+}
+
 /// A colour, one property of a light.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -213,6 +250,27 @@ mod tests {
         ];
         for (light, property, has) in cases {
             assert_eq!(light.has(property), has, "{light:?} {property:?}");
+        }
+    }
+
+    #[test]
+    fn a_value_is_one_property_and_nothing_else() {
+        let values = [
+            Value::Intensity(0),
+            Value::Colour(Rgb::BLACK),
+            Value::Position(Position { pan: 1, tilt: 2 }),
+            Value::Zoom(3),
+            Value::Gobo(Gobo { wheel: 1, slot: 2 }),
+        ];
+        for (value, property) in values.into_iter().zip(Property::ALL) {
+            assert_eq!(value.property(), property, "{value:?}");
+            for other in Property::ALL {
+                assert_eq!(
+                    value.light().has(other),
+                    other == property,
+                    "{value:?} {other:?}"
+                );
+            }
         }
     }
 

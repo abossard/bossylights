@@ -2,6 +2,9 @@
 //! RGB PAR at 1:37 is light 1. Each step's command is in the picture a `Query` answers
 //! and in the lights a subscriber's `Changed` carries: set, set, release, release.
 
+mod common;
+
+use common::taken;
 use engine::{Engine, Universes};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
@@ -131,7 +134,7 @@ async fn a_client_reads_back_what_a_light_holds_after_each_set_and_release() {
         ),
     ];
     for (step, light) in steps {
-        assert_eq!(command(&mut asker, step).await, json!("Accepted"));
+        assert!(taken(&command(&mut asker, step.clone()).await), "{step}");
         let held = if light["intensity"].is_null() && light["colour"].is_null() {
             json!([])
         } else {

@@ -435,7 +435,7 @@ fn a_press_is_admitted_while_another_clients_edit_is_prepared() {
         target: Target::Fixture { fixture: 1 },
         intensity: 0x8080,
     };
-    assert!(matches!(front.begin(dim), Ok(Begun::Queued)));
+    assert!(matches!(front.begin(dim), Ok(Begun::Grabbed { .. })));
     assert_eq!(front.frame(), [128, 0, 0], "B's press is in the next frame");
     // A's edit, prepared on a base the press did not move, is admitted after it
     let prepared = base.prepare(step(1, GREEN), &front.library).unwrap();
@@ -640,7 +640,7 @@ fn a_press_over_the_api_is_in_the_first_frame_after_it_while_the_blocking_pool_i
                 json!({"SetColour": {"target": {"Fixture": {"fixture": 1}},
                     "red": 0, "green": 65535, "blue": 0}})
             },
-            "Accepted",
+            "Grabbed",
             [0, 255, 0],
         ),
         (

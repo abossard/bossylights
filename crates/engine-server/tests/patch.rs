@@ -4,7 +4,7 @@
 
 mod common;
 
-use common::{Heard, Socket, answer, command, connect, open, send};
+use common::{Heard, Socket, answer, command, connect, open, send, taken};
 use engine::{Engine, Open, Universes};
 use futures_util::StreamExt;
 use serde_json::{Value, json};
@@ -120,8 +120,8 @@ async fn a_patched_par_made_red_sends_255_0_0_at_37_on_ddp_and_dmx_and_unpatched
     let fixture = json!({"Fixture": {"fixture": 1}});
     let full = json!({"SetIntensity": {"target": fixture, "intensity": 65535}});
     let red = json!({"SetColour": {"target": fixture, "red": 65535, "green": 0, "blue": 0}});
-    assert_eq!(command(&mut socket, full).await, json!("Accepted"));
-    assert_eq!(command(&mut socket, red).await, json!("Accepted"));
+    assert!(taken(&command(&mut socket, full).await));
+    assert!(taken(&command(&mut socket, red).await));
     until_both(&udp, &heard, None, [255, 0, 0]).await;
 
     until_picture(
@@ -206,11 +206,7 @@ async fn a_red_par_under_raw_38_at_9_sends_255_9_0_released_255_0_0_blackout_0_0
         (json!({"ReleaseIntensity": {"target": fixture}}), [0, 0, 0]),
     ];
     for (step, bytes) in steps {
-        assert_eq!(
-            command(&mut socket, step.clone()).await,
-            json!("Accepted"),
-            "{step}"
-        );
+        assert!(taken(&command(&mut socket, step.clone()).await), "{step}");
         until_both(&udp, &heard, None, bytes).await;
     }
     let none = json!({"ReleaseColour": {"target": {"Fixture": {"fixture": 2}}}});
@@ -307,11 +303,7 @@ async fn a_group_of_three_pars_made_red_sends_nine_bytes_on_ddp_and_dmx() {
     ];
     let mut before = [0; 9];
     for (step, bytes) in steps {
-        assert_eq!(
-            command(&mut socket, step.clone()).await,
-            json!("Accepted"),
-            "{step}"
-        );
+        assert!(taken(&command(&mut socket, step.clone()).await), "{step}");
         until_both(&udp, &heard, Some(before), bytes).await;
         before = bytes;
     }

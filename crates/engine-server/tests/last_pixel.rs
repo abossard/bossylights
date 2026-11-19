@@ -4,6 +4,9 @@
 //! sent: pixel 341 blue is byte 1023 of the stream. An output that would stream it and
 //! not send it is refused, `StreamsFixture`.
 
+mod common;
+
+use common::taken;
 use engine::{Engine, Universes};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
@@ -148,8 +151,8 @@ async fn the_last_pixel_an_rgb_output_sends_is_patched_and_lit_one_channel_over_
     let pixel = json!({"Light": {"light": 341}});
     let full = json!({"SetIntensity": {"target": pixel, "intensity": 65535}});
     let blue = json!({"SetColour": {"target": pixel, "red": 0, "green": 0, "blue": 65535}});
-    assert_eq!(command(&mut socket, full).await, json!("Accepted"));
-    assert_eq!(command(&mut socket, blue).await, json!("Accepted"));
+    assert!(taken(&command(&mut socket, full).await));
+    assert!(taken(&command(&mut socket, blue).await));
     let mut expected = vec![0; STREAM];
     expected[1020..1023].copy_from_slice(&[0, 0, 255]);
     until_frame(&udp, &expected).await;

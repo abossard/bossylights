@@ -3,7 +3,7 @@
 //!
 //! | Client sends | Engine answers |
 //! |---|---|
-//! | `{"Send": {"command": ...}}` | `"Accepted"`, `{"Patched": {"fixture": ...}}` for `Patch`, or `{"Refused": {"reason": ...}}`. `"Stopping"` once the engine stops: nothing changed |
+//! | `{"Send": {"command": ...}}` | `"Accepted"`, `{"Patched": {"fixture": ...}}` for `Patch`, `{"Started": {"play": ...}}` for `StartLook`, `{"Grabbed": {"grab": ...}}` for a set, or `{"Refused": {"reason": ...}}`. `"Stopping"` once the engine stops: nothing changed |
 //! | `"Query"` | `{"Picture": ...}`: the state, the project, the patch, every level and every held light |
 //! | `"Subscribe"` | `{"Picture": ...}`, then `{"Changed": ...}` for each new frame, with the patch when it changed |
 //! | `"Stop"` | `"Stopping"`, then every connection closes and the engine process ends |
@@ -14,15 +14,15 @@
 
 use crate::library::{Failure, FixtureKind, Library, Match, ModeChannels, Text};
 use crate::{
-    ChannelLevel, Command, Grouped, HeldLight, Levels, Patched, PlayId, Project, Property, Saved,
-    ShowFile, State,
+    ChannelLevel, Command, GrabId, Grouped, HeldLight, Levels, Patched, PlayId, Project, Property,
+    Saved, ShowFile, State,
 };
 use serde::{Deserialize, Serialize};
 
 /// The version of this API. `GET /version` answers it as text. A client that speaks
 /// another version does not talk to the engine. Raise it with every change a client of
 /// the old version would get wrong.
-pub const API_VERSION: u16 = 4;
+pub const API_VERSION: u16 = 5;
 
 /// What a client sends. A key it does not know, here or in any type it carries, refuses
 /// the request: a misspelled field would otherwise be ignored without a word.
@@ -68,6 +68,8 @@ pub enum Reply<'a> {
     Patched { fixture: u16 },
     /// The look plays as `play` from the very next frame.
     Started { play: PlayId },
+    /// The grab holds from the very next frame.
+    Grabbed { grab: GrabId },
     /// The engine stops: every connection closes, then the process ends.
     Stopping,
     /// The command was not taken. Nothing changed.
@@ -194,4 +196,6 @@ pub enum Refusal {
     Stale,
     /// The group has no members: a saved look's target names at least one light.
     EmptyGroup,
+    /// The grab holds `property`: an update gives a value of it.
+    OtherProperty { property: Property },
 }

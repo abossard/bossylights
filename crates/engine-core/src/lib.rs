@@ -20,7 +20,7 @@ mod kinds;
 mod library;
 mod mix;
 pub use mix::{
-    Brightness, Claims, End, Held, ManualEnd, MixRules, OtherEnd, show, stops, unkept, wins,
+    Brightness, Claims, End, GrabId, Held, ManualEnd, MixRules, OtherEnd, show, stops, unkept, wins,
 };
 use mix::{Want, mix};
 mod output;
@@ -51,7 +51,7 @@ pub use playback::{
     Entry, LOOKS, LookCommand, PLAYS, Play, PlayId, PlayState, Plays, Rank, Saved, Step,
 };
 pub use project::{Project, ProjectEffect, ProjectEvent, ProjectOutput};
-pub use property::{Gobo, Light, Position, Property, Rgb};
+pub use property::{Gobo, Light, Position, Property, Rgb, Value};
 pub use resolve::{
     HeldLight, Less, LightNumber, LightRun, Lights, MAX_LIGHTS, Part, Place, Scale, Sense, Take,
     Travel, Writer, held_lights, light_changes, resolve,
@@ -203,22 +203,32 @@ pub enum Command {
         #[cfg_attr(test, ts(type = "string"))]
         name: Text,
     },
-    /// Hold the intensity of a light, or of every light of a fixture or a group. 0 to
-    /// 65 535 is 0 to 1.
+    /// `SetProperty` of an intensity: 0 to 65 535 is 0 to 1.
     SetIntensity { target: Target, intensity: u16 },
-    /// Hold the colour of a light, or of every light of a fixture or a group. 16 bits each.
+    /// `SetProperty` of a colour, 16 bits each.
     SetColour {
         target: Target,
         red: u16,
         green: u16,
         blue: u16,
     },
-    /// Let the intensity of a light, or of every light of a fixture, go: its dimmer shows the
-    /// definition's default again, else 0.
+    /// `ReleaseProperty` of the intensity.
     ReleaseIntensity { target: Target },
-    /// Let the colour of a light, or of every light of a fixture, go: its colour channels
-    /// show the definition's defaults again, else black.
+    /// `ReleaseProperty` of the colour.
     ReleaseColour { target: Target },
+    /// Grab a property of a light, or of every light of a fixture or a group, at Manual:
+    /// answered `Grabbed` with its grab, the latest start. It holds until its end
+    /// (`EndGrab`) or a release.
+    SetProperty { target: Target, value: Value },
+    /// A new value for a grab where it still holds: it keeps its start, so what started
+    /// after it still wins. An ended or replaced grab is a harmless no-op.
+    UpdateGrab { grab: GrabId, value: Value },
+    /// End a grab under the Manual end rule ([`MixRules`]): kept until released, or let
+    /// go. An ended or replaced grab is a harmless no-op.
+    EndGrab { grab: GrabId },
+    /// Let every direct hold of `property` go on the lights `target` names: each shows
+    /// what plays underneath, else the definition's default. Manual plays stay.
+    ReleaseProperty { target: Target, property: Property },
     /// Make a group, or replace the one of this name. Its members are lights or fixtures,
     /// in the order given, each patched. Unpatching a fixture takes it out of its groups.
     SetGroup {
@@ -314,21 +324,10 @@ pub enum EngineCommand {
     /// The writers of the patch arrive with this command and take the place of the ones
     /// there, which go back to be freed. No light value changes.
     Writers,
-    SetIntensity {
+    /// Each light of `lights` takes `change`.
+    Lights {
         lights: LightRun,
-        intensity: u16,
-    },
-    SetColour {
-        lights: LightRun,
-        red: u16,
-        green: u16,
-        blue: u16,
-    },
-    ReleaseIntensity {
-        lights: LightRun,
-    },
-    ReleaseColour {
-        lights: LightRun,
+        change: LightChange,
     },
     /// The lights of an unpatched fixture: their held values go.
     Darken {
@@ -365,31 +364,30 @@ pub enum EngineCommand {
     },
 }
 
-/// What a light command does to each light it names, without naming them.
+/// What a light command does to the direct holds of each light it names, without
+/// naming them. All Manual; who holds what: [`Held`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LightChange {
-    SetIntensity { intensity: u16 },
-    SetColour { red: u16, green: u16, blue: u16 },
-    ReleaseIntensity,
-    ReleaseColour,
+    /// `grab` holds the value, as the latest start.
+    Grab { value: Value, grab: GrabId },
+    /// The value, where `grab` still holds its property. The start stays.
+    Update { value: Value, grab: GrabId },
+    /// Where `grab` still holds `property`: kept, or let go.
+    End {
+        property: Property,
+        grab: GrabId,
+        end: End,
+    },
+    /// Every direct hold of `property` let go.
+    Release { property: Property },
 }
 
 impl LightChange {
     /// The command that makes this change to the lights of `run`.
     pub const fn on(self, run: LightRun) -> EngineCommand {
-        match self {
-            Self::SetIntensity { intensity } => EngineCommand::SetIntensity {
-                lights: run,
-                intensity,
-            },
-            Self::SetColour { red, green, blue } => EngineCommand::SetColour {
-                lights: run,
-                red,
-                green,
-                blue,
-            },
-            Self::ReleaseIntensity => EngineCommand::ReleaseIntensity { lights: run },
-            Self::ReleaseColour => EngineCommand::ReleaseColour { lights: run },
+        EngineCommand::Lights {
+            lights: run,
+            change: self,
         }
     }
 }
@@ -491,45 +489,19 @@ pub fn update(
             ..state
         },
         EngineCommand::Writers | EngineCommand::Runs { .. } | EngineCommand::Plan { .. } => state,
-        EngineCommand::SetIntensity {
+        EngineCommand::Lights {
             lights: run,
-            intensity,
+            change,
         } => {
-            let value = Light {
-                intensity: Some(intensity),
-                ..Light::DARK
-            };
             for light in run.of(lights) {
-                light.hold(Property::Intensity, &value, state.order);
+                light.change(change, state.order);
             }
-            held
-        }
-        EngineCommand::SetColour {
-            lights: run,
-            red,
-            green,
-            blue,
-        } => {
-            let value = Light {
-                colour: Some(Rgb { red, green, blue }),
-                ..Light::DARK
-            };
-            for light in run.of(lights) {
-                light.hold(Property::Colour, &value, state.order);
+            match change {
+                LightChange::Grab { .. } => held,
+                LightChange::Update { .. }
+                | LightChange::End { .. }
+                | LightChange::Release { .. } => state,
             }
-            held
-        }
-        EngineCommand::ReleaseIntensity { lights: run } => {
-            for light in run.of(lights) {
-                light.release(Property::Intensity);
-            }
-            state
-        }
-        EngineCommand::ReleaseColour { lights: run } => {
-            for light in run.of(lights) {
-                light.release(Property::Colour);
-            }
-            state
         }
         EngineCommand::Darken { lights: run } => {
             run.of(lights).fill(Held::NONE);
@@ -548,6 +520,9 @@ pub fn update(
         EngineCommand::Rules { rules } => {
             let mut plays = state.plays;
             plays.release_where(|play| unkept(play.rank, play.state, rules));
+            for light in lights.iter_mut() {
+                light.unkeep(rules);
+            }
             State {
                 plays,
                 rules,
@@ -876,22 +851,21 @@ mod tests {
             ..Light::DARK
         };
         let dark = Light::DARK;
-        let set_red = |lights| EngineCommand::SetColour {
-            lights,
+        let grab = GrabId { generation: 1 };
+        let set = |value| move |lights| LightChange::Grab { value, grab }.on(lights);
+        let set_red = set(Value::Colour(Rgb {
             red: 0xffff,
             green: 0,
             blue: 0,
-        };
-        let half = |lights| EngineCommand::SetIntensity {
-            lights,
-            intensity: 0x8000,
-        };
+        }));
+        let half = set(Value::Intensity(0x8000));
         let full_red = Light {
             intensity: Some(0x8000),
             ..red
         };
-        let let_go = |lights| EngineCommand::ReleaseIntensity { lights };
-        let black = |lights| EngineCommand::ReleaseColour { lights };
+        let release = |property| move |lights| LightChange::Release { property }.on(lights);
+        let let_go = release(Property::Intensity);
+        let black = release(Property::Colour);
         // (lights before, command, lights after)
         let cases = [
             ([dark; 4], set_red(run(1, 2)), [dark, red, red, dark]),
@@ -899,12 +873,7 @@ mod tests {
             // black set is held black, not nothing held
             (
                 [dark; 4],
-                EngineCommand::SetColour {
-                    lights: run(0, 1),
-                    red: 0,
-                    green: 0,
-                    blue: 0,
-                },
+                set(Value::Colour(Rgb::BLACK))(run(0, 1)),
                 [held_black, dark, dark, dark],
             ),
             // intensity and colour are held on their own
@@ -937,8 +906,12 @@ mod tests {
         for (before, command, after) in cases {
             let mut lights = before.map(|values| {
                 let mut held = Held::NONE;
-                for property in Property::ALL.into_iter().filter(|p| values.has(*p)) {
-                    held.hold(property, &values, 1);
+                let each = [
+                    values.intensity.map(Value::Intensity),
+                    values.colour.map(Value::Colour),
+                ];
+                for value in each.into_iter().flatten() {
+                    held.change(LightChange::Grab { value, grab }, 1);
                 }
                 held
             });
@@ -952,7 +925,7 @@ mod tests {
                 CALM,
                 "{command:?}"
             );
-            assert_eq!(lights.map(|held| held.values), after, "{command:?}");
+            assert_eq!(lights.map(|held| *held.values()), after, "{command:?}");
             assert_eq!((universes, holds), raw(&[(1, 1, 5)]), "{command:?}");
         }
     }
@@ -1519,6 +1492,8 @@ mod tests {
                 Position::decl(&config),
                 Gobo::decl(&config),
                 Property::decl(&config),
+                Value::decl(&config),
+                GrabId::decl(&config),
                 Step::decl(&config),
                 Saved::decl(&config),
                 PlayId::decl(&config),

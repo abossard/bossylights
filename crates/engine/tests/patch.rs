@@ -67,7 +67,7 @@ fn start() -> (Engine, Sender, Arc<Heard>) {
 /// Sends `command` with the library: the fixture number for a patch.
 fn send(sender: &mut Sender, command: Command) -> Result<Option<u16>, Refusal> {
     match sender.begin(command, &library())? {
-        Begun::Queued | Begun::Started { .. } => Ok(None),
+        Begun::Queued | Begun::Started { .. } | Begun::Grabbed { .. } => Ok(None),
         Begun::Patched { fixture } => Ok(Some(fixture)),
         Begun::Opening(_) => panic!("{command:?} opens nothing"),
     }

@@ -4,8 +4,8 @@ mod common;
 
 use common::fixture;
 use engine_core::{
-    ChannelNumbers, EngineCommand, Lights, PatchCommand, Place, Property, Refusal, Target, Text,
-    Universes, Writer,
+    ChannelNumbers, EngineCommand, LightChange, Lights, PatchCommand, Place, Property, Refusal,
+    Rgb, Target, Text, Universes, Value, Writer,
 };
 use fixture_library::Fixture;
 use rig::{Patch, PatchEffect};
@@ -41,20 +41,20 @@ fn par(name: &str, universe: u16, address: u16) -> PatchCommand {
 }
 
 fn red(target: Target) -> PatchCommand {
-    PatchCommand::SetColour {
+    PatchCommand::Grab {
         target,
-        red: 0xffff,
-        green: 0,
-        blue: 0,
+        value: Value::Colour(Rgb {
+            red: 0xffff,
+            green: 0,
+            blue: 0,
+        }),
     }
 }
 
 fn black(target: Target) -> PatchCommand {
-    PatchCommand::SetColour {
+    PatchCommand::Grab {
         target,
-        red: 0,
-        green: 0,
-        blue: 0,
+        value: Value::Colour(Rgb::BLACK),
     }
 }
 
@@ -110,18 +110,19 @@ fn said(effect: &PatchEffect) -> String {
                 .to_string()
         }
         PatchEffect::Send(EngineCommand::Darken { lights }) => format!("darken {}", run(*lights)),
-        PatchEffect::Send(EngineCommand::SetColour { lights, .. }) => {
-            format!("colour {}", run(*lights))
+        PatchEffect::Grab { value, runs } => {
+            let runs: Vec<String> = runs.iter().map(|r| run(*r)).collect();
+            let property = format!("{:?}", value.property()).to_lowercase();
+            format!("{property} {}", runs.join(" "))
         }
-        PatchEffect::Send(EngineCommand::SetIntensity { lights, .. }) => {
-            format!("intensity {}", run(*lights))
-        }
-        PatchEffect::Send(EngineCommand::ReleaseColour { lights }) => {
-            format!("release colour {}", run(*lights))
-        }
-        PatchEffect::Send(EngineCommand::ReleaseIntensity { lights }) => {
-            format!("release intensity {}", run(*lights))
-        }
+        PatchEffect::Send(EngineCommand::Lights {
+            lights,
+            change: LightChange::Release { property },
+        }) => format!(
+            "release {} {}",
+            format!("{property:?}").to_lowercase(),
+            run(*lights)
+        ),
         PatchEffect::Send(other) => format!("{other:?}"),
         PatchEffect::Runs { change, runs } => format!("{change:?} {runs:?}"),
     }
@@ -355,9 +356,9 @@ fn a_patch_command_makes_a_new_patch_and_says_what_follows() {
         (
             many,
             vec![par_3, bar],
-            PatchCommand::SetIntensity {
+            PatchCommand::Grab {
                 target: Target::Light { light: 10 },
-                intensity: 7,
+                value: Value::Intensity(7),
             },
             Ok(&["intensity 9+1"]),
             &[
@@ -411,8 +412,9 @@ fn a_patch_command_makes_a_new_patch_and_says_what_follows() {
         (
             many,
             vec![par_3, bar],
-            PatchCommand::ReleaseColour {
+            PatchCommand::Release {
                 target: fixture_(2),
+                property: Property::Colour,
             },
             Ok(&["release colour 1+9"]),
             &[
@@ -423,8 +425,9 @@ fn a_patch_command_makes_a_new_patch_and_says_what_follows() {
         (
             many,
             vec![par_3, bar],
-            PatchCommand::ReleaseIntensity {
+            PatchCommand::Release {
                 target: Target::Light { light: 10 },
+                property: Property::Intensity,
             },
             Ok(&["release intensity 9+1"]),
             &[
@@ -435,8 +438,9 @@ fn a_patch_command_makes_a_new_patch_and_says_what_follows() {
         (
             many,
             vec![par_3],
-            PatchCommand::ReleaseIntensity {
+            PatchCommand::Release {
                 target: Target::Light { light: 2 },
+                property: Property::Intensity,
             },
             Err(Refusal::NoSuchLight),
             &["1 PAR 3: Generic RGB, RGB at 1.37 (3) lights 1+1"],
@@ -444,8 +448,9 @@ fn a_patch_command_makes_a_new_patch_and_says_what_follows() {
         (
             many,
             vec![par_3],
-            PatchCommand::ReleaseColour {
+            PatchCommand::Release {
                 target: fixture_(2),
+                property: Property::Colour,
             },
             Err(Refusal::NotPatched),
             &["1 PAR 3: Generic RGB, RGB at 1.37 (3) lights 1+1"],

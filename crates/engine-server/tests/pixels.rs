@@ -3,6 +3,9 @@
 //! stream (universe 2, addresses 169 to 172), every other byte 0. The strip is refused
 //! until an output streams its universes, and that output cannot go while it is patched.
 
+mod common;
+
+use common::taken;
 use engine::{Engine, Universes};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
@@ -164,8 +167,8 @@ async fn a_strip_of_300_rgbw_pixels_on_universes_1_to_3_pixel_171_green_sends_0_
     let pixel = json!({"Light": {"light": 171}});
     let full = json!({"SetIntensity": {"target": pixel, "intensity": 65535}});
     let green = json!({"SetColour": {"target": pixel, "red": 0, "green": 65535, "blue": 0}});
-    assert_eq!(command(&mut socket, full).await, json!("Accepted"));
-    assert_eq!(command(&mut socket, green).await, json!("Accepted"));
+    assert!(taken(&command(&mut socket, full).await));
+    assert!(taken(&command(&mut socket, green).await));
     let mut expected = vec![0; STREAM];
     expected[680..684].copy_from_slice(&[0, 255, 0, 0]);
     until_frame(&udp, &expected).await;
@@ -173,7 +176,7 @@ async fn a_strip_of_300_rgbw_pixels_on_universes_1_to_3_pixel_171_green_sends_0_
     // white is the part red, green and blue share
     let white =
         json!({"SetColour": {"target": pixel, "red": 65535, "green": 65535, "blue": 65535}});
-    assert_eq!(command(&mut socket, white).await, json!("Accepted"));
+    assert!(taken(&command(&mut socket, white).await));
     expected[680..684].copy_from_slice(&[0, 0, 0, 255]);
     until_frame(&udp, &expected).await;
 }

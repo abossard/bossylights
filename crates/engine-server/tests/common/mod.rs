@@ -121,3 +121,8 @@ pub async fn command(socket: &mut Socket, command: Value) -> Value {
     send(socket, &serde_json::json!({"Send": {"command": command}})).await;
     answer(socket).await
 }
+
+/// Whether `reply` took the command: `Accepted`, or `Grabbed` for a set.
+pub fn taken(reply: &Value) -> bool {
+    reply == "Accepted" || reply["Grabbed"]["grab"].is_object()
+}

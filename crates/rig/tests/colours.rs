@@ -198,7 +198,9 @@ const DEFAULT_RED: &str = r#"<?xml version="1.0"?>
 /// at 0 is 0 (#160).
 #[test]
 fn a_part_not_held_is_the_definition_default() {
-    use engine_core::{ChannelSet, EngineCommand, LightRun, Priority, State, update};
+    use engine_core::{
+        ChannelSet, GrabId, LightChange, LightRun, Priority, Property, State, Value, update,
+    };
     let fixture = fixture_library::parse("default.qxf", DEFAULT_RED.as_bytes()).unwrap();
     let rigged = compile(
         &fixture.modes[0],
@@ -209,18 +211,13 @@ fn a_part_not_held_is_the_definition_default() {
     )
     .unwrap();
     let one = LightRun::new(light(0), 1, lights()).unwrap();
-    let full = EngineCommand::SetIntensity {
-        lights: one,
-        intensity: FULL,
-    };
-    let colour = |(red, green, blue)| EngineCommand::SetColour {
-        lights: one,
-        red,
-        green,
-        blue,
-    };
-    let release_colour = EngineCommand::ReleaseColour { lights: one };
-    let release_intensity = EngineCommand::ReleaseIntensity { lights: one };
+    let grab = GrabId { generation: 1 };
+    let set = |value| LightChange::Grab { value, grab }.on(one);
+    let full = set(Value::Intensity(FULL));
+    let colour = |(red, green, blue)| set(Value::Colour(Rgb { red, green, blue }));
+    let release = |property| LightChange::Release { property }.on(one);
+    let release_colour = release(Property::Colour);
+    let release_intensity = release(Property::Intensity);
     // (name, commands, bytes 37 to 40)
     let cases = [
         ("nothing held", vec![], [0, 200, 0, 0]),
@@ -254,7 +251,7 @@ fn a_part_not_held_is_the_definition_default() {
             state = update(state, &mut universes, &mut holds, &mut shown, command);
         }
         let mut out = [Levels::ZERO];
-        resolve(&[shown[0].values], &rigged.writers, &mut out);
+        resolve(&[*shown[0].values()], &rigged.writers, &mut out);
         assert_eq!(out[0].0[36..40], expected, "{name}");
     }
 }

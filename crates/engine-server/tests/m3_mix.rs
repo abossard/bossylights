@@ -106,8 +106,35 @@ fn rgb([red, green, blue]: [u8; 3]) -> Value {
     json!({"red": wide(red), "green": wide(green), "blue": wide(blue)})
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn rank_stop_and_release_decide_each_light_on_dmx() {
+/// The grab a `SetProperty` (or a set of old) answered, or the test stops.
+async fn grab(socket: &mut Socket, sent: Value) -> Value {
+    let grabbed = command(socket, sent.clone()).await;
+    let grab = grabbed["Grabbed"]["grab"].clone();
+    assert!(grab.is_object(), "{sent}: {grabbed}");
+    grab
+}
+
+fn raw(address: u16, value: u8) -> Value {
+    json!({"SetChannel": {"channel": {"universe": 1, "address": address}, "value": value}})
+}
+
+/// Waits until a frame carries every command sent before, and PAR 1 shows `one` in it:
+/// a raw channel on PAR 2's blue marks that frame. PAR 2 is blue before and after.
+async fn then_shows(socket: &mut Socket, heard: &Heard, one: [u8; 3]) {
+    accepted(socket, raw(6, 9)).await;
+    until_dmx(heard, one, [0, 0, 9]).await;
+    accepted(socket, json!("ReleaseChannels")).await;
+    until_dmx(heard, one, BLUE).await;
+}
+
+fn set(target: &Value, value: Value) -> Value {
+    json!({"SetProperty": {"target": target, "value": value}})
+}
+
+/// An engine with a fake DMX USB Pro on universe 1, two Generic RGB PARs at 1:1 and 1:4
+/// in group "both", and the looks: 1 blue at full on both, 2 green, 3 red, 4 dark on
+/// PAR 1, 5 full, 6 dark on PAR 2.
+async fn two_pars() -> (Socket, Heard, Arc<AtomicBool>) {
     let heard: Heard = Arc::new(Mutex::new(Vec::new()));
     let stop_adapter = Arc::new(AtomicBool::new(false));
     let opens = open(Some(Arc::clone(&heard)), Arc::clone(&stop_adapter));
@@ -153,6 +180,13 @@ async fn rank_stop_and_release_decide_each_light_on_dmx() {
     for look in looks {
         accepted(s, look).await;
     }
+    (socket, heard, stop_adapter)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn rank_stop_and_release_decide_each_light_on_dmx() {
+    let (mut socket, heard, stop_adapter) = two_pars().await;
+    let s = &mut socket;
 
     // rank: blue Autopilot, green Show, red Manual, then green and blue on release
     let autopilot = start(s, 1, "Autopilot").await;
@@ -201,14 +235,13 @@ async fn rank_stop_and_release_decide_each_light_on_dmx() {
     until_dmx(&heard, BLUE, BLUE).await;
     // ReleaseChannels: the raw channels go, a Manual play stays
     let manual = start(s, 3, "Manual").await;
-    let raw = |address: u16, value: u8| json!({"SetChannel": {"channel": {"universe": 1, "address": address}, "value": value}});
     accepted(s, raw(3, 9)).await;
     until_dmx(&heard, [255, 0, 9], BLUE).await;
     accepted(s, json!("ReleaseChannels")).await;
     until_dmx(&heard, RED, BLUE).await;
     // ReleaseAll: Manual plays, direct holds and raw channels go; Show and Autopilot stay
     let show = start(s, 2, "Show").await;
-    accepted(
+    grab(
         s,
         json!({"SetColour": {"target": par(2), "red": 0, "green": 65535, "blue": 0}}),
     )
@@ -269,7 +302,7 @@ async fn rank_stop_and_release_decide_each_light_on_dmx() {
     // a direct grab over a playing Manual look, released: the look shows again
     let manual = start(s, 3, "Manual").await;
     until_dmx(&heard, RED, BLUE).await;
-    accepted(
+    grab(
         s,
         json!({"SetColour": {"target": par(1), "red": 65535, "green": 65535, "blue": 65535}}),
     )
@@ -279,6 +312,97 @@ async fn rank_stop_and_release_decide_each_light_on_dmx() {
     until_dmx(&heard, RED, BLUE).await;
     accepted(s, json!({"ReleaseHold": {"play": manual}})).await;
     until_dmx(&heard, BLUE, BLUE).await;
+
+    send(s, &json!("Stop")).await;
+    assert_eq!(answer(s).await, json!("Stopping"));
+    stop_adapter.store(true, Ordering::Relaxed);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_grab_holds_until_its_end_or_release_on_dmx() {
+    let (mut socket, heard, stop_adapter) = two_pars().await;
+    let s = &mut socket;
+    let both = json!({"Group": {"group": "both"}});
+    let white = [255, 255, 255];
+    let colour = |rgb_of| json!({"Colour": rgb(rgb_of)});
+    let autopilot = start(s, 1, "Autopilot").await;
+    until_dmx(&heard, BLUE, BLUE).await;
+
+    // a grab answers its ID; a Manual look started later wins over it
+    let first = grab(s, set(&par(1), colour(GREEN))).await;
+    until_dmx(&heard, GREEN, BLUE).await;
+    let manual = start(s, 3, "Manual").await;
+    until_dmx(&heard, RED, BLUE).await;
+    // an update keeps the grab's start: the later look still wins
+    accepted(
+        s,
+        json!({"UpdateGrab": {"grab": first, "value": colour(white)}}),
+    )
+    .await;
+    then_shows(s, &heard, RED).await;
+    accepted(s, json!({"ReleaseHold": {"play": manual}})).await;
+    until_dmx(&heard, white, BLUE).await;
+    // an update holds the grab's own property only
+    assert_eq!(
+        command(
+            s,
+            json!({"UpdateGrab": {"grab": first, "value": {"Intensity": 0}}})
+        )
+        .await,
+        json!({"Refused": {"reason": {"OtherProperty": {"property": "Colour"}}}})
+    );
+
+    // a new grab replaces it: the old one's update and end are stale gestures
+    let second = grab(s, set(&par(1), colour(RED))).await;
+    until_dmx(&heard, RED, BLUE).await;
+    accepted(
+        s,
+        json!({"UpdateGrab": {"grab": first, "value": colour(GREEN)}}),
+    )
+    .await;
+    accepted(s, json!({"EndGrab": {"grab": first}})).await;
+    then_shows(s, &heard, RED).await;
+    // UntilRelease: the end keeps it, and an update after the end changes nothing
+    accepted(s, json!({"EndGrab": {"grab": second}})).await;
+    accepted(
+        s,
+        json!({"UpdateGrab": {"grab": second, "value": colour(GREEN)}}),
+    )
+    .await;
+    then_shows(s, &heard, RED).await;
+    // a settings edit to UntilStop clears the kept grab
+    accepted(s, rules("Latest", "UntilStop", "Reveal")).await;
+    until_dmx(&heard, BLUE, BLUE).await;
+
+    // UntilStop: the end lets a grab go at once, over a still-playing Manual look
+    let manual = start(s, 3, "Manual").await;
+    until_dmx(&heard, RED, BLUE).await;
+    let third = grab(s, set(&par(1), colour(GREEN))).await;
+    until_dmx(&heard, GREEN, BLUE).await;
+    accepted(s, json!({"EndGrab": {"grab": third}})).await;
+    until_dmx(&heard, RED, BLUE).await;
+
+    // the old colour set is a grab too: one-shot, it stays through settings edits
+    let old = json!({"SetColour": {"target": par(2), "red": 65535, "green": 0, "blue": 0}});
+    grab(s, old).await;
+    until_dmx(&heard, RED, RED).await;
+    accepted(s, rules("Latest", "UntilRelease", "Reveal")).await;
+    accepted(s, rules("Latest", "UntilStop", "Reveal")).await;
+    until_picture(s, "/state/rules/manual_end", &json!("UntilStop")).await;
+    until_dmx(&heard, RED, RED).await;
+    // ReleaseProperty: the direct holds of that property go, the Manual look stays
+    let release = |property| json!({"ReleaseProperty": {"target": both, "property": property}});
+    accepted(s, release("Colour")).await;
+    until_dmx(&heard, RED, BLUE).await;
+    grab(s, set(&both, json!({"Intensity": 0}))).await;
+    until_dmx(&heard, DARK, DARK).await;
+    accepted(s, release("Intensity")).await;
+    until_dmx(&heard, RED, BLUE).await;
+    accepted(s, release("Intensity")).await; // nothing held: a no-op
+    accepted(s, json!({"ReleaseHold": {"play": manual}})).await;
+    until_dmx(&heard, BLUE, BLUE).await;
+    let alone = json!([{"play": autopilot, "look": 1, "rank": "Autopilot", "state": "Playing"}]);
+    until_picture(s, "/state/plays", &alone).await;
 
     send(s, &json!("Stop")).await;
     assert_eq!(answer(s).await, json!("Stopping"));

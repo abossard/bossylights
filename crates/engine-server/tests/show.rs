@@ -6,6 +6,9 @@
 //! is a step over a patch that leaves the looks no room. A refused edit saves nothing.
 //! An edit made before the keeper first looks is saved.
 
+mod common;
+
+use common::taken;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader};
@@ -243,8 +246,8 @@ async fn patch_stop_start_the_patch_and_groups_are_there_and_light_up_without_th
     let group = json!({"Group": {"group": "front"}});
     let full = json!({"SetIntensity": {"target": group, "intensity": 65535}});
     let red = json!({"SetColour": {"target": group, "red": 65535, "green": 0, "blue": 0}});
-    assert_eq!(command(&mut socket, full).await, json!("Accepted"));
-    assert_eq!(command(&mut socket, red).await, json!("Accepted"));
+    assert!(taken(&command(&mut socket, full).await));
+    assert!(taken(&command(&mut socket, red).await));
     until_ddp(&udp, &[255, 0, 0, 0, 0, 0, 255, 0, 0]).await;
     stop(&mut socket, &mut second).await;
     let _ = std::fs::remove_file(&file);

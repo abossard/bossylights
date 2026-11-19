@@ -1,8 +1,10 @@
 //! Proves the tick thread and each output's own thread allocate nothing per wake, also
 //! while they serve two outputs at different rates, resolve 512 patched lights and a strip
 //! of 100 pixels over two universes, take commands, swap in new writers, take a group of
-//! 256 runs, start, restart, replan and release a play of a step over that group, mix it
-//! with the direct holds and hand a reader a snapshot on every frame. And that the tick
+//! 256 runs, start, restart, replan and release a play of a step over that group, grab,
+//! update, end (kept or let go) and release a direct hold on one run and on two, clear the
+//! kept ones by a change of the rules, mix it with the direct holds and hand a reader a
+//! snapshot on every frame. And that the tick
 //! frees nothing: the old writers, runs, plans and a replaced device with its thread go to
 //! the free thread. A
 //! counting allocator sees every allocation in this process, except those of the front
@@ -22,8 +24,8 @@ mod mock;
 
 use engine::{
     Begun, Brightness, ChannelNumbers, Color, Command, Engine, Fixture, Light, ManualEnd, Member,
-    MemberList, Members, MixRules, OtherEnd, PlayId, Rank, Rate, Refusal, Rgb, RunNumbers, Sender,
-    Target, Text, Universes,
+    MemberList, Members, MixRules, OtherEnd, PlayId, Property, Rank, Rate, Refusal, Rgb,
+    RunNumbers, Sender, Target, Text, Universes, Value,
 };
 use engine_core::{Pixels, Step};
 
@@ -34,7 +36,10 @@ const UNIVERSES: u16 = 4;
 /// Sends `command` as the front, its allocations not counted. Whether it is taken.
 fn send(sender: &mut Sender, command: Command, library: &[Fixture]) -> bool {
     let begun = counting::uncounted(|| sender.begin(command, library));
-    matches!(begun, Ok(Begun::Queued | Begun::Patched { .. }))
+    matches!(
+        begun,
+        Ok(Begun::Queued | Begun::Patched { .. } | Begun::Grabbed { .. })
+    )
 }
 
 /// Begins `command` as the front, its allocations not counted.
@@ -149,6 +154,18 @@ fn main() {
         members: MemberList::Fits(Members::new(&even).expect("256 members")),
     };
     assert!(send(&mut sender, group, &library), "the group is made");
+    // two pixels of the strip apart: a grab of two runs
+    let ends = Command::SetGroup {
+        name: text("ends"),
+        members: MemberList::Fits(
+            Members::new(&[
+                Member::Light { light: LIGHTS + 1 },
+                Member::Light { light: LIGHTS + 3 },
+            ])
+            .expect("2 members"),
+        ),
+    };
+    assert!(send(&mut sender, ends, &library), "the group is made");
     assert!(send(&mut sender, step(0), &library), "look 1 is saved");
     let green = Command::SetColour {
         target: Target::Group {
@@ -256,6 +273,57 @@ fn main() {
             };
             let stop = Command::StopLook { play: shown };
             assert!(send(&mut sender, stop, &library), "the Show play stops");
+        }
+        if value % 16 == 14 {
+            // a grab on one run and on two: updated, then ended under the Manual end
+            // rule, kept or let go; a kept one is cleared by the next change to UntilStop
+            let manual_end = if value % 32 == 14 {
+                ManualEnd::UntilRelease
+            } else {
+                ManualEnd::UntilStop
+            };
+            let rules = MixRules {
+                brightness: Brightness::Latest,
+                manual_end,
+                other_end: OtherEnd::Reveal,
+            };
+            assert!(
+                send(&mut sender, Command::SetMixRules { rules }, &library),
+                "the rules change"
+            );
+            let strip = Target::Fixture {
+                fixture: LIGHTS + 1,
+            };
+            let ends = Target::Group {
+                group: text("ends"),
+            };
+            for target in [strip, ends] {
+                let blue = Value::Colour(Rgb {
+                    red: 0,
+                    green: 0,
+                    blue: u16::MAX,
+                });
+                let set = Command::SetProperty {
+                    target,
+                    value: blue,
+                };
+                let Ok(Begun::Grabbed { grab }) = begin(&mut sender, set, &library) else {
+                    panic!("{target:?} is grabbed");
+                };
+                let red = Value::Colour(Rgb {
+                    red: u16::from(value) << 8,
+                    ..Rgb::BLACK
+                });
+                let update = Command::UpdateGrab { grab, value: red };
+                assert!(send(&mut sender, update, &library), "the grab is updated");
+                let end = Command::EndGrab { grab };
+                assert!(send(&mut sender, end, &library), "the grab ends");
+            }
+            let release = Command::ReleaseProperty {
+                target: ends,
+                property: Property::Colour,
+            };
+            assert!(send(&mut sender, release, &library), "the colour is let go");
         }
         if value % 16 == 0 {
             // new writers: the tick swaps them in and sends the old ones back

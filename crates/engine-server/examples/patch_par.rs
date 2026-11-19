@@ -120,7 +120,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
 /// Sends `command` as any client does. The fixture number of a patch.
 fn send(sender: &mut Sender, command: Command, library: &[Fixture]) -> Result<Option<u16>, String> {
     match sender.begin(command, library) {
-        Ok(Begun::Queued | Begun::Started { .. }) => Ok(None),
+        Ok(Begun::Queued | Begun::Started { .. } | Begun::Grabbed { .. }) => Ok(None),
         Ok(Begun::Patched { fixture }) => Ok(Some(fixture)),
         Ok(Begun::Opening(opening)) => sender
             .finish(opening.open())

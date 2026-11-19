@@ -7,7 +7,7 @@
 //!                                                                    EngineCommand
 //! ```
 
-use crate::{ChannelNumbers, Color, Text};
+use crate::{ChannelNumbers, Color, Property, Text, Value};
 use core::fmt;
 use serde::de::{Deserializer, Error, SeqAccess, Visitor};
 use serde::{Deserialize, Serialize};
@@ -171,21 +171,15 @@ pub enum PatchCommand {
         fixture: u16,
         name: Text,
     },
-    SetIntensity {
+    /// A new direct grab of `value` on the lights `target` names.
+    Grab {
         target: Target,
-        intensity: u16,
+        value: Value,
     },
-    SetColour {
+    /// Every direct hold of `property` on the lights `target` names let go.
+    Release {
         target: Target,
-        red: u16,
-        green: u16,
-        blue: u16,
-    },
-    ReleaseIntensity {
-        target: Target,
-    },
-    ReleaseColour {
-        target: Target,
+        property: Property,
     },
     SetGroup {
         name: Text,

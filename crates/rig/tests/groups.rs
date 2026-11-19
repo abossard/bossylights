@@ -4,8 +4,8 @@ mod common;
 
 use common::fixture;
 use engine_core::{
-    ChannelNumbers, EngineCommand, LightRun, Lights, Member, Members, PatchCommand, Refusal,
-    Target, Text, Universes,
+    ChannelNumbers, EngineCommand, GrabId, LightChange, LightRun, Lights, Member, Members,
+    PatchCommand, Property, Refusal, Rgb, Target, Text, Universes, Value,
 };
 use fixture_library::Fixture;
 use rig::{Patch, PatchEffect};
@@ -58,11 +58,13 @@ fn remove(name: &str) -> PatchCommand {
 }
 
 fn red(group: &str) -> PatchCommand {
-    PatchCommand::SetColour {
+    PatchCommand::Grab {
         target: Target::Group { group: text(group) },
-        red: 0xffff,
-        green: 0,
-        blue: 0,
+        value: Value::Colour(Rgb {
+            red: 0xffff,
+            green: 0,
+            blue: 0,
+        }),
     }
 }
 
@@ -76,13 +78,17 @@ fn library() -> Vec<Fixture> {
 /// The runs of a group sent as one: `colour 0+1 2+1`.
 fn said(effect: &PatchEffect) -> String {
     let run = |run: LightRun| format!("{}+{}", run.first().index(), run.count());
+    let lower = |property: Property| format!("{property:?}").to_lowercase();
+    let what = |change: LightChange| match change {
+        LightChange::Grab { value, .. } | LightChange::Update { value, .. } => {
+            lower(value.property())
+        }
+        LightChange::End { property, .. } => format!("end {}", lower(property)),
+        LightChange::Release { property } => format!("release {}", lower(property)),
+    };
     let word = |command: EngineCommand| match command {
         EngineCommand::Darken { lights } => format!("darken {}", run(lights)),
-        EngineCommand::SetColour { lights, .. } => format!("colour {}", run(lights)),
-        EngineCommand::SetIntensity { lights, .. } => format!("intensity {}", run(lights)),
-        EngineCommand::ReleaseIntensity { lights } => {
-            format!("release intensity {}", run(lights))
-        }
+        EngineCommand::Lights { lights, change } => format!("{} {}", what(change), run(lights)),
         other @ (EngineCommand::Tick { .. }
         | EngineCommand::Handed { .. }
         | EngineCommand::Sent { .. }
@@ -94,7 +100,6 @@ fn said(effect: &PatchEffect) -> String {
         | EngineCommand::Attach { .. }
         | EngineCommand::RemoveOutput { .. }
         | EngineCommand::Writers
-        | EngineCommand::ReleaseColour { .. }
         | EngineCommand::Runs { .. }
         | EngineCommand::Start { .. }
         | EngineCommand::Keep { .. }
@@ -102,22 +107,25 @@ fn said(effect: &PatchEffect) -> String {
         | EngineCommand::Plan { .. }
         | EngineCommand::Release { .. }) => format!("{other:?}"),
     };
+    let runs = |change: LightChange, runs: &[LightRun]| {
+        [what(change)]
+            .into_iter()
+            .chain(runs.iter().map(|r| run(*r)))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
     match effect {
         PatchEffect::Patched { fixture } => format!("patched {fixture}"),
         PatchEffect::Writers(writers) => format!("writers {}", writers.len()),
         PatchEffect::Send(command) => word(*command),
-        PatchEffect::Runs { change, runs } => {
-            let rest: Vec<String> = runs.iter().skip(1).map(|r| run(*r)).collect();
-            let first = runs
-                .first()
-                .map(|r| word(change.on(*r)))
-                .unwrap_or_default();
-            [first]
-                .into_iter()
-                .chain(rest)
-                .collect::<Vec<_>>()
-                .join(" ")
-        }
+        PatchEffect::Runs { change, runs: of } => runs(*change, of),
+        PatchEffect::Grab { value, runs: of } => runs(
+            LightChange::Grab {
+                value: *value,
+                grab: GrabId { generation: 0 },
+            },
+            of,
+        ),
     }
 }
 
@@ -274,21 +282,22 @@ fn a_group_command_makes_new_groups_and_says_what_follows() {
         ),
         (
             with(&[back]),
-            PatchCommand::SetIntensity {
+            PatchCommand::Grab {
                 target: Target::Group {
                     group: text("back"),
                 },
-                intensity: 9,
+                value: Value::Intensity(9),
             },
             Ok(&["intensity 0+1 4+2"]),
             &["back: L6 L5 F1"],
         ),
         (
             with(&[front]),
-            PatchCommand::ReleaseIntensity {
+            PatchCommand::Release {
                 target: Target::Group {
                     group: text("front"),
                 },
+                property: Property::Intensity,
             },
             Ok(&["release intensity 0+3"]),
             &["front: F3 F1 F2"],
@@ -296,7 +305,7 @@ fn a_group_command_makes_new_groups_and_says_what_follows() {
         (
             with(&[set("empty", &[])]),
             red("empty"),
-            Ok(&[]),
+            Err(Refusal::EmptyGroup),
             &["empty:"],
         ),
         (
@@ -305,11 +314,11 @@ fn a_group_command_makes_new_groups_and_says_what_follows() {
             Err(Refusal::NoSuchGroup),
             &["front: F3 F1 F2"],
         ),
-        // a group that lost its last member is still there, and sends nothing
+        // a group that lost its last member is still there, and grabs nothing
         (
             with(&[set("one", &[f(2)]), PatchCommand::Unpatch { fixture: 2 }]),
             red("one"),
-            Ok(&[]),
+            Err(Refusal::EmptyGroup),
             &["one:"],
         ),
     ];

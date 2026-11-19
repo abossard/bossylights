@@ -25,8 +25,12 @@
 //! | Show or Autopilot, `StopLook` | [`OtherEnd::Reveal`] | nothing |
 //! | Show or Autopilot, `StopLook` | [`OtherEnd::Stay`] | kept |
 //! | Manual, `EndFlash`; any, `ReleaseHold` | any | nothing |
+//! | a grab, `EndGrab` | [`ManualEnd::UntilRelease`] | kept: its value at its start, until released |
+//! | a grab, `EndGrab` | [`ManualEnd::UntilStop`] | nothing |
+//! | a grab, `ReleaseProperty`, `ReleaseAll` | any | nothing; `ReleaseProperty` leaves the plays |
 //! | kept, rules change to remove it | `UntilStop` for Manual, `Reveal` for the others | nothing |
 
+use crate::LightChange;
 use crate::playback::{Entry, PlayState, Plays, Rank};
 use crate::property::{Light, Property};
 use serde::{Deserialize, Serialize};
@@ -131,35 +135,137 @@ fn beats(
     }
     wins(claim.order, over.order)
 }
-/// A light's direct holds: the values held of it, and the start order each property was
-/// held at.
+/// One direct grab: the generation the front gave it. Its gestures reach only the light
+/// properties it still holds: a later grab takes them away, and an old finger cannot
+/// update or end its replacement.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct GrabId {
+    pub generation: u32,
+}
+
+/// Who holds a property of a light directly.
+///
+/// ```text
+/// off --Grab--> Grab --Update--> Grab, same start
+///                 |  --End, Keep--> Kept --Rules with UntilStop--> off
+///                 |  --End, Remove--> off
+/// any --Release, ReleaseAll, a later Grab--> off, or the later grab
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Hand {
+    /// A live grab: its updates and its end reach it.
+    Grab(GrabId),
+    /// Its grab ended under [`ManualEnd::UntilRelease`]: the value stays until released.
+    Kept,
+}
+
+/// A held property: who holds it, and the start order it was grabbed at.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Holding {
+    hand: Hand,
+    since: u64,
+}
+
+/// A light's direct holds, all Manual: the values held of it, and per property who holds
+/// it since when. A property has a value exactly when it has a holding.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Held {
-    pub values: Light,
-    pub since: [u64; Property::ALL.len()],
+    values: Light,
+    holds: [Option<Holding>; Property::ALL.len()],
 }
 
 impl Held {
     pub const NONE: Self = Self {
         values: Light::DARK,
-        since: [0; Property::ALL.len()],
+        holds: [None; Property::ALL.len()],
     };
 
-    /// `property` held at `order` with the value `from` has.
-    pub fn hold(&mut self, property: Property, from: &Light, order: u64) {
-        self.values = self.values.with(property, from);
-        if let Some(since) = self.since.get_mut(property.index()) {
-            *since = order;
+    /// The values held.
+    pub const fn values(&self) -> &Light {
+        &self.values
+    }
+
+    /// `change` made to this light; a grab takes the start order `order`.
+    pub fn change(&mut self, change: LightChange, order: u64) {
+        match change {
+            LightChange::Grab { value, grab } => self.set(
+                value.property(),
+                &value.light(),
+                Some(Holding {
+                    hand: Hand::Grab(grab),
+                    since: order,
+                }),
+            ),
+            LightChange::Update { value, grab } => {
+                if let Some(holding) = self.grabbed(value.property(), grab) {
+                    self.set(value.property(), &value.light(), Some(holding));
+                }
+            }
+            LightChange::End {
+                property,
+                grab,
+                end,
+            } => {
+                if let Some(holding) = self.grabbed(property, grab) {
+                    match end {
+                        End::Keep => self.set(
+                            property,
+                            &self.values.clone(),
+                            Some(Holding {
+                                hand: Hand::Kept,
+                                ..holding
+                            }),
+                        ),
+                        End::Remove => self.set(property, &Light::DARK, None),
+                    }
+                }
+            }
+            LightChange::Release { property } => self.set(property, &Light::DARK, None),
         }
     }
 
-    /// `property` let go.
-    pub fn release(&mut self, property: Property) {
-        self.hold(property, &Light::DARK, 0);
+    /// The kept holds `rules` no longer keep let go: switching to `UntilStop`. A live
+    /// grab stays.
+    pub fn unkeep(&mut self, rules: MixRules) {
+        for property in Property::ALL {
+            let kept = self
+                .holding(property)
+                .is_some_and(|holding| holding.hand == Hand::Kept);
+            if kept && unkept(Rank::Manual, PlayState::Kept, rules) {
+                self.set(property, &Light::DARK, None);
+            }
+        }
+    }
+
+    /// `property` takes the value `from` has, held by `holding`: both or neither.
+    fn set(&mut self, property: Property, from: &Light, holding: Option<Holding>) {
+        if let Some(slot) = self.holds.get_mut(property.index()) {
+            *slot = holding;
+            self.values = self.values.with(
+                property,
+                if holding.is_some() {
+                    from
+                } else {
+                    &Light::DARK
+                },
+            );
+        }
+    }
+
+    fn holding(&self, property: Property) -> Option<Holding> {
+        self.holds.get(property.index()).copied().flatten()
+    }
+
+    /// The holding of `property`, when `grab` holds it live.
+    fn grabbed(&self, property: Property, grab: GrabId) -> Option<Holding> {
+        self.holding(property)
+            .filter(|holding| holding.hand == Hand::Grab(grab))
     }
 
     fn since(&self, property: Property) -> u64 {
-        self.since.get(property.index()).copied().unwrap_or(0)
+        self.holding(property).map_or(0, |holding| holding.since)
     }
 }
 
@@ -329,7 +435,7 @@ mod tests {
 mod properties {
     use super::*;
     use crate::playback::{PLAYS, PlayId, Plays};
-    use crate::property::Rgb;
+    use crate::property::{Gobo, Position, Rgb, Value};
     use crate::resolve::{LightNumber, LightRun, Lights};
 
     const RED: Rgb = Rgb {
@@ -379,12 +485,19 @@ mod properties {
         }
     }
 
+    /// `values` grabbed at `order`, one grab per property.
     fn held(values: Light, order: u64) -> Held {
         let mut held = Held::NONE;
-        for property in Property::ALL {
-            if values.has(property) {
-                held.hold(property, &values, order);
-            }
+        let grab = GrabId { generation: 1 };
+        let each = [
+            values.intensity.map(Value::Intensity),
+            values.colour.map(Value::Colour),
+            values.position.map(Value::Position),
+            values.zoom.map(Value::Zoom),
+            values.gobo.map(Value::Gobo),
+        ];
+        for value in each.into_iter().flatten() {
+            held.change(LightChange::Grab { value, grab }, order);
         }
         held
     }
@@ -693,8 +806,282 @@ mod properties {
 
     #[test]
     fn a_released_hold_lets_the_play_through() {
-        let mut hold = held(colour(BLUE), 3);
-        hold.release(Property::Colour);
-        assert_eq!(hold, Held::NONE);
+        for property in Property::ALL {
+            let all = Light {
+                position: Some(Position { pan: 1, tilt: 2 }),
+                zoom: Some(3),
+                gobo: Some(Gobo { wheel: 1, slot: 2 }),
+                ..both(4, BLUE)
+            };
+            let mut hold = held(all, 3);
+            hold.change(LightChange::Release { property }, 4);
+            assert_eq!(
+                hold.values,
+                all.with(property, &Light::DARK),
+                "{property:?}"
+            );
+            hold.change(LightChange::Release { property }, 5); // again: a no-op
+            assert_eq!(
+                hold.values,
+                all.with(property, &Light::DARK),
+                "{property:?}"
+            );
+            for other in Property::ALL {
+                assert_eq!(hold.since(other), if other == property { 0 } else { 3 });
+            }
+        }
+    }
+
+    #[test]
+    fn a_grab_is_reached_only_by_its_own_gestures() {
+        use LightChange::{End as Ends, Grab, Release, Update};
+        let one = GrabId { generation: 1 };
+        let two = GrabId { generation: 2 };
+        let green = Value::Colour(GREEN);
+        let red = Value::Colour(RED);
+        let white = Value::Colour(Rgb {
+            red: u16::MAX,
+            green: u16::MAX,
+            blue: u16::MAX,
+        });
+        let until_stop = MixRules {
+            manual_end: ManualEnd::UntilStop,
+            ..LATEST
+        };
+        let end = |grab, end| Ends {
+            property: Property::Colour,
+            grab,
+            end,
+        };
+        // (row, changes at start orders 1, 3, 5 and on, rules after, held colour; and
+        // with a Manual blue play started at 2, what light 1 shows)
+        type Row = (&'static str, Vec<LightChange>, MixRules, Option<Rgb>, Rgb);
+        let cases: [Row; 14] = [
+            (
+                "a grab",
+                vec![Grab {
+                    value: green,
+                    grab: one,
+                }],
+                LATEST,
+                Some(GREEN),
+                BLUE,
+            ),
+            (
+                "an update keeps its start",
+                vec![
+                    Grab {
+                        value: green,
+                        grab: one,
+                    },
+                    Update {
+                        value: red,
+                        grab: one,
+                    },
+                ],
+                LATEST,
+                Some(RED),
+                BLUE,
+            ),
+            (
+                "a later grab wins over a play",
+                vec![
+                    Update {
+                        value: red,
+                        grab: one,
+                    },
+                    Grab {
+                        value: green,
+                        grab: one,
+                    },
+                ],
+                LATEST,
+                Some(GREEN),
+                GREEN,
+            ),
+            (
+                "an update of a replaced grab",
+                vec![
+                    Grab {
+                        value: green,
+                        grab: one,
+                    },
+                    Grab {
+                        value: red,
+                        grab: two,
+                    },
+                    Update {
+                        value: white,
+                        grab: one,
+                    },
+                ],
+                LATEST,
+                Some(RED),
+                RED,
+            ),
+            (
+                "an end of a replaced grab",
+                vec![
+                    Grab {
+                        value: green,
+                        grab: one,
+                    },
+                    Grab {
+                        value: red,
+                        grab: two,
+                    },
+                    end(one, End::Remove),
+                ],
+                LATEST,
+                Some(RED),
+                RED,
+            ),
+            (
+                "an end of another property",
+                vec![
+                    Grab {
+                        value: green,
+                        grab: one,
+                    },
+                    Ends {
+                        property: Property::Intensity,
+                        grab: one,
+                        end: End::Remove,
+                    },
+                ],
+                LATEST,
+                Some(GREEN),
+                BLUE,
+            ),
+            (
+                "an end kept",
+                vec![
+                    Grab {
+                        value: green,
+                        grab: one,
+                    },
+                    end(one, End::Keep),
+                ],
+                LATEST,
+                Some(GREEN),
+                BLUE,
+            ),
+            (
+                "an update after the end",
+                vec![
+                    Grab {
+                        value: green,
+                        grab: one,
+                    },
+                    end(one, End::Keep),
+                    Update {
+                        value: red,
+                        grab: one,
+                    },
+                ],
+                LATEST,
+                Some(GREEN),
+                BLUE,
+            ),
+            (
+                "an end removed",
+                vec![
+                    Grab {
+                        value: green,
+                        grab: one,
+                    },
+                    end(one, End::Remove),
+                ],
+                LATEST,
+                None,
+                BLUE,
+            ),
+            (
+                "kept, then UntilStop",
+                vec![
+                    Grab {
+                        value: green,
+                        grab: one,
+                    },
+                    end(one, End::Keep),
+                ],
+                until_stop,
+                None,
+                BLUE,
+            ),
+            (
+                "live, then UntilStop",
+                vec![Grab {
+                    value: green,
+                    grab: one,
+                }],
+                until_stop,
+                Some(GREEN),
+                BLUE,
+            ),
+            (
+                "kept, then a later grab, then UntilStop",
+                vec![
+                    Grab {
+                        value: green,
+                        grab: one,
+                    },
+                    end(one, End::Keep),
+                    Grab {
+                        value: red,
+                        grab: two,
+                    },
+                ],
+                until_stop,
+                Some(RED),
+                RED,
+            ),
+            (
+                "released",
+                vec![
+                    Grab {
+                        value: green,
+                        grab: one,
+                    },
+                    Release {
+                        property: Property::Colour,
+                    },
+                ],
+                LATEST,
+                None,
+                BLUE,
+            ),
+            (
+                "another property released",
+                vec![
+                    Grab {
+                        value: green,
+                        grab: one,
+                    },
+                    Release {
+                        property: Property::Intensity,
+                    },
+                ],
+                LATEST,
+                Some(GREEN),
+                BLUE,
+            ),
+        ];
+        for (row, changes, rules, holds, shows) in cases {
+            let mut hold = Held::NONE;
+            for (n, change) in changes.into_iter().enumerate() {
+                hold.change(change, 1 + 2 * n as u64);
+            }
+            hold.unkeep(rules);
+            assert_eq!(hold.values.colour, holds, "{row}");
+            let blue = [play(Rank::Manual, 2, colour(BLUE))];
+            for first in 0..PLAYS {
+                assert_eq!(
+                    shown(hold, &blue, rules, first).colour,
+                    Some(shows),
+                    "{row}"
+                );
+            }
+        }
     }
 }

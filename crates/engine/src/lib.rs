@@ -41,7 +41,8 @@ pub use engine_core::{
     Refusal, Reply, Request, Run, RunNumbers, State, Status, Target, Text, Universes, changes,
 };
 pub use engine_core::{
-    Brightness, Light, ManualEnd, MixRules, OtherEnd, PlayId, PlayState, Rank, Rgb, Saved,
+    Brightness, GrabId, Light, ManualEnd, MixRules, OtherEnd, PlayId, PlayState, Property, Rank,
+    Rgb, Saved, Value,
 };
 use engine_core::{
     EngineCommand, Histogram, LATENCY_BUCKETS, LATENESS_BUCKETS, MAX_LIGHTS, bucket, due, frame,
@@ -53,8 +54,8 @@ pub use rig::Patch;
 mod snapshot;
 
 use engine_core::{
-    Claims, End, Entry, LightRun, Lights, LookCommand, PLAYS, ProjectEffect, ProjectEvent, Writer,
-    stops, unkept,
+    Claims, End, Entry, LightChange, LightRun, Lights, LookCommand, PLAYS, ProjectEffect,
+    ProjectEvent, Writer, stops, unkept,
 };
 use rig::{PatchEffect, Whole};
 
@@ -117,6 +118,10 @@ pub const fn edits(command: &Command) -> bool {
         | Command::SetColour { .. }
         | Command::ReleaseIntensity { .. }
         | Command::ReleaseColour { .. }
+        | Command::SetProperty { .. }
+        | Command::UpdateGrab { .. }
+        | Command::EndGrab { .. }
+        | Command::ReleaseProperty { .. }
         | Command::StartLook { .. }
         | Command::StopLook { .. }
         | Command::EndFlash { .. }
@@ -152,6 +157,10 @@ pub struct Sender {
     plays: [Option<Live>; PLAYS],
     /// The generation of the last play started.
     generation: u32,
+    /// The live grabs, oldest first: those not ended, released or wholly replaced.
+    grabs: Vec<Grab>,
+    /// The generation of the last grab.
+    grabbed: u32,
     /// Devices this sender sent the tick thread away from, so far. The free thread
     /// counts the ones it freed in `Shared::freed`.
     retired: u64,
@@ -232,6 +241,8 @@ pub enum Begun {
     Patched { fixture: u16 },
     /// The look plays as `play` from the very next wake.
     Started { play: PlayId },
+    /// The grab holds from the very next wake.
+    Grabbed { grab: GrabId },
     /// A device must be opened first: [`Opening::open`], then [`Sender::finish`].
     Opening(Opening),
 }
@@ -300,6 +311,13 @@ enum Change {
     ReleaseAll,
     Rules {
         looks: Looks,
+    },
+    UpdateGrab {
+        grab: GrabId,
+        value: Value,
+    },
+    EndGrab {
+        grab: GrabId,
     },
 }
 
@@ -412,6 +430,8 @@ impl Base {
             LookCommand::EndFlash { play } => Change::EndFlash { play },
             LookCommand::ReleaseHold { play } => Change::ReleaseHold { play },
             LookCommand::ReleaseAll => Change::ReleaseAll,
+            LookCommand::UpdateGrab { grab, value } => Change::UpdateGrab { grab, value },
+            LookCommand::EndGrab { grab } => Change::EndGrab { grab },
             LookCommand::SetMixRules { rules } => Change::Rules {
                 looks: self.looks.with_rules(rules),
             },
@@ -429,6 +449,31 @@ impl Base {
             .map(|saved| saved.look)
             .collect()
     }
+}
+
+/// A grab as the front sent it: the property it holds on the runs it was made on. The
+/// tick thread knows which of their lights it still holds.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Grab {
+    grab: GrabId,
+    property: Property,
+    runs: Vec<LightRun>,
+}
+
+/// Whether every light of `runs` is in one of `of`: a joined run, so a run within their
+/// lights is within one of them.
+fn within(runs: &[LightRun], of: &[LightRun]) -> bool {
+    let span = |run: &LightRun| {
+        let first = u32::from(run.first().index());
+        (first, first + u32::from(run.count()))
+    };
+    runs.iter().all(|run| {
+        let (first, end) = span(run);
+        of.iter().any(|of| {
+            let (from, to) = span(of);
+            from <= first && end <= to
+        })
+    })
 }
 
 /// A play as the front sent it.
@@ -526,6 +571,8 @@ impl Engine {
             looks: Arc::new(Looks::new()),
             plays: [None; PLAYS],
             generation: 0,
+            grabs: Vec::new(),
+            grabbed: 0,
             retired: 0,
             sent: 0,
             shared: Arc::clone(&shared),
@@ -567,7 +614,10 @@ impl Sender {
     /// library: `Patch` is refused (`NoSuchFixture`), use [`Sender::begin`] for it.
     pub fn send(&mut self, command: Command) -> Result<(), Refusal> {
         match self.begin(command, &[])? {
-            Begun::Queued | Begun::Patched { .. } | Begun::Started { .. } => Ok(()),
+            Begun::Queued
+            | Begun::Patched { .. }
+            | Begun::Started { .. }
+            | Begun::Grabbed { .. } => Ok(()),
             Begun::Opening(opening) => self.finish(opening.open()),
         }
     }
@@ -731,6 +781,35 @@ impl Sender {
             Change::ReleaseAll => {
                 self.push(EngineCommand::ReleaseAll, Brings::Nothing)?;
                 self.forget(|live| live.rank == Rank::Manual);
+                self.grabs.clear();
+                Begun::Queued
+            }
+            Change::UpdateGrab { grab, value } => {
+                if let Some(live) = self.grabs.iter().find(|live| live.grab == grab) {
+                    if live.property != value.property() {
+                        return Err(Refusal::OtherProperty {
+                            property: live.property,
+                        });
+                    }
+                    self.patch.supports(&live.runs, value)?;
+                    let runs = live.runs.clone();
+                    self.lights(LightChange::Update { value, grab }, runs)?;
+                }
+                Begun::Queued
+            }
+            Change::EndGrab { grab } => {
+                if let Some(at) = self.grabs.iter().position(|live| live.grab == grab) {
+                    let live = self.grabs.remove(at);
+                    let end = LightChange::End {
+                        property: live.property,
+                        grab,
+                        end: stops(Rank::Manual, self.looks.rules()),
+                    };
+                    if let Err(refused) = self.lights(end, live.runs.clone()) {
+                        self.grabs.insert(at, live);
+                        return Err(refused);
+                    }
+                }
                 Begun::Queued
             }
             Change::Rules { looks } => {
@@ -826,13 +905,57 @@ impl Sender {
                     self.push(EngineCommand::Writers, Brings::Writers(writers))?;
                     self.free.unpark(); // the old writers are on their way back
                 }
-                PatchEffect::Send(command) => self.push(command, Brings::Nothing)?,
+                PatchEffect::Send(command) => {
+                    self.push(command, Brings::Nothing)?;
+                    if let EngineCommand::Lights {
+                        lights,
+                        change: LightChange::Release { property },
+                    } = command
+                    {
+                        self.released(property, &[lights]);
+                    }
+                }
                 PatchEffect::Runs { change, runs } => {
+                    let released = runs.clone();
                     self.push(EngineCommand::Runs { change }, Brings::Runs(runs))?;
+                    if let LightChange::Release { property } = change {
+                        self.released(property, &released);
+                    }
+                }
+                PatchEffect::Grab { value, runs } => {
+                    let grab = GrabId {
+                        generation: self.grabbed.wrapping_add(1),
+                    };
+                    self.lights(LightChange::Grab { value, grab }, runs.clone())?;
+                    self.grabbed = grab.generation;
+                    // the grabs it wholly replaces hold nothing any more
+                    self.released(value.property(), &runs);
+                    self.grabs.push(Grab {
+                        grab,
+                        property: value.property(),
+                        runs,
+                    });
+                    begun = Begun::Grabbed { grab };
                 }
             }
         }
         Ok(begun)
+    }
+
+    /// Queues `change` on the lights of `runs`, all in one wake.
+    fn lights(&mut self, change: LightChange, runs: Vec<LightRun>) -> Result<(), Refusal> {
+        match runs.as_slice() {
+            [] => Ok(()),
+            [run] => self.push(change.on(*run), Brings::Nothing),
+            [_, _, ..] => self.push(EngineCommand::Runs { change }, Brings::Runs(runs)),
+        }
+    }
+
+    /// Forgets the grabs of `property` that hold nothing once the lights of `runs` let it
+    /// go.
+    fn released(&mut self, property: Property, runs: &[LightRun]) {
+        self.grabs
+            .retain(|live| !(live.property == property && within(&live.runs, runs)));
     }
 
     /// Puts the device of `opened` on the tick thread, or says why not.
@@ -959,10 +1082,7 @@ impl Sender {
             | EngineCommand::Blackout { .. }
             | EngineCommand::Writers
             | EngineCommand::Runs { .. }
-            | EngineCommand::SetIntensity { .. }
-            | EngineCommand::SetColour { .. }
-            | EngineCommand::ReleaseIntensity { .. }
-            | EngineCommand::ReleaseColour { .. }
+            | EngineCommand::Lights { .. }
             | EngineCommand::Darken { .. }
             | EngineCommand::Start { .. }
             | EngineCommand::Keep { .. }

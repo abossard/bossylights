@@ -370,6 +370,7 @@ async fn send(api: &Api, command: Command) -> Result<Reply<'static>, Refusal> {
         Some(Ok(Begun::Queued)) => Ok(Reply::Accepted),
         Some(Ok(Begun::Patched { fixture })) => Ok(Reply::Patched { fixture }),
         Some(Ok(Begun::Started { play })) => Ok(Reply::Started { play }),
+        Some(Ok(Begun::Grabbed { grab })) => Ok(Reply::Grabbed { grab }),
         Some(Err(reason)) => Err(reason),
     }
 }
