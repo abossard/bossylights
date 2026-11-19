@@ -13,8 +13,8 @@ flowchart LR
 | Role | Model, effort | Does | Never does |
 |---|---|---|---|
 | **Worker** | Sonnet 5.5, medium. Opus 5.5, high for tickets that touch the real-time core or cross crates | builds one ticket, test first, reports with evidence | closes issues, changes checks, decides design |
-| **Orchestrator** | Opus 5.5, high. Hands over to a fresh Opus 5.5 high session at about 500k tokens of context | picks the next ticket, briefs the worker, verifies, closes, keeps `main` green, hands hard checkable tasks to Codex and verifies what it returns, measures how well Codex did and improves its harness (`docs/agents/codex.md`) | writes product code, makes product decisions, plans a change to the Codex harness with a model below Opus |
-| **Codex** | `gpt-6.2-astra` at `ultra` for the very hard tasks, `gpt-6.2-sol` for reviews | builds or reviews in a scratch copy, leaves a patch | commits, pushes, closes issues, trusted on its report: Opus verifies every result |
+| **Orchestrator** | Opus 5.5, high. Hands over to a fresh Opus 5.5 high session at about 500k tokens of context | picks the next ticket, briefs the worker, verifies, closes, keeps `main` green, hands hard checkable tasks, second looks and research to the peers (Codex, Copilot) and verifies what they return, measures how well they did and improves their harness (`docs/agents/peers.md`) | writes product code, makes product decisions, plans a change to the peer harness with a model below Opus |
+| **Peers** (`npm run peer`) | Codex `gpt-6.2-astra` at `ultra` for the very hard tasks, `gpt-6.2-sol` at `ultra` for reviews; Copilot `gpt-6.2-sol` at `max`, long context | build, review or research in a scratch copy, leave a patch, repro tests and evidence | commits, pushes, closes issues, trusted on its report: Opus verifies every result |
 | **Gate reviewer** | Fable 5.2, high | deep review at a milestone, designs the next slice | routine verification, ticket by ticket |
 
 | Price per million tokens, in and out | |
@@ -30,7 +30,7 @@ Why cheaper models are safe for the routine: the rules are held by the compiler,
 ```mermaid
 flowchart LR
   P["Pick<br/>+ pre-check"] --> B["Brief<br/>modules it owns"] --> W["Worker<br/>in the trunk"] --> H["Hand-over comment,<br/>SendMessage,<br/>clear self"]
-  W -- "push main" --> V["Verify<br/>clean copy"] --> D["Second look<br/>Copilot CLI"] --> C["Close"] --> P
+  W -- "push main" --> V["Verify<br/>clean copy"] --> D["Second look<br/>Codex + Copilot"] --> C["Close"] --> P
   H --> V
 ```
 
@@ -40,8 +40,8 @@ flowchart LR
 | 2. Pre-check | can every box pass with this ticket's own commands? Does a box need a rule of who wins, or allow a state that cannot come out right? Settle it (or ask the owner) before the worker builds |
 | 3. Brief | the criteria from the issue, out of scope, the modules the worker owns (see "Work isolation"), the end of the slice (below). One ticket per worker. Send it only when `list_events` shows the worker empty |
 | 4. Verify | never trust a report. `npm run verify -- <commit> --mutants`: a clean copy of the pushed commit, every suite of `npm test` with the default target folder, mutants on the commit's diff (missed lines are listed). Then `npm run scorecard`. Drive the feature by hand. Break each new rule on purpose and see its check fail. Compare numbers with raw result files |
-| 4b. Second look | after your own verify, before closing, run in parallel: `npm run codex -- review <commit> <task-file>` (Codex `gpt-6.2-astra` at `ultra`) and the Copilot CLI (`copilot -p "<prompt>" --model gpt-6.2-sol --reasoning-effort max --no-ask-user --allow-all-tools --deny-tool write </dev/null`), read-only, after the verify, not beside it (load made a UI test time out). The prompt: the issue boxes, the commit, your evidence and your breaks; ask for a box not truly met, a test that cannot fail, a rule broken (`docs/coding.md`, `AGENTS.md`), and to argue against your verdict. Findings are leads: check each yourself; a confirmed one keeps the ticket open or becomes an issue. Name the result in the closing comment |
-| 4c. Codex ledger | after each Codex run: one row in `docs/agents/codex-runs.md` (task, model, effort, seconds, commands, failed, tokens, did verify pass first time, what the breaks or the second look found). The runner prints the numbers |
+| 4b. Second look | after your own verify, before closing: `npm run peer -- both review <commit> <task-file>` (Codex and Copilot in parallel, a scratch copy each, `docs/agents/peers.md`), after the verify, not beside it (load made a UI test time out). The task, from `docs/agents/tasks/review.md`: the issue boxes, the commit, your evidence and your breaks; ask for a box not truly met, a test that cannot fail, a rule broken (`docs/coding.md`, `AGENTS.md`), and to argue against your verdict. Findings are leads: check each yourself; a confirmed one keeps the ticket open or becomes an issue. Name the result in the closing comment |
+| 4c. Peer ledger | after each peer run: paste the row `npm run peer` prints into `docs/agents/peer-runs.md`, fill in whether verify passed first time and what the breaks or the second look found |
 | 5. Close | tick the boxes, close with a table of evidence, note what was not verified |
 | 6. Next | hand over the next ticket. Stop only for a decision of the owner |
 

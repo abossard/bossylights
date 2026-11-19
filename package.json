@@ -18,7 +18,9 @@
     "scorecard": "node scripts/print-scorecard.mjs",
     "mutants": "node scripts/mutants.mjs",
     "verify": "node scripts/verify-run.mjs",
-    "codex": "node scripts/codex-run.mjs"
+    "codex": "node scripts/peer-run.mjs codex",
+    "peer": "node scripts/peer-run.mjs",
+    "peer:doctor": "node scripts/peer-doctor.mjs"
   },
   "dependencies": {
     "solid-js": "1.9.18"

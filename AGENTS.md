@@ -75,6 +75,7 @@ The owner has ADHD and is a visual learner. This applies to every output: docs, 
 ### How the work is run
 
 Roles, models, the queue loop, milestones and gates. See `docs/agents/orchestration.md`.
+Peer agents (Codex CLI, Copilot CLI) for builds, reviews and research: `npm run peer`, see `docs/agents/peers.md`.
 
 ### Issue tracker
 

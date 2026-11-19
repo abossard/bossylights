@@ -1,6 +1,6 @@
-# Brief for Codex runs
+# Brief for peer runs
 
-You work on Bossylights, a lighting desk: Rust engine, SolidJS UI. This brief comes first in every run. The task follows it.
+You work on Bossylights, a lighting desk: Rust engine, SolidJS UI. This brief comes first in every run of a peer agent (Codex CLI or Copilot CLI). The task follows it, then where kept files go and how the result is judged.
 
 ## Read first, nothing else yet
 
@@ -28,11 +28,11 @@ Do not read the whole tree. Search for the symbol the task names.
 
 | Allowed | Not allowed |
 |---|---|
-| `cargo test -p <crate> --offline -j 4`, one crate or one test at a time, engine-server tests included | `npm install`, anything that needs the internet |
+| `cargo test -p <crate> --offline -j 4`, one crate or one test at a time, engine-server tests included | `npm install`, `cargo` without `--offline` |
 | `cargo clippy -p <crate> --offline` | the whole `npm test`, the UI and e2e suites (the orchestrator runs them) |
 | `node --test scripts/<name>.test.mjs` | `cargo mutants`, `git commit`, `git push`, `git stash`, branch switches |
 
-You may bind ports on `127.0.0.1`, so the engine-server tests that start the engine run here too. The copy is yours to write and is thrown away. Network use beyond `127.0.0.1` is not needed: cargo runs with `--offline`. `rm -rf` is blocked by the automatic review: leave temp files to the system or use `unlink` and `rmdir`.
+You may bind ports on `127.0.0.1`, so the engine-server tests that start the engine run here too. The copy is yours to write and is thrown away. The network is open: read the web for a research task or to check a claim against its source. cargo still runs with `--offline`. If `rm -rf` is refused (Codex's automatic review blocks it), leave temp files to the system or use `unlink` and `rmdir`.
 
 The machine is shared: at most four build jobs, and clean up what you create. `CARGO_TARGET_DIR` is already set outside your copy.
 
@@ -42,7 +42,15 @@ The machine is shared: at most four build jobs, and clean up what you create. `C
 2. For a finding in a review: write the failing test or run the command that shows it, in your copy, and report it with that command. Do not fix it. A finding you could not run says why.
 3. Change only the files the task names. A new file beats a wide edit of a shared one.
 4. Leave generated files (`ui/src/engine-api.ts`) to the command that generates them, and say so.
-5. Stay inside your copy. No commit. The orchestrator verifies your diff in a clean copy and applies it.
+5. Stay inside your copy and the out folder the prompt names. No commit, no push, no issue or comment. The orchestrator verifies your diff in a clean copy and applies it.
+
+## What is kept after the run
+
+| Kept | Lost |
+|---|---|
+| the diff of your copy: `change.patch` for a build, `repro.patch` for a review or research (your failing tests and scripts) | everything else in the copy, the build folder |
+| every file you write into the out folder (logs, measurements, screenshots, notes) | files outside the copy and the out folder |
+| your last message | |
 
 ## What the orchestrator checks afterwards
 
@@ -54,4 +62,10 @@ The machine is shared: at most four build jobs, and clean up what you create. `C
 
 ## Your last message
 
-A table of what you did per box (box, change, the command that proves it, red then green), then a short list of what you could not check. No restating the task, no praise.
+| Mode | Last message |
+|---|---|
+| build | a table of what you did per box (box, change, the command that proves it, red then green), then what you could not check |
+| review | a table of findings, most severe first (file:line, failing scenario, the command or test that shows it, red), then what you could not check |
+| research | the answer first, then a table of claims with their links, then what you could not check |
+
+No restating the task, no praise.
