@@ -131,7 +131,6 @@ stateDiagram-v2
   Connecting --> Reconnecting: failed
   Running --> Reconnecting: failed, the device is lost
   Reconnecting --> Running: accepted
-  Reconnecting --> NotFound: 100 failures in a row
 ```
 
 "Accepted" is the device's word: a DMX USB Pro accepts only once its adapter is found. DDP gets no answer from the device, so for it accepted, and Running, mean the frames were sent. After a refusal (nothing listens) a DDP output shows Reconnecting until 30 frames went out without one. A broken socket (a new address) is opened again by itself, off the tick thread.

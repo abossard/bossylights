@@ -26,6 +26,19 @@ export function publicItems(source) {
   return [...source.matchAll(items)].length + uses.reduce((sum, m) => sum + useNames(m[1]), 0);
 }
 
+/**
+ * Public items of a crate, from its files as [{ path, source }] (path relative to src). A module the crate
+ * root declares without `pub` is not public: its `pub` items count only where the root re-exports them.
+ */
+export function crateSurface(files) {
+  const root = files.find((f) => f.path === "lib.rs" || f.path === "main.rs");
+  const hidden = new Set(
+    [...(root?.source.matchAll(/^\s*(?:pub\(crate\)\s+)?mod\s+(\w+)\s*;/gm) ?? [])].map((m) => m[1]),
+  );
+  const inHidden = (path) => hidden.has(path.split("/")[0].replace(/\.rs$/, ""));
+  return files.reduce((sum, f) => sum + (inHidden(f.path) ? 0 : publicItems(f.source)), 0);
+}
+
 /** The source without its `#[cfg(test)] mod`, which by convention ends the file. */
 export function withoutTests(source) {
   const at = source.search(/^#\[cfg\(test\)\]\s*\nmod\s/m);

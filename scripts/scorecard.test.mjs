@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { codeLines, crateSource, escapeHatches, measurement, mutationReport, publicItems, scorecard, withoutTests } from "./scorecard.mjs";
+import { codeLines, crateSource, crateSurface, escapeHatches, measurement, mutationReport, publicItems, scorecard, withoutTests } from "./scorecard.mjs";
 
 // [source, code lines]
 const lineCases = [
@@ -129,4 +129,14 @@ for (const [out, count, expected] of measurementCases) {
     if (expected === "throws") assert.throws(() => measurement(out, count));
     else assert.deepEqual(measurement(out, count), expected);
   });
+}
+
+// [files, public items]: a private module counts only through the root's `pub use`
+const surfaceCases = [
+  [[{ path: "lib.rs", source: "mod mix;\npub use mix::{A, B};" }, { path: "mix.rs", source: "pub enum A {}\npub fn B() {}\npub fn c() {}" }], 2],
+  [[{ path: "lib.rs", source: "pub mod open;" }, { path: "open.rs", source: "pub fn a() {}" }], 2],
+  [[{ path: "lib.rs", source: "mod deep;" }, { path: "deep/part.rs", source: "pub fn a() {}" }], 0],
+];
+for (const [files, expected] of surfaceCases) {
+  test(`surface of ${files.length} files`, () => assert.equal(crateSurface(files), expected));
 }

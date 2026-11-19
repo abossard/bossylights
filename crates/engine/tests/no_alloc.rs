@@ -127,7 +127,6 @@ fn main() {
 
     let (allocations, tick_frees) = (counting::allocations(), counting::tick_frees());
     let frame = engine.latest().state.frame;
-    let mut pictures = 0;
     for value in 0..=255 {
         let channel = ChannelNumbers {
             universe: 1,
@@ -165,7 +164,6 @@ fn main() {
         // Pace the commands by the tick: a reader on every frame waits for the next picture.
         let seen = engine.latest().state.frame;
         mock::wait_until("no frame went by", || engine.latest().state.frame > seen);
-        pictures += 1;
     }
     let state = engine.latest().state;
     let lit = engine.latest().lights()[..usize::from(LIGHTS) + 100]
@@ -184,7 +182,7 @@ fn main() {
     drop(engine);
 
     assert!(ticks >= 5, "too few ticks to prove anything: {ticks}");
-    assert_eq!(pictures, 256, "the reader saw every frame it waited for");
+    assert!(ticks >= 256, "a frame went by for each of 256 commands: {ticks}");
     assert_eq!(
         lit,
         usize::from(LIGHTS) + 100,

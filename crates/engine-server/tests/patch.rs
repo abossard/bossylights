@@ -97,8 +97,14 @@ async fn command(socket: &mut Socket, command: Value) -> Value {
 }
 
 /// Waits until the channels of universe 1 from 37 on are `bytes` on the DDP socket and on
-/// the fake adapter. Frames computed while a command travelled may still lack it.
-async fn until_both<const N: usize>(udp: &UdpSocket, heard: &Heard, bytes: [u8; N]) {
+/// the fake adapter. Frames computed while a command travelled may still lack it. With `before`,
+/// every DDP frame on the way is either `before` or `bytes`: a command is never half in a frame.
+async fn until_both<const N: usize>(
+    udp: &UdpSocket,
+    heard: &Heard,
+    before: Option<[u8; N]>,
+    bytes: [u8; N],
+) {
     let started = Instant::now();
     let mut packet = vec![0; 1500];
     let mut ddp = None;
@@ -107,6 +113,12 @@ async fn until_both<const N: usize>(udp: &UdpSocket, heard: &Heard, bytes: [u8; 
             tokio::time::timeout(Duration::from_millis(100), udp.recv(&mut packet)).await
         {
             ddp = Some(packet[10 + 36..10 + 36 + N].to_vec()).filter(|_| size >= 10 + 36 + N);
+            if let (Some(before), Some(seen)) = (before, &ddp) {
+                assert!(
+                    seen == &before || seen == &bytes,
+                    "a partial frame: {seen:?} is neither {before:?} nor {bytes:?}"
+                );
+            }
         }
         let dmx = heard.lock().unwrap().map(|c| c[36..36 + N].to_vec());
         if ddp.as_deref() == Some(&bytes[..]) && dmx.as_deref() == Some(&bytes[..]) {
@@ -206,7 +218,7 @@ async fn a_patched_par_made_red_sends_255_0_0_at_37_on_ddp_and_dmx_and_unpatched
     let red = json!({"SetColour": {"target": fixture, "red": 65535, "green": 0, "blue": 0}});
     assert_eq!(command(&mut socket, full).await, json!("Accepted"));
     assert_eq!(command(&mut socket, red).await, json!("Accepted"));
-    until_both(&udp, &heard, [255, 0, 0]).await;
+    until_both(&udp, &heard, None, [255, 0, 0]).await;
 
     until_picture(
         &mut socket,
@@ -221,7 +233,7 @@ async fn a_patched_par_made_red_sends_255_0_0_at_37_on_ddp_and_dmx_and_unpatched
 
     let unpatch = json!({"Unpatch": {"fixture": 1}});
     assert_eq!(command(&mut socket, unpatch).await, json!("Accepted"));
-    until_both(&udp, &heard, [0, 0, 0]).await;
+    until_both(&udp, &heard, None, [0, 0, 0]).await;
     until_picture(&mut socket, "patch", &json!([])).await;
     stop.store(true, Ordering::Relaxed);
 }
@@ -295,7 +307,7 @@ async fn a_red_par_under_raw_38_at_9_sends_255_9_0_released_255_0_0_blackout_0_0
             json!("Accepted"),
             "{step}"
         );
-        until_both(&udp, &heard, bytes).await;
+        until_both(&udp, &heard, None, bytes).await;
     }
     let none = json!({"ReleaseColour": {"target": {"Fixture": {"fixture": 2}}}});
     assert_eq!(
@@ -389,13 +401,15 @@ async fn a_group_of_three_pars_made_red_sends_nine_bytes_on_ddp_and_dmx() {
             [0, 255, 0, 0, 0, 0, 0, 255, 0],
         ),
     ];
+    let mut before = [0; 9];
     for (step, bytes) in steps {
         assert_eq!(
             command(&mut socket, step.clone()).await,
             json!("Accepted"),
             "{step}"
         );
-        until_both(&udp, &heard, bytes).await;
+        until_both(&udp, &heard, Some(before), bytes).await;
+        before = bytes;
     }
     let left = json!([{"name": "front", "members": [f(3), f(1)]}]);
     until_picture(&mut socket, "groups", &left).await;

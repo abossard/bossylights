@@ -3,14 +3,18 @@
 // limits the API allows (16 outputs of 64 universes), then 10 seconds to time sends.
 import { execFileSync } from "node:child_process";
 import { appendFileSync, readdirSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { CRATES } from "./layers.mjs";
-import { codeLines, crateSource, escapeHatches, measurement, publicItems, scorecard } from "./scorecard.mjs";
+import { codeLines, crateSource, crateSurface, escapeHatches, measurement, scorecard, withoutTests } from "./scorecard.mjs";
 
-const files = (dir, extension) =>
+const entries = (dir, extension) =>
   readdirSync(dir, { recursive: true, withFileTypes: true })
     .filter((entry) => entry.isFile() && extension.test(entry.name))
-    .map((entry) => readFileSync(join(entry.parentPath, entry.name), "utf8"));
+    .map((entry) => ({
+      path: relative(dir, join(entry.parentPath, entry.name)),
+      source: readFileSync(join(entry.parentPath, entry.name), "utf8"),
+    }));
+const files = (dir, extension) => entries(dir, extension).map((entry) => entry.source);
 const read = (dir, extension) => files(dir, extension).join("\n");
 
 const packages = JSON.parse(
@@ -21,8 +25,9 @@ const packages = JSON.parse(
 ).packages;
 
 const crates = packages.map((p) => {
-  const source = crateSource(files(join(dirname(p.manifest_path), "src"), /\.rs$/));
-  return { name: p.name, kind: CRATES[p.name]?.kind ?? "action", lines: codeLines(source), publicItems: publicItems(source) };
+  const sources = entries(join(dirname(p.manifest_path), "src"), /\.rs$/).map((e) => ({ ...e, source: withoutTests(e.source) }));
+  const source = crateSource(sources.map((e) => e.source));
+  return { name: p.name, kind: CRATES[p.name]?.kind ?? "action", lines: codeLines(source), publicItems: crateSurface(sources) };
 });
 
 const everything = [

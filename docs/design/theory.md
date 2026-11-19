@@ -1,6 +1,6 @@
 # The theory of Bossylights
 
-Written before M1. M1 is built (a command lights two outputs, each at its own rate); the rest is design. Questions are at the end.
+Written before M1. Milestones M1 and M2 are built; the rest is design. Questions are at the end.
 
 > A program is the theory in its builders' heads (Peter Naur).
 
