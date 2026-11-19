@@ -2,103 +2,23 @@
 //! red: 255 0 0 arrive at 37 to 39 on the DDP socket and on a fake DMX USB Pro (a pseudo
 //! terminal). Unpatch it: 0 0 0. A group of three PARs made red: nine bytes.
 
-use engine::{Adapter, Device, Engine, Open, OutputKind, Universes};
-use futures_util::{SinkExt, StreamExt};
-use outputs::dmx_usb_pro::{DmxUsbPro, Find, MESSAGE, never_wait};
+mod common;
+
+use common::{Heard, Socket, answer, command, connect, open, send};
+use engine::{Engine, Open, Universes};
+use futures_util::StreamExt;
 use serde_json::{Value, json};
-use serialport::{SerialPort, TTYPort};
-use std::io::Read;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::thread;
 use std::time::{Duration, Instant};
-use tokio::net::{TcpStream, UdpSocket};
-use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
+use tokio::net::UdpSocket;
 
-type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
-
-/// The last full message the fake adapter got: its 512 channels.
-type Heard = Arc<Mutex<Option<[u8; 512]>>>;
-
-/// Reads the test's end of the fake port and keeps the channels of the last full message.
-fn listen(mut end: TTYPort, heard: Heard, stop: Arc<AtomicBool>) {
-    let mut bytes = Vec::new();
-    let mut chunk = [0; MESSAGE];
-    while !stop.load(Ordering::Relaxed) {
-        if let Ok(n) = end.read(&mut chunk) {
-            bytes.extend_from_slice(&chunk[..n]);
-        }
-        // a message: 0x7E, label 6, length 513, start code 0, 512 channels, 0xE7
-        while let Some(start) = bytes.iter().position(|b| *b == 0x7E) {
-            bytes.drain(..start);
-            if bytes.len() < MESSAGE {
-                break;
-            }
-            if bytes[..5] == [0x7E, 6, 0x01, 0x02, 0] && bytes[MESSAGE - 1] == 0xE7 {
-                *heard.lock().unwrap() = Some(bytes[5..5 + 512].try_into().unwrap());
-                bytes.drain(..MESSAGE);
-            } else {
-                bytes.drain(..1);
-            }
-        }
-    }
-}
-
-/// The engine's `open`: DDP as the engine opens it, adapter 1 a fake serial port whose
-/// other end `listen` reads.
-fn open(heard: Heard, stop: Arc<AtomicBool>) -> Open {
-    Box::new(move |kind| match kind {
-        OutputKind::DmxUsbPro {
-            adapter: Adapter::FIRST,
-        } => {
-            let (heard, stop) = (Arc::clone(&heard), Arc::clone(&stop));
-            let find: Find = Box::new(move || {
-                let (mut end, port) = TTYPort::pair()?;
-                never_wait(&port)?;
-                end.set_timeout(Duration::from_millis(20))?;
-                let (heard, stop) = (Arc::clone(&heard), Arc::clone(&stop));
-                thread::spawn(move || listen(end, heard, stop));
-                Ok(port)
-            });
-            Ok(Box::new(DmxUsbPro::open(find)?) as Box<dyn Device>)
-        }
-        OutputKind::Ddp { .. } | OutputKind::DmxUsbPro { .. } => outputs::open(kind),
-    })
-}
-
-async fn send(socket: &mut Socket, request: &Value) {
-    socket
-        .send(Message::text(request.to_string()))
-        .await
-        .unwrap();
-}
-
-/// The next message that is not a `Changed`.
-async fn answer(socket: &mut Socket) -> Value {
-    loop {
-        let message = tokio::time::timeout(Duration::from_secs(5), socket.next())
-            .await
-            .expect("a message within 5 s")
-            .unwrap()
-            .unwrap();
-        let reply: Value = serde_json::from_str(message.to_text().unwrap()).unwrap();
-        if reply.get("Changed").is_none() {
-            return reply;
-        }
-    }
-}
-
-async fn command(socket: &mut Socket, command: Value) -> Value {
-    send(socket, &json!({"Send": {"command": command}})).await;
-    answer(socket).await
-}
-
-/// Waits until the channels of universe 1 from 37 on are `bytes` on the DDP socket and on
-/// the fake adapter. Frames computed while a command travelled may still lack it. With `before`,
-/// every DDP frame on the way is either `before` or `bytes`: a command is never half in a frame.
+/// Waits until the channels of universe 1 from 37 on are `bytes` on the DDP socket and in
+/// the last message of the fake adapter. Frames computed while a command travelled may
+/// still lack it. With `before`, every DDP frame on the way is either `before` or `bytes`:
+/// a command is never half in a frame.
 async fn until_both<const N: usize>(
     udp: &UdpSocket,
     heard: &Heard,
@@ -120,7 +40,7 @@ async fn until_both<const N: usize>(
                 );
             }
         }
-        let dmx = heard.lock().unwrap().map(|c| c[36..36 + N].to_vec());
+        let dmx = heard.lock().unwrap().last().map(|c| c[36..36 + N].to_vec());
         if ddp.as_deref() == Some(&bytes[..]) && dmx.as_deref() == Some(&bytes[..]) {
             return;
         }
@@ -134,25 +54,9 @@ async fn until_both<const N: usize>(
 /// A served engine with the test definitions, its devices opened by `open`.
 async fn serve(open: Open) -> SocketAddr {
     let (engine, sender) = Engine::start_with(Universes::new(2).unwrap(), open).unwrap();
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
     let definitions =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../fixture-library/tests/definitions");
-    tokio::spawn(engine_server::serve(
-        listener,
-        engine,
-        sender,
-        Some(definitions),
-        None,
-    ));
-    address
-}
-
-async fn connect(address: SocketAddr) -> Socket {
-    let (socket, _) = tokio_tungstenite::connect_async(format!("ws://{address}/api"))
-        .await
-        .unwrap();
-    socket
+    common::serve(engine, sender, Some(definitions)).await
 }
 
 fn par(name: &str, address: u16) -> Value {
@@ -194,9 +98,9 @@ async fn until_picture(socket: &mut Socket, key: &str, wanted: &Value) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_patched_par_made_red_sends_255_0_0_at_37_on_ddp_and_dmx_and_unpatched_0_0_0() {
-    let heard: Heard = Arc::new(Mutex::new(None));
+    let heard: Heard = Arc::new(Mutex::new(Vec::new()));
     let stop = Arc::new(AtomicBool::new(false));
-    let address = serve(open(Arc::clone(&heard), Arc::clone(&stop))).await;
+    let address = serve(open(Some(Arc::clone(&heard)), Arc::clone(&stop))).await;
     let mut socket = connect(address).await;
     let udp = UdpSocket::bind("127.0.0.1:0").await.unwrap();
     let ddp = json!({"Ddp": {"address": udp.local_addr().unwrap().to_string(), "color": "Rgb"}});
@@ -242,9 +146,9 @@ async fn a_patched_par_made_red_sends_255_0_0_at_37_on_ddp_and_dmx_and_unpatched
 /// released, a blackout wins over everything, a released colour goes back to black.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_red_par_under_raw_38_at_9_sends_255_9_0_released_255_0_0_blackout_0_0_0() {
-    let heard: Heard = Arc::new(Mutex::new(None));
+    let heard: Heard = Arc::new(Mutex::new(Vec::new()));
     let stop = Arc::new(AtomicBool::new(false));
-    let address = serve(open(Arc::clone(&heard), Arc::clone(&stop))).await;
+    let address = serve(open(Some(Arc::clone(&heard)), Arc::clone(&stop))).await;
     let mut socket = connect(address).await;
     let udp = UdpSocket::bind("127.0.0.1:0").await.unwrap();
     let ddp = json!({"Ddp": {"address": udp.local_addr().unwrap().to_string(), "color": "Rgb"}});
@@ -321,9 +225,9 @@ async fn a_red_par_under_raw_38_at_9_sends_255_9_0_released_255_0_0_blackout_0_0
 /// move; an unpatched PAR leaves it, and the group then sets only the two left.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_group_of_three_pars_made_red_sends_nine_bytes_on_ddp_and_dmx() {
-    let heard: Heard = Arc::new(Mutex::new(None));
+    let heard: Heard = Arc::new(Mutex::new(Vec::new()));
     let stop = Arc::new(AtomicBool::new(false));
-    let address = serve(open(Arc::clone(&heard), Arc::clone(&stop))).await;
+    let address = serve(open(Some(Arc::clone(&heard)), Arc::clone(&stop))).await;
     let mut socket = connect(address).await;
     let udp = UdpSocket::bind("127.0.0.1:0").await.unwrap();
     let ddp = json!({"Ddp": {"address": udp.local_addr().unwrap().to_string(), "color": "Rgb"}});

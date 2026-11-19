@@ -17,6 +17,11 @@ rig = { path = "../rig" }
 fixture-library = { path = "../fixture-library" }
 rtrb = "0.4.1"
 
+[features]
+# A clock a test steps one wake at a time, and a trace of each due hand-over (src/wake.rs).
+# Only tests turn it on: without it the tick reads the wall and writes no trace.
+test-support = []
+
 [[test]]
 name = "no_alloc"
 harness = false

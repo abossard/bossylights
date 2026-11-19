@@ -56,13 +56,16 @@ mod lane;
 use lane::Lane;
 use snapshot::{Hand, Reader};
 pub use snapshot::{Lateness, Snapshot};
-use std::hint;
+mod wake;
 use std::io;
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread::{self, JoinHandle, Thread};
 use std::time::{Duration, Instant};
+use wake::{Clock, Trace};
+#[cfg(feature = "test-support")]
+pub use wake::{Event, Wakes};
 
 /// Commands the engine takes in one wake. More are refused with [`Refusal::QueueFull`].
 pub const QUEUE: usize = 256;
@@ -105,7 +108,7 @@ pub struct Sender {
     sent: u64,
     shared: Arc<Shared>,
     free: Thread,
-    start: Instant,
+    clock: Clock,
     /// The engine's universes: an output's frame boxes hold every one.
     universes: Universes,
 }
@@ -193,6 +196,24 @@ impl Engine {
 
     /// [`Engine::start`], with `open` making the devices `SetOutput` asks for.
     pub fn start_with(universes: Universes, open: Open) -> io::Result<(Self, Sender)> {
+        Self::start_on(universes, open, Clock::wall(), Trace::none())
+    }
+
+    /// [`Engine::start_with`] on a clock the test steps ([`Wakes`]), which also reads
+    /// each due hand-over and what came of it. The clock starts running.
+    #[cfg(feature = "test-support")]
+    pub fn start_stepped(universes: Universes, open: Open) -> io::Result<(Self, Sender, Wakes)> {
+        let (clock, trace, wakes) = wake::stepped();
+        let (engine, sender) = Self::start_on(universes, open, clock, trace)?;
+        Ok((engine, sender, wakes))
+    }
+
+    fn start_on(
+        universes: Universes,
+        open: Open,
+        clock: Clock,
+        trace: Trace,
+    ) -> io::Result<(Self, Sender)> {
         let count = usize::from(universes.count());
         let shared = Arc::new(Shared {
             stop: AtomicBool::new(false),
@@ -207,7 +228,6 @@ impl Engine {
                 .name("free devices".into())
                 .spawn(move || free(retired, &shared))?
         };
-        let start = Instant::now();
         let ticker = Ticker {
             shared: Arc::clone(&shared),
             commands: incoming,
@@ -219,7 +239,8 @@ impl Engine {
             hand,
             out: vec![Levels::ZERO; count],
             carried: Carried::new(),
-            start,
+            clock: clock.clone(),
+            trace,
         };
         let (tick, priority) = rt_thread::spawn("tick", move |priority| ticker.run(priority))?;
         let sender = Sender {
@@ -235,7 +256,7 @@ impl Engine {
             sent: 0,
             shared: Arc::clone(&shared),
             free: free.thread().clone(),
-            start,
+            clock,
             universes,
         };
         let engine = Self {
@@ -400,7 +421,9 @@ impl Sender {
             rate,
         };
         let sent = device
-            .and_then(|device| Lane::start(device, self.universes, self.start).map(Box::new))
+            .and_then(|device| {
+                Lane::start(device, self.universes, self.clock.clone()).map(Box::new)
+            })
             .map_err(|_| Refusal::CannotOpen)
             .and_then(|lane| self.push(attach, Brings::Device(lane)));
         let event = match sent {
@@ -434,7 +457,7 @@ impl Sender {
             universes,
             rate,
         };
-        let lane = Lane::start(device, self.universes, self.start)
+        let lane = Lane::start(device, self.universes, self.clock.clone())
             .map(Box::new)
             .map_err(|_| Refusal::CannotOpen)?;
         self.push(command, Brings::Device(lane))?;
@@ -503,7 +526,7 @@ impl Sender {
             free_elsewhere(brings);
             return Err(Refusal::QueueFull);
         }
-        let at = self.start.elapsed();
+        let at = self.clock.now();
         if let Err(rtrb::PushError::Full(refused)) = self.commands.push(Sent {
             command,
             at,
@@ -607,7 +630,8 @@ struct Ticker {
     out: Vec<Levels>,
     /// When the commands were sent, until each output carried them.
     carried: Carried,
-    start: Instant,
+    clock: Clock,
+    trace: Trace,
 }
 
 /// Commands an output's frame may still have to carry. Older ones are not counted.
@@ -678,18 +702,18 @@ impl Ticker {
         while !self.shared.stop.load(Ordering::Relaxed) {
             // Sleep, then spin the last millisecond before an output: a sleep can wake
             // late, a spin cannot. A beat with no output only sleeps.
-            let (sleep, spin) = wait(&self.now.state, self.start.elapsed());
-            thread::sleep(sleep);
-            while spin.is_some_and(|until| self.start.elapsed() < until) {
-                hint::spin_loop();
-            }
-            let now = self.start.elapsed();
-            self.apply(EngineCommand::Tick { now });
+            let (sleep, spin) = wait(&self.now.state, self.clock.now());
+            self.clock.wait(sleep, spin, &self.shared.stop);
+            // The cutoff (`wake.rs`): the picture asked for and the commands published
+            // so far belong to this wake, then the frame time is read. A command
+            // published after it waits for the next wake.
             let asked = self.hand.asked();
+            let published = self.commands.slots().min(QUEUE);
+            let now = self.clock.cutoff(&self.shared.stop);
+            self.apply(EngineCommand::Tick { now });
 
-            // Apply the waiting commands right before the frame: a press is in the next one.
-            let mut applied = 0;
-            while applied < QUEUE {
+            // Apply them right before the frame: a press is in the next one.
+            for _ in 0..published {
                 let Ok(sent) = self.commands.pop() else {
                     break;
                 };
@@ -697,7 +721,6 @@ impl Ticker {
                 self.swap(sent.command, sent.brings);
                 self.carried.applied(sent.at);
                 self.now.applied_one();
-                applied += 1;
             }
 
             frame(
@@ -715,7 +738,7 @@ impl Ticker {
             }
             for number in serve.into_iter().flatten() {
                 self.serve(number);
-                let (handed, now) = (self.start.elapsed(), &mut self.now);
+                let (handed, now) = (self.clock.now(), &mut self.now);
                 self.carried
                     .handed(number.slot(), handed, |time| now.carried(time));
             }
@@ -785,8 +808,9 @@ impl Ticker {
         let Some(Some(output)) = self.now.state.outputs.get(slot).copied() else {
             return;
         };
-        let at = self.start.elapsed();
+        let at = self.clock.now();
         self.apply(EngineCommand::Handed { output: number, at });
+        self.trace.handed(number, output.due, at);
         let next = match self.now.state.outputs.get(slot) {
             Some(Some(handed)) => handed.due,
             _ => at,
@@ -803,6 +827,7 @@ impl Ticker {
             _ => Some(Outcome::Failed),
         };
         if let Some(outcome) = dropped {
+            self.trace.came(number, outcome, output.due);
             self.now.late(slot, at.saturating_sub(output.due));
             self.apply(EngineCommand::Sent {
                 output: number,
@@ -815,12 +840,18 @@ impl Ticker {
     /// Counts what came of the frames each output's thread handed back since the last
     /// wake: the outcome, and how late the device was handed each.
     fn back(&mut self) {
-        let Self { devices, now, .. } = self;
+        let Self {
+            devices,
+            now,
+            trace,
+            ..
+        } = self;
         for (lane, number) in devices.iter_mut().zip(1..) {
             let (Some(lane), Ok(output)) = (lane, OutputNumber::try_from(number)) else {
                 continue;
             };
             lane.back(|sent| {
+                trace.came(output, sent.outcome, sent.due);
                 now.late(output.slot(), sent.at.saturating_sub(sent.due));
                 now.update(EngineCommand::Sent {
                     output,

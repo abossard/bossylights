@@ -40,12 +40,13 @@
 //! Its one transition function is [`step`]: what the thread does each time it looks at
 //! its queue and the clock. The thread only does what `step` says.
 
+use crate::wake::Clock;
 use crate::{Device, Levels, Outcome, Universes};
 use std::io;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// Boxes per output: one being sent, one waiting, one the tick fills. A device that takes
 /// longer than a frame skips to the newest frame instead of sending stale ones.
@@ -147,7 +148,7 @@ impl Lane {
     pub(crate) fn start(
         device: Box<dyn Device>,
         universes: Universes,
-        start: Instant,
+        clock: Clock,
     ) -> io::Result<Self> {
         let count = usize::from(universes.count());
         let (frames, waiting) = rtrb::RingBuffer::new(BOXES);
@@ -158,7 +159,7 @@ impl Lane {
         });
         let (thread, _) = rt_thread::spawn(THREAD, {
             let shared = Arc::clone(&shared);
-            move |_| run(device, waiting, done, &shared, start)
+            move |_| run(device, waiting, done, &shared, &clock)
         })?;
         while !shared.ready.load(Ordering::Acquire) {
             thread::yield_now();
@@ -249,26 +250,26 @@ fn run(
     mut waiting: rtrb::Consumer<Frame>,
     mut done: rtrb::Producer<Frame>,
     shared: &Shared,
-    start: Instant,
+    clock: &Clock,
 ) -> Box<dyn Device> {
     thread::park_timeout(Duration::ZERO); // sets up the park state
     shared.ready.store(true, Ordering::Release);
     let mut next = Duration::ZERO;
     loop {
         let stop = shared.stop.load(Ordering::Acquire);
-        match step(waiting.slots(), stop, start.elapsed(), next) {
+        match step(waiting.slots(), stop, clock.now(), next) {
             Step::Stop => return device,
             Step::Sleep(time) => thread::park_timeout(time),
             Step::Look => thread::park_timeout(LOOK),
             Step::Send { passed_over } => {
                 for _ in 0..passed_over {
                     if let Ok(frame) = waiting.pop() {
-                        back(&mut done, frame, Outcome::Dropped, start.elapsed());
+                        back(&mut done, frame, Outcome::Dropped, clock.now());
                     }
                 }
                 if let Ok(frame) = waiting.pop() {
                     next = frame.next;
-                    let at = start.elapsed();
+                    let at = clock.now();
                     let outcome = device.take(frame.levels.get(..frame.len).unwrap_or_default());
                     back(&mut done, frame, outcome, at);
                 }
@@ -293,6 +294,7 @@ fn back(done: &mut rtrb::Producer<Frame>, mut frame: Frame, outcome: Outcome, at
 mod tests {
     use super::*;
     use std::sync::atomic::AtomicUsize;
+    use std::time::Instant;
 
     #[test]
     fn the_output_thread_does_what_its_queue_and_the_clock_say() {
@@ -369,7 +371,7 @@ mod tests {
             open: Arc::clone(&open),
             taken: Arc::clone(&taken),
         };
-        let mut lane = Lane::start(Box::new(gate), Universes::ONE, Instant::now()).unwrap();
+        let mut lane = Lane::start(Box::new(gate), Universes::ONE, Clock::wall()).unwrap();
         // Every frame is due at once: the thread sends what it finds.
         let hand = |lane: &mut Lane, first, due| lane.hand(&levels(first), ms(due), ms(0));
         // Frame 1 is taken and held at the gate; then two wait and the boxes run out.
