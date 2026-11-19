@@ -95,8 +95,8 @@ pub struct Engine {
 
 /// The engine front: owns the [`Project`], checks every client command against it,
 /// sends the tick thread what follows and opens the outputs' devices, so the tick thread
-/// never does. The only sender: each queue has one producer and one consumer, and a
-/// check is never stale.
+/// never does. The only sender: each queue has one producer and one consumer. A command
+/// checked against an older [`Base`] is refused `Stale` when admitted.
 pub struct Sender {
     /// `None` while an [`Opening`] has it: one device opens at a time.
     open: Option<Open>,
@@ -194,6 +194,178 @@ pub enum Begun {
     Started { play: PlayId },
     /// A device must be opened first: [`Opening::open`], then [`Sender::finish`].
     Opening(Opening),
+}
+
+/// The project, the patch and the looks as the front had them: what a command is
+/// prepared against, without the front ([`Sender::base`]).
+///
+/// ```text
+/// under the lock: base  -->  off it: prepare (check, compile, measure the file)  -->  under the lock: admit
+///                                     another client's press is admitted meanwhile      the base still the front's, or Stale
+/// ```
+#[derive(Clone)]
+pub struct Base {
+    project: Project,
+    patch: Arc<Patch>,
+    looks: Arc<Looks>,
+}
+
+/// A command checked and compiled against its [`Base`], for [`Sender::admit`].
+pub struct Prepared {
+    base: Base,
+    /// The project once admitted.
+    project: Project,
+    change: Change,
+}
+
+/// What a prepared command changes, made before it is admitted.
+enum Change {
+    Nothing,
+    Send(EngineCommand),
+    Open {
+        output: OutputNumber,
+        kind: OutputKind,
+        universes: Run,
+        rate: Rate,
+    },
+    /// The new patch, `None` when it stays, and the saved looks whose lights it changes.
+    Patch {
+        patch: Option<Patch>,
+        effects: Vec<PatchEffect>,
+        moved: Vec<u16>,
+    },
+    PutStep {
+        look: u16,
+        looks: Looks,
+        plan: Box<[Entry]>,
+    },
+    RemoveLook {
+        look: u16,
+        looks: Looks,
+    },
+    StartLook {
+        look: u16,
+        plan: Box<[Entry]>,
+    },
+    ReleaseHold {
+        play: PlayId,
+    },
+}
+
+impl Base {
+    /// Checks `command` against this base and makes what it changes: a calculation,
+    /// which may take long (a patch measures its show file, a look compiles). `library`
+    /// is where `Patch` looks up its fixture. Nothing is queued until it is admitted.
+    pub fn prepare(&self, command: Command, library: &[Fixture]) -> Result<Prepared, Refusal> {
+        let (project, effect) = self.project.update(ProjectEvent::Client(command))?;
+        if let Some(
+            ProjectEffect::Keep {
+                kind, universes, ..
+            }
+            | ProjectEffect::Open {
+                kind, universes, ..
+            },
+        ) = effect
+        {
+            outputs::limits(kind).check(universes)?;
+        }
+        // No patch where a fixture loses a channel: a change of the outputs that would
+        // leave one is refused.
+        if let Some(
+            ProjectEffect::Keep { .. }
+            | ProjectEffect::Open { .. }
+            | ProjectEffect::Send(EngineCommand::RemoveOutput { .. }),
+        ) = effect
+            && let Some((fixture, _)) = self.patch.unstreamed(&project)
+        {
+            return Err(Refusal::StreamsFixture { fixture });
+        }
+        let change = match effect {
+            None => Change::Nothing,
+            Some(ProjectEffect::Send(command)) => Change::Send(command),
+            Some(ProjectEffect::Look(command)) => self.look(command)?,
+            Some(ProjectEffect::Patch(command)) => {
+                let (patch, effects) = self.patch.update(command, library)?;
+                // and a change of the patch that would make one is refused
+                if let Some((_, reason)) = patch.as_ref().and_then(|p| p.unstreamed(&project)) {
+                    return Err(reason);
+                }
+                // as is one that would leave a saved look naming nothing
+                let moved = match &patch {
+                    Some(patch) => {
+                        self.looks.check(patch)?;
+                        self.moved(patch)
+                    }
+                    None => Vec::new(),
+                };
+                Change::Patch {
+                    patch,
+                    effects,
+                    moved,
+                }
+            }
+            Some(ProjectEffect::Keep {
+                output,
+                kind,
+                universes,
+                rate,
+            }) => Change::Send(EngineCommand::Attach {
+                output,
+                universes,
+                rate: rate.unwrap_or(outputs::default_rate(kind)),
+            }),
+            Some(ProjectEffect::Open {
+                output,
+                kind,
+                universes,
+                rate,
+            }) => Change::Open {
+                output,
+                kind,
+                universes,
+                rate: rate.unwrap_or(outputs::default_rate(kind)),
+            },
+        };
+        Ok(Prepared {
+            base: self.clone(),
+            project,
+            change,
+        })
+    }
+
+    fn look(&self, command: LookCommand) -> Result<Change, Refusal> {
+        Ok(match command {
+            LookCommand::PutStep { look, name, step } => Change::PutStep {
+                look,
+                looks: self.looks.put(Saved { look, name, step }, &self.patch)?,
+                plan: looks::compile(&step, &self.patch)?,
+            },
+            LookCommand::RemoveLook { look } => Change::RemoveLook {
+                look,
+                looks: self.looks.remove(look),
+            },
+            LookCommand::StartLook { look } => {
+                let saved = self.looks.get(look).ok_or(Refusal::NoSuchLook)?;
+                Change::StartLook {
+                    look,
+                    plan: looks::compile(&saved.step, &self.patch)?,
+                }
+            }
+            LookCommand::ReleaseHold { play } => Change::ReleaseHold { play },
+        })
+    }
+
+    /// The saved looks that show other lights in `patch` than now.
+    fn moved(&self, patch: &Patch) -> Vec<u16> {
+        self.looks
+            .all()
+            .into_iter()
+            .filter(|saved| {
+                looks::compile(&saved.step, &self.patch) != looks::compile(&saved.step, patch)
+            })
+            .map(|saved| saved.look)
+            .collect()
+    }
 }
 
 /// A play as the front sent it.
@@ -327,49 +499,71 @@ impl Sender {
 
     /// Checks `command` against the project and sends what follows. `library` is where
     /// `Patch` looks up its fixture. [`Begun::Opening`] when a device must be opened
-    /// first: until [`Sender::finish`] the output is `Opening`.
+    /// first: until [`Sender::finish`] the output is `Opening`. Prepares and admits in
+    /// one step: a caller that shares the front behind a lock prepares without it
+    /// ([`Sender::base`], [`Base::prepare`], [`Sender::admit`]).
     pub fn begin(&mut self, command: Command, library: &[Fixture]) -> Result<Begun, Refusal> {
-        let (project, effect) = self.project.update(ProjectEvent::Client(command))?;
-        if let Some(
-            ProjectEffect::Keep {
-                kind, universes, ..
-            }
-            | ProjectEffect::Open {
-                kind, universes, ..
-            },
-        ) = effect
-        {
-            outputs::limits(kind).check(universes)?;
+        let prepared = self.base().prepare(command, library)?;
+        self.admit(prepared)
+    }
+
+    /// What a command is checked against now: the project, the patch and the looks.
+    /// Three handles, cheap to take under a lock.
+    pub fn base(&self) -> Base {
+        Base {
+            project: self.project,
+            patch: Arc::clone(&self.patch),
+            looks: Arc::clone(&self.looks),
         }
-        // No patch where a fixture loses a channel: a change of the outputs that would
-        // leave one is refused.
-        if let Some(
-            ProjectEffect::Keep { .. }
-            | ProjectEffect::Open { .. }
-            | ProjectEffect::Send(EngineCommand::RemoveOutput { .. }),
-        ) = effect
-            && let Some((fixture, _)) = self.patch.unstreamed(&project)
+    }
+
+    /// Queues what `prepared` does, all of it or none of it. `Stale` when another change
+    /// replaced its base since: nothing changes, prepare it again. Checks here only what
+    /// a play or the queue decides: which plays a change touches, a play slot, room.
+    pub fn admit(&mut self, prepared: Prepared) -> Result<Begun, Refusal> {
+        let Prepared {
+            base,
+            project,
+            change,
+        } = prepared;
+        if !(base.project == self.project
+            && Arc::ptr_eq(&base.patch, &self.patch)
+            && Arc::ptr_eq(&base.looks, &self.looks))
         {
-            return Err(Refusal::StreamsFixture { fixture });
+            return Err(Refusal::Stale);
         }
-        let begun = match effect {
-            None => Begun::Queued,
-            Some(ProjectEffect::Send(command)) => {
+        let begun = match change {
+            Change::Nothing => Begun::Queued,
+            Change::Send(command) => {
                 self.push(command, Brings::Nothing)?;
                 Begun::Queued
             }
-            Some(ProjectEffect::Look(command)) => self.look(command)?,
-            Some(ProjectEffect::Patch(command)) => {
-                let (patch, effects) = self.patch.update(command, library)?;
-                // and a change of the patch that would make one is refused
-                if let Some((_, reason)) = patch.as_ref().and_then(|p| p.unstreamed(&project)) {
-                    return Err(reason);
-                }
-                // as is one that would leave a saved look naming nothing, or change the
-                // lights of a play
-                if let Some(patch) = &patch {
-                    self.looks.check(patch)?;
-                    self.plays_stay(patch)?;
+            Change::Open {
+                output,
+                kind,
+                universes,
+                rate,
+            } => Begun::Opening(Opening {
+                output,
+                kind,
+                universes,
+                rate,
+                open: self.open.take().ok_or(Refusal::Opening)?,
+                shared: Arc::clone(&self.shared),
+                free: self.free.clone(),
+                retired: self.retired,
+            }),
+            Change::Patch {
+                patch,
+                effects,
+                moved,
+            } => {
+                // a change of the patch never moves a play
+                if let Some(look) = moved
+                    .into_iter()
+                    .find(|&look| self.playing(look).next().is_some())
+                {
+                    return Err(Refusal::LookInUse { look });
                 }
                 let begun = self.follow(effects)?;
                 if let Some(patch) = patch {
@@ -377,67 +571,25 @@ impl Sender {
                 }
                 begun
             }
-            Some(ProjectEffect::Keep {
-                output,
-                kind,
-                universes,
-                rate,
-            }) => {
-                let rate = rate.unwrap_or(outputs::default_rate(kind));
-                let attach = EngineCommand::Attach {
-                    output,
-                    universes,
-                    rate,
-                };
-                self.push(attach, Brings::Nothing)?;
-                Begun::Queued
-            }
-            Some(ProjectEffect::Open {
-                output,
-                kind,
-                universes,
-                rate,
-            }) => Begun::Opening(Opening {
-                output,
-                kind,
-                universes,
-                rate: rate.unwrap_or(outputs::default_rate(kind)),
-                open: self.open.take().ok_or(Refusal::Opening)?,
-                shared: Arc::clone(&self.shared),
-                free: self.free.clone(),
-                retired: self.retired,
-            }),
-        };
-        self.project = project;
-        Ok(begun)
-    }
-
-    /// Does what a look command asks: all of it, or none of it.
-    fn look(&mut self, command: LookCommand) -> Result<Begun, Refusal> {
-        match command {
-            LookCommand::PutStep { look, name, step } => {
-                let looks = self.looks.put(Saved { look, name, step }, &self.patch)?;
+            Change::PutStep { look, looks, plan } => {
                 // a play of the look takes the new plan, keeping its start
                 let playing: Vec<PlayId> = self.playing(look).collect();
-                let plan = looks::compile(&step, &self.patch)?;
                 self.room(playing.len())?;
                 for play in playing {
                     self.push(EngineCommand::Plan { play }, Brings::Plan(plan.clone()))?;
                 }
                 self.free.unpark(); // the old plans are on their way back
                 self.looks = Arc::new(looks);
-                Ok(Begun::Queued)
+                Begun::Queued
             }
-            LookCommand::RemoveLook { look } => {
+            Change::RemoveLook { look, looks } => {
                 if self.playing(look).next().is_some() {
                     return Err(Refusal::LookInUse { look });
                 }
-                self.looks = Arc::new(self.looks.remove(look));
-                Ok(Begun::Queued)
+                self.looks = Arc::new(looks);
+                Begun::Queued
             }
-            LookCommand::StartLook { look } => {
-                let saved = self.looks.get(look).ok_or(Refusal::NoSuchLook)?;
-                let plan = looks::compile(&saved.step, &self.patch)?;
+            Change::StartLook { look, plan } => {
                 // a fresh start of a playing look takes its slot
                 let slot = self
                     .plays
@@ -452,9 +604,9 @@ impl Sender {
                 if let Some(live) = self.plays.get_mut(slot) {
                     *live = Some(Live { play, look });
                 }
-                Ok(Begun::Started { play })
+                Begun::Started { play }
             }
-            LookCommand::ReleaseHold { play } => {
+            Change::ReleaseHold { play } => {
                 let live = self.plays.get(play.slot()).copied().flatten();
                 if live.is_some_and(|live| live.play == play) {
                     self.push(EngineCommand::Release { play }, Brings::Nothing)?;
@@ -463,9 +615,11 @@ impl Sender {
                         *live = None;
                     }
                 }
-                Ok(Begun::Queued)
+                Begun::Queued
             }
-        }
+        };
+        self.project = project;
+        Ok(begun)
     }
 
     /// The plays of `look`.
@@ -475,21 +629,6 @@ impl Sender {
             .flatten()
             .filter(move |live| live.look == look)
             .map(|live| live.play)
-    }
-
-    /// Refused unless every play shows the same lights in `patch` as now: a change of
-    /// the patch never moves a play.
-    fn plays_stay(&self, patch: &Patch) -> Result<(), Refusal> {
-        for live in self.plays.iter().flatten() {
-            let Some(saved) = self.looks.get(live.look) else {
-                continue;
-            };
-            let now = looks::compile(&saved.step, &self.patch);
-            if now != looks::compile(&saved.step, patch) {
-                return Err(Refusal::LookInUse { look: live.look });
-            }
-        }
-        Ok(())
     }
 
     /// `QueueFull` unless `commands` that each retire a box can all be queued now.

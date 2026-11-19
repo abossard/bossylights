@@ -189,4 +189,7 @@ pub enum Refusal {
     /// the value: black on a wheel without black. Or a fixture mixes colour beside a
     /// colour wheel that has no neutral slot to hold.
     Unsupported { light: u16, property: Property },
+    /// Another change came first: the command was checked against the project, the
+    /// patch or the looks as they were before it. Nothing changed. Send it again.
+    Stale,
 }

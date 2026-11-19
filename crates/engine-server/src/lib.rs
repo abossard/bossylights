@@ -327,14 +327,31 @@ async fn answer(
     }
 }
 
-/// Sends `command` to the front, with the library as it is read so far. A device it needs
-/// is opened on a thread of the blocking pool, without the front: every other client is
-/// answered meanwhile. The answer when it is taken.
+/// How often a command prepared on a base another change replaced is prepared again,
+/// before the client is told `Stale`.
+const PREPARES: usize = 3;
+
+/// Sends `command` to the front, with the library as it is read so far. It is prepared
+/// on a thread of the blocking pool, without the front (a patch measures its show file,
+/// a look compiles), and admitted under it: every other client is answered meanwhile. So
+/// is a device it needs opened. The answer when it is taken.
 async fn send(api: &Api, command: Command) -> Result<Reply<'static>, Refusal> {
     let shelf = Arc::clone(&api.shelf.borrow());
-    let begun = api
-        .changing(|sender| sender.begin(command, shelf.fixtures()))
-        .await;
+    let mut begun = Err(Refusal::Stale);
+    for _ in 0..PREPARES {
+        let base = api.sender.lock().await.base();
+        let shelf = Arc::clone(&shelf);
+        let prepared = tokio::task::spawn_blocking(move || base.prepare(command, shelf.fixtures()))
+            .await
+            .map_err(|_| Refusal::QueueFull)?; // the task was cancelled: the engine stops
+        begun = match prepared {
+            Ok(prepared) => api.changing(|sender| sender.admit(prepared)).await,
+            Err(reason) => Err(reason),
+        };
+        if !matches!(begun, Err(Refusal::Stale)) {
+            break;
+        }
+    }
     match begun {
         Ok(Begun::Opening(opening)) => {
             match tokio::task::spawn_blocking(move || opening.open()).await {
@@ -420,7 +437,124 @@ fn json(reply: &Reply) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use engine::Universes;
+    use engine::{ChannelNumbers, Light, Rgb, Target, Text, Universes};
+    use engine_core::Step;
+    use serde_json::Value;
+
+    /// The test definition of a Generic RGB, read when the test is built.
+    const GENERIC_RGB: &[u8] =
+        include_bytes!("../../fixture-library/tests/definitions/Generic-Generic-RGB.qxf");
+
+    /// Look `look` saved as fixture 1 in `colour`.
+    fn step(look: u16, colour: Rgb) -> Command {
+        Command::PutStep {
+            look,
+            name: Text::new("step").unwrap(),
+            step: Step {
+                target: Target::Fixture { fixture: 1 },
+                values: Light {
+                    colour: Some(colour),
+                    ..Light::DARK
+                },
+            },
+        }
+    }
+
+    #[test]
+    fn a_picture_joins_the_looks_and_holds_of_its_own_snapshot_when_revision_b_overtakes_it() {
+        let red = Rgb {
+            red: u16::MAX,
+            green: 0,
+            blue: 0,
+        };
+        let green = Rgb {
+            red: 0,
+            green: u16::MAX,
+            blue: 0,
+        };
+        let blue = Rgb {
+            red: 0,
+            green: 0,
+            blue: u16::MAX,
+        };
+        let library = [fixture_library::parse("Generic-Generic-RGB.qxf", GENERIC_RGB).unwrap()];
+        let (mut engine, mut sender) = Engine::start(Universes::new(1).unwrap()).unwrap();
+        let (moments, taken) = mpsc::unbounded_channel();
+        let mut front = Front {
+            shelf: library::start(None),
+            moments: taken,
+            kept: VecDeque::from([Moment::of(&sender)]),
+            show: watch::channel(ShowFile::None).1,
+        };
+        // as `changing` does: each change, then its moment
+        let mut change = |command| {
+            let begun = sender.begin(command, &library).unwrap();
+            moments.send(Moment::of(&sender)).unwrap();
+            begun
+        };
+        let patch = Command::Patch {
+            name: Text::new("PAR").unwrap(),
+            maker: Text::new("Generic").unwrap(),
+            model: Text::new("Generic RGB").unwrap(),
+            mode: Text::new("RGB").unwrap(),
+            at: ChannelNumbers {
+                universe: 1,
+                address: 1,
+            },
+        };
+        change(patch);
+        change(step(1, red));
+        let Begun::Started { play } = change(Command::StartLook { look: 1 }) else {
+            panic!("look 1 plays");
+        };
+        // revision A: look 1 green, its play takes the new plan. A's snapshot is taken
+        change(step(1, green));
+        let a = engine.fresh().clone();
+        // revision B overtakes it before it is painted: the play released, look 1
+        // removed, look 2 saved
+        change(Command::ReleaseHold { play });
+        change(Command::RemoveLook { look: 1 });
+        change(step(2, blue));
+        let a = front.picture(&a).expect("A's moment is kept");
+        let b = engine.fresh().clone();
+        let b = front.picture(&b).expect("B's moment is kept");
+
+        // (picture, saved looks, the play's look, light 1's colour)
+        let cases = [
+            (&a, vec![1], Some(1), Some(green)),
+            (&b, vec![2], None, None),
+        ];
+        for (picture, looks, playing, colour) in cases {
+            let saved: Vec<u16> = picture.looks.all().iter().map(|saved| saved.look).collect();
+            assert_eq!(saved, looks);
+            let plays: Vec<u16> = picture
+                .snapshot
+                .state
+                .plays
+                .iter()
+                .map(|play| play.look)
+                .collect();
+            assert_eq!(plays.first().copied(), playing);
+            let held = held_lights(picture.snapshot.lights()).find(|held| held.light == 1);
+            assert_eq!(held.and_then(|held| held.colour), colour);
+        }
+        // Query: each picture as it is
+        let query: Value = serde_json::from_str(&picture(&a).unwrap()).unwrap();
+        assert_eq!(query["Picture"]["looks"][0]["look"], 1);
+        assert_eq!(query["Picture"]["state"]["plays"][play.slot()]["look"], 1);
+        // Subscribe: A delivered, then B's change carries B's looks
+        let (paint, mut pictures) = watch::channel(Arc::new(a));
+        let mut subscription = Some(Arc::clone(&pictures.borrow_and_update()));
+        paint.send_replace(Arc::new(b));
+        let changed: Value =
+            serde_json::from_str(&changed(&mut pictures, &mut subscription).unwrap()).unwrap();
+        let looks = &changed["Changed"]["looks"];
+        assert_eq!(
+            (looks[0]["look"].clone(), looks[1].clone()),
+            (2.into(), Value::Null)
+        );
+        assert!(changed["Changed"]["state"]["plays"][play.slot()].is_null());
+    }
 
     #[test]
     fn a_snapshot_is_paired_only_with_the_moment_at_exactly_its_applied_commands() {

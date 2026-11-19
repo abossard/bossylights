@@ -1,11 +1,13 @@
 //! Proves the tick thread and each output's own thread allocate nothing per wake, also
 //! while they serve two outputs at different rates, resolve 512 patched lights and a strip
 //! of 100 pixels over two universes, take commands, swap in new writers, take a group of
-//! 256 runs and hand a reader a snapshot on every frame. And that the tick frees nothing:
-//! the old writers, runs and a replaced device with its thread go to the free thread. A
+//! 256 runs, start, restart, replan and release a play of a step over that group, mix it
+//! with the direct holds and hand a reader a snapshot on every frame. And that the tick
+//! frees nothing: the old writers, runs, plans and a replaced device with its thread go to
+//! the free thread. A
 //! counting allocator sees every allocation in this process, except those of the front
-//! while it sends: a light, patch or attach command allocates there (the patch is a
-//! calculation on the heap, a device is boxed and gets a thread and frame boxes), never on
+//! while it sends: a light, patch, look or attach command allocates there (the patch and a
+//! plan are calculations on the heap, a device is boxed and gets a thread and frame boxes), never on
 //! the tick thread. A new output's thread allocates as the system starts it, on itself,
 //! before the attach returns: those count as the front's too. It counts the frees of the tick thread apart, by its
 //! name. The outputs are attached and the lights patched before the window (the writers
@@ -19,10 +21,10 @@ mod counting;
 mod mock;
 
 use engine::{
-    Begun, ChannelNumbers, Color, Command, Engine, Fixture, Member, MemberList, Members, Rate,
-    RunNumbers, Sender, Target, Text, Universes,
+    Begun, ChannelNumbers, Color, Command, Engine, Fixture, Light, Member, MemberList, Members,
+    PlayId, Rate, Refusal, Rgb, RunNumbers, Sender, Target, Text, Universes,
 };
-use engine_core::Pixels;
+use engine_core::{Pixels, Step};
 
 /// 512 lights: Generic RGB in its mode RGB, 170 to a universe.
 const LIGHTS: u16 = 512;
@@ -32,6 +34,32 @@ const UNIVERSES: u16 = 4;
 fn send(sender: &mut Sender, command: Command, library: &[Fixture]) -> bool {
     let begun = counting::uncounted(|| sender.begin(command, library));
     matches!(begun, Ok(Begun::Queued | Begun::Patched { .. }))
+}
+
+/// Begins `command` as the front, its allocations not counted.
+fn begin(sender: &mut Sender, command: Command, library: &[Fixture]) -> Result<Begun, Refusal> {
+    counting::uncounted(|| sender.begin(command, library))
+}
+
+/// Look 1: the lights of the group "even" in `red` and full blue.
+fn step(red: u16) -> Command {
+    Command::PutStep {
+        look: 1,
+        name: text("even"),
+        step: Step {
+            target: Target::Group {
+                group: text("even"),
+            },
+            values: Light {
+                colour: Some(Rgb {
+                    red,
+                    green: 0,
+                    blue: u16::MAX,
+                }),
+                ..Light::DARK
+            },
+        },
+    }
 }
 
 fn text(text: &str) -> Text {
@@ -120,6 +148,7 @@ fn main() {
         members: MemberList::Fits(Members::new(&even).expect("256 members")),
     };
     assert!(send(&mut sender, group, &library), "the group is made");
+    assert!(send(&mut sender, step(0), &library), "look 1 is saved");
     let green = Command::SetColour {
         target: Target::Group {
             group: text("even"),
@@ -138,6 +167,7 @@ fn main() {
 
     let (allocations, tick_frees) = (counting::allocations(), counting::tick_frees());
     let mut attaching = 0;
+    let mut play: Option<PlayId> = None;
     let frame = engine.latest().state.frame;
     for value in 0..=255 {
         let channel = ChannelNumbers {
@@ -160,6 +190,26 @@ fn main() {
         if value % 16 == 8 {
             // the runs of the group: applied in one wake and sent back to be freed
             assert!(send(&mut sender, green, &library), "the group goes green");
+        }
+        if value % 16 == 4 {
+            // a start, or a fresh start in the play's slot: the old plan goes back
+            let start = begin(&mut sender, Command::StartLook { look: 1 }, &library);
+            let Ok(Begun::Started { play: started }) = start else {
+                panic!("look 1 starts");
+            };
+            play = Some(started);
+        }
+        if value % 16 == 6 {
+            // the playing look saved anew: the tick swaps in its plan, the old one goes back
+            let replan = step(u16::from(value) << 8);
+            assert!(send(&mut sender, replan, &library), "look 1 is saved anew");
+        }
+        if value % 32 == 12
+            && let Some(play) = play.take()
+        {
+            // released: its plan goes back
+            let release = Command::ReleaseHold { play };
+            assert!(send(&mut sender, release, &library), "the play is released");
         }
         if value % 16 == 0 {
             // new writers: the tick swaps them in and sends the old ones back
@@ -209,6 +259,11 @@ fn main() {
         green_lights,
         even.len(),
         "every light of the group is green"
+    );
+    assert_eq!(
+        state.plays.iter().map(|p| Some(p.play)).collect::<Vec<_>>(),
+        vec![play],
+        "the last play started still plays"
     );
     let accepted = state.outputs.map(|o| o.map(|o| o.counters.accepted));
     assert!(
