@@ -5,24 +5,28 @@
 use engine::{Patch, Sender};
 use engine_core::{ShowFile, Unopened};
 use std::fs::{self, File};
-use std::io::{self, ErrorKind, Write};
+use std::io::{self, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::watch;
 
 /// Opens the show file at `path` into the patch of `sender`. A file that is not there:
 /// the patch stays empty and the first change makes the file. A file that cannot be
-/// opened is left alone, and the patch stays empty.
+/// opened is left alone, and the patch stays empty. Reads at most one byte over
+/// [`show_file::MOST_BYTES`]: enough for `read` to say the file is too big, never a file
+/// of gigabytes.
 pub fn open(path: &Path, sender: &mut Sender) -> ShowFile {
-    let text = match fs::read_to_string(path) {
-        Ok(text) => text,
+    let mut text = String::new();
+    let most = u64::try_from(show_file::MOST_BYTES).unwrap_or(u64::MAX);
+    match File::open(path).and_then(|file| file.take(most + 1).read_to_string(&mut text)) {
+        Ok(_) => {}
         Err(error) if error.kind() == ErrorKind::NotFound => return ShowFile::Kept,
         Err(_) => {
             return ShowFile::LeftAlone {
                 why: Unopened::CannotRead,
             };
         }
-    };
+    }
     let opened = show_file::read(&text, &sender.patch()).and_then(|patch| {
         sender
             .load(patch)
@@ -68,8 +72,14 @@ pub async fn keep(
     }
 }
 
-/// Writes `text` to `path` whole or not at all: into a new file beside it, then renamed
-/// over it. On a failure the file at `path` is as it was.
+/// Writes `text` to `path` whole or not at all, so that a power cut brings back the old
+/// file or the new one, never half of one.
+///
+/// | Step | Fails | The file at `path` |
+/// |---|---|---|
+/// | write `<name>.saving` beside it, sync it | `Err`, the new file removed | as it was |
+/// | rename it over `path` | `Err`, the new file removed | as it was |
+/// | sync the folder, so the rename is on the disk | `Err` | the new text, which a power cut may undo |
 pub fn save(path: &Path, text: &str) -> io::Result<()> {
     let new = saving(path);
     let written = File::create(&new).and_then(|mut file| {
@@ -80,7 +90,30 @@ pub fn save(path: &Path, text: &str) -> io::Result<()> {
     if renamed.is_err() {
         let _ = fs::remove_file(&new);
     }
-    renamed
+    renamed.and_then(|()| sync_folder(path))
+}
+
+/// Syncs the folder of `path`, where the system allows it, so a rename in it is on the
+/// disk. A rename is a change of the folder, not of the file: syncing the file does not
+/// keep it.
+///
+/// | System | What happens |
+/// |---|---|
+/// | Linux | `fsync` of the folder: the way `fsync(2)` names to keep a rename |
+/// | macOS | `F_FULLFSYNC` of the folder (Rust's `sync_all` there), which also empties the drive's cache |
+/// | Windows | nothing: a folder cannot be opened as a file. NTFS writes the rename to its journal, flushed within seconds: a power cut right after a save can bring back the old file, never half of one |
+#[cfg(unix)]
+fn sync_folder(path: &Path) -> io::Result<()> {
+    let folder = path
+        .parent()
+        .filter(|folder| !folder.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    File::open(folder)?.sync_all()
+}
+
+#[cfg(not(unix))]
+fn sync_folder(_: &Path) -> io::Result<()> {
+    Ok(())
 }
 
 /// The new file a save writes before it is renamed: `<name>.saving`, beside the show file.

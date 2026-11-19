@@ -252,6 +252,7 @@ async fn patch_stop_start_the_patch_and_groups_are_there_and_light_up_without_th
 #[tokio::test]
 async fn a_file_the_engine_cannot_open_is_left_alone_and_the_picture_says_why() {
     let mode = r#"{"name":"RGB","channels":[],"pixels":[],"layout":null,"degrees":null}"#;
+    let empty = r#"{"version":1,"patch":[],"groups":[],"modes":{}}"#;
     let past = format!(
         r#"{{"version":1,"patch":[{{"fixture":1,"name":"PAR","mode":"m","at":{{"universe":9,"address":1}},"first":1}}],"groups":[],"modes":{{"m":{{"maker":"Generic","model":"Generic RGB","mode":{mode}}}}}}}"#
     );
@@ -271,6 +272,11 @@ async fn a_file_the_engine_cannot_open_is_left_alone_and_the_picture_says_why() 
             "past_the_universes",
             past,
             json!({"Refused": {"reason": {"NoSuchUniverse": {"universes": 4}}}}),
+        ),
+        (
+            "one_byte_over_the_most",
+            empty.to_string() + &" ".repeat(show_file::MOST_BYTES + 1 - empty.len()),
+            json!({"TooBig": {"most": show_file::MOST_BYTES}}),
         ),
     ];
     for (case, text, why) in cases {
@@ -334,4 +340,85 @@ async fn a_save_that_cannot_be_written_leaves_the_file_as_it_was_until_the_next_
         assert!(text.contains(name), "{name}: {text}");
     }
     let _ = std::fs::remove_file(&file);
+}
+
+/// A folder this test run can write to and empty, not there yet.
+#[cfg(unix)]
+fn show_folder(name: &str) -> PathBuf {
+    let folder =
+        std::env::temp_dir().join(format!("bossylights-show-{}-{name}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&folder);
+    std::fs::create_dir(&folder).unwrap();
+    folder
+}
+
+/// Waits at most 10 s for `file` to hold `name`.
+async fn until_saved(file: &Path, name: &str) {
+    let started = Instant::now();
+    while !std::fs::read_to_string(file).is_ok_and(|text| text.contains(name)) {
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "{name} not saved"
+        );
+        tokio::task::yield_now().await;
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_save_whose_folder_cannot_be_synced_is_not_saved_until_the_next_save() {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = |bits| std::fs::Permissions::from_mode(bits);
+    let folder = show_folder("unsynced");
+    let file = folder.join("show.json");
+    let listen = free_port();
+    let mut running = engine(&listen, &file, false);
+    let mut socket = connect(&listen).await;
+    until_show(&mut socket, &json!("Kept")).await;
+    assert_eq!(
+        command(&mut socket, strip("A", 1)).await,
+        json!({"Patched": {"fixture": 1}})
+    );
+    until_saved(&file, "\"A\"").await;
+
+    // files can be made and renamed in the folder, the folder cannot be opened to sync it
+    std::fs::set_permissions(&folder, mode(0o300)).unwrap();
+    assert_eq!(
+        command(&mut socket, strip("B", 20)).await,
+        json!({"Patched": {"fixture": 2}})
+    );
+    until_show(&mut socket, &json!("NotSaved")).await;
+    std::fs::set_permissions(&folder, mode(0o700)).unwrap();
+    // renamed, but not safe from a power cut
+    until_saved(&file, "\"B\"").await;
+
+    assert_eq!(
+        command(&mut socket, strip("C", 40)).await,
+        json!({"Patched": {"fixture": 3}})
+    );
+    until_show(&mut socket, &json!("Kept")).await;
+    stop(&mut socket, &mut running).await;
+    assert!(std::fs::read_to_string(&file).unwrap().contains("\"C\""));
+    let _ = std::fs::remove_dir_all(&folder);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_file_of_a_terabyte_is_not_read_whole_and_left_alone() {
+    let folder = show_folder("terabyte");
+    let file = folder.join("show.json");
+    // sparse: no room on the disk, but read whole it would not end in the 10 s below
+    let terabyte = 1 << 40;
+    std::fs::File::create(&file)
+        .unwrap()
+        .set_len(terabyte)
+        .unwrap();
+    let listen = free_port();
+    let mut running = engine(&listen, &file, false);
+    let mut socket = connect(&listen).await;
+    let why = json!({"TooBig": {"most": show_file::MOST_BYTES}});
+    until_show(&mut socket, &json!({"LeftAlone": {"why": why}})).await;
+    stop(&mut socket, &mut running).await;
+    assert_eq!(std::fs::metadata(&file).unwrap().len(), terabyte);
+    let _ = std::fs::remove_dir_all(&folder);
 }

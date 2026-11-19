@@ -37,6 +37,9 @@
 //!
 //! Reading checks what the commands check: a fixture is placed as patch places it, a
 //! group is set as set group sets it. A file that fails a check is not read at all.
+//!
+//! A file is at most [`MOST_BYTES`] long: one over it is not read, and a patch whose
+//! file would be over it is not written, so the file on disk always opens.
 
 #![no_std]
 #![forbid(unsafe_code)]
@@ -63,8 +66,18 @@ use serde::{Deserialize, Serialize};
 /// engine of the old version would read wrong. An engine never reads a newer file.
 pub const VERSION: u32 = 1;
 
-/// The text of `patch`: its fixtures, their modes and its groups. `None` cannot happen:
-/// the file is plain numbers, names and lists.
+/// The longest file, in bytes: 64 MiB. Far over any show, so no show meets it, and a file
+/// of gigabytes is not read whole at start.
+///
+/// | Part of the file | Measured | The most |
+/// |---|---|---|
+/// | a fixture's line, a name of 128 bytes | 244 bytes | 16 384 lines, one per light: 4 MB |
+/// | a mode, pretty | 0.2 to 17 KB (the test definitions) | 3 500 modes of 17 KB beside the lines |
+/// | a group of 512 lights | 14 KB | 4 000 groups beside the lines |
+pub const MOST_BYTES: usize = 64 * 1024 * 1024;
+
+/// The text of `patch`: its fixtures, their modes and its groups. `None` when it would
+/// be over [`MOST_BYTES`]: that file would not open.
 pub fn write(patch: &Patch) -> Option<String> {
     // each different mode under its own key, in the order the fixtures name them
     let mut modes: Vec<(String, Definition<'_>)> = Vec::new();
@@ -113,18 +126,24 @@ pub fn write(patch: &Patch) -> Option<String> {
             Some(format!("{}: {}", line(key)?, text.replace('\n', "\n    ")))
         })
         .collect::<Option<Vec<_>>>()?;
-    Some(format!(
+    let text = format!(
         "{{\n  \"version\": {VERSION},\n  \"patch\": {},\n  \"groups\": {},\n  \"modes\": {}\n}}\n",
         list(&rows, '[', ']'),
         list(&groups, '[', ']'),
         list(&modes, '{', '}'),
-    ))
+    );
+    (text.len() <= MOST_BYTES).then_some(text)
 }
 
 /// The patch of `text`: `empty` with the file's fixtures and groups, or why not. `empty`
 /// is the engine's patch with nothing in it, so the file is checked against its
 /// universes and lights.
 pub fn read(text: &str, empty: &Patch) -> Result<Patch, Unopened> {
+    if text.len() > MOST_BYTES {
+        return Err(Unopened::TooBig {
+            most: u32::try_from(MOST_BYTES).unwrap_or(u32::MAX),
+        });
+    }
     let Head { version } = serde_json::from_str(text).map_err(broken)?;
     if version.get() > VERSION {
         return Err(Unopened::Newer {

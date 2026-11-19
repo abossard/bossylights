@@ -19,7 +19,8 @@ pub enum ShowFile {
     None,
     /// The file holds the patch and the groups, or gets them with the save under way.
     Kept,
-    /// The last save failed: the file holds an older patch. The next change saves again.
+    /// The last save failed: the file holds an older patch, or the new one not yet safe
+    /// from a power cut. The next change saves again.
     NotSaved,
     /// The file was not opened: the engine started with an empty patch and never writes it.
     LeftAlone { why: Unopened },
@@ -39,6 +40,8 @@ pub enum Unopened {
     Taken { fixture: u16 },
     /// A fixture or a group of the file is refused as its command would be.
     Refused { reason: Refusal },
+    /// Longer than the `most` bytes a show file has.
+    TooBig { most: u32 },
 }
 
 impl ShowFile {

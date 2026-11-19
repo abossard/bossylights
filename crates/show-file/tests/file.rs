@@ -339,3 +339,40 @@ fn a_change_of_one_fixture_is_one_line_of_the_file() {
         assert_eq!(changed, 1, "{case}\n{new}");
     }
 }
+
+/// One PAR whose red channel's name is `extra` bytes longer: a file of any length.
+fn par_with_a_longer_name(extra: usize) -> Patch {
+    let mut library = library();
+    for mode in &mut library[0].modes {
+        mode.channels[0].name.push_str(&"x".repeat(extra));
+    }
+    patched(vec![(par("PAR 1", 1), library)])
+}
+
+#[test]
+fn a_file_of_the_most_bytes_is_written_and_read_and_one_byte_more_is_neither() {
+    let most = show_file::MOST_BYTES;
+    let short = show_file::write(&par_with_a_longer_name(0)).unwrap().len();
+    let at_most = par_with_a_longer_name(most - short);
+    let file = show_file::write(&at_most).unwrap();
+    assert_eq!(file.len(), most);
+    let too_big = Unopened::TooBig {
+        most: u32::try_from(most).unwrap(),
+    };
+    // (case, bytes over the most, written, read)
+    let cases = [
+        ("at the most", 0, Some(most), Ok(at_most.clone())),
+        ("one byte over", 1, None, Err(too_big)),
+    ];
+    for (case, over, written, read) in cases {
+        let patch = par_with_a_longer_name(most - short + over);
+        assert_eq!(
+            show_file::write(&patch).map(|text| text.len()),
+            written,
+            "{case}: written"
+        );
+        // the file at the most, and spaces after it
+        let text = format!("{file}{}", " ".repeat(over));
+        assert_eq!(show_file::read(&text, &empty()), read, "{case}: read");
+    }
+}
