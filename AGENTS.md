@@ -66,6 +66,7 @@ The owner has ADHD and is a visual learner. This applies to every output: docs, 
 - Never force-push or rewrite history on `main`.
 - Keep `main` green: run the tests before every push.
 - Work apart by modules, not worktrees: a brief names the files a worker owns. Stage only your own paths; `git log origin/main..` shows only your commits before a push.
+- Verify your change in a clean copy first (`npm run verify -- <commit>`), then commit and push in one step. A commit left unpushed on the shared `main` blocks every other worker's push.
 - A worker's slice ends with: a hand-over comment on the issue, `SendMessage` to the orchestrator (a chat answer reaches nobody), `clear_session "self"`.
 - No invalid project state: a command that would make one is refused, and so is a later command that would break it. Never allow and flag.
 
