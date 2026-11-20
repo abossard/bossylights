@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { keyStep, level, neighbour, placeIn, unbroken, wheelAt, wheelColour, wheelSpot } from "./kit/common.ts";
+import { keyStep, lampOf, level, neighbour, placeIn, unbroken, wheelAt, wheelColour, wheelSpot } from "./kit/common.ts";
 import { dragOutcome } from "./kit/dragging.ts";
 
 // [value, the level it becomes]
@@ -79,6 +79,19 @@ for (const [selected, key, expected] of moves) test(`neighbour: ${key} from ${se
 test("neighbour: no options, no move", () => assert.equal(neighbour([], "x", "ArrowRight"), undefined));
 
 test("unbroken: a hyphen that does not break", () => assert.equal(unbroken("Chase L-R"), "Chase L‑R"));
+
+// [toggle state, the lamp's shape, the word under the name, what a screen reader hears after the name]
+const lamps = [
+  ["off", "dashed", "", "off"],
+  ["ready", "outline", "Ready", "Ready, starts with LIVE"],
+  ["on", "solid", "On", "On"],
+];
+for (const [state, fill, word, says] of lamps) {
+  test(`lampOf: ${state}`, () => {
+    assert.deepEqual(lampOf(state), { fill, word, says });
+    assert.ok(says.startsWith(word), "the name starts with the word it shows");
+  });
+}
 
 // [from, event, to, what it means]
 const outcomes = [

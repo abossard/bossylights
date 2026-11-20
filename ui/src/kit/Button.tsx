@@ -1,22 +1,15 @@
 import { For, Show } from "solid-js";
-import type { Colour, Pressable, Signal } from "./common.ts";
+import { lampOf, type Colour, type Pressable, type Signal, type ToggleState } from "./common.ts";
 import { capture } from "./dragging.ts";
 
-/**
- * | state | means                              | look                                   |
- * |-------|------------------------------------|----------------------------------------|
- * | off   | not in effect                      | outline. A lamp is empty, its word struck |
- * | ready | will be in effect when LIVE goes on | outline. A lamp is lit mute            |
- * | on    | in effect now                      | filled in its colour. A lamp is lit    |
- */
-export type ToggleState = "off" | "ready" | "on";
+export type { ToggleState } from "./common.ts";
 
 /**
  * How a toggle shows its state beside its fill.
  *
  * | mark    | is                         | used for                |
  * |---------|----------------------------|-------------------------|
- * | lamp    | a round lamp before the word | the four indicators   |
+ * | lamp    | a round lamp before the name, the state in a word under it | the four indicators |
  * | chevron | a chevron that turns       | a part that folds       |
  * | knob    | a knob that changes side   | LIVE                    |
  */
@@ -68,7 +61,8 @@ export interface ToggleProps extends Shared {
 
 export type ButtonProps = ActionProps | ToggleProps;
 
-const SAYS: Record<ToggleState, string> = { off: "off", ready: "ready, starts with LIVE", on: "on" };
+/** A lamp keeps the width of its widest word, so nothing beside it moves. */
+const LAMP_WORDS = [lampOf("ready").word, lampOf("on").word];
 
 /**
  * The one button. Two kinds: an action fires once, a toggle stays until it is pressed again.
@@ -88,10 +82,12 @@ export function Button(props: ButtonProps) {
     if (!t || t.state !== "on") return "mute";
     return t.lamp ?? (t.colour === undefined || t.colour === "plain" ? "paper" : t.colour);
   };
+  /** A lamp says its state in a word under the name. A reason or a word of its own takes its place. */
+  const word = () => (mark() === "lamp" ? lampOf(state() ?? "off").word || undefined : undefined);
   const heard = () => {
     if (props.says !== undefined) return props.says;
     const t = toggle();
-    if (t && (t.mark === "lamp" || t.state === "ready")) return `${t.label}: ${SAYS[t.state]}`;
+    if (t && (t.mark === "lamp" || t.state === "ready")) return `${t.label}: ${lampOf(t.state).says}`;
     return props.glyph === undefined ? undefined : props.label;
   };
 
@@ -150,15 +146,15 @@ export function Button(props: ButtonProps) {
         <i class="k-mapped" aria-hidden="true" />
       </Show>
       <Show when={mark() === "lamp"}>
-        <i class="k-lamp" data-colour={lampColour()} data-fill={state() === "off" ? "outline" : "solid"} aria-hidden="true" />
+        <i class="k-lamp" data-colour={lampColour()} data-fill={lampOf(state() ?? "off").fill} aria-hidden="true" />
       </Show>
       <Show when={mark() === "chevron"}>
         <i class="k-chevron" aria-hidden="true" />
       </Show>
       <span class="k-btn-text">
         <span class="k-label">{props.glyph ?? props.label}</span>
-        <Show when={props.off ?? props.sub}>{(line) => <span class="k-reason">{line()}</span>}</Show>
-        <For each={props.holds ?? []}>{(line) => <span class="k-ghost" data-line={line} aria-hidden="true" />}</For>
+        <Show when={props.off ?? props.sub ?? word()}>{(line) => <span class="k-reason">{line()}</span>}</Show>
+        <For each={[...(props.holds ?? []), ...(mark() === "lamp" ? LAMP_WORDS : [])]}>{(line) => <span class="k-ghost" data-line={line} aria-hidden="true" />}</For>
       </span>
       <Show when={mark() === "knob"}>
         <i class="k-knob" aria-hidden="true" />

@@ -41,7 +41,7 @@ const indicator = (
       "live-on": works("Goes between on and turned off, at once"),
       ...cells,
     },
-    feedback: { screen: "The lamp changes when the engine reports it: paper on, mute ready, empty and struck through off" },
+    feedback: { screen: "The lamp changes when the engine reports it: solid paper and 'On', a mute ring and 'Ready', empty with the name struck through when off" },
     undo: no("Press it again"),
     machine: "indicator",
     states: ["ready", "on", "off", ...more],

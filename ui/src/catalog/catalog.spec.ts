@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { SITUATIONS } from "../controls/situations.ts";
 import { PRIMITIVES } from "../controls/spec.ts";
 import { CONTROLS } from "../controls/table.ts";
@@ -409,7 +409,7 @@ for (const [key, is] of recording) {
       await expect(button).toHaveAttribute("aria-pressed", "true");
       if (is === "ready") {
         await expect(button.locator(".k-lamp")).not.toHaveAttribute("data-colour", "danger");
-        await expect(button).toHaveAttribute("aria-label", /ready/);
+        await expect(button).toHaveAttribute("aria-label", /Ready/);
         await expect(button).not.toContainText("Armed");
       } else if (is === "armed") {
         await expect(button.locator(".k-lamp")).not.toHaveAttribute("data-colour", "danger");
@@ -418,6 +418,55 @@ for (const [key, is] of recording) {
     });
   }
 }
+
+/** Ready and On differ in shape and word, not only in fill (#194). Off: an empty lamp, no word, the name struck. */
+const LOCK = {
+  ready: { empty: true, word: "Ready" },
+  on: { empty: false, word: "On" },
+  off: { empty: true, word: "" },
+} as const;
+type LockState = keyof typeof LOCK;
+/** `reason`: why it is off. It stands in place of the word. */
+const lockShows = async (button: Locator, state: LockState, reason = "") => {
+  const { empty, word } = LOCK[state];
+  const lamp = await button.locator(".k-lamp").evaluate((e) => {
+    const style = getComputedStyle(e);
+    return { fill: style.backgroundColor, ring: style.borderTopWidth };
+  });
+  expect(lamp.ring, "the lamp has a ring").not.toBe("0px");
+  expect(lamp.fill === "rgba(0, 0, 0, 0)", `the lamp is ${empty ? "empty" : "solid"}`).toBe(empty);
+  if (reason !== "") await expect(button.locator(".k-reason")).toHaveText(reason);
+  else if (word === "") await expect(button.locator(".k-reason")).toHaveCount(0);
+  else await expect(button.locator(".k-reason")).toHaveText(word);
+  await expect(button).toHaveAccessibleName(new RegExp(`^Lock: ${word || "off"}\\b`));
+};
+// [frame, the Lock's state there]
+const lockFrames = [
+  ["alone", "ready"],
+  ["live-off", "ready"],
+  ["state:ready", "ready"],
+  ["live-on", "on"],
+  ["lock", "on"],
+  ["state:on", "on"],
+  ["state:off", "off"],
+] as const;
+for (const [key, state] of lockFrames) {
+  test(`#194 the Lock lamp says ${state} by shape and word: ${key}`, async ({ page }) => {
+    await page.goto("/#/top.indicator.lock");
+    await lockShows(frame(page, key).getByRole("button"), state);
+  });
+}
+test("#194 the Lock lamp's shape, word and name agree in every situation frame", async ({ page }) => {
+  await page.goto("/#/top.indicator.lock");
+  for (const situation of SITUATIONS) {
+    const button = frame(page, situation.id).locator(".c-stage button");
+    if ((await button.count()) === 0) continue;
+    const state = await button.getAttribute("data-state");
+    expect(state === "ready" || state === "on" || state === "off", `${situation.id}: ${state}`).toBe(true);
+    const reason = (await button.isDisabled()) ? await button.locator(".k-reason").innerText() : "";
+    await lockShows(button, state as LockState, reason);
+  }
+});
 
 test("UX-09 the Now strip follows the situation: its lanes and the two decks", async ({ page }) => {
   await page.goto("/#/top.now-strip");

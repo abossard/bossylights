@@ -235,14 +235,16 @@ Name: 14 px bold, narrow, never breaks at a hyphen. Pads 84 px and taller also s
 | On | Paper slab, ink "LIVE on", knob right |
 | Off | Outline, mute "LIVE off", knob left |
 
-Four indicators beside it (DJ link, Recording, Autopilot, Lock), each a lamp and a word:
+Four indicators beside it (DJ link, Recording, Autopilot, Lock), each a lamp, its name and, under the name, the state in a word. Ready and On differ in shape and word, not only in fill: paper and mute are only 1.66:1 apart.
 
-| Lamp | Meaning |
-|---|---|
-| Filled paper | On, in effect now |
-| Filled mute | Ready, starts with LIVE |
-| Empty, word struck through | Turned off |
-| Red lamp and red word | Recording, while it is on |
+| State | Lamp | Word | Lamp against the stage (`--bg`) | Screen reader |
+|---|---|---|---|---|
+| On, in effect now | Solid paper | On | 15.16:1 | "Lock: On" |
+| Ready, starts with LIVE | Outline, a mute ring | Ready | 9.14:1 | "Lock: Ready, starts with LIVE" |
+| Turned off | Empty, name struck through | none | 9.14:1 | "Lock: off" |
+| Recording, while it writes | Solid red | On | | "Recording: On" |
+
+A word of the row's own (Recording's "Armed") or the reason it is off ("Engine not connected") takes the place of the state word. The lamp keeps the width of its widest word, so nothing beside it moves.
 
 With no lights connected a red-outlined chip says so and opens In/Out.
 

@@ -220,9 +220,9 @@ export const indicator: Machine<IndicatorState, IndicatorEvent> = {
   title: "LIVE indicator",
   start: "ready",
   states: {
-    ready: "Mute lamp: starts with LIVE",
-    on: "Paper lamp: in effect now. Recording is red",
-    off: "Empty lamp, word struck through: turned off",
+    ready: "A mute ring and 'Ready': starts with LIVE",
+    on: "A solid paper lamp and 'On': in effect now. Recording is red",
+    off: "An empty lamp, the name struck through: turned off",
     offLive: "The same look as off, while LIVE is on",
   },
   events: {

@@ -30,6 +30,30 @@ export const COLOURS: readonly Colour[] = ["plain", "paper", "manual", "show", "
 export type Signal = Colour | "mute" | "ok" | "warn";
 
 /**
+ * | state | means                              | look                                   |
+ * |-------|------------------------------------|----------------------------------------|
+ * | off   | not in effect                      | outline. A lamp is empty, its name struck |
+ * | ready | will be in effect when LIVE goes on | outline. A lamp is a mute ring, "Ready" |
+ * | on    | in effect now                      | filled in its colour. A lamp is solid, "On" |
+ */
+export type ToggleState = "off" | "ready" | "on";
+
+/** A lamp's shape, the word under its name and what a screen reader hears after the name. Ready and On differ in shape and word, not only in fill (#194). */
+export interface LampLook {
+  fill: "solid" | "outline" | "dashed";
+  word: string;
+  says: string;
+}
+
+const LAMPS: Record<ToggleState, LampLook> = {
+  off: { fill: "dashed", word: "", says: "off" },
+  ready: { fill: "outline", word: "Ready", says: "Ready, starts with LIVE" },
+  on: { fill: "solid", word: "On", says: "On" },
+};
+
+export const lampOf = (state: ToggleState): LampLook => LAMPS[state];
+
+/**
  * How a thing stands in its place. Item and Block share it.
  *
  * | state  | means                                    | look                 |
