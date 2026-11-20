@@ -1,10 +1,10 @@
 import { Show } from "solid-js";
-import { unbroken, type Colour, type Standing } from "./common.ts";
+import { unbroken, type Colour, type Pressable, type Standing } from "./common.ts";
 import { dragHandlers } from "./dragging.ts";
 
 const ARROWS: Record<string, readonly [number, number]> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
 
-export interface BlockProps {
+export interface BlockProps extends Pressable {
   /**
    * | kind  | is                                               | arranged by                                   |
    * |-------|--------------------------------------------------|-----------------------------------------------|
@@ -35,6 +35,7 @@ export interface BlockProps {
 
 /** A thing placed in time or on a grid. It is arranged: dragged, nudged, resized. Nothing is sent before it is dropped. */
 export function Block(props: BlockProps) {
+  const off = () => props.off !== undefined;
   const drag = dragHandlers(() => ({
     // A pointer press comes from the drag machine: after a drop there is no press.
     ...(props.onPress ? { onPress: props.onPress } : {}),
@@ -43,6 +44,7 @@ export function Block(props: BlockProps) {
     ...(props.onCancel ? { onCancel: props.onCancel } : {}),
   }));
   const key = (e: KeyboardEvent) => {
+    if (off()) return;
     drag.onKeyDown(e);
     const arrow = ARROWS[e.key];
     const move = e.shiftKey ? props.onResize : props.onNudge;
@@ -67,9 +69,17 @@ export function Block(props: BlockProps) {
     <Show
       when={props.kind === "bar"}
       fallback={
-        <div class="k-block" {...shared()} role="group" tabindex={0} aria-label={`${props.label}${props.sub ? `, ${props.sub}` : ""}. Arrows move, Shift and arrows resize, Delete removes`} onPointerDown={drag.onPointerDown}>
+        <div
+          class="k-block"
+          {...shared()}
+          role="group"
+          tabindex={off() ? undefined : 0}
+          aria-disabled={off()}
+          aria-label={`${props.label}${props.sub ? `, ${props.sub}` : ""}${off() ? "" : ". Arrows move, Shift and arrows resize, Delete removes"}`}
+          onPointerDown={(e) => off() || drag.onPointerDown(e)}
+        >
           <span class="k-block-name">{props.label}</span>
-          <Show when={props.sub}>{(sub) => <span class="k-sub">{sub()}</span>}</Show>
+          <Show when={props.off ?? props.sub}>{(line) => <span class={off() ? "k-reason" : "k-sub"}>{line()}</span>}</Show>
         </div>
       }
     >
@@ -78,11 +88,12 @@ export function Block(props: BlockProps) {
         class="k-block"
         {...shared()}
         aria-current={props.standing === "picked"}
+        disabled={off()}
         onPointerDown={(e) => props.onDrop && drag.onPointerDown(e)}
         onClick={(e) => (e.detail === 0 || !props.onDrop) && props.onPress?.()}
       >
         <span class="k-label">{unbroken(props.label)}</span>
-        <Show when={props.sub}>{(sub) => <span class="k-sub">{sub()}</span>}</Show>
+        <Show when={props.off ?? props.sub}>{(line) => <span class={off() ? "k-reason" : "k-sub"}>{line()}</span>}</Show>
       </button>
     </Show>
   );

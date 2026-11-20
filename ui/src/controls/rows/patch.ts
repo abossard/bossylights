@@ -262,7 +262,7 @@ export const PATCH: Control[] = [
       "live-on": works("Works mid-show. In step 4 the new light flashes in the room"),
       "no-engine": off("Engine not connected"),
     },
-    states: ["Next: address", "Next: flash it", "off on a clash"],
+    states: ["Next: address", "Next: flash it", "off: Pick a free address"],
   }),
   control({
     id: "patch.add.confirm",
@@ -385,6 +385,7 @@ export const PATCH: Control[] = [
     in: { empty: works("Works. A panel can be the first thing patched") },
     learn: ON_SCREEN,
     first: change("It lets a panel land on universes that are already used, and nothing says so. It is off then and says which universe is taken"),
+    states: ["off: Universe 2 is already used"],
   }),
   // ---- in the mockups since review 4 (decision 29)
   edit({

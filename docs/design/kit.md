@@ -137,7 +137,7 @@ Fixed props are the ones that never change for the control. Its words, its state
 | --- | --- | --- | --- | --- | --- |
 | LIVE switch | `top.live` | Top bar | plain | mark: knob, size: large, holds: 2 lines |  |
 | DJ link indicator | `top.indicator.dj` | Top bar | plain | mark: lamp, quiet, lamp: ok |  |
-| Recording indicator | `top.indicator.recording` | Top bar | danger | mark: lamp, quiet |  |
+| Recording indicator | `top.indicator.recording` | Top bar | danger | mark: lamp, quiet, holds: 2 lines |  |
 | Autopilot indicator | `top.indicator.autopilot` | Top bar | autopilot | mark: lamp |  |
 | Lock indicator | `top.indicator.lock` | Top bar | plain | mark: lamp, quiet |  |
 | Learn | `top.learn` | Top bar | plain | held: short press and hold, holds: 3 lines |  |
@@ -158,7 +158,7 @@ Fixed props are the ones that never change for the control. Its words, its state
 | Flash it | `patch.details.flash` | Patch | plain | fires: down |  |
 | Patched only | `dmx.filter.patched` | DMX | plain |  |  |
 | Changing | `dmx.filter.changing` | DMX | plain |  |  |
-| Test an output | `inout.out.test` | In/Out | plain | fires: down, holds: 3 lines |  |
+| Test an output | `inout.out.test` | In/Out | plain | fires: down, holds: 2 lines |  |
 | Edit a mapping | `inout.mapping.edit` | In/Out | plain | holds: 3 lines |  |
 | Mapping feedback | `inout.mapping.feedback` | In/Out | plain | holds: 3 lines |  |
 | Set up an output | `inout.out.setup` | In/Out | plain | holds: 3 lines |  |

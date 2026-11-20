@@ -4,9 +4,11 @@ import { act } from "./catalog/act.ts";
 import { byFunction, linesOf, recipe } from "./catalog/compose.ts";
 import { framesOf, screensOf, search } from "./catalog/frames.ts";
 import { inSituation, inState, usual } from "./catalog/look.ts";
+import { place } from "./catalog/place.ts";
 import { asMarkdown, comment, kitKey, merge, parse, rate, reviewOf, same } from "./catalog/review.ts";
 import { fileText } from "./catalog/reviews-file.mjs";
 import { SAMPLES, SITUATION_STATE, STATE_LOOKS } from "./catalog/samples.ts";
+import { SHAPES } from "./catalog/shapes.ts";
 import { USES } from "./catalog/uses.ts";
 import { MACHINES } from "./controls/machines.ts";
 import { SITUATIONS } from "./controls/situations.ts";
@@ -125,7 +127,11 @@ const plays = [
   ["a feed with no signal cannot be picked", "inout.tempo.feed", "state:off: no signal", [{ is: "pick", option: "Timecode" }], [], { off: "No signal", offOption: "Timecode" }],
   ["a feed with a signal can", "inout.tempo.feed", "state:off: no signal", [{ is: "pick", option: "Audio" }], ["SetTempoFeed Audio"], { picked: "Audio" }],
   ["a stepper at its end goes only the other way", "looks.seq.width", "state:narrower off at a quarter beat", [{ is: "step", by: -1 }, { is: "step", by: 1 }], ["SetSequenceEntry Wider"], { offOption: "Narrower" }],
-  ["a drop sends once, with where it landed", "patch.grid.light", "alone", [{ is: "lift" }, { is: "drop" }], ["SetAddress where it landed"], { variant: "", at: "idle" }],
+  ["a drop sends once, with where it landed", "patch.grid.light", "alone", [{ is: "lift" }, { is: "drop", by: { across: 1, down: 0, wider: 0 } }], ["SetAddress 18 to 24"], { variant: "", at: "idle", sub: "18 to 24" }],
+  ["a drop of a thing that is not placed says it landed", "console.widget.frame", "edit-surface", [{ is: "lift" }, { is: "drop" }], ["PlaceWidget where it landed"], { at: "idle" }],
+  ["an arrow moves a placed bar and sends where it is", "looks.seq.bar", "alone", [{ is: "nudge", by: { across: 1, down: 0, wider: 0 } }], ["SetSequenceEntry At beat 1¼, 1 beat"], { sub: "At beat 1¼, 1 beat" }],
+  ["an arrow that cannot move it sends nothing", "looks.seq.bar", "alone", [{ is: "nudge", by: { across: -1, down: 0, wider: 0 } }], [], { sub: "At beat 1, 1 beat" }],
+  ["a test of an output does nothing while it runs", "inout.out.test", "alone", [{ is: "press" }, { is: "press" }], ["TestOutput on: true"], { label: "Testing" }],
   ["a drag put back sends nothing", "patch.grid.light", "alone", [{ is: "lift" }, { is: "cancel" }], [], { variant: "", at: "idle" }],
   ["a lifted thing looks lifted", "looks.seq.bar", "alone", [{ is: "lift" }], [], { variant: "lifted", at: "dragging" }],
   ["the cross takes a look out of a section", "songs.section.remove-look", "alone", [{ is: "remove" }], ["RemoveSectionLook"], {}],
@@ -225,7 +231,7 @@ const recipes = [
   ["top.live", "Button", "toggle", "plain", { mark: "knob", size: "large", holds: "2 lines" }, []],
   ["top.indicator.dj", "Button", "toggle", "plain", { mark: "lamp", quiet: "yes", lamp: "ok" }, []],
   ["top.indicator.autopilot", "Button", "toggle", "autopilot", { mark: "lamp" }, []],
-  ["top.indicator.recording", "Button", "toggle", "danger", { mark: "lamp", quiet: "yes" }, []],
+  ["top.indicator.recording", "Button", "toggle", "danger", { mark: "lamp", quiet: "yes", holds: "2 lines" }, []],
   ["console.pad", "Pad", "", "plain", {}, ["Status.flag", "Status.pill"]],
   ["console.xy", "XY", "position", "plain", {}, []],
   ["looks.step.colour.wheel", "XY", "colour", "plain", {}, []],
@@ -248,6 +254,45 @@ const lines = [
   ["top.tap", []],
 ];
 for (const [id, expected] of lines) test(`a control that changes its words keeps its width: ${id}`, () => assert.deepEqual(linesOf(byId(id)), expected));
+
+// [control, readout, across, down, wider, readout after]
+const places = [
+  ["patch.grid.light", "17 to 23", 1, 0, 0, "18 to 24"],
+  ["patch.grid.light", "17 to 23", 0, 1, 0, "49 to 55"],
+  ["patch.grid.light", "1 to 7", -1, 0, 0, "1 to 7"],
+  ["patch.grid.light", "500 to 506", 0, 1, 0, "506 to 512"],
+  ["patch.grid.light", "17 to 23", 0, 0, 1, "17 to 23"],
+  ["looks.seq.bar", "At beat 1, 1 beat", 1, 0, 0, "At beat 1¼, 1 beat"],
+  ["looks.seq.bar", "At beat 1, 1 beat", 4, 0, 0, "At beat 2, 1 beat"],
+  ["looks.seq.bar", "At beat 1, 1 beat", -1, 0, 0, "At beat 1, 1 beat"],
+  ["looks.seq.bar", "At beat 2½, ¼ beat", 0, 0, -1, "At beat 2½, ¼ beat"],
+  ["looks.seq.bar", "At beat 1, 1 beat", 0, 0, 2, "At beat 1, 1½ beats"],
+  ["looks.seq.bar", "At beat 1, 1 beat", 0, 3, 0, "At beat 1, 1 beat"],
+  ["looks.seq.bar", "1 beat", 1, 0, 0, undefined],
+  ["console.widget.frame", "Main", 1, 0, 0, undefined],
+];
+for (const [id, readout, across, down, wider, after] of places) {
+  test(`place: ${id} at ${readout} by ${across}, ${down}, ${wider}`, () => assert.equal(place(id, readout, { across, down, wider }), after));
+}
+
+// [control, text, the reason it is refused: undefined when it fits]
+const shapes = [
+  ["inout.osc.port", "9000", undefined],
+  ["inout.osc.port", "65536", "A port is a number from 1 to 65535"],
+  ["inout.osc.port", "0", "A port is a number from 1 to 65535"],
+  ["inout.osc.port", "Banana", "A port is a number from 1 to 65535"],
+  ["inout.out.universes", "1", undefined],
+  ["inout.out.universes", "2 to 9", undefined],
+  ["inout.out.universes", "9 to 2", "One universe, as 1, or a range, as 2 to 9"],
+  ["inout.out.universes", "0", "One universe, as 1, or a range, as 2 to 9"],
+  ["inout.mapping.message", "Note 36", undefined],
+  ["inout.mapping.message", "CC 127", undefined],
+  ["inout.mapping.message", "CC 128", "A note, as Note 36, or a controller, as CC 48"],
+  ["inout.mapping.message", "note 36", "A note, as Note 36, or a controller, as CC 48"],
+  ["patch.panel.start", "2", undefined],
+  ["patch.panel.start", "0", "A universe is a number, 1 or more"],
+];
+for (const [id, text, reason] of shapes) test(`shape: ${id} takes "${text}"`, () => assert.equal(SHAPES[id]?.(text), reason));
 
 // [what, steps, reviews after]
 const A = "top.tap";

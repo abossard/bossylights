@@ -296,6 +296,9 @@
 .k-input { height: var(--target); min-width: 180px; padding: 0 12px; background: var(--s1); color: var(--paper); border: var(--rule) solid var(--line); font: inherit; font-weight: 600; appearance: none; }
 .k-input:hover:not(:disabled) { border-color: var(--paper); }
 .k-input:disabled { border-style: dashed; color: var(--mute); background: none; }
+/* refused: a red edge, the reason under it, the old value kept */
+.k-field.is-refused .k-input, .k-field.is-refused .k-input:hover { border-color: var(--danger); }
+.k-field.is-refused .k-reason { color: var(--paper); }
 .k-input::placeholder { color: var(--mute); }
 .k-steps { display: inline-flex; align-items: stretch; gap: var(--sp-2); }
 .k-steps .k-status { min-width: 72px; justify-content: center; }
@@ -345,7 +348,9 @@
 /* chip: the cross is a Button */
 .k-item[data-kind="chip"] { display: inline-flex; min-height: var(--target); padding-left: 10px; gap: var(--sp-2); border: var(--rule) solid var(--line); cursor: default; }
 .k-item[data-kind="chip"] .k-btn { min-height: calc(var(--target) - 4px); border: 0; border-left: var(--rule) solid var(--line); }
-.k-item[data-kind="chip"] .k-btn:hover { background: var(--s2); }
+.k-item[data-kind="chip"] .k-btn:hover:not(:disabled) { background: var(--s2); }
+/* the reason of an off chip stands once, beside its name */
+.k-item[data-kind="chip"] .k-btn .k-reason { display: none; }
 /* strip: a full line of statuses. Its lanes share the width, and stack their name over what runs when it gets narrow */
 .k-item[data-kind="strip"] { container-type: inline-size; width: 100%; min-height: 56px; padding: 0 var(--sp-3) 0 0; align-items: stretch; gap: var(--sp-4); background: none; border-bottom: var(--rule) solid var(--line); }
 .k-item[data-kind="strip"]:hover:not(:disabled) { background: var(--s1); }
@@ -379,3 +384,8 @@
 /* ---- Handle: only dragged */
 .k-handle { width: var(--target); height: 64px; display: inline-block; background: linear-gradient(var(--paper), var(--paper)) 50% 0 / 4px 100% no-repeat; cursor: ew-resize; touch-action: none; }
 .k-handle[data-kind="corner"] { height: var(--target); background: linear-gradient(135deg, transparent 50%, var(--paper) 50%) 100% 100% / 20px 20px no-repeat; border: var(--rule) dashed var(--paper); cursor: nwse-resize; }
+/* off: dashed and mute, the reason under or beside it */
+.k-block[data-kind="bar"]:disabled { background: none; color: var(--mute); border-color: var(--line); border-style: dashed; cursor: default; }
+.k-block[data-kind="frame"][aria-disabled="true"] { border-style: dashed; border-color: var(--line); cursor: default; }
+.k-handle[aria-disabled="true"] { background-image: linear-gradient(var(--mute), var(--mute)); opacity: 0.5; cursor: default; }
+.k-handle[data-kind="corner"][aria-disabled="true"] { background-image: linear-gradient(135deg, transparent 50%, var(--mute) 50%); border-color: var(--line); }

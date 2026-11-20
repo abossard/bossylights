@@ -1,10 +1,11 @@
 // One frame of the storyboard: the control, live, with what is true here and what it sends as it fires.
-import { createSignal, For, Show } from "solid-js";
+import { createSignal, For, onCleanup, Show } from "solid-js";
 import { COMMANDS } from "../controls/commands.ts";
 import type { Control } from "../controls/spec.ts";
-import { act, type Act, type Sent } from "./act.ts";
+import { act, ENDS_BY_ITSELF, type Act, type Sent } from "./act.ts";
 import type { Frame } from "./frames.ts";
 import { Live } from "./Live.tsx";
+import { inState } from "./look.ts";
 import { USES } from "./uses.ts";
 
 const MARK = { works: "works", off: "off", gone: "not there" } as const;
@@ -17,9 +18,20 @@ export function FrameView(props: { control: Control; frame: Frame; onSent: (fram
   const holds = USES[props.control.id]?.on.keyDown !== undefined;
   let swallowClick = false;
 
+  // A toggle that ends by itself is back after a while: the engine ends it, nothing is sent.
+  const ends = ENDS_BY_ITSELF[props.control.id];
+  let ending: ReturnType<typeof setTimeout> | undefined;
+  onCleanup(() => clearTimeout(ending));
+
   const play = (gesture: Act) => {
     const result = act(props.control, look(), gesture);
     setLook(result.look);
+    if (ends && result.look.label === ends.while && ending === undefined) {
+      ending = setTimeout(() => {
+        ending = undefined;
+        setLook(inState(props.control, ends.back));
+      }, ends.ms);
+    }
     if (result.sent.length === 0) return;
     setSent(result.sent);
     setFired(fired() + 1);
@@ -33,7 +45,21 @@ export function FrameView(props: { control: Control; frame: Frame; onSent: (fram
     e.preventDefault();
     if (e.type === "click") play({ is: "press" });
   };
-  // A key that holds: dark while Space is down. The click Space would make on the way up is swallowed.
+  // A key that holds: dark while Space is down. It lets go once: Space comes up anywhere, or the window loses the focus.
+  // The click Space would make on the way up is swallowed.
+  let holding = false;
+  const letGo = () => {
+    if (!holding) return;
+    holding = false;
+    window.removeEventListener("keyup", spaceUp);
+    window.removeEventListener("blur", letGo);
+    play({ is: "key", down: false });
+  };
+  const spaceUp = (e: KeyboardEvent) => e.key === " " && letGo();
+  onCleanup(() => {
+    window.removeEventListener("keyup", spaceUp);
+    window.removeEventListener("blur", letGo);
+  });
   const key = (down: boolean) => (e: KeyboardEvent) => {
     // Some browsers still click when Space comes up. That click comes before the next key goes down, or never.
     if (down) swallowClick = false;
@@ -41,7 +67,12 @@ export function FrameView(props: { control: Control; frame: Frame; onSent: (fram
     e.preventDefault();
     if (e.repeat) return;
     swallowClick = !down;
-    play({ is: "key", down });
+    if (!down) return letGo();
+    if (holding) return;
+    holding = true;
+    window.addEventListener("keyup", spaceUp);
+    window.addEventListener("blur", letGo);
+    play({ is: "key", down: true });
   };
   const click = (e: MouseEvent) => {
     if (swallowClick && e.detail === 0) {

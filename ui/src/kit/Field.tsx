@@ -1,4 +1,4 @@
-import { Show } from "solid-js";
+import { createSignal, Show } from "solid-js";
 import { Button } from "./Button.tsx";
 import { offWith, type Pressable } from "./common.ts";
 import { Status } from "./Status.tsx";
@@ -18,6 +18,10 @@ export interface TextProps extends Shared {
    */
   kind: "text" | "search";
   placeholder?: string;
+  /** Why a text does not fit: a calculation, undefined when it fits. A refused text is never sent and the old value stays. */
+  refuse?: (text: string) => string | undefined;
+  /** `enter or leave`: leaving the field saves too, as Enter does. A text that is refused then puts the old one back. */
+  saves?: "enter" | "enter or leave";
   onText: (text: string) => void;
 }
 
@@ -50,14 +54,35 @@ export function Field(props: FieldProps) {
   );
 }
 
+/**
+ * A text field. Enter saves, Escape puts the old value back. An empty field keeps the old value.
+ * A text that does not fit is refused: nothing is sent, the reason stands under the field, the old value stays.
+ */
 function Text(props: TextProps) {
+  // Why the last text was refused: the field's own state, gone with the next letter.
+  const [refused, setRefused] = createSignal<string>();
+  const save = (input: HTMLInputElement) => {
+    const text = input.value.trim();
+    const reason = text === "" || text === props.value ? undefined : props.refuse?.(text);
+    setRefused(reason);
+    if (text === "") input.value = props.value;
+    else if (reason === undefined && text !== props.value) props.onText(text);
+  };
   const key = (e: KeyboardEvent & { currentTarget: HTMLInputElement }) => {
     if (props.kind === "search") return;
-    if (e.key === "Enter") props.onText(e.currentTarget.value);
-    if (e.key === "Escape") e.currentTarget.value = props.value;
+    if (e.key === "Enter") save(e.currentTarget);
+    if (e.key === "Escape") {
+      e.currentTarget.value = props.value;
+      setRefused(undefined);
+    }
+  };
+  const leave = (e: FocusEvent & { currentTarget: HTMLInputElement }) => {
+    if (props.kind === "search" || props.saves !== "enter or leave") return;
+    save(e.currentTarget);
+    if (refused() !== undefined) e.currentTarget.value = props.value;
   };
   return (
-    <label class="k-field">
+    <label class="k-field" classList={{ "is-refused": refused() !== undefined }}>
       <span class="k-field-label">{props.label}</span>
       <input
         class="k-input"
@@ -65,10 +90,12 @@ function Text(props: TextProps) {
         value={props.value}
         placeholder={props.placeholder ?? ""}
         disabled={props.off !== undefined}
-        onInput={(e) => props.kind === "search" && props.onText(e.currentTarget.value)}
+        aria-invalid={refused() !== undefined}
+        onInput={(e) => (props.kind === "search" ? props.onText(e.currentTarget.value) : setRefused(undefined))}
         onKeyDown={key}
+        onBlur={leave}
       />
-      <Show when={props.off}>{(reason) => <span class="k-reason">{reason()}</span>}</Show>
+      <Show when={props.off ?? refused()}>{(reason) => <span class="k-reason">{reason()}</span>}</Show>
     </label>
   );
 }

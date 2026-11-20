@@ -55,7 +55,7 @@ const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 /** States that are on, by their name. */
 const ON = /^(on|selected|open|shown|picked|playing|in use|set|may use|muted|flashing|form shown|running|latched|held|something runs|menu open|unfolded)$/i;
 /** Words on a toggle that say it is on. */
-const ON_WORDS = /^(Stop|Done|Testing|Fold back|Lights up|Cancel|Sent|Continue)/;
+const ON_WORDS = /^(Stop|Done|Testing|Listening|Fold back|Lights up|Cancel|Sent|Continue)/;
 /** States that are the usual look. */
 const USUAL = /^(plain|idle|there|both|free|works|off|left alone|plays|folded|nothing runs|at a value|has a step|something held|one selected|not picked|ready|not started|pad on)$/i;
 

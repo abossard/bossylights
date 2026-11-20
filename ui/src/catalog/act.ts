@@ -4,6 +4,7 @@ import type { CommandName } from "../controls/commands.ts";
 import { MACHINES, step, type Machine } from "../controls/machines.ts";
 import type { Control } from "../controls/spec.ts";
 import { inState, type Look } from "./look.ts";
+import { place, placed, type Move } from "./place.ts";
 import { USES, type Gesture, type Use } from "./uses.ts";
 
 /** A gesture, with what it carries. */
@@ -20,7 +21,10 @@ export type Act =
   | { is: "text"; text: string }
   | { is: "step"; by: -1 | 1 }
   | { is: "lift" }
-  | { is: "drop" }
+  /** `by`: how far it went, for a control that is placed. */
+  | { is: "drop"; by?: Move }
+  /** An arrow key on a control that is placed: one step, with Shift one step wider or narrower. */
+  | { is: "nudge"; by: Move }
   | { is: "cancel" }
   | { is: "remove" };
 
@@ -53,6 +57,7 @@ function gestureOf(act: Act): Gesture | undefined {
     case "text":
     case "step":
     case "remove":
+    case "nudge":
       return undefined;
   }
 }
@@ -86,7 +91,7 @@ function machineAct(control: Control, look: Look, use: Use, events: readonly str
     for (const name of next.sends ?? []) sent.push({ name, value: name === "Blackout" ? `on: ${at !== "off"}` : "" });
     // A lamp sends its own command. A drop sends the command of what was dragged, once.
     if (use.machine === "indicator" && event === "press" && first) sent.push({ name: first, value: `on: ${at === "ready" || at === "on"}` });
-    if (use.machine === "drag" && from === "dragging" && event === "up" && first) sent.push({ name: first, value: "where it landed" });
+    if (use.machine === "drag" && from === "dragging" && event === "up" && first) sent.push({ name: first, value: placed(control.id) ? look.sub : "where it landed" });
   }
   const shows = use.shows?.[at];
   // Not listed: the look stays. Empty: back to plain, with what the gesture itself changed.
@@ -126,17 +131,31 @@ function plainAct(control: Control, look: Look, gesture: Act): Result {
       const name = control.sends.find((n) => n.startsWith("Remove")) ?? first;
       return { look, sent: name ? [{ name, value: "" }] : [] };
     }
+    case "nudge": {
+      const to = place(control.id, look.sub, gesture.by);
+      return to === undefined || to === look.sub ? { look, sent: [] } : { look: { ...look, sub: to }, sent: send(to) };
+    }
+    // Where a placed control lands. The drag machine sends it.
+    case "drop": {
+      const to = gesture.by && look.at === "dragging" ? place(control.id, look.sub, gesture.by) : undefined;
+      return { look: to === undefined ? look : { ...look, sub: to }, sent: [] };
+    }
     case "release":
     case "key":
     case "lift":
-    case "drop":
     case "cancel":
       return { look, sent: [] };
   }
 }
 
+/** A toggle that ends by itself: a press while it runs does nothing, after `ms` it is back. Data. */
+export const ENDS_BY_ITSELF: Record<string, { while: string; back: string; ms: number }> = {
+  "inout.out.test": { while: "Testing", back: "Test", ms: 3000 },
+};
+
 /** A toggle goes to the other of its first two states. With two commands the first turns it on, the second off. */
 function flip(control: Control, look: Look): Result {
+  if (ENDS_BY_ITSELF[control.id]?.while === look.label) return { look, sent: [] };
   const other = control.states
     .slice(0, 2)
     .map((state) => inState(control, state))

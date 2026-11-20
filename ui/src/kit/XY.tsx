@@ -71,6 +71,7 @@ export function XY(props: XYProps) {
         classList={{ "is-held": props.held === true, "is-off": props.off !== undefined }}
         role="application"
         tabindex={props.off === undefined ? 0 : -1}
+        aria-disabled={props.off !== undefined}
         aria-label={`${reads()}. Arrows move`}
         onPointerDown={press}
         onPointerMove={(e) => down() && follow(e)}

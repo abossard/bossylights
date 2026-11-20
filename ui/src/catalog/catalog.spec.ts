@@ -195,7 +195,7 @@ test("a light dragged in the universe grid sends its new address once, when drop
   await expect(light).toHaveAttribute("data-standing", "lifted");
   await expect(sent(page, "alone")).toHaveText("Nothing sent yet");
   await page.mouse.up();
-  await expect(sent(page, "alone")).toHaveText("SetAddress where it landed");
+  await expect(sent(page, "alone")).toHaveText("SetAddress 20 to 26");
   await expect(light).toHaveAttribute("data-standing", "plain");
 });
 
@@ -216,3 +216,210 @@ test("a rating and a comment stay, show in the index and come out in the export"
   await page.goto("/#/");
   await expect(page.locator("[data-export]")).toHaveValue(/\| Pad \| `kit:Pad` \| Kit \| 5 of 5 \|/);
 });
+
+// ---- the review of the catalog (#188): each row a check, red before its fix
+
+const away = [
+  ["Space comes up with the focus outside the frame", async (page: Page) => {
+    await page.getByLabel("What works, what does not?").focus();
+    await page.keyboard.up("Space");
+  }],
+  ["the window loses the focus", async (page: Page) => {
+    await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+  }],
+] as const;
+for (const [how, letGo] of away) {
+  test(`UX-01 Blackout held by Space lets go once when ${how}`, async ({ page }) => {
+    await page.goto("/#/top.blackout");
+    const button = frame(page, "alone").getByRole("button");
+    await button.focus();
+    await page.keyboard.down("Space");
+    await expect(sent(page, "alone")).toHaveText("Blackout on: true");
+    await letGo(page);
+    await expect(button).toHaveText("Blackout");
+    await expect(sent(page, "alone")).toHaveText("Blackout on: false");
+    await expect(page.locator("[data-log] li")).toHaveCount(2);
+  });
+}
+
+test("UX-02 every control that is off without the engine looks off and says why", async ({ page }) => {
+  const live: string[] = [];
+  for (const control of CONTROLS) {
+    const cell = control.cells["no-engine"];
+    if (cell.is !== "off") continue;
+    await page.goto(`/#/${control.id}`);
+    const stage = frame(page, "no-engine").locator(".c-stage");
+    await expect(stage).toBeVisible();
+    const enabled = await stage.evaluate((el) => [...el.querySelectorAll<HTMLElement>("button, input, [tabindex]")].filter((t) => !(t as HTMLButtonElement).disabled && t.getAttribute("aria-disabled") !== "true").length);
+    const text = await stage.innerText();
+    if (enabled > 0 || !text.includes(cell.says)) live.push(`${control.id}: ${enabled} enabled, "${text.replace(/\s+/g, " ")}"`);
+  }
+  expect(live).toEqual([]);
+});
+
+// [control, keys, readout after, command sent]
+const placings = [
+  ["patch.grid.light", ["ArrowRight"], "18 to 24", "SetAddress 18 to 24"],
+  ["patch.grid.light", ["ArrowDown"], "49 to 55", "SetAddress 49 to 55"],
+  ["patch.grid.light", ["ArrowLeft", "ArrowLeft"], "15 to 21", "SetAddress 15 to 21"],
+  ["looks.seq.bar", ["ArrowRight"], "At beat 1¼, 1 beat", "SetSequenceEntry At beat 1¼, 1 beat"],
+  ["looks.seq.bar", ["Shift+ArrowRight"], "At beat 1, 1¼ beats", "SetSequenceEntry At beat 1, 1¼ beats"],
+  ["looks.seq.bar", ["Shift+ArrowLeft", "Shift+ArrowLeft", "Shift+ArrowLeft", "Shift+ArrowLeft"], "At beat 1, ¼ beat", "SetSequenceEntry At beat 1, ¼ beat"],
+] as const;
+for (const [id, keys, readout, command] of placings) {
+  test(`UX-05 ${id} moves by the keyboard: ${keys.join(", ")}`, async ({ page }) => {
+    await page.goto(`/#/${id}`);
+    const bar = frame(page, "alone").getByRole("button");
+    await bar.focus();
+    for (const key of keys) await page.keyboard.press(key);
+    await expect(bar).toContainText(readout);
+    await expect(sent(page, "alone")).toHaveText(command);
+  });
+}
+
+// [control, px dragged to the right, readout after]
+const drags = [
+  ["patch.grid.light", 80, "21 to 27"],
+  ["patch.grid.light", -80, "13 to 19"],
+  ["looks.seq.bar", 80, "At beat 2, 1 beat"],
+] as const;
+for (const [id, dx, readout] of drags) {
+  test(`UX-05 ${id} dragged ${dx} px shows and sends where it landed`, async ({ page }) => {
+    await page.goto(`/#/${id}`);
+    const bar = frame(page, "alone").getByRole("button");
+    const box = await bar.boundingBox();
+    if (!box) throw new Error("the bar is not on screen");
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 + dx, box.y + box.height / 2, { steps: 5 });
+    await page.mouse.up();
+    await expect(bar).toContainText(readout);
+    await expect(sent(page, "alone")).toContainText(readout);
+  });
+}
+
+// [control, the words before, the words while on, the command of the first press]
+const toggles = [
+  ["inout.out.test", "Test", "Testing", "TestOutput on: true"],
+  ["inout.osc.on", "Off", "Listening", "SetOsc on: true"],
+] as const;
+for (const [id, before, on, command] of toggles) {
+  test(`UX-07 ${id} starts off and its first press turns it on`, async ({ page }) => {
+    await page.goto(`/#/${id}`);
+    const button = frame(page, "alone").getByRole("button");
+    await expect(button).toHaveText(before);
+    await expect(button).toHaveAttribute("aria-pressed", "false");
+    await button.click();
+    await expect(button).toHaveText(on);
+    await expect(button).toHaveAttribute("aria-pressed", "true");
+    await expect(sent(page, "alone")).toHaveText(command);
+  });
+}
+
+test("UX-07 a test of an output ends by itself after three seconds, a press while it runs does nothing", async ({ page }) => {
+  await page.goto("/#/inout.out.test");
+  const button = frame(page, "alone").getByRole("button");
+  await button.click();
+  await expect(button).toHaveText("Testing");
+  await button.click();
+  await expect(button).toHaveText("Testing");
+  await expect(page.locator("[data-log] li")).toHaveCount(1);
+  await expect(button).toHaveText("Test", { timeout: 5000 });
+  await expect(page.locator("[data-log] li")).toHaveCount(1);
+});
+
+test("UX-07 OSC goes back off on the second press", async ({ page }) => {
+  await page.goto("/#/inout.osc.on");
+  const button = frame(page, "alone").getByRole("button");
+  await button.click();
+  await button.click();
+  await expect(button).toHaveText("Off");
+  await expect(sent(page, "alone")).toHaveText("SetOsc on: false");
+});
+
+for (const id of ["top.workspaces", "console.speed", "inout.tempo.feed", "looks.pattern.shape"]) {
+  test(`UX-08 arrows keep moving in ${id}: the picked option has the focus`, async ({ page }) => {
+    await page.goto(`/#/${id}`);
+    await frame(page, "alone").locator('.k-pick-opt[tabindex="0"]').focus();
+    const focused = () => page.evaluate(() => (document.activeElement?.classList.contains("k-pick-opt") ? document.activeElement.textContent : document.activeElement?.tagName));
+    const start = await focused();
+    await page.keyboard.press("ArrowRight");
+    const once = await focused();
+    await page.keyboard.press("ArrowRight");
+    const twice = await focused();
+    expect(new Set([start, once, twice]).size).toBe(3);
+    await expect(frame(page, "alone").locator('.k-pick-opt[tabindex="0"]')).toBeFocused();
+  });
+}
+
+// [situation, armed or writing]
+const recording = [
+  ["live-on", "armed"],
+  ["lock", "armed"],
+  ["no-song", "armed"],
+  ["recording", "writing"],
+] as const;
+for (const [key, is] of recording) {
+  test(`UX-09 the Recording lamp is red only while it writes: ${key}`, async ({ page }) => {
+    await page.goto("/#/top.indicator.recording");
+    const button = frame(page, key).getByRole("button");
+    await expect(button).toHaveAttribute("aria-pressed", "true");
+    if (is === "armed") {
+      await expect(button.locator(".k-lamp")).not.toHaveAttribute("data-colour", "danger");
+      await expect(button).toContainText("Armed");
+    } else await expect(button.locator(".k-lamp")).toHaveAttribute("data-colour", "danger");
+  });
+}
+
+test("UX-09 the Now strip follows the situation: its lanes and the two decks", async ({ page }) => {
+  await page.goto("/#/top.now-strip");
+  const says = async (key: string) => (await frame(page, key).locator(".c-stage").innerText()).replace(/\s+/g, " ");
+  const texts = { usual: await says("alone"), song: await says("song"), autopilot: await says("autopilot"), empty: await says("empty"), noSong: await says("no-song") };
+  expect(new Set(Object.values(texts)).size).toBe(Object.keys(texts).length);
+  expect(texts.song).toMatch(/1\s?Playing/);
+  expect(texts.autopilot).not.toMatch(/Autopilot\s?nothing/);
+  expect(texts.noSong).toMatch(/1\s?Stopped/);
+});
+
+// [control, frame, the reason shown on the control]
+const refusals = [
+  ["patch.panel.add", "state:off: Universe 2 is already used", "Universe 2 is already used"],
+  ["patch.add.next", "state:off: Pick a free address", "Pick a free address"],
+] as const;
+for (const [id, key, reason] of refusals) {
+  test(`UX-11 ${id} is off and says why: ${reason}`, async ({ page }) => {
+    await page.goto(`/#/${id}`);
+    const control = frame(page, key).locator(".c-stage button").first();
+    await expect(control).toBeDisabled();
+    await expect(control).toContainText(reason);
+  });
+}
+
+// [control, typed, how it is left, sent, the value it keeps, the reason]
+const typed = [
+  ["inout.osc.port", "Banana", "Enter", "Nothing sent yet", "9000", "A port is a number from 1 to 65535"],
+  ["inout.osc.port", "", "Enter", "Nothing sent yet", "9000", ""],
+  ["inout.osc.port", "9001", "Tab", "SetOsc 9001", "9001", ""],
+  ["inout.osc.port", "9001", "Enter", "SetOsc 9001", "9001", ""],
+  ["inout.out.universes", "Banana", "Enter", "Nothing sent yet", "2 to 9", "One universe, as 1, or a range, as 2 to 9"],
+  ["inout.out.universes", "9 to 2", "Tab", "Nothing sent yet", "2 to 9", "One universe, as 1, or a range, as 2 to 9"],
+  ["inout.out.universes", "3", "Tab", "SetOutput 3", "3", ""],
+  ["inout.mapping.message", "Banana", "Enter", "Nothing sent yet", "Note 36", "A note, as Note 36, or a controller, as CC 48"],
+  ["inout.mapping.message", "CC 48", "Tab", "UpdateMapping CC 48", "CC 48", ""],
+  ["inout.mapping.message", "", "Tab", "Nothing sent yet", "Note 36", ""],
+  ["looks.name", "", "Enter", "Nothing sent yet", "Warm wash", ""],
+] as const;
+for (const [id, text, leave, command, keeps, reason] of typed) {
+  test(`UX-31 ${id}: "${text}" and ${leave}`, async ({ page }) => {
+    await page.goto(`/#/${id}`);
+    const field = frame(page, "alone").getByRole("textbox");
+    await field.fill(text);
+    await field.press(leave);
+    await expect(sent(page, "alone")).toHaveText(command);
+    if (reason) {
+      await expect(frame(page, "alone").locator(".c-stage")).toContainText(reason);
+      await expect(field).toHaveAttribute("aria-invalid", "true");
+    } else await expect(frame(page, "alone").locator(".c-stage .k-reason")).toHaveCount(0);
+    if (leave === "Tab" || !reason) await expect(field).toHaveValue(keeps);
+  });
+}

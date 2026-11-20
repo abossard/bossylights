@@ -22,6 +22,8 @@ const indicator = (
   command: CommandName,
   does: string,
   cells: NonNullable<Parameters<typeof control>[0]["in"]>,
+  /** States it shows beyond ready, on and off. */
+  more: readonly string[] = [],
 ): Control =>
   control({
     id: `top.indicator.${id}`,
@@ -42,7 +44,7 @@ const indicator = (
     feedback: { screen: "The lamp changes when the engine reports it: paper on, mute ready, empty and struck through off" },
     undo: no("Press it again"),
     machine: "indicator",
-    states: ["ready", "on", "off"],
+    states: ["ready", "on", "off", ...more],
   });
 
 export const TOP: Control[] = [
@@ -86,7 +88,7 @@ export const TOP: Control[] = [
     recording: works("Turns recording off. The pass being written ends and is kept"),
     "no-song": works("On, and armed: it writes when a song starts. The lamp is red only while it writes"),
     empty: works("Works. With no song analysed there is no row to write into"),
-  }),
+  }, ["armed"]),
   indicator("autopilot", "Autopilot", "SetAutopilot", "While LIVE is on, the autopilot plays its picks. The same state as the Autopilot button in Running", {
     autopilot: works("Turns the autopilot off. Its looks end, what was underneath shows"),
     empty: works("Works. No looks to pick from: it plays only Never dark, if set"),
@@ -306,7 +308,7 @@ export const TOP: Control[] = [
       "no-engine": works("Works. The lanes show the last the engine sent and stand still"),
     },
     learn: no("The Console tab is the control to map"),
-    states: ["something runs", "nothing runs"],
+    states: ["something runs", "nothing runs", "a song plays", "the autopilot plays", "no song plays"],
   }),
   control({
     id: "top.redo",

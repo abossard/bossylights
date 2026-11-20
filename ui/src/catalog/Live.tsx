@@ -1,12 +1,15 @@
 // One control, live: the primitive of its row, drawn from its recipe and a `Look`, its gestures reported as acts.
 // The only place that turns a row into a primitive with props.
-import type { JSX } from "solid-js";
+import { createMemo, type JSX } from "solid-js";
 import type { Control } from "../controls/spec.ts";
 import { Block, Button, Fader, Field, Handle, Item, named, offWith, Pad, Picker, XY, type PickOption, type StatusProps } from "../kit/index.ts";
 import type { Act } from "./act.ts";
 import { linesOf, recipe } from "./compose.ts";
 import type { Look } from "./look.ts";
 import { gobos } from "./drawings.tsx";
+import { dragged as stepsOf, placed, resizes } from "./place.ts";
+import { NOW } from "./samples.ts";
+import { SHAPES } from "./shapes.ts";
 import { USES } from "./uses.ts";
 
 /** A press that comes up within this is short. Longer, it was a hold (the pad machine). */
@@ -16,6 +19,10 @@ const oneOf = <const T extends string>(value: string | undefined, all: readonly 
 const oneOrNone = <const T extends string>(value: string | undefined, all: readonly T[]): T | undefined => all.find((v) => v === value);
 /** `{ key: value }` when there is a value: an optional prop is left out, never undefined. */
 const some = <K extends string, V>(key: K, value: V | undefined | ""): { [P in K]?: V } => (value === undefined || value === "" ? {} : ({ [key]: value } as { [P in K]?: V }));
+
+/** Two lists of options say the same: a picker keeps the old objects, so the option with the focus stays. */
+const sameOptions = (a: readonly PickOption[], b: readonly PickOption[]) =>
+  a.length === b.length && a.every((o, i) => o.name === b[i]?.name && o.off === b[i]?.off && o.marked === b[i]?.marked && o.sub === b[i]?.sub);
 
 /** The lamp of the menu bar item, by the name of its look. */
 const LAMPS: Record<string, StatusProps> = {
@@ -58,7 +65,20 @@ export function Live(props: { control: Control; look: Look; act: (act: Act) => v
     ...some("fires", oneOrNone(r.props.fires, ["down"])),
     ...some("size", oneOrNone(r.props.size, ["small", "large"])),
   });
-  const options = (): PickOption[] => named(l().options);
+  const options = createMemo((): PickOption[] => named(l().options), [], { equals: sameOptions });
+  const tabs = createMemo(() => options().map((o, i) => (l().variant === "marked" && i === 1 ? { ...o, marked: true } : o)), [], { equals: sameOptions });
+  const cards = createMemo(() => options().map((o) => ({ ...o, ...offWith(sideOff(o.name)) })), [], { equals: sameOptions });
+  /** A bar that is placed: a drag and the arrows move it, its readout says where. */
+  const placing = () =>
+    placed(c.id)
+      ? {
+          onDrop: (dx: number, dy: number) => props.act({ is: "drop", by: stepsOf(dx, dy) }),
+          onNudge: (across: number, down: number) => props.act({ is: "nudge", by: { across, down, wider: 0 } }),
+          ...(resizes(c.id) ? { onResize: (wider: number) => props.act({ is: "nudge", by: { across: 0, down: 0, wider } }) } : {}),
+        }
+      : {};
+  /** Leaving the field saves where the row says so. */
+  const saves = c.gestures.keyboard.includes("leaving the field saves") ? "enter or leave" : "enter";
 
   switch (c.kit) {
     case "Button.action":
@@ -93,18 +113,18 @@ export function Live(props: { control: Control; look: Look; act: (act: Act) => v
     case "XY.colour":
       return <XY kind={c.kit === "XY.colour" ? "colour" : "position"} label={l().label} across={l().value} up={l().value2} held={l().on} {...off()} onChange={(value, value2) => props.act({ is: "set", value, value2 })} />;
     case "Picker.tabs":
-      return <Picker kind="tabs" label={c.name} options={options().map((o, i) => (l().variant === "marked" && i === 1 ? { ...o, marked: true } : o))} picked={l().picked} onPick={pick} />;
+      return <Picker kind="tabs" label={c.name} options={tabs()} picked={l().picked} {...off()} onPick={pick} />;
     case "Picker.segments":
       return <Picker kind="segments" label={c.name} options={options()} picked={l().picked} {...some("size", oneOrNone(r.props.size, ["small"]))} {...some("fires", oneOrNone(r.props.fires, ["down"]))} {...off()} onPick={pick} />;
     case "Picker.pictures":
       return <Picker kind="pictures" label={c.name} options={gobos(l().options)} picked={l().picked} {...off()} onPick={pick} />;
     case "Picker.cards":
-      return <Picker kind="cards" label={c.name} options={options().map((o) => ({ ...o, ...offWith(sideOff(o.name)) }))} picked={l().picked} onPick={pick} />;
+      return <Picker kind="cards" label={c.name} options={cards()} picked={l().picked} {...off()} onPick={pick} />;
     case "Picker.list":
       return <Picker kind="list" label={l().label} options={options()} picked={l().picked} {...off()} onPick={pick} />;
     case "Field.text":
     case "Field.search":
-      return <Field kind={c.kit === "Field.search" ? "search" : "text"} label={l().label} value={l().picked} {...off()} onText={(text) => props.act({ is: "text", text })} />;
+      return <Field kind={c.kit === "Field.search" ? "search" : "text"} label={l().label} value={l().picked} saves={saves} {...some("refuse", SHAPES[c.id])} {...off()} onText={(text) => props.act({ is: "text", text })} />;
     case "Field.steps":
       return (
         <Field
@@ -151,28 +171,31 @@ export function Live(props: { control: Control; look: Look; act: (act: Act) => v
     case "Item.entry":
       return <Item kind="entry" title={l().label} {...some("sub", l().sub)} {...some("lead", LAMPS[l().variant])} standing={standing()} {...off()} onPress={press} />;
     case "Item.chip":
-      return <Item kind="chip" title={l().label} onRemove={() => props.act({ is: "remove" })} />;
+      return <Item kind="chip" title={l().label} {...off()} onRemove={() => props.act({ is: "remove" })} />;
     case "Item.strip": {
       const lane = (name: string, colour: "manual" | "show" | "autopilot", runs: string): StatusProps => ({ kind: "pill", name, label: runs || "nothing", colour, fill: runs ? "solid" : "dashed" });
-      const lanes = () => [lane("Manual", "manual", l().on ? "Warm wash" : ""), lane("Show", "show", l().on ? "Chase L-R" : ""), lane("Autopilot", "autopilot", "")];
+      const now = () => NOW[l().variant] ?? NOW[""];
+      const decks = (): StatusProps[] =>
+        (now()?.decks ?? []).map((deck, i) => ({ kind: "pill", name: String(i + 1), label: deck.song ? `${deck.state}: ${deck.song}` : deck.state, fill: deck.state === "Playing" ? "solid" : deck.state === "Cued" ? "outline" : "dashed" }));
+      const lanes = () => [lane("Manual", "manual", now()?.manual ?? ""), lane("Show", "show", now()?.show ?? ""), lane("Autopilot", "autopilot", now()?.autopilot ?? "")];
       return (
         <Item
           kind="strip"
           title="Now"
           lead={{ kind: "flag", label: "NOW" }}
-          marks={lanes()}
-          says={`Now strip. ${lanes().map((s) => `${s.name}: ${s.label}`).join(". ")}. Opens the Console`}
+          marks={[...lanes(), ...decks()]}
+          says={`Now strip. ${lanes().map((s) => `${s.name}: ${s.label}`).join(". ")}. ${decks().map((d) => `Deck ${d.name}: ${d.label}`).join(". ")}. Opens the Console`}
           {...off()}
           onPress={press}
         />
       );
     }
     case "Block.bar":
-      return <Block kind="bar" label={l().label} {...some("sub", l().sub)} colour={l().colour} standing={standing()} onPress={press} {...dragged()} />;
+      return <Block kind="bar" label={l().label} {...some("sub", l().sub)} colour={l().colour} standing={standing()} {...off()} onPress={press} {...dragged()} {...placing()} />;
     case "Block.frame":
-      return <Block kind="frame" label={l().label} {...some("sub", l().sub)} standing={standing()} onLift={lift} onDrop={drop} onCancel={cancel} onNudge={nudge} onResize={nudge} onRemove={() => props.act({ is: "remove" })} />;
+      return <Block kind="frame" label={l().label} {...some("sub", l().sub)} standing={standing()} {...off()} onLift={lift} onDrop={drop} onCancel={cancel} onNudge={nudge} onResize={nudge} onRemove={() => props.act({ is: "remove" })} />;
     case "Handle.edge":
     case "Handle.corner":
-      return <Handle kind={c.kit === "Handle.corner" ? "corner" : "edge"} label={l().label} onLift={lift} onDrop={drop} onCancel={cancel} onNudge={nudge} />;
+      return <Handle kind={c.kit === "Handle.corner" ? "corner" : "edge"} label={l().label} {...off()} onLift={lift} onDrop={drop} onCancel={cancel} onNudge={nudge} />;
   }
 }

@@ -84,7 +84,7 @@ export const SAMPLES: Record<string, Sample> = {
   "looks.step.dimmer": { label: "Dimmer" },
   "looks.step.spin": { label: "Spin" },
   "looks.seq.item": { label: "Warm wash", sub: "1 beat" },
-  "looks.seq.bar": { label: "Warm wash", sub: "1 beat" },
+  "looks.seq.bar": { label: "Warm wash", sub: "At beat 1, 1 beat" },
   "looks.seq.bar.edge": { label: "End of Warm wash" },
   "looks.seq.width": { label: "Width", sub: "1 beat", options: ["Narrower", "Wider"] },
   "looks.seq.speed": { picked: "×1" },
@@ -143,6 +143,9 @@ export const SAMPLES: Record<string, Sample> = {
   "inout.out.rate": { picked: "40" },
   "inout.audio.input": { label: "Listens to", options: ["Built-in input", "USB audio interface", "Loopback"] },
   "inout.osc.port": { label: "Port", picked: "9000" },
+  // A toggle starts at its off state: its first press turns it on.
+  "inout.out.test": { label: "Test" },
+  "inout.osc.on": { label: "Off" },
   // ---- explainers
   "how.pad": { label: "Warm wash", variant: "idle" },
   "how.walk": { options: ["Press", "Command", "Engine", "Lights"] },
@@ -153,6 +156,16 @@ export const SAMPLES: Record<string, Sample> = {
 
 /** Looks of states that are written down, where the rules of `look.ts` would guess. */
 export const STATE_LOOKS: Record<string, Record<string, Sample>> = {
+  // On while LIVE is on, red only while it writes into a song.
+  "top.indicator.recording": { armed: { on: true, colour: "plain", sub: "Armed", at: "on" } },
+  // Its lanes and decks, by `NOW`.
+  "top.now-strip": {
+    "something runs": { on: true, variant: "" },
+    "nothing runs": { on: false, variant: "nothing" },
+    "a song plays": { on: true, variant: "song" },
+    "the autopilot plays": { on: true, variant: "autopilot" },
+    "no song plays": { on: true, variant: "no song" },
+  },
   "top.live": { off: { on: false, label: "LIVE off" }, on: { on: true, label: "LIVE on" } },
   "top.trouble": {
     "no lights": { label: "No lights connected" },
@@ -187,16 +200,43 @@ export const STATE_LOOKS: Record<string, Record<string, Sample>> = {
 export const SITUATION_STATE: Record<string, Partial<Record<SituationId, string>>> = {
   "top.live": { "live-on": "on", lock: "on", recording: "on" },
   "top.indicator.dj": { "live-on": "on", lock: "on", recording: "on", song: "on" },
-  "top.indicator.recording": { "live-on": "on", lock: "on", recording: "on" },
+  "top.indicator.recording": { "live-on": "armed", lock: "armed", recording: "on", "no-song": "armed" },
   "top.indicator.autopilot": { "live-on": "on", lock: "on", recording: "on", autopilot: "on" },
   "top.indicator.lock": { "live-on": "on", lock: "on", recording: "on" },
   "console.autopilot.on": { "live-on": "on", lock: "on", recording: "on", autopilot: "on" },
   "top.trouble": { "no-engine": "no engine", empty: "no lights", "output-lost": "output lost" },
   "top.learn": { learn: "pick" },
-  "top.now-strip": { empty: "nothing runs" },
+  "top.now-strip": { empty: "nothing runs", song: "a song plays", recording: "a song plays", autopilot: "the autopilot plays", "no-song": "no song plays" },
   "console.running.release-all": { holding: "something held" },
   "console.pad": { holding: "pad off, still held", autopilot: "run by the autopilot", song: "run by the show" },
   "console.xy": { holding: "held" },
   "console.edit-surface": { empty: "primary on an empty page" },
   "menubar.item": { "live-on": "LIVE on", lock: "LIVE on", recording: "LIVE on", "no-engine": "not connected", empty: "trouble", "output-lost": "trouble" },
+};
+
+/** A deck of the DJ software as the Now strip shows it: its state in a word and the song, title and artist. */
+export interface Deck {
+  state: "Playing" | "Cued" | "Stopped";
+  song: string;
+}
+
+/** What runs in the three lanes of the Now strip, and its two decks. Empty: nothing runs there. */
+export interface Now {
+  manual: string;
+  show: string;
+  autopilot: string;
+  decks: readonly [Deck, Deck];
+}
+
+const NIGHT_DRIVE = "Night drive, Kaito";
+const SUNRISE = "Sunrise, Mira";
+const STOPPED: Deck = { state: "Stopped", song: "" };
+
+/** The Now strip by the variant of its look. */
+export const NOW: Record<string, Now> = {
+  "": { manual: "Warm wash", show: "Chase L-R", autopilot: "", decks: [{ state: "Playing", song: NIGHT_DRIVE }, { state: "Cued", song: SUNRISE }] },
+  nothing: { manual: "", show: "", autopilot: "", decks: [STOPPED, STOPPED] },
+  song: { manual: "", show: "Drop", autopilot: "", decks: [{ state: "Playing", song: NIGHT_DRIVE }, STOPPED] },
+  autopilot: { manual: "", show: "", autopilot: "Slow sweep", decks: [{ state: "Playing", song: NIGHT_DRIVE }, STOPPED] },
+  "no song": { manual: "Warm wash", show: "", autopilot: "", decks: [STOPPED, { state: "Cued", song: SUNRISE }] },
 };

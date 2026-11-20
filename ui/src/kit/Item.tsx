@@ -1,6 +1,6 @@
 import { For, Show } from "solid-js";
 import { Button } from "./Button.tsx";
-import type { Colour, Pressable, Standing } from "./common.ts";
+import { offWith, type Colour, type Pressable, type Standing } from "./common.ts";
 import { dragHandlers } from "./dragging.ts";
 import { Status, type StatusProps } from "./Status.tsx";
 
@@ -77,7 +77,7 @@ export function Item(props: ItemProps) {
       fallback={
         <span class="k-item" {...shared()}>
           {inside()}
-          <Button label={`Take ${props.title} out`} glyph="×" onPress={() => props.onRemove?.()} />
+          <Button label={`Take ${props.title} out`} glyph="×" {...offWith(props.off)} onPress={() => props.onRemove?.()} />
         </span>
       }
     >

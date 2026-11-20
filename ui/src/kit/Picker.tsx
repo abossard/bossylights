@@ -65,11 +65,14 @@ type Inner = PickerProps & { open: readonly string[] };
 /** Tabs, segments and cards: every option is on screen. */
 function Group(props: Inner) {
   const tabs = () => props.kind === "tabs";
-  const key = (e: KeyboardEvent) => {
+  const key = (e: KeyboardEvent & { currentTarget: HTMLElement }) => {
     const next = neighbour(props.open, props.picked, e.key);
     if (next === undefined) return;
     e.preventDefault();
     props.onPick(next);
+    // The picked option takes the focus: the next arrow goes on from there.
+    const at = props.options.findIndex((o) => o.name === next);
+    e.currentTarget.querySelectorAll<HTMLElement>(":scope > .k-pick-opt")[at]?.focus();
   };
   return (
     <div class="k-pick-wrap">
