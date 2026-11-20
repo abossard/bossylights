@@ -150,6 +150,7 @@ For a channel with value `v`, dark `d`, following modifiers with levels `m1..mn`
 - Blackout at 0 gives `d` exactly. For a shutter, `d` is the first byte of its Closed range.
 - A **jump** channel (`fade` clear) follows all or nothing: `d` when the combined level is 0, else `v`. A shutter on Master at 50% therefore never passes through a strobe range.
 - A control channel cannot follow a modifier (refused at patch), so there are no cycles.
+- **Open, owner (cm-two-dimmers, 2026-11-21): Master is a ceiling, not a multiplier.** A dimmer at 70% under Master 50% sends 50%, at Master 100% it sends 70%. The formula above stays for Blackout and the virtual dimmers. Which dimmer Master caps on a fixture with head dimmers and a shared dimmer, and what it does on a fixture with no dimmer, waits for the owner (cm-master-ceiling). T5 builds the answer.
 - Master and the virtual dimmers apply to the winner and the raw hold. Identify is written after them and before Blackout, so a low Master never hides it, and Blackout always does. A raw hold on one byte of a pair under Master shows the assembled, scaled word. Explain gives both the held byte and the sent one.
 
 Default rules, from the fixture file (cx-3: unknown channels start independent):
@@ -158,7 +159,7 @@ Default rules, from the fixture file (cx-3: unknown channels start independent):
 |---|---|---|---|
 | Dimmer | yes | yes | 0, or the closed value of a reverse dimmer |
 | Emitters (R, G, B, White, Amber, UV, Lime, Indigo) that **no dimmer channel controls** | yes | yes | 0 |
-| Emitters that a dimmer controls (the dimmer is in the same head, or is the fixture's shared dimmer and the emitter is in no head of its own) | no | no | the dimmer carries it |
+| Emitters that a dimmer controls (the dimmer is in the same head, or is the fixture's shared dimmer and the emitter's head has no dimmer of its own) | no | no | the dimmer carries it |
 | C, M, Y on a fixture without a dimmer | yes | yes | 255 (subtractive) |
 | Shutter | no | yes | the first byte of its Closed range. A shutter with no Closed range does not follow Blackout |
 | Strobe, pan, tilt, zoom, focus, iris, wheels, prism | no | no | |
@@ -181,7 +182,7 @@ The tick sees bytes and 16-bit pairs. Everything else is the API and the Rig (ch
 | `Byte` | one | every channel, always |
 | `Word` | coarse, fine | a Fine channel and the first coarse channel of the same function with no fine yet, adjacent or not (today's `join` scans the mode) |
 | `Xy` | pan word or byte, tilt word or byte | Pan and Tilt functions, degrees from the mode |
-| `Rgb`, `Rgbw`, `Rgba`, `Cmy`, `Cmyk` | the colour channels | R, G, B, White, Amber, C, M, Y, K functions in one mode or head |
+| `Rgb`, `Rgbw`, `Rgba`, `Cmy` | the colour channels | R, G, B, White, Amber, C, M, Y functions in one mode or head. No `Cmyk` (owner, cm-cmyk, 2026-11-21): no fixture definition has a black function; it comes back with the first one that does |
 | `Slot` | one wheel channel | colour wheel, gobo, prism and mode ranges: named slots |
 | `Components` | up to 8 named, ordered | anything a mode or the user groups |
 
@@ -353,7 +354,7 @@ One Rust wire schema in `engine-core::api`, generated TypeScript as today. The s
 | Command | Meaning |
 |---|---|
 | `Hold{channel, byte}`, `ReleaseChannel`, `ReleaseChannels` | raw hold, as today's `SetChannel`. The DMX screen and the haze fader use it |
-| `Grab{target, value}`, `UpdateGrab`, `EndGrab` | live hold at Manual. `target` is a channel or a compound id. `value` is typed: `Byte`, `Word`, `Xy`, `Rgb`, `Rgbw`, `Rgba`, `Cmy`, `Cmyk`, `Slot`, `Components` |
+| `Grab{target, value}`, `UpdateGrab`, `EndGrab` | live hold at Manual. `target` is a channel or a compound id. `value` is typed: `Byte`, `Word`, `Xy`, `Rgb`, `Rgbw`, `Rgba`, `Cmy`, `Slot`, `Components` |
 | `PutLook{id?, name, definition, recipe, base}`, `RemoveLook` | look definition in refs, with the revision it was built on. Replies `Saved{look}`. A draft with no target saves and `Start` is refused `NoTarget` |
 | `Start{look, rank, launch, speed, repeat}`, `Stop`, `Flash`, `EndFlash` | play a look |
 | `ReleasePlay{play}`, `ReleaseAll` | release a kept play. `ReleaseAll` clears every hold and kept play of every owner, never the Blackout latch |
