@@ -1,6 +1,6 @@
 //! Cumulative output timing, four-second windows and health transitions.
 
-use crate::{Histogram, LATENCY_BUCKETS, LATENESS_BUCKETS, Rate, Status, bucket, edge, percentile};
+use crate::{Histogram, LATENCY_BUCKETS, LATENESS_BUCKETS, Rate, Status, bucket, edge};
 use core::time::Duration;
 
 /// One output's counters at an engine time, all counted since this generation attached.
@@ -97,20 +97,35 @@ impl<const N: usize> Difference<N> {
         Self { counts, total }
     }
 
-    fn misses_rank(&self, percent: u64, under_target: u128) -> bool {
-        under_target < (u128::from(percent) * self.total).div_ceil(100)
+    /// Nearest rank: how many samples must stay at or under the percentile.
+    fn rank(&self, percent: u64) -> u128 {
+        (u128::from(percent) * self.total).div_ceil(100)
     }
 
+    fn misses_rank(&self, percent: u64, under_target: u128) -> bool {
+        under_target < self.rank(percent)
+    }
+
+    /// The window total may pass `u64`, so the rank is found here, not by [`crate::percentile`].
     fn measurement(&self, percent: u64, cumulative_worst: Duration) -> Option<MetricWindow> {
-        let highest = self.counts.iter().rposition(|&count| count != 0)?;
-        let worst = if highest + 1 == N {
-            cumulative_worst
-        } else {
-            edge(highest).min(cumulative_worst)
+        // The upper edge of a bucket, never past the worst. The last bucket is open.
+        let bound = |bucket: usize| {
+            if bucket + 1 == N {
+                cumulative_worst
+            } else {
+                edge(bucket).min(cumulative_worst)
+            }
         };
+        let highest = self.counts.iter().rposition(|&count| count != 0)?;
+        let rank = self.rank(percent);
+        let mut seen = 0;
+        let ranked = self.counts.iter().position(|&count| {
+            seen += u128::from(count);
+            seen >= rank
+        })?;
         Some(MetricWindow {
-            percentile: percentile(&self.counts, percent, cumulative_worst)?,
-            worst,
+            percentile: bound(ranked),
+            worst: bound(highest),
             samples: u32::try_from(self.total).unwrap_or(u32::MAX),
         })
     }
@@ -308,6 +323,9 @@ pub enum CoverageStep {
     ClockDiscontinuity { end: Option<Duration> },
     /// Store the sample for `end` and difference it with the one four seconds earlier.
     Window { end: Duration },
+    /// Another read at the grid endpoint just stored. Store this newer sample for
+    /// `end` in its place. The verdict at `end` stands, so the machine has no new input.
+    SameGridPoint { end: Duration },
 }
 
 impl CoverageStep {
@@ -315,7 +333,7 @@ impl CoverageStep {
     /// Between grid points the machine has no new input.
     pub fn verdict(self, judge: impl FnOnce(Duration) -> Verdict) -> Option<Verdict> {
         match self {
-            Self::BetweenGridPoints => None,
+            Self::BetweenGridPoints | Self::SameGridPoint { .. } => None,
             Self::Measuring { .. } | Self::ClockDiscontinuity { .. } => Some(Verdict::Insufficient),
             Self::Window { end } => Some(judge(end)),
         }
@@ -324,11 +342,12 @@ impl CoverageStep {
 
 impl Coverage {
     /// Observe *every* reader sample, in engine-time order. A new generation starts
-    /// fresh even if the reader stalled. Discard the old samples and verdicts on a
+    /// fresh typical if the reader stalled. Discard the old samples and verdicts on a
     /// generation change or gap. Save the newest cumulative sample at each returned
     /// grid endpoint, including endpoints during warm-up. Use the current read
-    /// when it falls exactly on the grid. When a read crosses the endpoint, the
-    /// preceding read is the newest sample available at that engine time.
+    /// when it falls exactly on the grid, and a later read at that same time in its
+    /// place. When a read crosses the endpoint, the preceding read is the newest
+    /// sample available at that engine time.
     pub fn observe(previous: Option<Self>, generation: u64, at: Duration) -> (Self, CoverageStep) {
         // The half-second grid divides every whole second exactly.
         let remainder = at.subsec_nanos() % GRID_INTERVAL.subsec_nanos();
@@ -345,7 +364,9 @@ impl Coverage {
         if at.saturating_sub(previous.last_read) >= GRID_INTERVAL {
             return (fresh, CoverageStep::ClockDiscontinuity { end: baseline });
         }
-        let step = if end <= previous.last_read {
+        let step = if end == at && at == previous.last_read {
+            CoverageStep::SameGridPoint { end }
+        } else if end <= previous.last_read {
             CoverageStep::BetweenGridPoints
         } else if end - previous.started_at >= WINDOW_DURATION {
             // At grid endpoints this first passes exactly four seconds after the
@@ -432,6 +453,7 @@ mod tests {
             ((20, 0), (0, 20), 0, Bad(PressToLight)),
             ((0, 20), (0, 20), 0, Bad(Both)),
             ((20, 0), (0, 20), 1, Clean),
+            ((20, 0), (0, 20), 2, Clean),
             ((0, 20), (0, 20), 1, Bad(HandoffLateness)),
             ((99, 1), (19, 1), 0, Clean),
             ((98, 2), (19, 1), 0, Bad(HandoffLateness)),
@@ -478,23 +500,43 @@ mod tests {
 
     #[test]
     fn window_reports_percentile_and_worst_bounds() {
-        // Each metric gains 95 low, 4 middle, 1 high. All times below are microseconds.
+        // Each metric gains 100 samples: low, middle, high. All times below are microseconds.
         // History may supply a larger worst. Only buckets gained in this window count.
-        for (history, late, press, late_bounds, press_bounds) in [
+        let typical = ([95, 4, 1], [95, 4, 1]);
+        // p99 and p95 rank into the middle bucket here, p98 and p94 would not.
+        let edge_ranks = ([98, 1, 1], [94, 1, 5]);
+        for (history, late, press, counts, late_bounds, press_bounds) in [
             (
                 90_000,
                 [10, 201, 714],
                 [499, 819, 929],
+                typical,
                 (300, 800),
                 (500, 1_000),
             ),
-            (0, [10, 201, 214], [430, 460, 470], (214, 214), (470, 470)),
+            (
+                0,
+                [10, 201, 214],
+                [430, 460, 470],
+                typical,
+                (214, 214),
+                (470, 470),
+            ),
             (
                 0,
                 [25_005, 29_000, 64_001],
                 [50_100, 55_000, 81_002],
+                typical,
                 (64_001, 64_001),
                 (81_002, 81_002),
+            ),
+            (
+                0,
+                [10, 201, 714],
+                [10, 201, 714],
+                edge_ranks,
+                (300, 714),
+                (300, 714),
             ),
         ] {
             let mut earlier = start();
@@ -506,11 +548,13 @@ mod tests {
                 at: Duration::from_secs(4),
                 ..earlier
             };
-            for ((late_us, press_us), count) in late.into_iter().zip(press).zip([95, 4, 1]) {
+            for (((late_us, press_us), late_count), press_count) in
+                late.into_iter().zip(press).zip(counts.0).zip(counts.1)
+            {
                 let latency = Duration::from_micros(press_us);
                 let lateness = Duration::from_micros(late_us);
-                record(&mut later.lateness, lateness, count);
-                record(&mut later.press, latency, count);
+                record(&mut later.lateness, lateness, late_count);
+                record(&mut later.press, latency, press_count);
                 later.lateness_worst = later.lateness_worst.max(lateness);
                 later.press_worst = later.press_worst.max(latency);
             }
@@ -529,6 +573,37 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn window_ranks_a_total_past_u64() {
+        let lateness_worst = Duration::from_millis(1);
+        let press_worst = Duration::from_millis(30);
+        let mut later = HealthSample {
+            at: Duration::from_secs(4),
+            lateness_worst,
+            press_worst,
+            press_under_target: u64::MAX,
+            ..start()
+        };
+        // Half the samples are in the upper bucket.
+        for (lateness, press) in [
+            (Duration::ZERO, Duration::ZERO),
+            (lateness_worst, press_worst),
+        ] {
+            record(&mut later.lateness, lateness, u64::MAX);
+            record(&mut later.press, press, u64::MAX);
+        }
+        let measured = window(&start(), &later);
+        assert_eq!(measured.verdict, Verdict::Bad(LateReason::Both));
+        assert_eq!(
+            [measured.lateness, measured.press_to_light],
+            [lateness_worst, press_worst].map(|time| Some(MetricWindow {
+                percentile: time,
+                worst: time,
+                samples: u32::MAX,
+            }))
+        );
     }
 
     #[test]
@@ -620,7 +695,9 @@ mod tests {
 
     #[test]
     fn reader_samples_cover_grid_windows_across_gaps_and_generations() {
-        use CoverageStep::{BetweenGridPoints, ClockDiscontinuity, Measuring, Window};
+        use CoverageStep::{
+            BetweenGridPoints, ClockDiscontinuity, Measuring, SameGridPoint, Window,
+        };
         let ms = Duration::from_millis;
         let ns = Duration::from_nanos;
         // (generation, polls, time per poll, expected result of last poll)
@@ -651,7 +728,7 @@ mod tests {
                 },
             ),
             (1, 1, ms(499), Window { end: ms(9_500) }),
-            (1, 1, ms(0), BetweenGridPoints),
+            (1, 1, ms(0), SameGridPoint { end: ms(9_500) }),
             (
                 1,
                 1,
@@ -696,32 +773,74 @@ mod tests {
             assert_eq!(step, expected, "generation {generation} at {at:?}");
 
             let mut judged = None;
+            let reason = LateReason::PressToLight;
+            let bad = Verdict::Bad(reason);
             let verdict = step.verdict(|end| {
                 judged = Some(end);
-                Verdict::Clean
+                bad
             });
-            let reason = LateReason::PressToLight;
-            let late = HealthState::Late(reason);
             let next_state = verdict.map(|now| {
                 next(
-                    late,
+                    HealthState::Healthy,
                     now,
-                    Verdict::Clean,
+                    bad,
                     HealthInput::Present(Status::Running),
                 )
             });
             let timing = match expected {
-                BetweenGridPoints => (None, None, None),
-                Measuring { .. } | ClockDiscontinuity { .. } => {
-                    (None, Some(Verdict::Insufficient), Some((late, None)))
-                }
+                BetweenGridPoints | SameGridPoint { .. } => (None, None, None),
+                Measuring { .. } | ClockDiscontinuity { .. } => (
+                    None,
+                    Some(Verdict::Insufficient),
+                    Some((HealthState::Measuring, None)),
+                ),
                 Window { end } => (
                     Some(end),
-                    Some(Verdict::Clean),
-                    Some((HealthState::Recovering(reason), None)),
+                    Some(bad),
+                    Some((
+                        HealthState::Late(reason),
+                        Some(HealthEvent::RunningLate(reason)),
+                    )),
                 ),
             };
             assert_eq!((judged, verdict, next_state), timing, "at {at:?}");
+        }
+    }
+
+    #[test]
+    fn repeated_grid_read_keeps_the_newest_sample() {
+        use CoverageStep::{Measuring, SameGridPoint, Window};
+        let ms = Duration::from_millis;
+        let baseline = ms(500);
+        let end = ms(4_500);
+        let sample = |at, count| {
+            let mut sample = HealthSample::new(at, 1, Status::Running);
+            record(&mut sample.lateness, Duration::ZERO, count);
+            sample
+        };
+        // Two reads before the baseline is final, with 0 and then 1 handoff.
+        for times in [[ms(499), baseline], [baseline, baseline]] {
+            let mut coverage = None;
+            let mut earlier = None;
+            for (at, count) in times.into_iter().zip([0, 1]) {
+                let (seen, step) = Coverage::observe(coverage, 1, at);
+                coverage = Some(seen);
+                if let Measuring { end: Some(end) } | SameGridPoint { end } = step {
+                    assert_eq!(end, baseline);
+                    earlier = Some(sample(at, count));
+                }
+            }
+            for millis in (750..4_500).step_by(250) {
+                coverage = Some(Coverage::observe(coverage, 1, ms(millis)).0);
+            }
+            let (_, step) = Coverage::observe(coverage, 1, end);
+            assert_eq!(step, Window { end });
+            let measured = window(&earlier.expect("grid baseline"), &sample(end, 20));
+            assert_eq!(
+                (measured.lateness.map(|m| m.samples), measured.verdict),
+                (Some(19), Verdict::Insufficient),
+                "{times:?}"
+            );
         }
     }
 
@@ -831,6 +950,7 @@ mod tests {
                 (running, Bad(Both), Clean, unconfirmed),
                 (running, Bad(Both), Insufficient, unconfirmed),
                 (connecting, Clean, Bad(Both), clean),
+                (running, Clean, Insufficient, clean),
                 (running, Insufficient, Bad(Both), insufficient),
                 (Present(Status::NotFound), Clean, Clean, unavailable),
                 (
@@ -888,7 +1008,9 @@ mod tests {
             (Some((NotFound, 0)), Some((Connecting, 0)), 1, silence),
             (Some((Connecting, 3)), Some((Running, 3)), 1, silence),
             (Some((Running, 3)), Some((Running, 3)), 1, silence),
+            (Some((reconnecting, 3)), Some((reconnecting, 4)), 1, lost),
             (Some((reconnecting, 3)), Some((reconnecting, 3)), 1, silence),
+            (Some((reconnecting, 3)), Some((Connecting, 3)), 1, silence),
             (Some((reconnecting, 3)), None, 1, silence),
             (None, Some((Running, 1)), 1, silence),
             (Some((reconnecting, 3)), Some((Running, 0)), 2, silence),
