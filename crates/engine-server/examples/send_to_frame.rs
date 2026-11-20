@@ -1,5 +1,5 @@
 //! The reference scorecard. `baseline [seconds]` prints the original one-output
-//! send-to-frame p95 in microseconds. `m2|m3|worst [seconds]` prints JSON with
+//! send-to-frame p95 in microseconds. `m2|m3|worst|burst [seconds]` prints JSON with
 //! lateness p99 and command-to-device-handoff p95 in nanoseconds for each output.
 
 use engine::{
@@ -26,7 +26,7 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     };
     if args.next().is_some() || seconds == Some(0) {
-        eprintln!("send_to_frame [baseline|m2|m3|worst] [seconds]");
+        eprintln!("send_to_frame [baseline|m2|m3|worst|burst] [seconds]");
         return ExitCode::FAILURE;
     }
     let profile = match mode.as_str() {
@@ -34,6 +34,7 @@ fn main() -> ExitCode {
         "m2" => Workload::M2,
         "m3" => Workload::M3,
         "worst" => Workload::Worst,
+        "burst" => Workload::Burst,
         other => {
             eprintln!("unknown run {other:?}");
             return ExitCode::FAILURE;
@@ -120,6 +121,7 @@ struct OutputSamples {
 }
 
 struct Samples {
+    workload: Workload,
     outputs: Vec<OutputSamples>,
     setup: u64,
     window: std::ops::Range<Duration>,
@@ -127,8 +129,9 @@ struct Samples {
 }
 
 impl Samples {
-    fn new(outputs: usize, setup: u64, start: Duration, end: Duration) -> Self {
+    fn new(workload: Workload, outputs: usize, setup: u64, start: Duration, end: Duration) -> Self {
         Self {
+            workload,
             outputs: (0..outputs).map(|_| OutputSamples::default()).collect(),
             setup,
             window: start..end,
@@ -155,6 +158,15 @@ impl Samples {
                 due,
                 applied,
             } => {
+                // With fixed, live outputs the wall clock serves at least one output
+                // on every wake. Even a dropped frame must carry a whole burst.
+                if self.workload == Workload::Burst
+                    && !applied
+                        .saturating_sub(self.setup)
+                        .is_multiple_of(engine::QUEUE as u64)
+                {
+                    return Err(format!("split burst at {output:?} cutoff {applied}"));
+                }
                 let row = &mut self.outputs[output.slot()];
                 if row.pending.insert(due, applied).is_some() {
                     return Err(format!("duplicate due time {due:?} on {output:?}"));
@@ -180,9 +192,6 @@ impl Samples {
                     Outcome::Dropped => row.drops += usize::from(measured),
                     Outcome::Failed => return Err(format!("{output:?} failed at {due:?}")),
                     Outcome::Accepted => {
-                        if measured {
-                            row.lateness.push(at.saturating_sub(due));
-                        }
                         let carried = applied.saturating_sub(self.setup) as usize;
                         let new =
                             self.commands
@@ -190,6 +199,14 @@ impl Samples {
                                 .ok_or_else(|| {
                                     format!("invalid {output:?} cutoff {applied} at {due:?}")
                                 })?;
+                        let count_lateness = if self.workload == Workload::Burst {
+                            !new.is_empty()
+                        } else {
+                            measured
+                        };
+                        if count_lateness {
+                            row.lateness.push(at.saturating_sub(due));
+                        }
                         for &sent in new {
                             row.latency
                                 .push(at.checked_sub(sent).ok_or("handoff before send")?);
@@ -246,12 +263,17 @@ impl Samples {
                 "drops": row.drops,
             }));
         }
-        Ok(json!({
+        let mut report = json!({
+            "workload": self.workload.name(),
             "seconds": (self.window.end - self.window.start).as_secs(),
             "events": performance.events,
             "pressSamples": performance.manual.len(),
             "outputs": outputs,
-        }))
+        });
+        if self.workload == Workload::Burst {
+            report["bursts"] = json!(self.commands.len() / engine::QUEUE);
+        }
+        Ok(report)
     }
 }
 
@@ -299,7 +321,7 @@ fn measure(
 ) -> Result<serde_json::Value, Box<dyn Error>> {
     let universes = Universes::new(engine::MAX_UNIVERSES).ok_or("invalid universe count")?;
     let (mut engine, mut sender, mut timings) = Engine::start_measured(universes)?;
-    let outputs = if profile == Workload::Worst {
+    let outputs = if matches!(profile, Workload::Worst | Workload::Burst) {
         engine::MAX_OUTPUTS
     } else {
         2
@@ -336,18 +358,32 @@ fn measure(
     let end = since
         .checked_add(duration)
         .ok_or("run duration exceeds clock range")?;
-    let mut samples = Samples::new(outputs, setup, since, end);
+    let mut samples = Samples::new(profile, outputs, setup, since, end);
     let mut pictures = 0_u64;
     let (performance, tail) = thread::scope(|scope| -> Result<_, Box<dyn Error>> {
-        let player = scope.spawn(|| {
-            let performance = workload::perform(&mut sender, started, duration)?;
+        let (ready, common_deadline) = mpsc::sync_channel(0);
+        let player = scope.spawn(move || {
+            let performance = if profile == Workload::Burst {
+                perform_bursts(&mut sender, started, duration, common_deadline)?
+            } else {
+                workload::perform(&mut sender, started, duration)?
+            };
             Ok::<_, String>((performance, sender.sent()))
         });
         while started.elapsed() < duration || !player.is_finished() {
-            let frame = engine.latest().state.frame;
-            if frame != last_frame {
+            let state = &engine.latest().state;
+            if state.frame != last_frame {
                 pictures += 1;
-                last_frame = frame;
+                last_frame = state.frame;
+            }
+            // Dispatch into a gap before both rates are due together. The cutoff
+            // trace above checks what actually fit, even if a client was preempted.
+            if profile == Workload::Burst
+                && let Some(next) = state.outputs.iter().flatten().map(|o| o.due).min()
+                && next.saturating_sub(timings.now()) >= Rate::Sixty.period() / 2
+                && engine_core::due(state, next).count() == outputs
+            {
+                let _ = ready.try_send(());
             }
             samples.read(&mut timings)?;
             thread::sleep(Duration::from_millis(1));
@@ -376,11 +412,34 @@ fn measure(
     samples.report(&performance)
 }
 
+fn perform_bursts(
+    sender: &mut engine::Sender,
+    started: Instant,
+    duration: Duration,
+    common_deadline: mpsc::Receiver<()>,
+) -> Result<Performed, String> {
+    let mut performance = Performed {
+        events: 0,
+        manual: Vec::new(),
+    };
+    for burst in workload::burst_schedule(duration) {
+        let prepared = burst.prepare(sender)?;
+        thread::sleep((started + burst.at).saturating_duration_since(Instant::now()));
+        common_deadline
+            .recv_timeout((started + duration).saturating_duration_since(Instant::now()))
+            .map_err(|e| format!("burst at {:?} missed its dispatch window: {e}", burst.at))?;
+        let sent = prepared.admit(sender)?;
+        performance.events += sent.events;
+        performance.manual.extend(sent.manual);
+    }
+    Ok(performance)
+}
+
 mod workload {
     use engine::{
-        ChannelNumbers, Color, Command, Light, Member, MemberList, Members, Palette, Pattern, Rank,
-        Refusal, Rgb, Sender, Sequence, SequenceItem, Swatches, Target, Text, Use, WaveTarget,
-        When,
+        ChannelNumbers, Color, Command, Light, Member, MemberList, Members, Palette, Pattern,
+        Prepared, Rank, Refusal, Rgb, Sender, Sequence, SequenceItem, Swatches, Target, Text, Use,
+        WaveTarget, When,
     };
     use engine_core::{Pixels, Step};
     use std::sync::Mutex;
@@ -392,15 +451,25 @@ mod workload {
         M2,
         M3,
         Worst,
+        Burst,
     }
 
     impl Workload {
+        pub(super) fn name(self) -> &'static str {
+            match self {
+                Self::M2 => "m2",
+                Self::M3 => "m3",
+                Self::Worst => "worst",
+                Self::Burst => "burst",
+            }
+        }
+
         /// The same 10,000-pixel rig for the matched runs. At the limit all 10,922 whole
         /// RGB pixels fit, and the three target sizes jointly fill the visit budget.
         fn strips(self) -> (u16, u16, u16) {
             match self {
                 Self::M2 | Self::M3 => (1024, 256, 10_000 - 1024 - 256),
-                Self::Worst => (77, 198, 10_922 - 77 - 198),
+                Self::Worst | Self::Burst => (77, 198, 10_922 - 77 - 198),
             }
         }
 
@@ -408,7 +477,7 @@ mod workload {
             match self {
                 Self::M2 => 0,
                 Self::M3 => 1,
-                Self::Worst => engine_core::PLAYS - 2,
+                Self::Worst | Self::Burst => engine_core::PLAYS - 2,
             }
         }
     }
@@ -477,7 +546,14 @@ mod workload {
 
     /// Attach the streaming outputs before calling this, so all spanning strips can be admitted.
     pub(crate) fn prepare(sender: &mut Sender, workload: Workload) -> Result<(), String> {
-        let (wave, sequence, background) = workload.strips();
+        prepare_strips(sender, workload, workload.strips())
+    }
+
+    fn prepare_strips(
+        sender: &mut Sender,
+        workload: Workload,
+        (wave, sequence, background): (u16, u16, u16),
+    ) -> Result<(), String> {
         let mut channels: u16 = 0;
         for count in [wave / 2, wave - wave / 2, sequence, background] {
             send(
@@ -517,7 +593,7 @@ mod workload {
         }
 
         let probe = "two lights";
-        if workload == Workload::Worst {
+        if matches!(workload, Workload::Worst | Workload::Burst) {
             send(
                 sender,
                 group(
@@ -612,21 +688,26 @@ mod workload {
                 },
             )?;
         }
-        if workload == Workload::Worst {
+        if matches!(workload, Workload::Worst | Workload::Burst) {
             // With all variable visits booked, the desk guarantees a one-light grab.
             // Prove this is the admitted edge before measuring it.
             let refused = sender.send(colour(Target::Group { group: text(probe) }, RED));
-            if refused != Err(Refusal::WorkLimit) || visits != 65_536 {
-                return Err(format!(
-                    "expected a full work budget, booked {visits} and two-light grab gave {refused:?}"
-                ));
-            }
+            check_worst(visits, refused)?;
         }
         eprintln!(
             "{} RGB pixels, {} roots ({waves} Waves on {wave} pixels, sequence on {sequence}, background), {visits} reserved visits",
             channels / 3,
             waves + 2
         );
+        Ok(())
+    }
+
+    fn check_worst(visits: usize, probe: Result<(), Refusal>) -> Result<(), String> {
+        if visits != 65_536 || probe != Err(Refusal::WorkLimit) {
+            return Err(format!(
+                "expected a full work budget, booked {visits} and two-light grab gave {probe:?}"
+            ));
+        }
         Ok(())
     }
 
@@ -661,6 +742,12 @@ mod workload {
         action: Action,
     }
 
+    fn next_seed(mut seed: u64) -> u64 {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^ (seed << 17)
+    }
+
     /// All runs use identical reproducible send slots and targets. Absolute offsets
     /// keep the next press independent of the preceding edit's compile time.
     fn schedule(duration: Duration) -> Vec<Event> {
@@ -670,9 +757,7 @@ mod workload {
         let mut held = 1;
         let mut reverse = false;
         loop {
-            seed ^= seed << 13;
-            seed ^= seed >> 7;
-            seed ^= seed << 17;
+            seed = next_seed(seed);
             at += Duration::from_millis(90 + seed % 41);
             if at >= duration {
                 return events;
@@ -699,6 +784,91 @@ mod workload {
         pub(super) events: usize,
         /// The one FIFO command for each Manual press and release, in send order.
         pub(super) manual: Vec<u64>,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(super) struct Burst {
+        pub(super) at: Duration,
+        seed: u64,
+        reverse: bool,
+    }
+
+    /// Leave a common 44/60 Hz deadline for every burst, including the last.
+    pub(super) fn burst_schedule(duration: Duration) -> Vec<Burst> {
+        let mut bursts = Vec::new();
+        let mut seed = 0x2545_f491_4f6c_dd1d;
+        let mut at = Duration::ZERO;
+        loop {
+            seed = next_seed(seed);
+            at += Duration::from_millis(450 + seed % 101);
+            if at + Duration::from_millis(350) >= duration {
+                return bursts;
+            }
+            bursts.push(Burst {
+                at,
+                seed,
+                reverse: bursts.len().is_multiple_of(2),
+            });
+        }
+    }
+
+    impl Burst {
+        /// Prepare every press and the group edit against the same revision.
+        /// Admitting the edit last keeps that revision valid for all 226 presses.
+        pub(super) fn prepare(&self, sender: &Sender) -> Result<PreparedBurst, String> {
+            let base = sender.base();
+            let prepare = |command| {
+                base.prepare(command, &[])
+                    .map_err(|r| format!("burst prepare: {r:?}"))
+            };
+            let mut seed = self.seed ^ 0x9e37_79b9_7f4a_7c15;
+            let mut presses = Vec::new();
+            for _ in 0..engine::QUEUE - Workload::Burst.waves() {
+                seed = next_seed(seed);
+                presses.push(prepare(Command::SetChannel {
+                    channel: ChannelNumbers {
+                        universe: 1,
+                        address: 1 + (seed % 512) as u16,
+                    },
+                    value: (seed >> 32) as u8,
+                })?);
+            }
+            Ok(PreparedBurst {
+                presses,
+                reorder: prepare(wave_group(self.reverse))?,
+            })
+        }
+    }
+
+    pub(super) struct PreparedBurst {
+        presses: Vec<Prepared>,
+        reorder: Prepared,
+    }
+
+    impl PreparedBurst {
+        pub(super) fn admit(self, sender: &mut Sender) -> Result<Performed, String> {
+            let before = sender.sent();
+            for press in self.presses {
+                sender
+                    .admit(press)
+                    .map_err(|r| format!("burst press: {r:?}"))?;
+            }
+            let last_press = sender.sent();
+            sender
+                .admit(self.reorder)
+                .map_err(|r| format!("burst reorder: {r:?}"))?;
+            let swaps = sender.sent() - last_press;
+            let commands = sender.sent() - before;
+            if swaps != Workload::Burst.waves() as u64 || commands != engine::QUEUE as u64 {
+                return Err(format!(
+                    "burst admitted {commands} commands including {swaps} swaps"
+                ));
+            }
+            Ok(Performed {
+                events: (last_press - before) as usize + 1,
+                manual: (before + 1..=last_press).collect(),
+            })
+        }
     }
 
     /// One edit client and one performance client, mirroring the server's short
@@ -757,6 +927,129 @@ mod workload {
     #[cfg(test)]
     mod tests {
         use super::*;
+        use crate::Nowhere;
+        use engine::{Engine, OutputNumber, Rate, RunNumbers, Universes};
+
+        fn stream(sender: &mut Sender, universes: Universes) {
+            let run = RunNumbers {
+                first: 1,
+                count: universes.count(),
+            }
+            .check(universes)
+            .unwrap();
+            sender
+                .attach(
+                    OutputNumber::try_from(1).unwrap(),
+                    Box::new(Nowhere),
+                    run,
+                    Rate::Sixty,
+                )
+                .unwrap();
+        }
+
+        #[test]
+        fn worst_requires_both_the_visit_limit_and_the_two_light_refusal() {
+            for (visits, probe, valid) in [
+                (65_536, Err(Refusal::WorkLimit), true),
+                (65_534, Err(Refusal::WorkLimit), false),
+                (65_536, Ok(()), false),
+                (65_536, Err(Refusal::QueueFull), false),
+            ] {
+                assert_eq!(
+                    check_worst(visits, probe).is_ok(),
+                    valid,
+                    "{visits}, {probe:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn worst_rig_one_pixel_short_is_refused_even_when_the_probe_fails() {
+            let mode = Workload::Worst;
+            let universes = Universes::new(64).unwrap();
+            let (_engine, mut sender) = Engine::start(universes).unwrap();
+            stream(&mut sender, universes);
+            // Two spare visits are still too few for the two-light grab.
+            let (wave, sequence, background) = mode.strips();
+            let result = prepare_strips(&mut sender, mode, (wave, sequence, background - 1));
+            assert_eq!(result, Err("expected a full work budget, booked 65534 and two-light grab gave Err(WorkLimit)".into()));
+        }
+
+        #[test]
+        fn burst_slots_and_commands_replay_from_the_same_seed() {
+            let smoke = burst_schedule(Duration::from_secs(5));
+            let reference = burst_schedule(Duration::from_secs(60));
+            assert_eq!(smoke.len(), 9);
+            assert_eq!(reference.len(), 119);
+            assert_eq!(smoke, reference[..smoke.len()]);
+            assert_eq!(
+                smoke
+                    .iter()
+                    .take(2)
+                    .map(|burst| (burst.at.as_millis(), burst.seed, burst.reverse))
+                    .collect::<Vec<_>>(),
+                [
+                    (504, 0x7f6c_280b_eaa8_e3e7, true),
+                    (982, 0xe471_1987_1cf9_abe0, false)
+                ]
+            );
+        }
+
+        #[test]
+        fn a_burst_at_the_limit_fills_one_wake_with_manual_sends_and_thirty_swaps() {
+            let universes = Universes::new(64).unwrap();
+            let (mut engine, mut sender, wakes) =
+                Engine::start_stepped(universes, Box::new(outputs::open)).unwrap();
+            stream(&mut sender, universes);
+            prepare(&mut sender, Workload::Burst).unwrap();
+            let looks = sender.looks();
+            let picture = engine.fresh();
+            assert_eq!(picture.state.plays.iter().count(), 32);
+            assert_eq!(
+                picture
+                    .state
+                    .plays
+                    .iter()
+                    .map(|p| 2 * looks.plan(p.look).unwrap().work())
+                    .sum::<usize>(),
+                65_536
+            );
+            wakes.hold().unwrap();
+            let bursts = burst_schedule(Duration::from_secs(5));
+            for (burst, levels) in bursts[..2]
+                .iter()
+                .zip([[0, 242, 107, 66], [0, 242, 194, 66]])
+            {
+                let before = sender.sent();
+                let previous = sender.looks();
+                let performance = burst.prepare(&sender).unwrap().admit(&mut sender).unwrap();
+                assert_eq!(
+                    performance.manual,
+                    (before + 1..=before + 226).collect::<Vec<_>>()
+                );
+                assert_eq!(performance.events, 227);
+                let next = sender.looks();
+                assert_eq!(
+                    (5..35)
+                        .filter(|&look| !std::sync::Arc::ptr_eq(
+                            &previous.plan(look).unwrap(),
+                            &next.plan(look).unwrap()
+                        ))
+                        .count(),
+                    30
+                );
+                assert_eq!(sender.sent() - before, 256);
+                assert_eq!(
+                    sender.send(Command::Blackout { on: true }),
+                    Err(Refusal::QueueFull)
+                );
+                engine.latest();
+                wakes.wake().unwrap();
+                let applied = engine.latest();
+                assert_eq!(applied.applied(), before + 256);
+                assert_eq!(applied.universes()[0].0[..4], levels);
+            }
+        }
 
         #[test]
         fn all_workloads_use_the_same_absolute_press_release_and_edit_slots() {
@@ -793,15 +1086,6 @@ mod workload {
 
         #[test]
         fn measured_rigs_patch_all_the_pixels_and_run_the_expected_roots() {
-            use engine::{
-                Device, Engine, Levels, Outcome, OutputNumber, Rate, RunNumbers, Universes,
-            };
-            struct Sink;
-            impl Device for Sink {
-                fn take(&mut self, _: &[Levels]) -> Outcome {
-                    Outcome::Accepted
-                }
-            }
             let universes = Universes::new(64).unwrap();
             for (mode, pixels, roots) in [
                 (Workload::M2, 10_000, 0),
@@ -809,20 +1093,7 @@ mod workload {
                 (Workload::Worst, 10_922, engine_core::PLAYS),
             ] {
                 let (mut engine, mut sender) = Engine::start(universes).unwrap();
-                let run = RunNumbers {
-                    first: 1,
-                    count: 64,
-                }
-                .check(universes)
-                .unwrap();
-                sender
-                    .attach(
-                        OutputNumber::try_from(1).unwrap(),
-                        Box::new(Sink),
-                        run,
-                        Rate::Sixty,
-                    )
-                    .unwrap();
+                stream(&mut sender, universes);
                 prepare(&mut sender, mode).unwrap();
                 let patch = sender.patch();
                 assert_eq!(
@@ -852,10 +1123,116 @@ mod handoff_tests {
     use engine::Timing::{Applied, Due, Finished};
 
     #[test]
+    fn a_burst_split_at_any_due_output_invalidates_the_run() {
+        let mut run = Samples::new(
+            Workload::Burst,
+            2,
+            17,
+            Duration::ZERO,
+            Duration::from_secs(1),
+        );
+        for count in [0, 256, 512, 513] {
+            let result = run.record(Due {
+                output: OutputNumber::try_from(2).unwrap(),
+                due: Duration::from_nanos(count),
+                applied: 17 + count,
+            });
+            assert_eq!(
+                result.is_ok(),
+                count != 513,
+                "cutoff after {count} commands"
+            );
+        }
+    }
+
+    #[test]
+    fn burst_lateness_counts_only_the_first_accepted_handoff_on_each_output() {
+        let ms = Duration::from_millis;
+        let output = OutputNumber::try_from(1).unwrap();
+        let mut run = Samples::new(Workload::Burst, 1, 0, ms(0), ms(1000));
+        for number in 1..=512 {
+            run.record(Applied {
+                number,
+                at: if number <= 256 { ms(500) } else { ms(900) },
+            })
+            .unwrap();
+        }
+        for (due, applied, late, outcome) in [
+            (200, 0, 10, Outcome::Accepted),
+            (600, 256, 3, Outcome::Dropped),
+            (999, 512, 3, Outcome::Dropped),
+            (1010, 512, 2, Outcome::Accepted),
+            (1030, 512, 12, Outcome::Accepted),
+        ] {
+            run.record(Due {
+                output,
+                due: ms(due),
+                applied,
+            })
+            .unwrap();
+            run.record(Finished {
+                output,
+                due: ms(due),
+                at: ms(due + late),
+                outcome,
+            })
+            .unwrap();
+        }
+        assert_eq!(run.outputs[0].lateness, [ms(2)]);
+        let report = run
+            .report(&Performed {
+                events: 454,
+                manual: (1..=226).chain(257..=482).collect(),
+            })
+            .unwrap();
+        assert_eq!(report["outputs"][0]["p99"], 2_000_000);
+        assert_eq!(report["outputs"][0]["p95"], 512_000_000);
+        assert_eq!(report["outputs"][0]["drops"], 2);
+        assert_eq!(report["workload"], "burst");
+        assert_eq!(report["bursts"], 2);
+    }
+
+    #[test]
+    fn lateness_p99_is_the_99th_of_100_handoffs() {
+        let output = OutputNumber::try_from(1).unwrap();
+        let mut run = Samples::new(Workload::M3, 1, 0, Duration::ZERO, Duration::from_secs(1));
+        run.record(Applied {
+            number: 1,
+            at: Duration::ZERO,
+        })
+        .unwrap();
+        for frame in 1..=100 {
+            let due = Duration::from_millis(frame);
+            let late = Duration::from_nanos(101 - frame);
+            run.record(Due {
+                output,
+                due,
+                applied: 1,
+            })
+            .unwrap();
+            run.record(Finished {
+                output,
+                due,
+                at: due + late,
+                outcome: Outcome::Accepted,
+            })
+            .unwrap();
+        }
+        let report = run
+            .report(&Performed {
+                events: 1,
+                manual: vec![1],
+            })
+            .unwrap();
+        assert_eq!(report["outputs"][0]["p99"], 99);
+        assert_eq!(report["workload"], "m3");
+    }
+
+    #[test]
     fn one_edit_swapping_thirty_plans_does_not_outweigh_the_two_manual_sends() {
         let ms = Duration::from_millis;
         let output = OutputNumber::try_from(1).unwrap();
-        let mut run = Samples::new(1, 100, ms(0), ms(1000));
+        let mut run = Samples::new(Workload::Worst, 1, 100, ms(0), ms(1000));
         // A group reorder publishes 30 swaps. The following press and release
         // each have their own FIFO number and reach the device in 1 and 3 ms.
         for number in 101..=130 {
@@ -896,7 +1273,7 @@ mod handoff_tests {
         let ms = Duration::from_millis;
         let a = OutputNumber::try_from(1).unwrap();
         let b = OutputNumber::try_from(2).unwrap();
-        let mut run = Samples::new(2, 9, ms(1000), ms(2000));
+        let mut run = Samples::new(Workload::M2, 2, 9, ms(1000), ms(2000));
         for event in [
             Applied {
                 number: 10,

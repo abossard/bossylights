@@ -61,13 +61,19 @@ export function measurement(output, count) {
 }
 
 /** One complete run, with nanoseconds from each output's own handoff. */
-export function performanceRows(json, count, seconds) {
+export function performanceRows(json, count, seconds, workload) {
   const run = JSON.parse(json);
+  if (run.workload !== workload) throw new Error(`expected workload ${workload}, got ${run.workload}`);
   if (run.seconds !== seconds || !Number.isSafeInteger(run.events) || run.events < 1) {
     throw new Error(`expected ${seconds} measured seconds and a positive event count`);
   }
   if (!Number.isSafeInteger(run.pressSamples) || run.pressSamples < 1 || run.pressSamples > run.events) {
     throw new Error("expected a sample for each scheduled press and release");
+  }
+  if (workload === "burst") {
+    if (!Number.isSafeInteger(run.bursts) || run.bursts < 1) throw new Error("expected a positive measured burst count");
+    if (run.pressSamples !== 226 * run.bursts) throw new Error("expected 226 raw channel sends per burst");
+    if (run.events !== run.pressSamples + run.bursts) throw new Error("expected one plan swap batch per burst alongside the raw channel sends");
   }
   if (!Array.isArray(run.outputs) || run.outputs.length !== count) {
     throw new Error(`expected ${count} measured outputs`);
@@ -82,21 +88,30 @@ export function performanceRows(json, count, seconds) {
     const period = Math.floor(1_000_000_000 / hz);
     return { output, hz, p99, p95, drops, pass: p99 < 1_000_000 && p95 < period + 5_000_000 };
   });
-  return { seconds, events: run.events, pressSamples: run.pressSamples, outputs };
+  return { workload, seconds, events: run.events, pressSamples: run.pressSamples, bursts: run.bursts, outputs };
 }
 
 /** Compare the same seeded schedule on each rig without pooling either output's samples. */
 export function performanceTable(runs) {
   if (runs.length === 0) return "## Performance\n\nNot measured on CI.\n";
-  const { seconds, events, pressSamples } = runs[0][1];
-  if (!runs.every(([, run]) => run.seconds === seconds && run.events === events && run.pressSamples === pressSamples)) {
-    throw new Error("performance runs must have the same duration, event count and Manual sample count");
+  const seconds = runs[0][1].seconds;
+  const matched = runs.map(([, run]) => run).filter((run) => run.workload !== "burst");
+  const burst = runs.find(([, run]) => run.workload === "burst")?.[1];
+  if (!runs.every(([, run]) => run.seconds === seconds)) throw new Error("performance run durations differ");
+  if (!matched.every((run) => run.events === matched[0].events && run.pressSamples === matched[0].pressSamples)) {
+    throw new Error("matched performance runs must have the same event count and Manual sample count");
   }
   return [
     "## Performance",
     "",
-    `Each run took ${seconds} s with ${events} seeded events and a snapshot reader. The p95 covers ${pressSamples} Manual presses and releases per output while group edits run alongside.`,
-    "",
+    ...(matched.length ? [
+      `Each run took ${seconds} s. The matched schedule used ${matched[0].events} seeded events and a snapshot reader. Its p95 covers ${matched[0].pressSamples} Manual presses and releases per output while group edits run alongside.`,
+      "",
+    ] : []),
+    ...(burst ? [
+      `The rig at limits applied ${burst.bursts} bursts of 256 FIFO commands. Each burst landed in one tick with 30 plan swaps and 226 raw channel sends. Its p95 covers ${burst.pressSamples} raw channel sends per output. Each output contributes one lateness sample at its first accepted handoff carrying new burst commands.`,
+      "",
+    ] : []),
     "M2 used direct colour on 10,000 RGB pixels. M3 used the same rig with a Wave and a sequence. M3 at limits used 10,922 RGB pixels, 32 roots, 65,536 reserved visits and 16 outputs.",
     "",
     "| Rig | Output | Hz | Handoff lateness p99 (µs) | Send to handoff p95 (µs) | Drops | Target |",
@@ -105,14 +120,14 @@ export function performanceTable(runs) {
       `| ${name} | ${output} | ${hz} | ${p99 / 1000} | ${p95 / 1000} | ${drops} | ${pass ? "pass" : "fail"} |`)),
     "",
     "Targets are p99 below 1,000 µs and p95 below the output period plus 5,000 µs.",
-    ...(seconds === 60 ? [] : ["Short runs exercise the measurements. The 60 s reference run checks the caps."]),
+    ...(seconds >= 60 ? [] : ["Short runs exercise the measurements. Runs of 60 s or longer check the caps."]),
     "",
   ].join("\n");
 }
 
-/** Only the full reference measurement gates the caps. */
+/** Measured runs of 60 seconds or longer gate the caps. */
 export function missedReferenceTarget(runs) {
-  return runs.some(([, run]) => run.seconds === 60 && run.outputs.some((row) => !row.pass));
+  return runs.some(([, run]) => run.seconds >= 60 && run.outputs.some((row) => !row.pass));
 }
 
 /** Places that switch a check off. */

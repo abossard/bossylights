@@ -20,6 +20,10 @@ path = "src/main.rs"
 name = "wled_pattern"
 test = true # its pixel arithmetic has a test
 
+[[example]]
+name = "send_to_frame"
+test = true
+
 [dependencies]
 engine = { path = "../engine" }
 engine-core = { path = "../engine-core" } # the API types of the fixture library

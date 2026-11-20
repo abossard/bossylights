@@ -1,5 +1,5 @@
 // Prints the scorecard as Markdown. With GITHUB_STEP_SUMMARY set, also writes it there.
-// Keep the original engine timings and compare three 60 s performances on this machine.
+// Keep the original engine timings and compare the 60 s performances on this machine.
 // npm run scorecard -- --seconds 5 runs the same workloads as a short smoke check.
 import { execFileSync } from "node:child_process";
 import { appendFileSync, readdirSync, readFileSync } from "node:fs";
@@ -66,9 +66,9 @@ const summary = scorecard(
   seconds,
 );
 const duration = seconds ?? 60;
-const rigs = [["M2", "m2", 2], ["M3", "m3", 2], ["M3 at limits", "worst", 16]];
-const runs = measured ? rigs.map(([name, mode, outputs]) => [
-  name, performanceRows(example("send_to_frame", mode, String(duration)), outputs, duration),
+const rigs = { m2: ["M2", 2], m3: ["M3", 2], worst: ["M3 at limits", 16], burst: ["M3 at limits (burst)", 16] };
+const runs = measured ? Object.entries(rigs).map(([workload, [name, outputs]]) => [
+  name, performanceRows(example("send_to_frame", workload, String(duration)), outputs, duration, workload),
 ]) : [];
 const host = measured ? `\nMeasured on ${type()} ${release()}, ${arch()}, ${cpus()[0]?.model ?? "unknown CPU"}.\n` : "";
 const markdown = `${summary}\n${performanceTable(runs)}${host}`;

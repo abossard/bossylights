@@ -1,4 +1,8 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { delimiter, join } from "node:path";
 import { test } from "node:test";
 import { codeLines, crateSource, crateSurface, escapeHatches, measurement, mutationReport, publicItems, scorecard, withoutTests } from "./scorecard.mjs";
 
@@ -144,7 +148,7 @@ for (const [files, expected] of surfaceCases) {
 test("the performance scorecard keeps each output, rejects missing samples and uses strict timing targets", async () => {
   const { performanceRows, performanceTable, missedReferenceTarget } = await import("./scorecard.mjs");
   const run = (output, hz, p99, p95, drops = 0) => ({ output, hz, p99, p95, drops });
-  const result = (outputs, pressSamples = 267) => JSON.stringify({ seconds: 60, events: 400, pressSamples, outputs });
+  const result = (outputs, pressSamples = 267) => JSON.stringify({ workload: "m3", seconds: 60, events: 400, pressSamples, outputs });
   const good = [run(1, 44, 999999, 27727271), run(2, 60, 999999, 21666665, 3)];
   const limits = good.map((row, i) => ({ ...row, p99: i ? 999999 : 1000000, p95: i ? 21666666 : 0 }));
   for (const [output, count, expected] of [
@@ -152,29 +156,96 @@ test("the performance scorecard keeps each output, rejects missing samples and u
     [[good[0], good[0]], 2, null], [[good[0], { ...good[1], p95: null }], 2, null],
     [[good[0], { ...good[1], hz: 44 }], 2, null],
   ]) {
-    if (expected === null) assert.throws(() => performanceRows(result(output), count, 60));
-    else assert.deepEqual(performanceRows(result(output), count, 60).outputs.map((row) => row.pass), expected);
+    if (expected === null) assert.throws(() => performanceRows(result(output), count, 60, "m3"));
+    else assert.deepEqual(performanceRows(result(output), count, 60, "m3").outputs.map((row) => row.pass), expected);
   }
-  const rows = performanceRows(result(good), 2, 60);
+  const rows = performanceRows(result(good), 2, 60, "m3");
   assert.match(performanceTable([["M3", rows]]), /M3 \| 2 \| 60 \| 999.999 \| 21666.665 \| 3 \| pass/);
-  assert.throws(() => performanceRows(result(good), 2, 5));
+  assert.throws(() => performanceRows(result(good), 2, 5, "m3"));
   assert.throws(() => performanceTable([["M2", rows], ["M3", { ...rows, events: 399 }]]));
   assert.throws(() => performanceTable([["M2", rows], ["M3", { ...rows, pressSamples: 266 }]]));
   for (const missing of [0, 401, null]) {
-    assert.throws(() => performanceRows(result(good, missing), 2, 60));
+    assert.throws(() => performanceRows(result(good, missing), 2, 60, "m3"));
   }
-  assert.throws(() => performanceRows(JSON.stringify({ seconds: 60, events: 0, outputs: good }), 2, 60));
+  assert.throws(() => performanceRows(JSON.stringify({ workload: "m3", seconds: 60, events: 0, outputs: good }), 2, 60, "m3"), /positive event count/);
   assert.match(performanceTable([]), /Not measured on CI/);
   const smoke = performanceTable([["M3 at limits", { ...rows, seconds: 5 }]]);
   assert.match(smoke, /Each run took 5 s/);
-  assert.match(smoke, /60 s reference run checks the caps/);
+  assert.match(smoke, /Runs of 60 s or longer check the caps/);
   assert.match(smoke, /267 Manual presses and releases per output/);
   assert.match(smoke, /10,922 RGB pixels, 32 roots, 65,536 reserved visits and 16 outputs/);
-  const missed = performanceRows(result(limits), 2, 60);
+  const missed = performanceRows(result(limits), 2, 60, "m3");
   for (const [runs, fails] of [
     [[], false],
     [[["M2", rows], ["M3", rows]], false],
     [[["M2", rows], ["M3", missed]], true],
     [[["M3 at limits", { ...missed, seconds: 5 }]], false],
   ]) assert.equal(missedReferenceTarget(runs), fails);
+});
+
+test("a rig refuses a measurement from a different or unnamed workload", async () => {
+  const { performanceRows } = await import("./scorecard.mjs");
+  const outputs = [44, 60].map((hz, i) => ({ hz, output: i + 1, p99: 1, p95: 1, drops: 0 }));
+  for (const workload of ["m2", undefined]) {
+    const json = JSON.stringify({ workload, outputs, seconds: 60, events: 5, pressSamples: 4 });
+    assert.throws(() => performanceRows(json, 2, 60, "m3"), /expected workload m3/);
+  }
+});
+
+test("a burst row requires complete batches of raw channel sends and plan swaps", async () => {
+  const { performanceRows } = await import("./scorecard.mjs");
+  const outputs = Array.from({ length: 16 }, (_, i) => ({ output: i + 1, hz: i % 2 === 0 ? 44 : 60, p99: 1, p95: 1, drops: 0 }));
+  for (const [bursts, pressSamples, events, error] of [
+    [undefined, 452, 454, /measured burst count/],
+    [0, 452, 454, /measured burst count/],
+    [0.5, 113, 114, /measured burst count/],
+    [2, 451, 453, /226 raw channel sends/],
+    [2, 452, 453, /one plan swap batch/],
+  ]) {
+    const json = JSON.stringify({ workload: "burst", seconds: 60, bursts, pressSamples, events, outputs });
+    assert.throws(() => performanceRows(json, 16, 60, "burst"), error);
+  }
+});
+
+test("the scorecard command labels each workload and gates runs of at least 60 seconds", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "scorecard-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  // Feed the command recorded numbers in place of starting a real-time measurement on CI.
+  writeFileSync(join(dir, "cargo"), `#!/bin/sh
+if [ "$1" = metadata ]; then echo '{"packages":[]}'; exit 0; fi
+while [ "$#" -gt 0 ] && [ "$1" != -- ]; do shift; done
+case "$2" in
+  normal|limits) echo '1 1 0' ;;
+  baseline) echo 1 ;;
+  *) cat "$SCORECARD_FIXTURES/$2.json" ;;
+esac
+`, { mode: 0o755 });
+  const env = { ...process.env, SCORECARD_FIXTURES: dir, PATH: dir + delimiter + process.env.PATH };
+  delete env.CI;
+  delete env.GITHUB_STEP_SUMMARY;
+  for (const [seconds, missed, expectedExit] of [[59, true, 0], [60, false, 0], [60, true, 1], [120, true, 1]]) {
+    for (const [workload, count, ns] of [["m2", 2, 1000], ["m3", 2, 2000], ["worst", 16, 3000], ["burst", 16, 4000]]) {
+      const outputs = Array.from({ length: count }, (_, i) => ({
+        output: i + 1, hz: i % 2 === 0 ? 44 : 60, p99: ns, p95: 1, drops: 0,
+      }));
+      const burst = workload === "burst";
+      if (burst && missed) outputs[1].p99 = 1_000_000;
+      const events = burst ? 454 : 2;
+      const pressSamples = burst ? 452 : 1;
+      writeFileSync(join(dir, workload + ".json"), JSON.stringify({ workload, seconds, events, pressSamples, outputs, bursts: burst ? 2 : undefined }));
+    }
+    const { stdout, stderr, status } = spawnSync(process.execPath, ["scripts/print-scorecard.mjs", "--seconds", String(seconds)], {
+      encoding: "utf8", env,
+    });
+    assert.equal(status, expectedExit, `${seconds} s, missed=${missed}: ${stderr}`);
+    for (const row of ["| M2 | 1 | 44 | 1 |", "| M3 | 1 | 44 | 2 |", "| M3 at limits | 1 | 44 | 3 |"]) {
+      assert.ok(stdout.includes(row), row);
+    }
+    assert.ok(stdout.includes("| M3 at limits (burst) | 1 | 44 | 4 |"));
+    assert.ok(stdout.includes(`| M3 at limits (burst) | 2 | 60 | ${missed ? 1000 : 4} | 0.001 | 0 | ${missed ? "fail" : "pass"} |`));
+    assert.match(stdout, /2 bursts of 256 FIFO commands/);
+    assert.match(stdout, /452 raw channel sends per output/);
+    assert.match(stdout, /first accepted handoff/);
+    assert.equal(stdout.includes("Short runs"), seconds < 60);
+  }
 });
