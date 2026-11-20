@@ -36,7 +36,7 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock, Weak};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::net::TcpListener;
 use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore, mpsc, watch};
 use tokio::time::MissedTickBehavior;
@@ -72,10 +72,18 @@ pub async fn serve(
     });
     let first = Moment::of(&sender);
     // A snapshot of a wake after every command queued so far: taken under `first`.
+    let requested_at = Instant::now();
     let snapshot = engine.fresh();
     let mut health = health::Reader::new();
-    health.observe(snapshot);
-    let picture = Picture::of(snapshot.clone(), &first, &shelf, &shown, health.view());
+    health.observe(|output, sample| snapshot.health_sample(output, sample));
+    let picture = Picture::of(
+        snapshot.clone(),
+        requested_at,
+        &first,
+        &shelf,
+        &shown,
+        health.view(),
+    );
     let through = Arc::clone(&first.through);
     let front = Front {
         shelf: shelf.clone(),
@@ -144,6 +152,8 @@ struct Api {
 /// project, the patch and the show file as they were when the snapshot was taken.
 struct Picture {
     snapshot: Snapshot,
+    /// Host-clock lower bound on when the reader requested this snapshot.
+    requested_at: Instant,
     health: health::View,
     library: Library,
     project: Project,
@@ -157,6 +167,7 @@ struct Picture {
 impl Picture {
     fn of(
         snapshot: Snapshot,
+        requested_at: Instant,
         moment: &Moment,
         shelf: &watch::Receiver<Arc<Shelf>>,
         show: &watch::Receiver<ShowFile>,
@@ -164,6 +175,7 @@ impl Picture {
     ) -> Self {
         Self {
             snapshot,
+            requested_at,
             health: health.clone(),
             library: shelf.borrow().library(),
             project: moment.project,
@@ -235,13 +247,19 @@ struct Front {
 impl Front {
     /// `snapshot` with the project and the patch it was taken under. `None` when that
     /// moment is not known yet.
-    fn picture(&mut self, snapshot: &Snapshot, health: &health::View) -> Option<Picture> {
+    fn picture(
+        &mut self,
+        snapshot: &Snapshot,
+        requested_at: Instant,
+        health: &health::View,
+    ) -> Option<Picture> {
         while let Ok(moment) = self.moments.try_recv() {
             self.kept.push_back(moment);
         }
         let moment = under(&mut self.kept, snapshot.applied(), snapshot.revision())?;
         Some(Picture::of(
             snapshot.clone(),
+            requested_at,
             moment,
             &self.shelf,
             &self.show,
@@ -262,15 +280,20 @@ async fn read(
     let mut poll = tokio::time::interval(engine::BEAT / 2);
     poll.set_missed_tick_behavior(MissedTickBehavior::Skip);
     let mut observed_frame = painted.borrow().snapshot.state.frame;
+    let mut requested_at = painted.borrow().requested_at;
+    let mut next_request = Instant::now();
     loop {
         tokio::select! {
             _ = stopped.wait_for(|stop| *stop) => return engine,
             _ = poll.tick() => {
+                let poll_started = Instant::now();
                 let snapshot = engine.latest();
                 let frame = snapshot.state.frame;
                 // The front may need another poll to find this frame's project.
                 if frame != observed_frame {
-                    health.observe(snapshot);
+                    // latest takes the previous request's snapshot and asks for the next.
+                    requested_at = std::mem::replace(&mut next_request, poll_started);
+                    health.observe(|output, sample| snapshot.health_sample(output, sample));
                     observed_frame = frame;
                 }
                 let changed = {
@@ -278,7 +301,7 @@ async fn read(
                     frame != last.snapshot.state.frame
                         || health.view().revision() != last.health.revision()
                 };
-                if changed && let Some(picture) = front.picture(snapshot, health.view()) {
+                if changed && let Some(picture) = front.picture(snapshot, requested_at, health.view()) {
                     painted.send_replace(Arc::new(picture));
                 }
             }
@@ -348,8 +371,7 @@ async fn talk(mut socket: WebSocket, api: Arc<Api>) {
                 return; // client gone
             }
             if let Some(sub) = &mut subscription {
-                sub.health_sent_at
-                    .get_or_insert_with(|| pictures.borrow().snapshot.state.now);
+                sub.sent(&pictures.borrow());
             }
         }
     }
@@ -382,7 +404,7 @@ async fn answer(
         Request::Subscribe => {
             let now = Arc::clone(&pictures.borrow_and_update());
             let reply = picture(&now);
-            *subscription = Some(Subscription::new(now));
+            *subscription = Some(Subscription::new(now, subscription.as_ref()));
             reply
         }
         Request::Search { text } => api.shelf.borrow().found(text.as_str()),
@@ -563,31 +585,66 @@ struct Subscription {
     last: Arc<Picture>,
     revision: u64,
     cursor: u64,
-    /// Set after the socket finishes sending the subscription Picture or a Health reply.
-    health_sent_at: Option<Duration>,
+    pacing: HealthPacing,
+}
+
+/// A Health send may finish long after the pictured wake. The first snapshot requested
+/// after that send gives an upper bound on its engine time. In between, Changed and
+/// commands keep flowing. The host clock only orders sends and snapshot requests.
+enum HealthPacing {
+    SendingPicture,
+    SendingHealth,
+    AwaitingSample(Instant),
+    Since(Duration),
 }
 
 impl Subscription {
-    fn new(picture: Arc<Picture>) -> Self {
+    fn new(picture: Arc<Picture>, previous: Option<&Self>) -> Self {
+        // Subscribing resets both cursors. A Health sent on this socket may
+        // still need a fresh engine timestamp before its next delivery.
+        let pacing = match previous.map(|sub| &sub.pacing) {
+            Some(HealthPacing::AwaitingSample(sent)) => HealthPacing::AwaitingSample(*sent),
+            _ => HealthPacing::SendingPicture,
+        };
         Self {
             revision: picture.health.revision(),
             cursor: picture.health.end(),
             last: picture,
-            health_sent_at: None,
+            pacing,
+        }
+    }
+
+    fn sent(&mut self, latest: &Picture) {
+        match self.pacing {
+            HealthPacing::SendingPicture => {
+                self.pacing = HealthPacing::Since(latest.snapshot.state.now)
+            }
+            HealthPacing::SendingHealth => {
+                self.pacing = HealthPacing::AwaitingSample(Instant::now())
+            }
+            HealthPacing::AwaitingSample(_) | HealthPacing::Since(_) => {}
         }
     }
 
     fn health(&mut self, picture: &Picture) -> Option<String> {
         let view = &picture.health;
         let now = picture.snapshot.state.now;
-        let since = now.saturating_sub(self.health_sent_at?);
+        if let HealthPacing::AwaitingSample(sent) = self.pacing
+            && picture.requested_at > sent
+        {
+            self.pacing = HealthPacing::Since(now);
+        }
+        let HealthPacing::Since(sent) = self.pacing else {
+            return None;
+        };
+        let since = now.saturating_sub(sent);
         if self.revision == view.revision() || since < Duration::from_millis(500) {
             return None;
         }
         let (events, missed) = view.events_since(self.cursor);
         self.cursor = view.end();
         self.revision = view.revision();
-        self.health_sent_at = None;
+        self.pacing = HealthPacing::SendingHealth;
         json(&Reply::Health {
             health: view.health(),
             events: &events,
@@ -720,9 +777,13 @@ mod tests {
         change(Command::RemoveLook { look: 1 });
         change(step(2, blue));
         let health = health::View::default();
-        let a = front.picture(&a, &health).expect("A's moment is kept");
+        let a = front
+            .picture(&a, Instant::now(), &health)
+            .expect("A's moment is kept");
         let b = engine.fresh().clone();
-        let b = front.picture(&b, &health).expect("B's moment is kept");
+        let b = front
+            .picture(&b, Instant::now(), &health)
+            .expect("B's moment is kept");
 
         // (picture, saved looks, the play's look, light 1's colour)
         let cases = [
@@ -748,7 +809,7 @@ mod tests {
         assert_eq!(query["Picture"]["looks"][0]["look"], 1);
         assert_eq!(query["Picture"]["state"]["plays"][play.slot()]["look"], 1);
         // Subscribe: A delivered, then B's change carries B's looks
-        let mut subscription = Subscription::new(Arc::new(a));
+        let mut subscription = Subscription::new(Arc::new(a), None);
         let changed: Value =
             serde_json::from_str(&subscription.changed(Arc::new(b)).unwrap()).unwrap();
         let looks = &changed["Changed"]["looks"];
@@ -777,6 +838,7 @@ mod tests {
         let plan = Arc::downgrade(&sender.looks().plan(1).unwrap());
         let delivered = Picture::of(
             engine.fresh().clone(),
+            Instant::now(),
             &Moment::of(&sender),
             &library::start(None),
             &watch::channel(ShowFile::None).1,
@@ -853,7 +915,7 @@ mod tests {
             wakes.finish().unwrap();
             let snapshot = engine.latest().clone();
             let picture = front
-                .picture(&snapshot, &health::View::default())
+                .picture(&snapshot, Instant::now(), &health::View::default())
                 .expect("its moment is kept");
             let shown = picture
                 .looks

@@ -1,7 +1,6 @@
 //! The reader turns cumulative engine snapshots into health rows and a bounded event log.
 //! Only the view travels with a picture. The sampling history stays with this reader.
 
-use engine::Snapshot;
 use engine_core::health::{
     self, Coverage, CoverageStep, HealthInput, HealthSample, HealthState, Verdict, WINDOW_DURATION,
     next, status_events, window,
@@ -42,11 +41,11 @@ impl Reader {
         &self.view
     }
 
-    pub(super) fn observe(&mut self, snapshot: &Snapshot) {
-        self.observe_with(|output, sample| snapshot.health_sample(output, sample));
-    }
-
-    fn observe_with(&mut self, mut read: impl FnMut(OutputNumber, &mut HealthSample) -> bool) {
+    /// Read the cumulative samples for all attached outputs from one snapshot.
+    pub(super) fn observe(
+        &mut self,
+        mut read: impl FnMut(OutputNumber, &mut HealthSample) -> bool,
+    ) {
         let view = &mut self.view;
         let previous_end = view.end();
         let mut count = 0;
@@ -249,6 +248,11 @@ impl Tracker {
             CoverageStep::SameGridPoint { end } => {
                 if let Some(point) = self.grid.back_mut().filter(|point| point.end == end) {
                     point.sample = *sample;
+                    // A loss withdraws this endpoint's vote, even if the output
+                    // returns on another read at the same engine time.
+                    if !available(sample.status) {
+                        point.verdict = Insufficient;
+                    }
                 } else {
                     self.restart_coverage(sample);
                 }
@@ -345,7 +349,7 @@ mod tests {
     }
 
     fn observe(reader: &mut Reader, sample: Option<&HealthSample>) {
-        reader.observe_with(|number, to| {
+        reader.observe(|number, to| {
             if let Some(read) = sample.filter(|_| number == output()) {
                 *to = *read;
                 true
@@ -567,50 +571,79 @@ mod tests {
         }
     }
 
-    // Coverage normally guarantees these samples. Remove one to exercise the
-    // reader's recovery through the same observations that publish its rows.
-    fn check_missing_endpoint(repeat: bool) {
-        let mut reader = Reader::new();
-        let last = if repeat { 16 } else { 15 };
-        for i in 0..=last {
-            observe(&mut reader, Some(&sample(i * 250, i * 2)));
+    #[test]
+    fn a_loss_on_a_repeated_endpoint_cannot_confirm_a_later_warning() {
+        for (repeat, back_at) in [(false, 4_250), (true, 4_250), (true, 4_000)] {
+            let mut reader = Reader::new();
+            for i in 0..16 {
+                observe(&mut reader, Some(&sample(i * 250, i * 2)));
+            }
+            if repeat {
+                observe(&mut reader, Some(&sample(4_000, 32)));
+            }
+            let mut lost = sample(4_000, 32);
+            lost.status = Status::Reconnecting { failures: 1 };
+            lost.outages = 1;
+            observe(&mut reader, Some(&lost));
+            assert_eq!(row(&reader).state, OutputHealthState::Measuring);
+
+            for ms in (back_at..=8_000).step_by(250) {
+                let mut running = sample(ms, ms / 125);
+                running.outages = 1;
+                observe(&mut reader, Some(&running));
+            }
+            assert_eq!(window(&reader), (8_000, 32));
+            assert_eq!(
+                row(&reader).state,
+                OutputHealthState::Measuring,
+                "repeat {repeat}, back at {back_at}"
+            );
+            assert_eq!(
+                reader.view().events_since(0),
+                (
+                    vec![
+                        event(4_000, HealthEvent::OutputLost),
+                        event(
+                            back_at,
+                            HealthEvent::Recovered {
+                                reason: RecoveredReason::OutputAvailable,
+                            },
+                        ),
+                    ],
+                    0,
+                ),
+                "repeat {repeat}, back at {back_at}"
+            );
         }
-        let grid = &mut reader.outputs[0].1.grid;
-        if repeat {
-            grid.clear();
-        } else {
-            grid.pop_front();
-        }
-        observe(&mut reader, Some(&sample(4_000, 32)));
-        assert_eq!(
-            row(&reader).measurement,
-            OutputMeasurement::ClockDiscontinuity
-        );
-        for i in 17..=32 {
-            observe(&mut reader, Some(&sample(i * 250, i * 2)));
-        }
-        assert_eq!(window(&reader), (8_000, 32));
-        assert_eq!(reader.view().end(), 0);
     }
 
     #[test]
-    fn a_repeat_without_its_grid_point_restarts_measurement() {
-        check_missing_endpoint(true);
-    }
+    fn a_reader_gap_needs_four_seconds_of_new_grid_samples_for_a_window() {
+        for (gap_at, first_window) in [(4_500, 8_500), (4_510, 9_000)] {
+            let mut reader = Reader::new();
+            for ms in (0..=4_000).step_by(250) {
+                observe(&mut reader, Some(&sample(ms, ms / 25)));
+            }
+            assert_eq!(window(&reader), (4_000, 160));
 
-    #[test]
-    fn a_window_without_its_first_grid_point_restarts_measurement() {
-        check_missing_endpoint(false);
-    }
-
-    #[test]
-    fn crossing_without_a_preceding_sample_restarts_measurement() {
-        let mut tracker = super::Tracker::new();
-        let later = sample(510, 8);
-        let end = Some(Duration::from_millis(500));
-        let step = super::CoverageStep::Measuring { end };
-        assert_eq!(tracker.timing(step, &later), None);
-        assert_eq!(tracker.measurement, OutputMeasurement::ClockDiscontinuity);
+            // The gap may land on a grid point or just past it. A repeat of
+            // that read cannot restore coverage from before the gap.
+            for ms in [gap_at, gap_at, 4_750] {
+                observe(&mut reader, Some(&sample(ms, ms / 25)));
+                assert_eq!(
+                    row(&reader).measurement,
+                    OutputMeasurement::ClockDiscontinuity
+                );
+            }
+            for ms in (5_000..first_window).step_by(250) {
+                observe(&mut reader, Some(&sample(ms, ms / 25)));
+                assert_eq!(row(&reader).measurement, OutputMeasurement::Measuring);
+            }
+            observe(&mut reader, Some(&sample(first_window, first_window / 25)));
+            assert_eq!(window(&reader), (first_window, 160));
+            assert_eq!(row(&reader).state, OutputHealthState::Measuring);
+            assert_eq!(reader.view().events_since(0), (vec![], 0));
+        }
     }
 
     #[test]

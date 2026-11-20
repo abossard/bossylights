@@ -118,6 +118,125 @@ async fn subscribed_requests_skip_queued_health() {
     .expect("channel 1 reaches the DDP output");
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn consecutive_health_replies_keep_their_spacing_when_the_first_snapshot_is_old() {
+    for request in ["Query", "Subscribe"] {
+        check_health_spacing(request).await;
+    }
+}
+
+async fn check_health_spacing(request: &str) {
+    async fn published(desk: &mut Socket, wakes: &engine::Wakes, slot: usize, at: Duration) {
+        let previous = wakes.woke();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                assert_eq!(
+                    tokio::task::block_in_place(|| wakes.wake_at(at)).unwrap(),
+                    at
+                );
+                send(desk, &json!("Query")).await;
+                let picture = answer(desk).await;
+                let state = &picture["Picture"]["state"];
+                if state["frame"].as_u64().unwrap() > previous && !state["outputs"][slot].is_null()
+                {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("the reader publishes the wake with the attached output");
+    }
+
+    let (first_udp, first_attach) = receiver().await;
+    let (second_udp, mut second_attach) = receiver().await;
+    second_attach["Send"]["command"]["SetOutput"]["output"] = json!(2);
+    let slow_address = second_udp.local_addr().unwrap();
+    let (opening, opened) = std::sync::mpsc::channel();
+    let (release, released) = std::sync::mpsc::channel();
+    let slow_open: engine::Open = Box::new(move |kind| {
+        if matches!(kind, engine::OutputKind::Ddp { address, .. } if SocketAddr::V4(address) == slow_address)
+        {
+            opening.send(()).unwrap();
+            released.recv_timeout(Duration::from_secs(5)).unwrap();
+        }
+        outputs::open(kind)
+    });
+    let (engine, sender, wakes) = Engine::start_stepped(Universes::ONE, slow_open).unwrap();
+    let address = common::serve(engine, sender, None).await;
+    let (mut desk, mut subscriber) = (open(address).await, open(address).await);
+    tokio::task::block_in_place(|| wakes.hold()).unwrap();
+    let before = tokio::task::block_in_place(|| wakes.wake()).unwrap();
+    send(&mut subscriber, &json!("Subscribe")).await;
+    assert_eq!(
+        next(&mut subscriber).await["Picture"]["health"]["outputs"],
+        json!([])
+    );
+
+    for request in [set(1, 1, 91), first_attach] {
+        send(&mut desk, &request).await;
+        assert_eq!(answer(&mut desk).await, "Accepted");
+    }
+    // The subscriber cannot send Health while it waits for this open to finish.
+    send(&mut subscriber, &second_attach).await;
+    tokio::task::spawn_blocking(move || opened.recv_timeout(Duration::from_secs(5)))
+        .await
+        .unwrap()
+        .unwrap();
+    let first = before + Duration::from_secs(1);
+    published(&mut desk, &wakes, 0, first).await;
+    assert_eq!(packet(&first_udp).await[10], 91);
+
+    // The socket sends its first Health at `now`, carrying the previous wake.
+    let now = first + Duration::from_secs(1);
+    wakes.set_time(now);
+    release.send(()).unwrap();
+    assert_eq!(answer(&mut subscriber).await, "Accepted");
+    loop {
+        if let Some(reply) = next(&mut subscriber).await.get("Health") {
+            let rows = reply["health"]["outputs"].as_array().unwrap();
+            assert_eq!(rows.len(), 1);
+            assert_eq!(rows[0]["output"], 1);
+            break;
+        }
+    }
+    // A reply on the same socket confirms the preceding send has finished.
+    send(&mut subscriber, &json!(request)).await;
+    assert!(answer(&mut subscriber).await.get("Picture").is_some());
+    published(&mut desk, &wakes, 1, now).await;
+    assert_eq!(packet(&second_udp).await[10], 91);
+    let due = now + Duration::from_millis(500);
+    for at in [now, due - Duration::from_nanos(1)] {
+        // At `now` this is a fresh snapshot requested after the first Health.
+        published(&mut desk, &wakes, 1, at).await;
+        // One Query can race the new frame. The next drains any Health the
+        // socket sent once that frame was already available to it.
+        for _ in 0..2 {
+            send(&mut subscriber, &json!("Query")).await;
+            loop {
+                let reply = next(&mut subscriber).await;
+                assert!(
+                    reply.get("Health").is_none(),
+                    "early Health at {at:?} after {request}: {reply}"
+                );
+                if reply.get("Picture").is_some() {
+                    break;
+                }
+            }
+        }
+    }
+    published(&mut desk, &wakes, 1, due).await;
+    loop {
+        if let Some(health) = next(&mut subscriber).await.get("Health") {
+            let rows = health["health"]["outputs"].as_array().unwrap();
+            assert_eq!(rows.len(), 2);
+            assert_eq!(rows[1]["output"], 2);
+            break;
+        }
+    }
+    send(&mut desk, &json!("Stop")).await;
+    assert_eq!(answer(&mut desk).await, "Stopping");
+}
+
 #[tokio::test]
 async fn set_channel_reaches_the_state_stream_and_the_ddp_socket_in_the_next_frame() {
     let mut socket = connect().await;

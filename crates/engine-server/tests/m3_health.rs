@@ -313,6 +313,13 @@ impl Rig {
         self.after(at).await;
     }
 
+    /// One snapshot can already be in flight at delivery. A second wake lets the
+    /// reader sample the send time before the stepped clock moves again.
+    async fn sample_delivery_time(&mut self) {
+        self.wake_at(self.now).await;
+        self.wake_at(self.now).await;
+    }
+
     /// Wait for the DMX writes and the reader, then save any newly covered window.
     async fn after(&mut self, at: Duration) {
         let before = self.now;
@@ -589,6 +596,13 @@ async fn a_query_keeps_pending_events_and_health_waits_500_ms_of_engine_time() {
     for previous in 0..2 {
         // Finish the preceding send on the server while the engine still holds at `sent`.
         sub.query().await;
+        if previous > 0 {
+            rig.sample_delivery_time().await;
+            sub.until("a fresh sample at the delivery time", |w| {
+                w.frame == rig.wakes.woke()
+            })
+            .await;
+        }
         let due = sent + GRID;
         rig.fail(true);
         while !reconnecting(status(&rig.watcher.state, 0)) {
@@ -641,6 +655,38 @@ async fn a_query_keeps_pending_events_and_health_waits_500_ms_of_engine_time() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn an_unchanged_health_revision_is_not_resent_while_frames_keep_arriving() {
+    let (mut rig, _) = Rig::start().await;
+    rig.level(LEVEL).await;
+    rig.attach(1).await;
+    while status(&rig.watcher.state, 0) != "Running" {
+        rig.step(ON_TIME).await;
+    }
+
+    let (mut sub, picture) = Watcher::subscribe(connect(rig.address).await).await;
+    let initial = &picture["Picture"]["health"];
+    assert_eq!(initial["outputs"][0]["measurement"], "Measuring");
+    // Finish the subscription send before advancing the clock.
+    assert_eq!(sub.query().await["Picture"]["health"], *initial);
+
+    let until = rig.now + 2 * GRID;
+    while rig.now < until {
+        rig.step(ON_TIME).await;
+    }
+    sub.until("the last Changed frame", |w| w.frame == rig.wakes.woke())
+        .await;
+    assert_eq!(sub.query().await["Picture"]["health"], *initial);
+    let wire = rig.wire();
+    assert_eq!(wire, vec![LEVEL; rig.handed[0].len()]);
+    assert!(
+        sub.healths.is_empty(),
+        "unchanged Health: {:?}",
+        sub.healths
+    );
+    rig.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_loss_at_the_last_grid_time_resets_the_timing_state() {
     let (mut rig, _) = Rig::start().await;
     rig.level(LEVEL).await;
@@ -667,6 +713,7 @@ async fn a_loss_at_the_last_grid_time_resets_the_timing_state() {
     let current = &picture["Picture"]["health"]["outputs"][0];
     assert!(reconnecting(&current["status"]));
     assert_eq!(current["state"], "Measuring", "{current}");
+    rig.sample_delivery_time().await;
     rig.wake_at(end + GRID).await;
     rig.watcher
         .until("the loss at the same grid point", |w| {
@@ -676,6 +723,54 @@ async fn a_loss_at_the_last_grid_time_resets_the_timing_state() {
     let current = row(rig.watcher.last());
     assert!(reconnecting(&current["status"]));
     assert_eq!(current["state"], "Measuring", "{current}");
+    rig.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unavailable_repeat_cannot_confirm_lateness_on_the_wire() {
+    let (mut rig, _) = Rig::start().await;
+    rig.level(LEVEL).await;
+    rig.attach(2).await;
+    let first = rig.windows_from;
+    while rig.due + 2 * PERIOD + LATE <= first {
+        rig.step(LATE).await;
+    }
+
+    // Both outputs have bad timing, but only output 1 loses its device at the first
+    // endpoint. The reader sees the failure on a second wake at that exact time.
+    rig.devices.fail_only.store(1, Ordering::SeqCst);
+    rig.wake_at(first).await;
+    assert_eq!(rig.window(first)["outputs"][0]["status"], "Running");
+    let started = Instant::now();
+    while !reconnecting(status(&rig.watcher.state, 0)) {
+        assert!(started.elapsed() < GIVE_UP, "no failed frame result"); // guard
+        rig.wake_at(first).await;
+    }
+    let picture = rig.watcher.query().await;
+    assert!(reconnecting(
+        &picture["Picture"]["health"]["outputs"][0]["status"]
+    ));
+    rig.devices.fail_only.store(0, Ordering::SeqCst);
+    rig.due = rig.handed[0].last().unwrap().0;
+
+    let confirm = first + WINDOW;
+    while rig.now < confirm + 2 * GRID {
+        rig.step(LATE).await;
+    }
+    let wire = rig.wire();
+    assert_eq!(wire.len() + 1, rig.handed[0].len());
+    assert!(wire.iter().all(|level| *level == LEVEL));
+    let warnings: Vec<_> = rig
+        .watcher
+        .events(0)
+        .into_iter()
+        .filter(|e| e["at_ms"] == ms(confirm) && e["event"].get("RunningLate").is_some())
+        .collect();
+    assert_eq!(
+        warnings,
+        [json!({"output": 2, "generation": 1, "at_ms": ms(confirm),
+            "event": {"RunningLate": {"reason": "HandoffLateness"}}})]
+    );
     rig.stop().await;
 }
 
@@ -745,33 +840,52 @@ async fn a_fresh_engine_has_no_health_and_a_slow_socket_counts_what_it_missed_an
     );
 
     // 10 losses and returns on 16 outputs: 320 events, faster than one Health per 500 ms
-    let cycles = 10;
-    for _ in 0..cycles {
-        rig.fail(true);
-        while !(0..16).all(|n| reconnecting(status(&rig.watcher.state, n))) {
-            rig.step(ON_TIME).await;
-        }
-        rig.fail(false);
-        while !running(&rig.watcher) {
-            rig.step(ON_TIME).await;
+    let mut expected = Vec::new();
+    let mut lost = [false; 16];
+    for _ in 0..10 {
+        for (fail, event) in [
+            (true, json!("OutputLost")),
+            (false, json!({"Recovered": {"reason": "OutputAvailable"}})),
+        ] {
+            rig.fail(fail);
+            while lost != [fail; 16] {
+                rig.step(ON_TIME).await;
+                for (slot, was_lost) in lost.iter_mut().enumerate() {
+                    let now_lost = reconnecting(status(&rig.watcher.state, slot));
+                    if now_lost != *was_lost {
+                        expected.push(json!({"output": slot + 1, "generation": 1,
+                            "at_ms": ms(rig.now), "event": event}));
+                        *was_lost = now_lost;
+                    }
+                }
+            }
         }
     }
-    let total = cycles * 16 * 2;
-    rig.wake_at(rig.now + GRID).await;
-    slow.until("every event heard or counted missed", |w| {
-        w.events(0).len() as u64 + w.missed() >= total
+    slow.query().await;
+    rig.sample_delivery_time().await;
+    slow.until("the last frame before flushing the log", |w| {
+        w.frame == rig.wakes.woke()
     })
     .await;
-    let events = slow.events(0);
-    assert_eq!(events.len() as u64 + slow.missed(), total);
-    assert!(slow.missed() > 0, "{} events, none missed", events.len());
-    let available = json!({"Recovered": {"reason": "OutputAvailable"}});
-    assert!(
-        events.iter().all(
-            |e| e["generation"] == 1 && (e["event"] == "OutputLost" || e["event"] == available)
-        ),
-        "{events:?}"
-    );
+    rig.wake_at(rig.now + GRID).await;
+    slow.until("every event heard or counted missed", |w| {
+        w.events(0).len() as u64 + w.missed() >= expected.len() as u64
+    })
+    .await;
+    assert!(slow.missed() > 0, "the log must overflow");
+    let mut pending = expected.as_slice();
+    for reply in &slow.healths {
+        let health = &reply["Health"];
+        let missed = usize::try_from(health["missed"].as_u64().unwrap()).unwrap();
+        let events = health["events"].as_array().unwrap();
+        if missed > 0 {
+            assert_eq!(events.len(), 64, "the log retains the newest 64 events");
+        }
+        let (delivered, rest) = pending[missed..].split_at(events.len());
+        assert_eq!(events, delivered, "events since the last delivery");
+        pending = rest;
+    }
+    assert!(pending.is_empty());
 
     // the slow socket is still open
     let pictures = slow.pictures;
