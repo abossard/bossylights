@@ -4,19 +4,21 @@
 #[path = "wave.rs"]
 mod wave;
 
-use crate::{Light, Position, Repeat, Rgb, Speed, Swatches, Use};
+use crate::{BeatTime, Light, Position, Repeat, Rgb, Speed, Swatches, Use};
 
 /// The maximum number of looks from the root to a leaf, counting both.
 pub const MAX_DEPTH: usize = 8;
 
-/// A compiled look. Sequence ends and timed measures use the clock's Q32 beats.
+/// A compiled look. Sequence ends and measures use the clock's Q32 beats.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Node {
     Step {
         values: Light,
     },
     Wave {
-        measure: u64,
+        /// Whole beats. Keeping the authored period here lets every instruction
+        /// fit in the same space as a v5 sequence or step.
+        period: u8,
         swatches: Swatches,
     },
     Sequence {
@@ -54,31 +56,81 @@ pub struct Program<'a> {
 impl Program<'_> {
     /// A once-use ends when the *unspread* clock reaches its measure. Its final
     /// sample still exists: the Mixer decides whether to keep or remove it.
-    pub fn finished(&self, elapsed: u64, settings: Use) -> bool {
-        match self.nodes.get(self.root) {
-            Some(Node::Sequence { measure, .. } | Node::Wave { measure, .. }) => {
-                settings.repeat == Repeat::Once
-                    && scaled(u128::from(elapsed), settings.speed) >= u128::from(*measure)
-            }
-            Some(Node::Step { .. }) | None => false,
-        }
+    pub fn finished(&self, elapsed: impl Into<Elapsed>, settings: Use) -> bool {
+        let measure = match self.nodes.get(self.root) {
+            Some(Node::Sequence { measure, .. }) => *measure,
+            Some(Node::Wave { period, .. }) => u64::from(*period) << 32,
+            Some(Node::Step { .. }) | None => return false,
+        };
+        let time = elapsed.into().0;
+        settings.repeat == Repeat::Once && !time.at_speed(settings.speed).before(time.at(measure))
     }
 
     /// Sample one light at the clock's elapsed count since this play began.
-    pub fn sample(&self, bindings: &[Binding], elapsed: u64, settings: Use) -> Light {
+    pub fn sample(
+        &self,
+        bindings: &[Binding],
+        elapsed: impl Into<Elapsed>,
+        settings: Use,
+    ) -> Light {
         Sampler {
             program: self,
             bindings,
         }
-        .visit(self.root, Moment::at(elapsed), settings, MAX_DEPTH)
+        .visit(self.root, elapsed.into().0, settings, MAX_DEPTH)
     }
 }
 
-fn scaled(count: u128, speed: Speed) -> u128 {
-    match speed {
-        Speed::Half => count / 2,
-        Speed::Normal => count,
-        Speed::Double => count * 2,
+/// Time since a play started, ready for every light that uses the same clock.
+#[derive(Clone, Copy)]
+pub struct Elapsed(Moment);
+
+impl From<u64> for Elapsed {
+    fn from(whole: u64) -> Self {
+        BeatTime::from(whole).since(0.into())
+    }
+}
+
+impl BeatTime {
+    /// Subtract the exact start position, even if a tap has changed the clock's span.
+    pub fn since(self, start: Self) -> Elapsed {
+        let (now_count, now_part, now_span) = self.parts();
+        let (start_count, start_part, start_span) = start.parts();
+        // One Q32 count has this many subcounts. The larger span divides the scale
+        // exactly; only the smaller span can leave a fractional subcount. Keep
+        // 2^MAX_DEPTH for nested half speeds and 100 for percentage offsets.
+        let factor = 100 << MAX_DEPTH;
+        let span = now_span.max(start_span);
+        let scale = u128::from(span) * factor;
+        let position = |whole: u64, part: u64, clock_span: u64| {
+            let count = u128::from(whole) * scale;
+            if clock_span == span {
+                (count + u128::from(part) * factor, 0)
+            } else {
+                let fraction = u128::from(part) * scale;
+                let divisor = u128::from(clock_span);
+                (count + fraction / divisor, fraction % divisor)
+            }
+        };
+        let (now, end_part) = position(now_count, now_part, now_span);
+        let (from, begin_part) = position(start_count, start_part, start_span);
+        let mut time = Moment {
+            count: 0,
+            scale,
+            part: 0,
+            divisor: 1,
+            left: false,
+        };
+        if (now, end_part) > (from, begin_part) {
+            let divisor = u128::from(now_span.min(start_span));
+            let borrow = begin_part > end_part;
+            time.count = now - from - u128::from(borrow);
+            time.part = end_part + u128::from(borrow) * divisor - begin_part;
+            if time.part != 0 {
+                time.divisor = divisor;
+            }
+        }
+        Elapsed(time)
     }
 }
 
@@ -87,32 +139,32 @@ fn scaled(count: u128, speed: Speed) -> u128 {
 #[derive(Clone, Copy)]
 struct Moment {
     count: u128,
+    scale: u128,
     /// Fraction of the next subcount, carried through each linked target's spread.
     part: u128,
     divisor: u128,
     left: bool,
 }
 
-/// The factor of 100 makes percentages exact. The low bits leave room to halve
-/// the clock and its spread offsets at every level without losing a fraction.
-fn subcounts(clock_count: u64) -> u128 {
-    (u128::from(clock_count) << 32) * 100
-}
-
 impl Moment {
-    fn at(count: u64) -> Self {
+    fn subcounts(self, clock_count: u64) -> u128 {
+        u128::from(clock_count) * self.scale
+    }
+
+    fn at(self, count: u64) -> Self {
         Self {
-            count: subcounts(count),
+            count: self.subcounts(count),
+            scale: self.scale,
             part: 0,
             divisor: 1,
             left: false,
         }
     }
 
-    fn left(count: u64) -> Self {
+    fn left(self, count: u64) -> Self {
         Self {
             left: true,
-            ..Self::at(count)
+            ..self.at(count)
         }
     }
 
@@ -124,7 +176,7 @@ impl Moment {
 
     fn since(self, start: u64) -> Self {
         Self {
-            count: self.count.saturating_sub(subcounts(start)),
+            count: self.count.saturating_sub(self.subcounts(start)),
             ..self
         }
     }
@@ -136,6 +188,37 @@ impl Moment {
             self.part -= self.divisor;
         }
         self
+    }
+
+    fn times(mut self, factor: u128) -> Self {
+        let fraction = self.part * factor;
+        self.count = self.count * factor + fraction / self.divisor;
+        self.part = fraction % self.divisor;
+        self
+    }
+
+    /// Progress through the part of an item left after its step-entry delay.
+    /// Keep both weights in the same units so a fractional delay cancels exactly.
+    fn fade_weight(mut self, delay: Self, width: u128, percent: u8) -> Option<(Self, u128)> {
+        if percent == 0 {
+            return None;
+        }
+        self.count -= delay.count;
+        let mut remaining = width - delay.count;
+        if delay.part != 0 {
+            self = self.times(delay.divisor);
+            self.count -= delay.part;
+            remaining = remaining * delay.divisor - delay.part;
+        }
+        let span = if remaining.is_multiple_of(100) {
+            remaining / 100 * u128::from(percent)
+        } else {
+            // A tapped tempo and fractional delay can leave a non-integral
+            // percentage. Keep the factor of 100 on the progress in that case.
+            self = self.times(100);
+            remaining * u128::from(percent)
+        };
+        (self.count < span).then_some((self, span))
     }
 
     fn at_speed(mut self, speed: Speed) -> Self {
@@ -154,42 +237,47 @@ impl Moment {
         }
     }
 
-    /// Add span × spread/100 × index/count. At most eight nodes multiply
-    /// divisors, each at most MAX_LIGHTS (2¹⁴). Their product fits in 112 bits,
-    /// including the binding of a Wave at maximum depth.
-    fn shifted(mut self, span: u128, spread: u8, binding: &Binding) -> Self {
+    /// Add span × spread/100 × index/count. Leave 16 bits for an RGB16
+    /// product. Compiled plans fit: at depth eight their per-light visit cost
+    /// caps the root at 425 lights. Eight such divisors and the smaller tap
+    /// span take under 101 bits. Reject oversized caller-built programs.
+    fn shifted(mut self, span: u128, spread: u8, binding: &Binding) -> Option<Self> {
         if spread == 0 || binding.index == 0 || binding.count == 0 {
-            return self;
+            return Some(self);
         }
         let offset = (span / 100) * u128::from(spread) * u128::from(binding.index);
         let lights = u128::from(binding.count);
         self.count += offset / lights;
         let remainder = offset % lights;
         if remainder != 0 {
+            let divisor = self.divisor * lights;
+            if divisor > 1u128 << 112 {
+                return None;
+            }
             self.part = self.part * lights + remainder * self.divisor;
-            self.divisor *= lights;
+            self.divisor = divisor;
             self = self.carry();
         }
-        self
+        Some(self)
     }
 
     /// Phase in this use and whether it has a predecessor across a loop boundary.
-    fn phase(self, measure: u64, settings: Use, binding: &Binding) -> (Self, bool) {
-        let end = Self::at(measure);
-        let mut phase = self
-            .at_speed(settings.speed)
-            .shifted(end.count, settings.spread, binding);
+    fn phase(self, measure: u64, settings: Use, binding: &Binding) -> Option<(Self, bool)> {
+        let end = self.at(measure);
+        let mut phase =
+            self.at_speed(settings.speed)
+                .shifted(end.count, settings.spread, binding)?;
         if phase.before(end) {
-            return (phase, false);
+            return Some((phase, false));
         }
         if settings.repeat == Repeat::Once {
-            return (Self::left(measure), false);
+            return Some((self.left(measure), false));
         }
         phase.count %= end.count;
         if phase.left && phase.count == 0 && phase.part == 0 {
-            (Self::left(measure), true)
+            Some((self.left(measure), true))
         } else {
-            (phase, true)
+            Some((phase, true))
         }
     }
 }
@@ -212,10 +300,13 @@ impl Sampler<'_> {
         };
         let (items, measure) = match self.program.nodes.get(node) {
             Some(Node::Step { values }) => return *values,
-            Some(Node::Wave { measure, swatches }) if *measure > 0 => {
-                let (phase, _) = time.phase(*measure, settings, binding);
+            Some(Node::Wave { period, swatches }) if *period > 0 => {
+                let measure = u64::from(*period) << 32;
+                let Some((phase, _)) = time.phase(measure, settings, binding) else {
+                    return Light::DARK;
+                };
                 return Light {
-                    colour: wave::colour(swatches.as_slice(), phase, subcounts(*measure)),
+                    colour: wave::colour(swatches.as_slice(), phase, time.subcounts(measure)),
                     ..Light::DARK
                 };
             }
@@ -232,23 +323,25 @@ impl Sampler<'_> {
             }
             Some(Node::Sequence { .. } | Node::Wave { .. }) | None => return Light::DARK,
         };
-        let (phase, wrapped) = time.phase(measure, settings, binding);
-        let index = items.partition_point(|item| !phase.before(Moment::at(item.end)));
+        let Some((phase, wrapped)) = time.phase(measure, settings, binding) else {
+            return Light::DARK;
+        };
+        let index = items.partition_point(|item| !phase.before(time.at(item.end)));
         let Some((incoming, start)) = item_at(items, index) else {
             return Light::DARK;
         };
         let age = phase.since(start);
-        let width = subcounts(incoming.end.saturating_sub(start));
+        let width = time.subcounts(incoming.end.saturating_sub(start));
         let delay = if incoming.settings.spread != 0
             && matches!(
                 self.program.nodes.get(incoming.child),
                 Some(Node::Step { .. })
             ) {
-            self.binding(incoming.child).map_or(Moment::at(0), |b| {
-                Moment::at(0).shifted(width, incoming.settings.spread, b)
-            })
+            self.binding(incoming.child)
+                .and_then(|b| time.at(0).shifted(width, incoming.settings.spread, b))
+                .unwrap_or(time.at(0))
         } else {
-            Moment::at(0)
+            time.at(0)
         };
         let previous = || {
             let index = index
@@ -257,7 +350,7 @@ impl Sampler<'_> {
             let (outgoing, start) = item_at(items, index)?;
             Some(self.visit(
                 outgoing.child,
-                Moment::left(outgoing.end.saturating_sub(start)),
+                time.left(outgoing.end.saturating_sub(start)),
                 outgoing.settings,
                 depth,
             ))
@@ -266,12 +359,9 @@ impl Sampler<'_> {
             return previous().unwrap_or(Light::DARK);
         }
         let now = self.visit(incoming.child, age, incoming.settings, depth);
-        // Convert to interpolation weights only after deciding the exact item and entry.
-        let fade = width.saturating_sub(delay.count) * u128::from(incoming.transition) / 100;
-        let progress = age.count.saturating_sub(delay.count);
-        if progress >= fade {
+        let Some((progress, fade)) = age.fade_weight(delay, width, incoming.transition) else {
             return now;
-        }
+        };
         match previous() {
             Some(from) => blend(from, now, progress, fade, binding.discrete_colour),
             None => now,
@@ -288,12 +378,25 @@ fn item_at(items: &[Item], index: usize) -> Option<(&Item, u64)> {
     Some((items.get(index)?, start))
 }
 
+/// Round the exact weighted channel. The position may lie a fraction of a subcount
+/// on either side of a half tie. At a rising tie the outgoing left limit rounds down.
+fn interpolate(from: u16, to: u16, weight: Moment, span: u128) -> u16 {
+    let rounded =
+        u128::from(from) * (span - weight.count) + u128::from(to) * weight.count + span / 2;
+    let fraction = weight.part * u128::from(to.abs_diff(from));
+    let numerator = if from < to {
+        let left_of_integer = weight.left && fraction.is_multiple_of(weight.divisor);
+        rounded + fraction / weight.divisor - u128::from(left_of_integer)
+    } else {
+        rounded - fraction.div_ceil(weight.divisor)
+    };
+    (numerator / span) as u16
+}
+
 /// Only the incoming sample can claim a property. A common continuous value
 /// interpolates in 16 bits, rounded to nearest. Gobo and wheel colour cut at entry.
-fn blend(from: Light, mut to: Light, progress: u128, fade: u128, discrete_colour: bool) -> Light {
-    let lerp = |a: u16, b: u16| {
-        ((u128::from(a) * (fade - progress) + u128::from(b) * progress + fade / 2) / fade) as u16
-    };
+fn blend(from: Light, mut to: Light, progress: Moment, fade: u128, discrete_colour: bool) -> Light {
+    let lerp = |a, b| interpolate(a, b, progress, fade);
     if let (Some(a), Some(b)) = (from.intensity, to.intensity) {
         to.intensity = Some(lerp(a, b));
     }
@@ -585,6 +688,42 @@ mod tests {
                 expected,
                 "{name}"
             );
+        }
+    }
+
+    #[test]
+    fn a_spread_step_fade_rounds_at_the_midpoint_and_at_its_left_limit() {
+        let mut graph = Graph::default();
+        let dark = graph.step(Some(0));
+        let lit = graph.step(Some(1));
+        let normal = Use::default();
+        let once = Use {
+            repeat: Repeat::Once,
+            ..normal
+        };
+        for (percent, transition, count, width) in [
+            // Offset 2/3, delay 1/3. At beat 1 the full fade is halfway.
+            (100, 100, 3, 16),
+            // Offset 1/400, delay 1/300. At beat 1.25 the 50% fade is halfway.
+            (1, 50, 8, 20),
+        ] {
+            let spread = Use {
+                spread: percent,
+                ..normal
+            };
+            let fade = graph.sequence(&[(dark, 16, normal, 0), (lit, 16, spread, transition)]);
+            let parent = graph.sequence(&[(fade, width, spread, 0)]);
+            let mut bindings = graph.bindings(1, 3);
+            bindings[fade].count = count;
+            for (root, settings, expected) in [(fade, spread, 1), (parent, once, 0)] {
+                assert_eq!(
+                    graph
+                        .program(root)
+                        .sample(&bindings, u64::from(width) * UNIT, settings)
+                        .intensity,
+                    Some(expected)
+                );
+            }
         }
     }
 

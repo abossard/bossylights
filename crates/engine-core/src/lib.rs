@@ -18,8 +18,8 @@ mod api;
 mod channel;
 mod clock;
 mod evaluate;
-pub use clock::{BEATS_PER_BAR, Bpm, Clock, Reading, Source, When, beats};
-pub use evaluate::{Binding, Item, MAX_DEPTH, Node, Program};
+pub use clock::{BEATS_PER_BAR, BeatTime, Bpm, Clock, Reading, Source, When, beats};
+pub use evaluate::{Binding, Elapsed, Item, MAX_DEPTH, Node, Program};
 mod kinds;
 mod library;
 mod mix;
@@ -897,8 +897,8 @@ mod tests {
     }
 
     /// A count of the clock is `beats`, to a millionth of a beat.
-    fn close(count: u64, want: f64) -> bool {
-        (beats(count) - want).abs() < 1e-6
+    fn close(count: impl Into<BeatTime>, want: f64) -> bool {
+        (count.into().beats() - want).abs() < 1e-6
     }
 
     fn play(slot: usize) -> PlayId {
@@ -1173,7 +1173,7 @@ mod tests {
             sent.insert(0, (100, start(When::Now)));
             let state = wake(at_120(), 500, &sent);
             let play = *state.plays.iter().next().unwrap();
-            (play.start, state.clock.elapsed_now())
+            (play.start, state.clock.beat_at(state.clock.at()))
         };
         let slow = EngineCommand::Feed {
             bpm: Bpm::new(60).unwrap(),

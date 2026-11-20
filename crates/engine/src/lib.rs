@@ -170,7 +170,7 @@ pub struct Sender {
     /// applied every command sent.
     plays: [Option<Live>; PLAYS],
     /// Visits booked for expanded light commands and retiring plans until their FIFO prefix completes.
-    prefix_work: std::collections::VecDeque<(u64, usize)>,
+    prefix_work: std::collections::VecDeque<(u64, PrefixWork)>,
     /// Bytes of immutable plans sent, including versions still waiting for reclamation.
     plan_bytes: u64,
     /// The generation of the last play started.
@@ -191,6 +191,11 @@ pub struct Sender {
     clock: Clock,
     /// The engine's universes: an output's frame boxes hold every one.
     universes: Universes,
+}
+
+enum PrefixWork {
+    Plan(usize),
+    Lights(usize),
 }
 
 /// Opens the device for an output kind, off the tick thread. The engine's own is
@@ -554,6 +559,31 @@ impl Live {
     fn work(&self) -> usize {
         self.versions().map(|v| v.plan.work()).max().unwrap_or(0)
     }
+
+    /// A once-use may finish at a FIFO event before the frame installs its replacement.
+    fn work_after_edit(&self, plan: &Plan) -> usize {
+        match self.current.usage.repeat {
+            Repeat::Once => self.work().max(plan.work()),
+            Repeat::Loop => plan.work(),
+        }
+    }
+
+    /// Once released, only a possible natural end before the release can still sample.
+    /// An explicit stop books its terminal sample when the Keep command is queued.
+    fn work_before_release(&self) -> usize {
+        if self.state == PlayState::Playing && self.current.usage.repeat == Repeat::Once {
+            self.work()
+        } else {
+            0
+        }
+    }
+
+    fn wake_work(&self) -> usize {
+        match self.state {
+            PlayState::Kept => self.work(),
+            PlayState::Playing | PlayState::Waiting { .. } => looks::play_work(self.work()),
+        }
+    }
 }
 
 /// Between the threads of the engine. Atomics only.
@@ -857,7 +887,7 @@ impl Sender {
                 // no play is generation zero: each slot's `Shared::ended` starts there
                 let generation = self.generation.wrapping_add(1).max(1);
                 let play = PlayId::new(slot, generation).ok_or(Refusal::PlayFull)?;
-                self.check_work(plan.work(), 0)?;
+                self.check_work(self.playing_work() + looks::play_work(plan.work()), 0)?;
                 let bytes = plan.bytes() as u64;
                 self.check_plan_bytes(bytes)?;
                 let version = Version {
@@ -880,7 +910,7 @@ impl Sender {
                 if let Some(live) = self.plays.get_mut(slot) {
                     if let Some(old) = live.as_ref() {
                         self.prefix_work
-                            .push_back((self.sent, looks::play_work(old.work())));
+                            .push_back((self.sent, PrefixWork::Plan(old.wake_work())));
                     }
                     *live = Some(Live {
                         play,
@@ -900,6 +930,8 @@ impl Sender {
                             End::Keep => {
                                 self.push(EngineCommand::Keep { play }, Brings::Nothing)?;
                                 if let Some(Some(live)) = self.plays.get_mut(play.slot()) {
+                                    self.prefix_work
+                                        .push_back((self.sent, PrefixWork::Plan(live.work())));
                                     live.state = PlayState::Kept;
                                 }
                             }
@@ -980,14 +1012,25 @@ impl Sender {
         Ok(begun)
     }
 
-    /// Charge even a version replaced twice in one wake. A play has room for its
-    /// frame and for the terminal sample of a stop or natural end.
-    fn check_work(&self, new_plans: usize, lights: usize) -> Result<(), Refusal> {
-        let playing: usize = self.plays.iter().flatten().map(Live::work).sum();
-        let prefix: usize = self.prefix_work.iter().map(|(_, work)| work).sum();
-        if looks::play_work(playing + new_plans) + prefix + self.grabs.reserved() + lights
-            > looks::WORK_LIMIT
-        {
+    fn playing_work(&self) -> usize {
+        self.plays.iter().flatten().map(Live::wake_work).sum()
+    }
+
+    /// Even a full set of plans leaves room to write one light property, end
+    /// its grab and release it. Other commands share the unused play budget.
+    fn check_work(&self, mut playing: usize, extra_lights: usize) -> Result<(), Refusal> {
+        const ONE_GRAB: usize = 3;
+        let mut lights = self.grabs.reserved() + extra_lights;
+        for (_, work) in &self.prefix_work {
+            match work {
+                PrefixWork::Plan(visits) => playing += visits,
+                PrefixWork::Lights(visits) => lights += visits,
+            }
+        }
+        let remaining = looks::WORK_LIMIT
+            .checked_sub(playing)
+            .ok_or(Refusal::WorkLimit)?;
+        if lights > remaining.max(ONE_GRAB) {
             return Err(Refusal::WorkLimit);
         }
         Ok(())
@@ -1012,8 +1055,11 @@ impl Sender {
     fn release(&mut self, play: PlayId) -> Result<(), Refusal> {
         self.push(EngineCommand::Release { play }, Brings::Nothing)?;
         if let Some(old) = self.plays.get_mut(play.slot()).and_then(Option::take) {
-            self.prefix_work
-                .push_back((self.sent, looks::play_work(old.work())));
+            let terminal = old.work_before_release();
+            if terminal > 0 {
+                self.prefix_work
+                    .push_back((self.sent, PrefixWork::Plan(terminal)));
+            }
         }
         Ok(())
     }
@@ -1064,8 +1110,11 @@ impl Sender {
             if slot.as_ref().is_some_and(&ends)
                 && let Some(old) = slot.take()
             {
-                self.prefix_work
-                    .push_back((self.sent, looks::play_work(old.work())));
+                let terminal = old.work_before_release();
+                if terminal > 0 {
+                    self.prefix_work
+                        .push_back((self.sent, PrefixWork::Plan(terminal)));
+                }
                 self.retired += 1;
             }
         }
@@ -1115,6 +1164,7 @@ impl Sender {
     ) -> Result<Begun, Refusal> {
         let places: usize = effects.iter().map(places).sum();
         let mut changed = Vec::new();
+        let mut playing = self.playing_work();
         if let Some(looks) = looks {
             for live in self
                 .plays
@@ -1124,6 +1174,8 @@ impl Sender {
             {
                 let plan = looks.plan(live.look)?;
                 if !Arc::ptr_eq(&plan, &live.current.plan) {
+                    playing =
+                        playing - live.wake_work() + looks::play_work(live.work_after_edit(&plan));
                     changed.push(Version {
                         play: live.play,
                         sent: self.sent + places as u64 + changed.len() as u64 + 1,
@@ -1148,7 +1200,7 @@ impl Sender {
             }
         }
         if !changed.is_empty() || book > 0 {
-            self.check_work(changed.iter().map(|v| v.plan.work()).sum(), book)?;
+            self.check_work(playing, book)?;
             self.check_plan_bytes(bytes)?;
         }
         let at = self.clock.now();
@@ -1199,12 +1251,11 @@ impl Sender {
         self.retired += returns as u64;
         self.plan_bytes += bytes;
         if lights > 0 {
-            self.prefix_work.push_back((self.sent, lights));
+            self.prefix_work
+                .push_back((self.sent, PrefixWork::Lights(lights)));
         }
         for version in changed {
             if let Some(Some(live)) = self.plays.get_mut(version.play.slot()) {
-                self.prefix_work
-                    .push_back((self.sent, looks::play_work(live.current.plan.work())));
                 if live.current.usage.repeat == Repeat::Once {
                     Arc::make_mut(live.earlier.get_or_insert_with(Default::default))
                         .push(live.current.clone());
@@ -1227,7 +1278,7 @@ impl Sender {
         }
         let visits = run_visits(runs);
         if matches!(change, LightChange::Update { .. }) {
-            self.check_work(0, visits)?;
+            self.check_work(self.playing_work(), visits)?;
         }
         let pieces = runs.len().div_ceil(RUNS_IN_PLACE);
         let chunk = self
@@ -1236,7 +1287,8 @@ impl Sender {
             .map_err(|_| Refusal::QueueFull)?;
         let sent = chunk.fill_from_iter(run_commands(change, runs, self.clock.now()));
         self.sent += sent as u64;
-        self.prefix_work.push_back((self.sent, visits));
+        self.prefix_work
+            .push_back((self.sent, PrefixWork::Lights(visits)));
         Ok(())
     }
 
@@ -1691,7 +1743,8 @@ impl Ticker {
                 self.now.applied_one();
             }
             self.settle(now);
-            let elapsed = self.now.state.clock.elapsed_now();
+            let clock = &self.now.state.clock;
+            let elapsed = clock.beat_at(clock.at());
             for play in self
                 .now
                 .state
@@ -1705,7 +1758,7 @@ impl Ticker {
                 {
                     version
                         .plan
-                        .sample(elapsed.saturating_sub(play.start), version.usage, out);
+                        .sample(elapsed.since(play.start), version.usage, out);
                 }
             }
             let (plans, scratch) = (&self.plans, &self.scratch);
@@ -1752,14 +1805,16 @@ impl Ticker {
     /// sample of a once-use is its left limit, regardless of how late this wake is.
     fn settle(&mut self, at: Duration) {
         self.apply(EngineCommand::Settle { at });
-        let count = self.now.state.clock.elapsed_now();
+        let clock = &self.now.state.clock;
+        let count = clock.beat_at(clock.at());
         for slot in 0..PLAYS {
             if let Some(play) = self.now.state.plays.at(slot)
                 && play.state == PlayState::Playing
                 && let Some(Some(version)) = self.plans.get(slot)
+                && version.usage.repeat == Repeat::Once
                 && version
                     .plan
-                    .finished(count.saturating_sub(play.start), version.usage)
+                    .finished(count.since(play.start), version.usage)
             {
                 match stops(play.rank, self.now.state.rules) {
                     End::Keep => self.stop(play.play),
@@ -1786,8 +1841,8 @@ impl Ticker {
                 self.now
                     .state
                     .clock
-                    .elapsed_now()
-                    .saturating_sub(play.start),
+                    .beat_at(self.now.state.clock.at())
+                    .since(play.start),
                 version.usage,
                 out,
             )
@@ -2637,13 +2692,20 @@ mod tests {
 
     #[cfg(feature = "test-support")]
     #[test]
+    fn linked_roots_book_aggregate_work_until_the_fifo_drains() {
+        for repeat in [Repeat::Loop, Repeat::Once] {
+            check_linked_roots(repeat);
+        }
+    }
+
+    #[cfg(feature = "test-support")]
     #[expect(
         clippy::unwrap_used,
         clippy::panic,
         clippy::indexing_slicing,
         reason = "an invalid fixture, missing play or missing frame fails this stepped test"
     )]
-    fn linked_roots_book_aggregate_work_until_the_fifo_drains() {
+    fn check_linked_roots(repeat: Repeat) {
         use engine_core::{Sequence, SequenceItem, Step};
 
         let (mut engine, mut sender, wakes) =
@@ -2673,9 +2735,17 @@ mod tests {
             },
         };
         sender.send(leaf(11)).unwrap();
-        // Two roots share three nested loop transitions over a hundred lights.
+        sender
+            .send(Command::SetMixRules {
+                rules: MixRules {
+                    other_end: OtherEnd::Stay,
+                    ..Default::default()
+                },
+            })
+            .unwrap();
+        // Two roots share three nested transitions over a hundred lights.
         // Each fits alone. Three plays fit with their terminal samples reserved.
-        for (look, child) in [(2, 1), (3, 2), (4, 3), (5, 3)] {
+        for (look, child) in [(2, 1), (3, 2), (4, 3), (5, 3), (6, 4)] {
             sender
                 .send(Command::PutSequence {
                     look,
@@ -2689,10 +2759,14 @@ mod tests {
                 })
                 .unwrap();
         }
-        let start = |look, rank| Command::StartLook {
+        let start = |look, rank| Command::StartUse {
             look,
             rank,
             when: When::Now,
+            usage: Use {
+                repeat,
+                ..Default::default()
+            },
         };
         let started = |s: &mut Sender, cmd| match s.begin(cmd, &[]) {
             Ok(Begun::Started { play }) => play,
@@ -2722,7 +2796,21 @@ mod tests {
         for (case, command) in [
             ("another linked root", start(5, Rank::Manual)),
             ("restart a reserved root", start(4, Rank::Manual)),
-            ("replace every parent's shared leaf", leaf(22)),
+            (
+                "expand every parent's shared sequence",
+                Command::PutSequence {
+                    look: 2,
+                    name,
+                    sequence: Sequence::new(
+                        &[SequenceItem {
+                            look: 1,
+                            transition: 100,
+                            ..Default::default()
+                        }; 4],
+                    )
+                    .unwrap(),
+                },
+            ),
         ] {
             assert_eq!(sender.send(command), Err(Refusal::WorkLimit), "{case}");
             assert_eq!(sender.sent(), tail, "{case}");
@@ -2747,12 +2835,16 @@ mod tests {
         }
         assert_eq!(refusal, Some(Refusal::WorkLimit));
         for play in ids {
+            if repeat == Repeat::Loop {
+                sender.send(Command::StopLook { play }).unwrap();
+            }
             sender.send(Command::ReleaseHold { play }).unwrap();
         }
-        // Their release is queued. An additional root must still fit that prefix.
-        assert_eq!(sender.send(start(5, Rank::Manual)), Err(Refusal::WorkLimit));
+        // A loop stopped under Stay and a once-use can sample before release.
+        // Together with the queued group writes, a larger root still cannot fit.
+        assert_eq!(sender.send(start(6, Rank::Manual)), Err(Refusal::WorkLimit));
         assert_eq!(picture(&mut engine), (vec![], vec![None; 100]));
-        let retry = started(&mut sender, start(5, Rank::Manual));
+        let retry = started(&mut sender, start(6, Rank::Manual));
         sender.send(leaf(22)).unwrap();
         let (plays, intensities) = picture(&mut engine);
         assert_eq!(plays.iter().map(|p| p.play).collect::<Vec<_>>(), [retry]);
@@ -2867,9 +2959,36 @@ mod tests {
             assert_eq!(applying_frame(&mut engine), before);
         }
         sender.send(Command::ReleaseHold { play }).unwrap();
-        assert_eq!(sender.send(start(2)), Err(Refusal::WorkLimit));
+        let Ok(Begun::Started { play: next }) = sender.begin(start(2), &[]) else {
+            panic!("release frees the loop's frame reservation");
+        };
+        assert_eq!(applying_frame(&mut engine), (vec![next], None));
+
+        // A stop that keeps the Manual Wave must still sample it at the stop.
+        // Releasing it in that prefix only frees the following frame sample.
+        sender.send(Command::ReleaseHold { play: next }).unwrap();
+        let manual = Command::StartLook {
+            look: 1,
+            rank: Rank::Manual,
+            when: When::Now,
+        };
+        let Ok(Begun::Started { play }) = sender.begin(manual, &[]) else {
+            panic!("the Manual Wave starts");
+        };
+        let intensity = Command::SetIntensity {
+            target: Target::Light { light: 1 },
+            intensity: u16::MAX,
+        };
+        sender.send(intensity).unwrap();
+        assert_eq!(applying_frame(&mut engine).0, [play]);
+        sender.send(Command::StopLook { play }).unwrap();
+        // Moving a sample from the live Wave into the stop event preserves
+        // the headroom to write the same light property again.
+        assert_eq!(sender.send(intensity), Ok(()));
+        sender.send(Command::ReleaseHold { play }).unwrap();
+        assert_eq!(sender.send(start(1)), Err(Refusal::WorkLimit));
         assert_eq!(applying_frame(&mut engine), (vec![], None));
-        sender.send(start(2)).unwrap();
+        sender.send(start(1)).unwrap();
         assert_eq!(applying_frame(&mut engine).0.len(), 1);
         wakes.run();
     }

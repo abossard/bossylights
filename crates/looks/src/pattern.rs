@@ -46,10 +46,7 @@ pub(crate) fn compile(
         return Err(Refusal::EmptyPalette);
     }
     Ok((
-        Node::Wave {
-            measure: u64::from(period) << 32,
-            swatches,
-        },
+        Node::Wave { period, swatches },
         WaveBinding::new(target, patch)?,
     ))
 }

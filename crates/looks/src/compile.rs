@@ -5,11 +5,12 @@ use crate::{Looks, pattern::WaveBinding, sequence};
 use alloc::boxed::Box;
 use core::mem::size_of_val;
 use engine_core::{
-    Binding, Definition, Entry, Item, Light, LightRun, Node, Program, Refusal, Step, Use,
+    Binding, Definition, Elapsed, Entry, Item, Light, LightRun, Node, Program, Refusal, Step, Use,
 };
 use rig::Patch;
 
-/// Maximum variable visits booked for one wake.
+/// Maximum play visits booked for one wake. The engine shares unused visits
+/// with light commands and guarantees room for one direct light grab.
 pub const WORK_LIMIT: usize = 65_536;
 
 /// A play reserves its frame sample and a possible terminal sample in the same wake.
@@ -218,7 +219,7 @@ impl Plan {
         }
     }
 
-    pub fn finished(&self, elapsed: u64, usage: Use) -> bool {
+    pub fn finished(&self, elapsed: impl Into<Elapsed>, usage: Use) -> bool {
         match &self.kind {
             PlanKind::Step(_) => false,
             PlanKind::Timed(timed) => timed.program().finished(elapsed, usage),
@@ -226,11 +227,12 @@ impl Plan {
     }
 
     /// Fill caller-owned scratch. A sample with no properties has nothing to keep.
-    pub fn sample(&self, elapsed: u64, usage: Use, scratch: &mut [Entry]) -> bool {
+    pub fn sample(&self, elapsed: impl Into<Elapsed>, usage: Use, scratch: &mut [Entry]) -> bool {
         match &self.kind {
             PlanKind::Step(leaf) => leaf.step.values != Light::DARK,
             PlanKind::Timed(timed) => {
                 let mut supplied = false;
+                let elapsed = elapsed.into();
                 let program = timed.program();
                 for (entry, target) in scratch.iter_mut().zip(&timed.targets) {
                     let values = program.sample(&target.bindings, elapsed, usage);

@@ -6,7 +6,9 @@ use engine::{
     ChannelNumbers, Color, Command, Engine, Light, Rank, Rate, Rgb, RunNumbers, Target, Text,
     Universes, When,
 };
-use engine_core::{Pixels, Sequence, SequenceItem, Step};
+use engine_core::{Palette, Pattern, Pixels, Sequence, SequenceItem, Step, Swatches, WaveTarget};
+use std::sync::Arc;
+use std::time::Duration;
 
 #[test]
 fn an_empty_property_release_does_not_exhaust_a_playing_sequences_work_budget() {
@@ -55,7 +57,7 @@ fn an_empty_property_release_does_not_exhaust_a_playing_sequences_work_budget() 
 
 const PIXELS: u16 = 2978;
 
-fn strip(pixels: u16, universes: u16) -> (Engine, engine::Sender, engine::Wakes) {
+fn strip(pixels: u16, universes: u16) -> (Engine, engine::Sender, engine::Wakes, Arc<mock::Heard>) {
     let universes = Universes::new(universes).unwrap();
     let (engine, mut sender, wakes) =
         Engine::start_stepped(universes, Box::new(outputs::open)).unwrap();
@@ -64,7 +66,7 @@ fn strip(pixels: u16, universes: u16) -> (Engine, engine::Sender, engine::Wakes)
         first: 1,
         count: universes.count(),
     };
-    let _heard = mock::attach(&mut sender, universes, 1, output, Rate::Sixty);
+    let heard = mock::attach(&mut sender, universes, 1, output, Rate::Sixty);
     let name = Text::new("red pixels").unwrap();
     sender
         .send(Command::PatchStrip {
@@ -77,11 +79,86 @@ fn strip(pixels: u16, universes: u16) -> (Engine, engine::Sender, engine::Wakes)
             },
         })
         .unwrap();
-    (engine, sender, wakes)
+    (engine, sender, wakes, heard)
+}
+
+#[test]
+fn a_saved_rgb_wave_leaves_room_to_light_its_first_pixel() {
+    let name = Text::new("wall").unwrap();
+    let colour = Rgb {
+        red: u16::MAX,
+        ..Rgb::BLACK
+    };
+    let wave = Command::PutPattern {
+        look: 1,
+        name,
+        pattern: Pattern::Wave {
+            target: WaveTarget::Matrix { fixture: 1 },
+            period: 1,
+            palette: Palette::Inline(Swatches::new(&[colour, Rgb::BLACK]).unwrap()),
+        },
+    };
+    let start = Command::StartLook {
+        look: 1,
+        rank: Rank::Show,
+        when: When::Now,
+    };
+    let intensity = Command::SetIntensity {
+        target: Target::Light { light: 1 },
+        intensity: u16::MAX,
+    };
+    let mut replies = Vec::new();
+    for (pixels, first, second) in [
+        (4095, intensity, start),
+        (4095, start, intensity),
+        (4096, intensity, start),
+        (4096, start, intensity),
+    ] {
+        let (_engine, mut sender, wakes, heard) = strip(pixels, 24);
+        sender.send(wave).unwrap();
+        sender
+            .send(Command::SetInternalTempo {
+                bpm: engine::Bpm::new(60).unwrap(),
+            })
+            .unwrap();
+        let beat = Duration::from_secs(1);
+        let first_at = wakes.wake().unwrap() + beat;
+        mock::wait_until("the patch frame did not arrive", || heard.frames() == 1);
+        wakes.set_time(first_at);
+        sender.send(first).unwrap();
+        wakes.wake_at(first_at).unwrap();
+        mock::wait_until("the first command's frame did not arrive", || {
+            heard.frames() == 2
+        });
+        // A full beat later the first pixel is red for either start order.
+        let second_at = first_at + beat;
+        wakes.set_time(second_at);
+        // A strip without a dimmer emits no Wave colour without a separate hold.
+        replies.push(sender.send(second));
+        if pixels == 4096 {
+            // A full Wave has room for one light's write, end and release.
+            let another = Command::SetIntensity {
+                target: Target::Light { light: 2 },
+                intensity: u16::MAX,
+            };
+            assert_eq!(sender.send(another), Err(engine::Refusal::WorkLimit));
+        }
+        wakes.wake_at(second_at).unwrap();
+        mock::wait_until("the second command's frame did not arrive", || {
+            heard.frames() == 3
+        });
+        assert_eq!(
+            [1, 2, 3].map(|address| heard.level(1, address)),
+            [255, 0, 0]
+        );
+        assert_eq!(heard.lit_of(3), Some(1));
+        wakes.run();
+    }
+    assert_eq!(replies, [Ok(()); 4]);
 }
 
 fn playing_strip() -> (Engine, engine::Sender, engine::Wakes) {
-    let (mut engine, mut sender, wakes) = strip(PIXELS, 18);
+    let (mut engine, mut sender, wakes, _) = strip(PIXELS, 18);
     let name = Text::new("red pixels").unwrap();
     sender
         .send(Command::PutStep {
@@ -168,7 +245,7 @@ fn direct_grabs_reserve_their_end_and_release_before_they_are_accepted() {
 #[test]
 fn a_fragmented_fixture_release_fits_in_one_wake() {
     let pixels = 3200;
-    let (mut engine, mut sender, wakes) = strip(pixels, 19);
+    let (mut engine, mut sender, wakes, _) = strip(pixels, 19);
     let target = Target::Fixture { fixture: 1 };
     sender
         .send(Command::SetIntensity {

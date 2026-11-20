@@ -90,6 +90,48 @@ fn empty() -> Patch {
     Patch::new(Universes::new(2).unwrap(), Lights::new(64).unwrap(), whole)
 }
 
+#[test]
+fn v5_show_with_many_sequences_still_opens() {
+    let empty = Patch::new(
+        Universes::new(18).unwrap(),
+        Lights::MOST,
+        Whole(|_| std::num::NonZeroU16::MIN),
+    );
+    let patch = empty
+        .update(
+            PatchCommand::PatchStrip {
+                name: text("wall"),
+                pixels: Pixels::try_from(2972).unwrap(),
+                color: Color::Rgb,
+                at: at(1, 1),
+            },
+            &[],
+        )
+        .unwrap()
+        .0
+        .unwrap();
+    let mut project: serde_json::Value =
+        serde_json::from_str(&show_file::write(&patch, &Looks::new()).unwrap()).unwrap();
+    project["version"] = 5.into();
+    let mut rows = vec![serde_json::json!({
+        "look": 1, "name": "red",
+        "step": {
+            "target": {"Fixture": {"fixture": 1}},
+            "values": {"colour": {"red": 65535, "green": 0, "blue": 0}}
+        }
+    })];
+    rows.extend((2..=403).map(|look| {
+        serde_json::json!({
+            "look": look, "name": format!("cue {look}"),
+            "sequence": {"items": [{"look": 1}]}
+        })
+    }));
+    project["looks"] = serde_json::Value::Array(rows);
+
+    let (_, looks) = show_file::read(&project.to_string(), &empty).unwrap();
+    assert_eq!(looks.all().len(), 403);
+}
+
 /// A command and the library it is sent with.
 type Step = (PatchCommand, Vec<Fixture>);
 

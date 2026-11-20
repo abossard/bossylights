@@ -1,44 +1,26 @@
 //! A cyclic RGB16 ramp. The timed sampler supplies the local position for this light.
 
-use super::Moment;
+use super::{Moment, interpolate};
 use crate::Rgb;
-
-/// Round the exact weighted channel. The position may lie a fraction of a subcount
-/// on either side of a half tie. At a rising tie the outgoing left limit rounds down.
-fn lerp(from: u16, to: u16, weight: Moment, span: u128) -> u16 {
-    let rounded =
-        u128::from(from) * (span - weight.count) + u128::from(to) * weight.count + span / 2;
-    let fraction = weight.part * u128::from(to.abs_diff(from));
-    let numerator = if from < to {
-        let left_of_integer = weight.left && fraction.is_multiple_of(weight.divisor);
-        rounded + fraction / weight.divisor - u128::from(left_of_integer)
-    } else {
-        rounded - fraction.div_ceil(weight.divisor)
-    };
-    (numerator / span) as u16
-}
 
 pub(super) fn colour(swatches: &[Rgb], phase: Moment, span: u128) -> Option<Rgb> {
     let count = swatches.len();
     if count == 0 {
         return None;
     }
-    // Multiply the phase by the swatch count, then split off the swatch index.
-    // Keeping the remainder below the 112-bit divisor leaves room for an RGB16 product.
-    let fraction = phase.part * count as u128;
-    let position = phase.count * count as u128 + fraction / phase.divisor;
-    let index = (position / span) as usize % count;
+    // The whole spans select the pair. Its fractional position sets the blend.
+    let position = phase.times(count as u128);
+    let index = (position.count / span) as usize % count;
     let a = swatches.get(index)?;
     let b = swatches.get((index + 1) % count)?;
     let weight = Moment {
-        count: position % span,
-        part: fraction % phase.divisor,
-        ..phase
+        count: position.count % span,
+        ..position
     };
     Some(Rgb {
-        red: lerp(a.red, b.red, weight, span),
-        green: lerp(a.green, b.green, weight, span),
-        blue: lerp(a.blue, b.blue, weight, span),
+        red: interpolate(a.red, b.red, weight, span),
+        green: interpolate(a.green, b.green, weight, span),
+        blue: interpolate(a.blue, b.blue, weight, span),
     })
 }
 
@@ -59,7 +41,7 @@ mod tests {
 
     fn wave(colours: &[Rgb]) -> Node {
         Node::Wave {
-            measure: PERIOD,
+            period: 4,
             swatches: Swatches::new(colours).unwrap(),
         }
     }
@@ -106,6 +88,14 @@ mod tests {
                 (100, 1, 6),
                 rgb(32768, 32768, 0),
             ),
+            // One sixth of a three-unit ramp is exactly half a channel unit.
+            (
+                "the swatch weight keeps its leftover fraction",
+                &[rgb(0, 3, 0), rgb(3, 0, 0)],
+                0,
+                (100, 1, 12),
+                rgb(1, 3, 0),
+            ),
             ("four, exact swatch", four, 2 * BEAT, (0, 0, 1), BLUE),
             (
                 "four, last pair",
@@ -138,6 +128,52 @@ mod tests {
                     ..Light::DARK
                 },
                 "{name}",
+            );
+        }
+    }
+
+    #[test]
+    fn linked_spreads_sample_both_sides_of_a_half_tie() {
+        let spread = Use {
+            spread: 100,
+            ..Use::default()
+        };
+        let mut nodes = vec![wave(&[rgb(1, 0, 0), rgb(0, 1, 0)])];
+        let mut items = Vec::new();
+        for child in 0..5 {
+            items.push(Item {
+                child,
+                end: PERIOD,
+                settings: spread,
+                transition: 0,
+            });
+            nodes.push(Node::Sequence {
+                first: child,
+                count: 1,
+                measure: PERIOD,
+            });
+        }
+        let program = Program {
+            nodes: &nodes,
+            items: &items,
+            root: 5,
+        };
+        // The six signed offsets add to 120 / (16000 × 16001 × ... × 16005)
+        // of a period, modulo whole loops. Either sign moves the midpoint by
+        // less than one subcount, enough to decide which channel rounds up.
+        for (sign, expected) in [(1, rgb(0, 1, 0)), (-1, rgb(1, 0, 0))] {
+            let bindings = [1_i32, -5, 10, -10, 5, -1]
+                .into_iter()
+                .enumerate()
+                .map(|(node, coefficient)| {
+                    let count = 16_000 + node as i32;
+                    let index = (sign * coefficient).rem_euclid(count);
+                    binding(node, index as u16, count as u16)
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                program.sample(&bindings, BEAT, spread).colour,
+                Some(expected)
             );
         }
     }

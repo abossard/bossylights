@@ -258,6 +258,99 @@ fn group(name: &str, first: u16, second: u16) -> Value {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn one_beat_wave_rounds_exact_swatch_midpoints_on_dmx() {
+    let mut desk = Desk::new(None).await;
+    let patch = json!({"PatchStrip":{"name":"pixel","pixels":1,"color":"Rgb","at":{"universe":1,"address":1}}});
+    assert_eq!(
+        command(&mut desk.socket, patch).await,
+        json!({"Patched":{"fixture":1}})
+    );
+    desk.intensity(json!({"Fixture":{"fixture":1}}), 255).await;
+    let mut pattern = wave(
+        1,
+        json!({"Matrix":{"fixture":1}}),
+        json!({"Inline":swatches(&[RED, BLUE, GREEN])}),
+    );
+    pattern["PutPattern"]["pattern"]["Wave"]["period"] = json!(1);
+    accepted(&mut desk.socket, pattern).await;
+    desk.wakes.set_time(desk.zero);
+    accepted(&mut desk.socket, json!({"SetInternalTempo":{"bpm":125}})).await;
+    start(&mut desk.socket, 1, 0, "Normal").await;
+
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for (ms, rgb) in [
+        (0, RED),
+        (80, [128, 0, 128]),
+        (160, BLUE),
+        (240, [0, 128, 128]),
+        (320, GREEN),
+        (400, [128, 128, 0]),
+        (480, RED),
+        (520, [128, 0, 128]),
+    ] {
+        if ms == 480 {
+            desk.wakes.set_time(desk.zero + Duration::from_millis(ms));
+            accepted(&mut desk.socket, json!({"SetInternalTempo":{"bpm":250}})).await;
+        }
+        let frame = desk.frame(ms).await;
+        actual.push((ms, [frame[0], frame[1], frame[2]]));
+        expected.push((ms, rgb));
+    }
+    desk.finish().await;
+    assert_eq!(actual, expected);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_once_sequence_keeps_the_left_limit_of_its_fade_into_a_wave() {
+    let mut desk = Desk::new(None).await;
+    let patch = json!({"PatchStrip":{"name":"pixel","pixels":1,"color":"Rgb","at":{"universe":1,"address":1}}});
+    assert_eq!(
+        command(&mut desk.socket, patch).await,
+        json!({"Patched":{"fixture":1}})
+    );
+    desk.intensity(json!({"Fixture":{"fixture":1}}), 255).await;
+    for edit in [
+        json!({"PutStep":{"look":1,"name":"blue","step":{
+            "target":{"Fixture":{"fixture":1}},
+            "values":{"colour":{"red":0,"green":0,"blue":65535}}
+        }}}),
+        wave(
+            2,
+            json!({"Matrix":{"fixture":1}}),
+            json!({"Inline":swatches(&[RED, YELLOW])}),
+        ),
+        json!({"PutSequence":{"look":3,"name":"fade into Wave","sequence":{"items":[
+            {"look":1,"width":8},{"look":2,"width":16,"transition":100}
+        ]}}}),
+        json!({"PutSequence":{"look":4,"name":"one beat","sequence":{"items":[{"look":3}]}}}),
+    ] {
+        accepted(&mut desk.socket, edit).await;
+    }
+    desk.wakes.set_time(desk.zero);
+    let once = json!({"StartLook":{"look":4,"use":{"repeat":"Once"}}});
+    assert!(command(&mut desk.socket, once).await["Started"]["play"].is_object());
+
+    // At beat one, the 50% fade into the Wave reaches a rising half tie on red.
+    // The sample immediately before that beat must round down and remain held.
+    let mut actual = Vec::new();
+    for ms in [0, 375, 500, 750] {
+        let frame = desk.frame(ms).await;
+        actual.push((ms, [frame[0], frame[1], frame[2]]));
+    }
+    desk.finish().await;
+    assert_eq!(
+        actual,
+        [
+            (0, BLUE),
+            (375, [64, 16, 191]),
+            (500, [127, 63, 128]),
+            (750, [127, 63, 128]),
+        ]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn group_reorder_and_palette_edits_reach_a_wave_and_a_playing_sequence() {
     let mut desk = Desk::new(None).await;
     let patch = json!({"PatchStrip":{"name":"pixels","pixels":4,"color":"Rgb","at":{"universe":1,"address":1}}});
@@ -395,4 +488,51 @@ async fn group_reorder_and_palette_edits_reach_a_wave_and_a_playing_sequence() {
         [[0; 3], [0; 3], BLUE, BLUE].concat()
     );
     desk.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn one_beat_wave_rounds_both_channels_up_at_an_exact_midpoint() {
+    let mut desk = Desk::new(None).await;
+    let patch = json!({"PatchStrip":{"name":"pixel","pixels":1,"color":"Rgb",
+        "at":{"universe":1,"address":1}}});
+    assert_eq!(
+        command(&mut desk.socket, patch).await,
+        json!({"Patched":{"fixture":1}})
+    );
+    desk.intensity(json!({"Fixture":{"fixture":1}}), 255).await;
+    accepted(
+        &mut desk.socket,
+        json!({"SetGroup":{"name":"pixel","members":[{"Light":{"light":1}}]}}),
+    )
+    .await;
+    accepted(
+        &mut desk.socket,
+        json!({"PutPattern":{"look":1,"name":"midpoints","pattern":{"Wave":{
+            "target":{"Group":{"group":"pixel"}},"period":1,"palette":{"Inline":[
+                {"red":255,"green":256,"blue":0},
+                {"red":256,"green":255,"blue":0},
+                {"red":0,"green":0,"blue":0}
+            ]}
+        }}}}),
+    )
+    .await;
+
+    desk.wakes.set_time(desk.zero);
+    accepted(&mut desk.socket, json!({"SetInternalTempo":{"bpm":100}})).await;
+    start(&mut desk.socket, 1, 0, "Normal").await;
+    let mut actual = [[0; 3]; 5];
+    actual[0].copy_from_slice(&desk.frame(0).await[..3]);
+    desk.wakes.set_time(desk.zero + Duration::from_millis(20));
+    accepted(&mut desk.socket, json!({"SetInternalTempo":{"bpm":80}})).await;
+
+    // 20 ms at 100 BPM and 100 ms at 80 BPM add up to 1/6 beat.
+    // With three swatches, both channels then equal 255.5 before rounding.
+    for (rgb, ms) in actual[1..].iter_mut().zip([100, 120, 140, 745]) {
+        rgb.copy_from_slice(&desk.frame(ms).await[..3]);
+    }
+    desk.finish().await;
+    assert_eq!(
+        actual,
+        [[0, 1, 0], [0, 1, 0], [1, 1, 0], [1, 0, 0], [0, 1, 0]]
+    );
 }

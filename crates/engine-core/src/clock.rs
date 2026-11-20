@@ -166,6 +166,43 @@ impl Count {
     }
 }
 
+/// Elapsed Q32 beat counts, retaining the fraction measured by the clock.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BeatTime {
+    count: Count,
+    span: u64,
+}
+
+impl From<u64> for BeatTime {
+    fn from(whole: u64) -> Self {
+        Self {
+            count: Count::whole(whole),
+            span: 1,
+        }
+    }
+}
+
+impl BeatTime {
+    /// Count in beats for the wire picture.
+    pub(crate) fn beats(self) -> f64 {
+        (self.count.whole as f64 + self.count.part as f64 / self.span as f64) / ONE as f64
+    }
+
+    pub(crate) fn after(self, other: Self) -> bool {
+        (
+            self.count.whole,
+            u128::from(self.count.part) * u128::from(other.span),
+        ) > (
+            other.count.whole,
+            u128::from(other.count.part) * u128::from(self.span),
+        )
+    }
+
+    pub(crate) fn parts(self) -> (u64, u64, u64) {
+        (self.count.whole, self.count.part, self.span)
+    }
+}
+
 /// The beat clock. Every change happens at the time it was settled to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Clock {
@@ -224,9 +261,17 @@ impl Clock {
         }
     }
 
+    /// The elapsed position at `t`, including the fraction of a Q32 count.
+    pub fn beat_at(&self, t: Duration) -> BeatTime {
+        BeatTime {
+            count: self.count(self.elapsed, t),
+            span: self.tempo.span,
+        }
+    }
+
     /// The elapsed count at `t`, which is not before the last change, in [`ONE`]s.
     pub fn elapsed_at(&self, t: Duration) -> u64 {
-        self.count(self.elapsed, t).whole
+        self.beat_at(t).count.whole
     }
 
     /// The elapsed count now, in [`ONE`]s.
@@ -385,7 +430,7 @@ impl Clock {
             feed: self.feed,
             source: self.source(),
             beat: beats(self.grid()),
-            elapsed: beats(self.elapsed_now()),
+            elapsed: self.beat_at(self.at).beats(),
         }
     }
 }
@@ -458,6 +503,67 @@ mod tests {
     }
 
     use Event::{Feed, Late, Release, Settle, Tap};
+
+    #[test]
+    fn a_wave_started_between_counts_keeps_its_midpoint_across_a_tap() {
+        use crate::{Binding, Node, Program, Rgb, Swatches, Use};
+
+        let feed = Clock::START.set_feed(bpm(125));
+        let tap_at =
+            |clock: Clock, at: Duration, period| clock.settle(at - period).tap().settle(at).tap();
+        let tapped = tap_at(feed, ms(480), ms(250));
+        // Two tap periods with no common factor. Each change is on a whole
+        // beat so the absolute clock is exact. Test both orders of their spans.
+        let short = Duration::from_nanos(240_000_006);
+        let long = Duration::from_nanos(250_000_001);
+        let a = tap_at(feed, ms(480), short);
+        let change = ms(480) + 12 * short;
+        let b = tap_at(a, change, long);
+        let back = change + 12 * long;
+        let c = tap_at(b, back, short);
+        let red = Rgb {
+            red: u16::MAX,
+            green: 0,
+            blue: 0,
+        };
+        let green = Rgb {
+            red: 0,
+            green: u16::MAX,
+            blue: 0,
+        };
+        let nodes = [Node::Wave {
+            period: 1,
+            swatches: Swatches::new(&[red, green, green]).unwrap(),
+        }];
+        let wave = Program {
+            nodes: &nodes,
+            items: &[],
+            root: 0,
+        };
+        let target = [Binding {
+            node: 0,
+            index: 0,
+            count: 1,
+            discrete_colour: false,
+        }];
+        // A three-swatch Wave has red/green midpoints at 1/6 and 5/6 beat.
+        for (start, end) in [
+            (feed.beat_at(ms(80)), feed.beat_at(ms(480))),
+            (feed.beat_at(ms(80)), tapped.beat_at(ms(480))),
+            (a.beat_at(ms(480) + short / 6), b.beat_at(change)),
+            (b.beat_at(change), c.beat_at(back + short / 6)),
+        ] {
+            assert_eq!(
+                wave.sample(&target, end.since(start), Use::default())
+                    .colour,
+                Some(Rgb {
+                    red: 32_768,
+                    green: 32_768,
+                    blue: 0
+                })
+            );
+        }
+    }
 
     #[test]
     fn every_source_takes_every_event() {
@@ -652,10 +758,30 @@ mod tests {
         let on = |beat| Clock::START.settle(Clock::START.crossing(beat));
         let cases: [(&str, Clock, When, u64); 5] = [
             ("on beat 16, a bar", on(16), When::Bar, 16),
-            ("the feed on beat 16, a bar", on(16).set_feed(bpm(120)), When::Bar, 16),
-            ("the feed on beat 16, a beat", on(16).set_feed(bpm(120)), When::Beat, 16),
-            ("the feed and a tap on beat 3, a beat", on(3).set_feed(bpm(120)).tap(), When::Beat, 3),
-            ("the feed and a tap on beat 3, a bar", on(3).set_feed(bpm(120)).tap(), When::Bar, 4),
+            (
+                "the feed on beat 16, a bar",
+                on(16).set_feed(bpm(120)),
+                When::Bar,
+                16,
+            ),
+            (
+                "the feed on beat 16, a beat",
+                on(16).set_feed(bpm(120)),
+                When::Beat,
+                16,
+            ),
+            (
+                "the feed and a tap on beat 3, a beat",
+                on(3).set_feed(bpm(120)).tap(),
+                When::Beat,
+                3,
+            ),
+            (
+                "the feed and a tap on beat 3, a bar",
+                on(3).set_feed(bpm(120)).tap(),
+                When::Bar,
+                4,
+            ),
         ];
         for (name, clock, when, beat) in cases {
             assert_eq!(clock.next(when), Some(beat), "{name}");

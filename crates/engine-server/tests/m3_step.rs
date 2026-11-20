@@ -189,7 +189,7 @@ async fn a_saved_red_step_plays_255_0_0_releases_and_replays_after_a_restart() {
 
     stop_adapter.store(true, Ordering::Relaxed);
     let saved: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
-    for version in [show_file::VERSION, 1, 2, 3, 4] {
+    for version in (1..=show_file::VERSION).rev() {
         if version < show_file::VERSION {
             let mut old = saved.clone();
             old["version"] = json!(version);

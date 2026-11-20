@@ -22,7 +22,7 @@
 //! A sequence supplies entries sampled at its local beat. A natural end or stop can
 //! freeze that sample. The Mixer owns rank, start priority and the end rules.
 
-use crate::clock::{Clock, When, beats};
+use crate::clock::{BeatTime, Clock, When};
 use crate::library::Text;
 use crate::mix::{GrabId, MixRules};
 use crate::patch::Target;
@@ -166,11 +166,11 @@ pub struct Play {
     /// In beats, as the picture shows it.
     #[serde(serialize_with = "in_beats")]
     #[cfg_attr(test, ts(type = "number"))]
-    pub start: u64,
+    pub start: BeatTime,
 }
 
-fn in_beats<S: serde::Serializer>(count: &u64, serializer: S) -> Result<S::Ok, S::Error> {
-    serializer.serialize_f64(beats(*count))
+fn in_beats<S: serde::Serializer>(count: &BeatTime, serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.serialize_f64(count.beats())
 }
 
 /// The start orders kept for launches at the instant the clock is at: `next` is the
@@ -229,7 +229,7 @@ impl Plays {
                 rank,
                 state,
                 order,
-                start: clock.elapsed_at(now),
+                start: clock.beat_at(now),
             });
         }
         self.launch(clock, launches);
@@ -249,7 +249,7 @@ impl Plays {
             })
             .min_by_key(|(beat, play)| (*beat, play.order))
             .map(|(beat, play)| {
-                play.start = clock.elapsed_at(clock.crossing(beat));
+                play.start = clock.beat_at(clock.crossing(beat));
                 play
             })
         {
@@ -262,12 +262,12 @@ impl Plays {
     /// not, begin at it on `clock`, which changed tempo since they were asked for: beat
     /// zero in their applying frame.
     pub fn begin_at(&mut self, clock: &Clock, now: Duration) {
-        let settled = clock.elapsed_now();
+        let settled = clock.beat_at(clock.at());
         for play in self.0.iter_mut().flatten() {
             // a start past the clock's count is one made for the frame ahead; a waiting
             // play takes its start at its launch
-            if play.start > settled {
-                play.start = clock.elapsed_at(now);
+            if play.start.after(settled) {
+                play.start = clock.beat_at(now);
             }
         }
     }
@@ -433,7 +433,7 @@ mod tests {
                 rank: Rank::Manual,
                 state: PlayState::Playing,
                 order: 2,
-                start: 0,
+                start: Clock::START.beat_at(Duration::ZERO),
             }]
         );
         assert!(!plays.release(id(0, 1)));
