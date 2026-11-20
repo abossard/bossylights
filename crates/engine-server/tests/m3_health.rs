@@ -320,6 +320,17 @@ impl Rig {
         self.wake_at(self.now).await;
     }
 
+    /// Finish the send and let this subscriber see the fresh sample before time advances.
+    async fn sample_delivery_for(&mut self, subscriber: &mut Watcher) {
+        subscriber.query().await;
+        self.sample_delivery_time().await;
+        subscriber
+            .until("a fresh sample at the delivery time", |w| {
+                w.frame == self.wakes.woke()
+            })
+            .await;
+    }
+
     /// Wait for the DMX writes and the reader, then save any newly covered window.
     async fn after(&mut self, at: Duration) {
         let before = self.now;
@@ -594,15 +605,7 @@ async fn a_query_keeps_pending_events_and_health_waits_500_ms_of_engine_time() {
     let mut sent = rig.now;
     // Start at the subscription Picture, then at the first Health delivery.
     for previous in 0..2 {
-        // Finish the preceding send on the server while the engine still holds at `sent`.
-        sub.query().await;
-        if previous > 0 {
-            rig.sample_delivery_time().await;
-            sub.until("a fresh sample at the delivery time", |w| {
-                w.frame == rig.wakes.woke()
-            })
-            .await;
-        }
+        rig.sample_delivery_for(&mut sub).await;
         let due = sent + GRID;
         rig.fail(true);
         while !reconnecting(status(&rig.watcher.state, 0)) {
@@ -651,6 +654,49 @@ async fn a_query_keeps_pending_events_and_health_waits_500_ms_of_engine_time() {
         sent = due;
     }
     assert_eq!(rig.wire().last(), Some(&LEVEL));
+    rig.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn first_health_waits_after_a_subscribe_picture_with_an_old_snapshot() {
+    let (mut rig, _) = Rig::start().await;
+    rig.level(LEVEL).await;
+    rig.attach(1).await;
+    while status(&rig.watcher.state, 0) != "Running" {
+        rig.step(ON_TIME).await;
+    }
+
+    // Advance the engine clock without waking the tick. The subscription gets
+    // the previous frame, even though delivery happens a quarter second later.
+    let delivered = rig.now + GRID / 2;
+    rig.wakes.set_time(delivered);
+    let (mut sub, _) = Watcher::subscribe(connect(rig.address).await).await;
+    assert_eq!(sub.frame, rig.watcher.frame);
+
+    rig.fail(true);
+    rig.wake_at(delivered).await;
+    rig.sample_delivery_for(&mut sub).await;
+    assert!(reconnecting(status(&rig.watcher.state, 0)));
+    assert_eq!(rig.wire().last(), Some(&LEVEL));
+
+    let due = delivered + GRID;
+    rig.wake_at(due - Duration::from_nanos(1)).await;
+    sub.until("the last frame before Health is due", |w| {
+        w.frame == rig.wakes.woke()
+    })
+    .await;
+    sub.query().await;
+    assert!(sub.healths.is_empty(), "early Health: {:?}", sub.healths);
+
+    rig.wake_at(due).await;
+    sub.until("the loss at 500 ms after the subscription Picture", |w| {
+        !w.healths.is_empty()
+    })
+    .await;
+    assert_eq!(
+        sub.events(0),
+        [json!({"output": 1, "generation": 1, "at_ms": ms(delivered), "event": "OutputLost"})]
+    );
     rig.stop().await;
 }
 
@@ -800,6 +846,7 @@ async fn a_return_after_the_grid_does_not_warn_at_the_unavailable_endpoint() {
     assert_eq!(status(&rig.watcher.state, 0), "Running");
 
     assert_eq!(rig.window(end)["outputs"][0]["state"], "Measuring");
+    rig.sample_delivery_for(&mut subscriber).await;
     rig.wake_at(after + GRID).await;
     subscriber
         .until("warning and return", |w| !w.healths.is_empty())
@@ -861,12 +908,7 @@ async fn a_fresh_engine_has_no_health_and_a_slow_socket_counts_what_it_missed_an
             }
         }
     }
-    slow.query().await;
-    rig.sample_delivery_time().await;
-    slow.until("the last frame before flushing the log", |w| {
-        w.frame == rig.wakes.woke()
-    })
-    .await;
+    rig.sample_delivery_for(&mut slow).await;
     rig.wake_at(rig.now + GRID).await;
     slow.until("every event heard or counted missed", |w| {
         w.events(0).len() as u64 + w.missed() >= expected.len() as u64

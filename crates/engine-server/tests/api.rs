@@ -5,7 +5,7 @@ mod common;
 
 use common::{Socket, answer, connect as open, send};
 use engine::{Engine, Universes};
-use futures_util::{SinkExt, StreamExt};
+use futures_util::{FutureExt, SinkExt, StreamExt};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -118,33 +118,37 @@ async fn subscribed_requests_skip_queued_health() {
     .expect("channel 1 reaches the DDP output");
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn consecutive_health_replies_keep_their_spacing_when_the_first_snapshot_is_old() {
+#[test]
+fn consecutive_health_replies_keep_their_spacing_when_the_first_snapshot_is_old() {
+    let reader = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let sockets = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
     for request in ["Query", "Subscribe"] {
-        check_health_spacing(request).await;
+        sockets.block_on(check_health_spacing(request, &reader));
     }
 }
 
-async fn check_health_spacing(request: &str) {
-    async fn published(desk: &mut Socket, wakes: &engine::Wakes, slot: usize, at: Duration) {
+async fn check_health_spacing(request: &str, reader: &tokio::runtime::Runtime) {
+    async fn published(desk: &mut Socket, wakes: &engine::Wakes, at: Duration) {
         let previous = wakes.woke();
         tokio::time::timeout(Duration::from_secs(5), async {
             loop {
-                assert_eq!(
-                    tokio::task::block_in_place(|| wakes.wake_at(at)).unwrap(),
-                    at
-                );
+                assert_eq!(wakes.wake_at(at).unwrap(), at);
                 send(desk, &json!("Query")).await;
                 let picture = answer(desk).await;
-                let state = &picture["Picture"]["state"];
-                if state["frame"].as_u64().unwrap() > previous && !state["outputs"][slot].is_null()
-                {
+                if picture["Picture"]["state"]["frame"].as_u64().unwrap() > previous {
                     break;
                 }
             }
         })
         .await
-        .expect("the reader publishes the wake with the attached output");
+        .expect("the reader publishes a new frame");
     }
 
     let (first_udp, first_attach) = receiver().await;
@@ -162,15 +166,35 @@ async fn check_health_spacing(request: &str) {
         outputs::open(kind)
     });
     let (engine, sender, wakes) = Engine::start_stepped(Universes::ONE, slow_open).unwrap();
-    let address = common::serve(engine, sender, None).await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let mut serving = Box::pin(engine_server::serve(listener, engine, sender, None, None));
+    // Start the reader on its own runtime. Once serve waits for a connection,
+    // the sockets can run even while the test holds the reader between polls.
+    {
+        let _reader = reader.enter();
+        assert!(serving.as_mut().now_or_never().is_none());
+    }
+    let served = tokio::spawn(serving);
     let (mut desk, mut subscriber) = (open(address).await, open(address).await);
     tokio::task::block_in_place(|| wakes.hold()).unwrap();
     let before = tokio::task::block_in_place(|| wakes.wake()).unwrap();
+    let publish = |desk: &mut Socket, at| {
+        tokio::task::block_in_place(|| reader.block_on(published(desk, &wakes, at)));
+    };
     send(&mut subscriber, &json!("Subscribe")).await;
     assert_eq!(
         next(&mut subscriber).await["Picture"]["health"]["outputs"],
         json!([])
     );
+    // Sample the Picture's delivery time before the socket blocks on the open.
+    send(&mut subscriber, &json!("Query")).await;
+    assert!(answer(&mut subscriber).await.get("Picture").is_some());
+    for _ in 0..2 {
+        publish(&mut desk, before);
+    }
+    send(&mut subscriber, &json!("Query")).await;
+    assert!(answer(&mut subscriber).await.get("Picture").is_some());
 
     for request in [set(1, 1, 91), first_attach] {
         send(&mut desk, &request).await;
@@ -183,10 +207,12 @@ async fn check_health_spacing(request: &str) {
         .unwrap()
         .unwrap();
     let first = before + Duration::from_secs(1);
-    published(&mut desk, &wakes, 0, first).await;
+    publish(&mut desk, first);
     assert_eq!(packet(&first_udp).await[10], 91);
 
-    // The socket sends its first Health at `now`, carrying the previous wake.
+    // Fill the reader's outstanding request at the old time. Leave the reader
+    // paused so it can only collect that snapshot after the first Health.
+    assert_eq!(wakes.wake_at(first).unwrap(), first);
     let now = first + Duration::from_secs(1);
     wakes.set_time(now);
     release.send(()).unwrap();
@@ -201,13 +227,31 @@ async fn check_health_spacing(request: &str) {
     }
     // A reply on the same socket confirms the preceding send has finished.
     send(&mut subscriber, &json!(request)).await;
+    let frame = answer(&mut subscriber).await["Picture"]["state"]["frame"]
+        .as_u64()
+        .expect("the frame before the reader resumes");
+    // Let the socket see the in-flight snapshot before granting a fresh wake.
+    tokio::task::block_in_place(|| {
+        reader.block_on(async {
+            loop {
+                let reply = next(&mut subscriber).await;
+                if reply["Changed"]["state"]["frame"]
+                    .as_u64()
+                    .is_some_and(|next_frame| next_frame > frame)
+                {
+                    break;
+                }
+            }
+        });
+    });
+    send(&mut subscriber, &json!("Query")).await;
     assert!(answer(&mut subscriber).await.get("Picture").is_some());
-    published(&mut desk, &wakes, 1, now).await;
+    publish(&mut desk, now);
     assert_eq!(packet(&second_udp).await[10], 91);
     let due = now + Duration::from_millis(500);
     for at in [now, due - Duration::from_nanos(1)] {
         // At `now` this is a fresh snapshot requested after the first Health.
-        published(&mut desk, &wakes, 1, at).await;
+        publish(&mut desk, at);
         // One Query can race the new frame. The next drains any Health the
         // socket sent once that frame was already available to it.
         for _ in 0..2 {
@@ -216,7 +260,8 @@ async fn check_health_spacing(request: &str) {
                 let reply = next(&mut subscriber).await;
                 assert!(
                     reply.get("Health").is_none(),
-                    "early Health at {at:?} after {request}: {reply}"
+                    "second Health {:?} after the first ({request}): {reply}",
+                    at - now
                 );
                 if reply.get("Picture").is_some() {
                     break;
@@ -224,7 +269,7 @@ async fn check_health_spacing(request: &str) {
             }
         }
     }
-    published(&mut desk, &wakes, 1, due).await;
+    publish(&mut desk, due);
     loop {
         if let Some(health) = next(&mut subscriber).await.get("Health") {
             let rows = health["health"]["outputs"].as_array().unwrap();
@@ -235,6 +280,9 @@ async fn check_health_spacing(request: &str) {
     }
     send(&mut desk, &json!("Stop")).await;
     assert_eq!(answer(&mut desk).await, "Stopping");
+    tokio::task::block_in_place(|| reader.block_on(served))
+        .unwrap()
+        .unwrap();
 }
 
 #[tokio::test]

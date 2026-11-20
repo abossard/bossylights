@@ -247,12 +247,11 @@ impl Tracker {
             CoverageStep::BetweenGridPoints => return None,
             CoverageStep::SameGridPoint { end } => {
                 if let Some(point) = self.grid.back_mut().filter(|point| point.end == end) {
-                    point.sample = *sample;
-                    // A loss withdraws this endpoint's vote, even if the output
-                    // returns on another read at the same engine time.
-                    if !available(sample.status) {
+                    // The outage counter also catches a loss and return between reads.
+                    if !available(sample.status) || sample.outages != point.sample.outages {
                         point.verdict = Insufficient;
                     }
+                    point.sample = *sample;
                 } else {
                     self.restart_coverage(sample);
                 }
@@ -573,7 +572,13 @@ mod tests {
 
     #[test]
     fn a_loss_on_a_repeated_endpoint_cannot_confirm_a_later_warning() {
-        for (repeat, back_at) in [(false, 4_250), (true, 4_250), (true, 4_000)] {
+        let reconnecting = Status::Reconnecting { failures: 1 };
+        for (repeat, back_at, status) in [
+            (false, 4_250, reconnecting),
+            (true, 4_250, reconnecting),
+            (true, 4_000, reconnecting),
+            (true, 4_000, Status::Running),
+        ] {
             let mut reader = Reader::new();
             for i in 0..16 {
                 observe(&mut reader, Some(&sample(i * 250, i * 2)));
@@ -582,7 +587,7 @@ mod tests {
                 observe(&mut reader, Some(&sample(4_000, 32)));
             }
             let mut lost = sample(4_000, 32);
-            lost.status = Status::Reconnecting { failures: 1 };
+            lost.status = status;
             lost.outages = 1;
             observe(&mut reader, Some(&lost));
             assert_eq!(row(&reader).state, OutputHealthState::Measuring);
@@ -593,11 +598,6 @@ mod tests {
                 observe(&mut reader, Some(&running));
             }
             assert_eq!(window(&reader), (8_000, 32));
-            assert_eq!(
-                row(&reader).state,
-                OutputHealthState::Measuring,
-                "repeat {repeat}, back at {back_at}"
-            );
             assert_eq!(
                 reader.view().events_since(0),
                 (
@@ -612,7 +612,12 @@ mod tests {
                     ],
                     0,
                 ),
-                "repeat {repeat}, back at {back_at}"
+                "repeat {repeat}, status {status:?}, back at {back_at}"
+            );
+            assert_eq!(
+                row(&reader).state,
+                OutputHealthState::Measuring,
+                "repeat {repeat}, status {status:?}, back at {back_at}"
             );
         }
     }

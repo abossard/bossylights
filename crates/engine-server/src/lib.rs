@@ -371,7 +371,7 @@ async fn talk(mut socket: WebSocket, api: Arc<Api>) {
                 return; // client gone
             }
             if let Some(sub) = &mut subscription {
-                sub.sent(&pictures.borrow());
+                sub.sent();
             }
         }
     }
@@ -404,7 +404,7 @@ async fn answer(
         Request::Subscribe => {
             let now = Arc::clone(&pictures.borrow_and_update());
             let reply = picture(&now);
-            *subscription = Some(Subscription::new(now, subscription.as_ref()));
+            *subscription = Some(Subscription::new(now));
             reply
         }
         Request::Search { text } => api.shelf.borrow().found(text.as_str()),
@@ -588,41 +588,28 @@ struct Subscription {
     pacing: HealthPacing,
 }
 
-/// A Health send may finish long after the pictured wake. The first snapshot requested
-/// after that send gives an upper bound on its engine time. In between, Changed and
-/// commands keep flowing. The host clock only orders sends and snapshot requests.
+/// A subscription Picture or Health may finish sending long after its pictured wake.
+/// A snapshot requested after delivery gives an upper bound on the engine time of the
+/// send. The host clock only orders sends and snapshot requests.
 enum HealthPacing {
-    SendingPicture,
-    SendingHealth,
+    Sending,
     AwaitingSample(Instant),
     Since(Duration),
 }
 
 impl Subscription {
-    fn new(picture: Arc<Picture>, previous: Option<&Self>) -> Self {
-        // Subscribing resets both cursors. A Health sent on this socket may
-        // still need a fresh engine timestamp before its next delivery.
-        let pacing = match previous.map(|sub| &sub.pacing) {
-            Some(HealthPacing::AwaitingSample(sent)) => HealthPacing::AwaitingSample(*sent),
-            _ => HealthPacing::SendingPicture,
-        };
+    fn new(picture: Arc<Picture>) -> Self {
         Self {
             revision: picture.health.revision(),
             cursor: picture.health.end(),
             last: picture,
-            pacing,
+            pacing: HealthPacing::Sending,
         }
     }
 
-    fn sent(&mut self, latest: &Picture) {
-        match self.pacing {
-            HealthPacing::SendingPicture => {
-                self.pacing = HealthPacing::Since(latest.snapshot.state.now)
-            }
-            HealthPacing::SendingHealth => {
-                self.pacing = HealthPacing::AwaitingSample(Instant::now())
-            }
-            HealthPacing::AwaitingSample(_) | HealthPacing::Since(_) => {}
+    fn sent(&mut self) {
+        if matches!(self.pacing, HealthPacing::Sending) {
+            self.pacing = HealthPacing::AwaitingSample(Instant::now());
         }
     }
 
@@ -644,7 +631,7 @@ impl Subscription {
         let (events, missed) = view.events_since(self.cursor);
         self.cursor = view.end();
         self.revision = view.revision();
-        self.pacing = HealthPacing::SendingHealth;
+        self.pacing = HealthPacing::Sending;
         json(&Reply::Health {
             health: view.health(),
             events: &events,
@@ -809,7 +796,7 @@ mod tests {
         assert_eq!(query["Picture"]["looks"][0]["look"], 1);
         assert_eq!(query["Picture"]["state"]["plays"][play.slot()]["look"], 1);
         // Subscribe: A delivered, then B's change carries B's looks
-        let mut subscription = Subscription::new(Arc::new(a), None);
+        let mut subscription = Subscription::new(Arc::new(a));
         let changed: Value =
             serde_json::from_str(&subscription.changed(Arc::new(b)).unwrap()).unwrap();
         let looks = &changed["Changed"]["looks"];
