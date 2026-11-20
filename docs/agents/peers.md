@@ -9,10 +9,11 @@ npm run peer:doctor                                                      # insta
 npm run peer -- both review <commit> docs/agents/tasks/review.md          # second look: Codex and Copilot in parallel
 npm run peer -- codex build <head> <task-file> --name <issue-slug>        # a hard task with a check, on the current head
 npm run peer -- both research <commit> <task-file> --name <slug>          # research with network, every claim linked
+npm run peer -- codex spec <head> <task-file> --name spec-<issue>         # a spec for an issue: one file, out/spec.md
 cat "$(node -p 'require("os").tmpdir()')/bossylights-peer/latest"        # the run folders of the last call
 ```
 
-Copy a template from `docs/agents/tasks/` (review, build, research, ux-review), fill it in, pass its path. `npm run codex -- <mode> <commit> <task-file>` still works: it is `npm run peer -- codex ...`.
+Copy a template from `docs/agents/tasks/` (review, build, research, spec, ux-review), fill it in, pass its path. `npm run codex -- <mode> <commit> <task-file>` still works: it is `npm run peer -- codex ...`.
 
 ```mermaid
 flowchart LR
@@ -27,9 +28,9 @@ flowchart LR
 | Option | Values | Default |
 |---|---|---|
 | tool | `codex`, `copilot`, `both` (parallel, a copy each) | |
-| mode | `review`, `build`, `research` | |
-| `--model` | `astra`, `sol`, `terra` (for every tool picked) | Codex: `sol` for review, `astra` for build and research. Copilot: `sol` |
-| `--effort` | Codex `low` to `ultra`, Copilot `none` to `max`. One a picked tool does not take is refused | Codex `ultra`, Copilot `max` |
+| mode | `review`, `build`, `research`, `spec` | |
+| `--model` | `astra`, `sol`, `terra`, `luna` (for every tool picked) | Codex: `sol` for review, `astra` for build, research and spec. Copilot: `sol` |
+| `--effort` | per model (see Models). An effort the picked model does not take is refused with the models that take it, also when it is the default: `--model luna` needs `--effort` | Codex `ultra`, Copilot `max` |
 | `--name` | letters, digits, `.`, `-`, `_` | `<mode>-<sha>` |
 | `--out` | a base folder | `<tmp>/bossylights-peer` |
 
@@ -56,6 +57,7 @@ flowchart LR
 | `last-message.md` | the answer |
 | `change.patch` | build: the change, verify it with `npm run verify` on a copy |
 | `repro.patch` | review and research: the tests and scripts it wrote. A worker starts from its red test |
+| `out/spec.md` | spec: the one file it writes. No patch is kept; a missing spec fails the run |
 | `out/` | evidence the agent wrote there (logs, measurements, screenshots) |
 | `report.md` | facts, paths and the ledger row (also printed) |
 
@@ -64,17 +66,22 @@ flowchart LR
 | review | prove each finding by running something, do not fix, keep the tests |
 | build | leave the change uncommitted, end with the commands that show every box passing |
 | research | primary sources first, link do not copy, every claim has a link, nothing secret or local in text for a public issue |
+| spec | write `out/spec.md`, change nothing, every claim about the code has file:line checked by reading it, no em dashes, short sentences and tables, end with a ten-line summary and the path |
+
+A spec is checked by an Opus model against the code (every file:line read) before it is posted on the issue.
 
 ## Models
 
-From `codex debug models` and `copilot help config`, read 2026-11-19. `npm run peer:doctor` prints the current lists.
+From `codex debug models` and `copilot help config`, read 2026-11-20. `npm run peer:doctor` prints the current lists.
 
-| Model | For | Codex context | In Copilot |
-|---|---|---|---|
-| `gpt-6.2-astra` | most capable: hard, long tasks with a clear check | 272k (up to 872k) | yes |
-| `gpt-6.2-sol` | fast go-to: reviews, big reads, normal tasks | 500k (up to 872k) | yes |
-| `gpt-6.1-terra` | visual understanding, computer use | 500k (up to 872k) | yes |
-| `gpt-6-luna` | easy, cheap | 272k | yes |
+| `--model` | Model | For | Codex context | Codex efforts | In Copilot |
+|---|---|---|---|---|---|
+| `astra` | `gpt-6.2-astra` | most capable: hard, long tasks with a clear check | 272k (up to 872k) | `low` to `ultra` | yes |
+| `sol` | `gpt-6.2-sol` | fast go-to: reviews, big reads, normal tasks | 500k (up to 872k) | `low` to `ultra` | yes |
+| `terra` | `gpt-6.1-terra` | visual understanding, computer use | 500k (up to 872k) | `low` to `ultra` | yes |
+| `luna` | `gpt-6-luna` | fast and affordable: easy tasks | 272k (up to 872k) | `low` to `max` | yes |
+
+Luna has no `ultra`: `--model luna --effort ultra` is refused ("ultra needs astra, sol or terra"). Copilot takes `none` to `max` for every model.
 
 Context: Codex models start at 500k tokens (a 475k window). The runner sets `model_context_window=872000` on every run. Checked: the session log of a run shows 475000 without it and 828400 with it. Copilot takes `--context long_context` (its tiers: `default`, `long_context`).
 
@@ -94,6 +101,7 @@ Measured here: a read-only Codex review at `ultra` takes 10 to 15 minutes, 50 to
 | Review of a diff or a design against our rules | `both review`: Codex and Copilot find different defects |
 | UX review of controls or screens | `both review` with `tasks/ux-review.md` (sol, highest effort) |
 | A question with sources on the web | `both research` |
+| A spec for an issue, before its build tickets | `codex spec` (astra ultra), checked by Opus against the code |
 | Needs the live conversation, the UI, a judgment about the owner's intent, hotspot edits beside other workers | Claude worker (Opus high) |
 | Small slice, a table of known rows | Claude worker (Sonnet) |
 
@@ -143,7 +151,7 @@ Harness v1 (Codex only) was written in one pass by a Sonnet 5.5 orchestrator on 
 | `scripts/peer-cli.mjs` | the action that starts one CLI |
 | `scripts/peer-run.mjs`, `scripts/peer-doctor.mjs` | the two entries |
 | `docs/agents/peer-brief.md` | the brief every run starts with |
-| `docs/agents/tasks/` | task templates |
+| `docs/agents/tasks/` | task templates: review, build, research, spec, ux-review |
 | `docs/agents/peer-runs.md` | the ledger |
 
 ## What we learned from the first runs

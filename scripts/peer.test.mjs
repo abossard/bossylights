@@ -16,10 +16,12 @@ import {
   report,
   runName,
   settingsOf,
+  specFileOf,
   stampOf,
   summarizeCodex,
   summarizeCopilot,
   tokens,
+  USAGE,
 } from "./peer.mjs";
 
 const both = ["codex", "copilot"];
@@ -43,9 +45,16 @@ const argCases = [
   [["codex", "review", "abc", "t.md", "model", "sol"], /usage/],
   [["codex", "review", "abc", "t.md", "--model", "sol", "--model", "astra"], /usage/],
   [["codex", "review", "abc", "t.md", "--model", "gpt-9"], /unknown model gpt-9/],
-  [["copilot", "review", "abc", "t.md", "--effort", "ultra"], /copilot takes no effort ultra/],
-  [["both", "review", "abc", "t.md", "--effort", "ultra"], /copilot takes no effort ultra/],
-  [["both", "review", "abc", "t.md", "--effort", "none"], /codex takes no effort none/],
+  [["copilot", "review", "abc", "t.md", "--effort", "ultra"], /copilot sol takes no effort ultra .*; no copilot model takes ultra\n/],
+  [["both", "review", "abc", "t.md", "--effort", "ultra"], /copilot sol takes no effort ultra/],
+  [["both", "review", "abc", "t.md", "--effort", "none"], /codex sol takes no effort none .*; no codex model takes none\n/],
+  [["codex", "spec", "abc", "t.md"], { tools: ["codex"], mode: "spec", commit: "abc", task: "t.md", ...none }],
+  [["both", "spec", "abc", "t.md", "--model", "luna", "--effort", "low", "--name", "luna-smoke"], { tools: both, mode: "spec", commit: "abc", task: "t.md", ...none, model: "luna", effort: "low", name: "luna-smoke" }],
+  [["copilot", "spec", "abc", "t.md", "--model", "luna"], { tools: ["copilot"], mode: "spec", commit: "abc", task: "t.md", ...none, model: "luna" }],
+  [["codex", "spec", "abc", "t.md", "--model", "luna", "--effort", "ultra"], /Error: peer: codex luna takes no effort ultra \(it takes low, medium, high, xhigh, max\); ultra needs astra, sol or terra\nusage/],
+  [["codex", "spec", "abc", "t.md", "--model", "luna"], /Error: peer: codex luna takes no effort ultra .*; ultra needs astra, sol or terra \(the spec default\): name --effort\nusage/],
+  [["codex", "review", "abc", "t.md", "--model", "luna"], /codex luna takes no effort ultra .*\(the review default\)/],
+  [["both", "build", "abc", "t.md", "--model", "luna"], /codex luna takes no effort ultra/],
   [["codex", "review", "abc", "t.md", "--name", "a/b"], /a name is letters/],
 ];
 for (const [argv, expected] of argCases) {
@@ -56,6 +65,38 @@ for (const [argv, expected] of argCases) {
 }
 
 test("a refusal carries the usage text", () => assert.throws(() => parseArgs(["both", "review", "a", "t", "--effort", "ultra"]), /usage: npm run peer/));
+
+const ALL_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
+// [tool, model, the efforts it takes]: Codex from `codex debug models`, Copilot from `copilot --help`
+const effortTable = [
+  ["codex", "astra", ["low", "medium", "high", "xhigh", "max", "ultra"]],
+  ["codex", "sol", ["low", "medium", "high", "xhigh", "max", "ultra"]],
+  ["codex", "terra", ["low", "medium", "high", "xhigh", "max", "ultra"]],
+  ["codex", "luna", ["low", "medium", "high", "xhigh", "max"]],
+  ["copilot", "astra", ["none", "minimal", "low", "medium", "high", "xhigh", "max"]],
+  ["copilot", "sol", ["none", "minimal", "low", "medium", "high", "xhigh", "max"]],
+  ["copilot", "terra", ["none", "minimal", "low", "medium", "high", "xhigh", "max"]],
+  ["copilot", "luna", ["none", "minimal", "low", "medium", "high", "xhigh", "max"]],
+];
+// [tool, effort, what the refusal names]
+const needs = {
+  "codex none": "no codex model takes none",
+  "codex minimal": "no codex model takes minimal",
+  "codex ultra": "ultra needs astra, sol or terra",
+  "copilot ultra": "no copilot model takes ultra",
+};
+for (const [tool, model, takes] of effortTable) {
+  for (const effort of ALL_EFFORTS) {
+    const argv = [tool, "review", "abc", "t.md", "--model", model, "--effort", effort];
+    test(`${tool} ${model} at ${effort}: ${takes.includes(effort) ? "accepted" : "refused"}`, () => {
+      if (takes.includes(effort)) assert.equal(parseArgs(argv).effort, effort);
+      else {
+        const said = `peer: ${tool} ${model} takes no effort ${effort} (it takes ${takes.join(", ")}); ${needs[`${tool} ${effort}`]}\n`;
+        assert.throws(() => parseArgs(argv), (e) => e.message.startsWith(said) && e.message.endsWith(USAGE));
+      }
+    });
+  }
+}
 
 // [tool, mode, model, effort, expected model, expected effort]
 const settingCases = [
@@ -68,6 +109,10 @@ const settingCases = [
   ["codex", "review", "astra", "xhigh", "astra", "xhigh"],
   ["copilot", "build", "astra", null, "astra", "max"],
   ["codex", "build", null, "low", "astra", "low"],
+  ["codex", "spec", null, null, "astra", "ultra"],
+  ["copilot", "spec", null, null, "sol", "max"],
+  ["codex", "spec", "luna", "low", "luna", "low"],
+  ["codex", "spec", "sol", null, "sol", "ultra"],
 ];
 for (const [tool, mode, model, effort, m, e] of settingCases) {
   test(`settings of ${tool} ${mode} ${model} ${effort}`, () => assert.deepEqual(settingsOf(tool, { mode, model, effort }), { tool, mode, model: m, effort: e }));
@@ -84,6 +129,16 @@ const execCases = [
     "codex",
     { model: "terra", effort: "low" },
     ["exec", "--ignore-user-config", "-m", "gpt-6.1-terra", "-c", "model_reasoning_effort=low", "-c", "model_context_window=872000", "-s", "workspace-write", "-c", "sandbox_workspace_write.network_access=true", "-c", 'web_search="live"', "--add-dir", "/r/out", "-C", "/r/copy", "--json", "-o", "/r/last-message.md"],
+  ],
+  [
+    "codex",
+    { model: "luna", effort: "low" },
+    ["exec", "--ignore-user-config", "-m", "gpt-6-luna", "-c", "model_reasoning_effort=low", "-c", "model_context_window=872000", "-s", "workspace-write", "-c", "sandbox_workspace_write.network_access=true", "-c", 'web_search="live"', "--add-dir", "/r/out", "-C", "/r/copy", "--json", "-o", "/r/last-message.md"],
+  ],
+  [
+    "copilot",
+    { model: "luna", effort: "high" },
+    ["-p", "PROMPT", "--model", "gpt-6-luna", "--reasoning-effort", "high", "--context", "long_context", "--allow-all", "--no-ask-user", "--add-dir", "/r/out", "--share", "/r/transcript.md", "--log-dir", "/r/logs", "--output-format", "json", "--usage-output-file", "/r/usage.json"],
   ],
   [
     "copilot",
@@ -115,12 +170,30 @@ const promptCases = [
   ["research", /Link, do not copy/],
   ["research", /Every claim has a link/],
   ["research", /a secret, a token, a user name, a local path or a machine name/],
+  ["spec", /Write the spec as ONE markdown file: \/o\/spec\.md\. Change no file in the copy\./],
+  ["spec", /Every claim about the code carries file:line, checked by reading that line/],
+  ["spec", /No em dashes\. Short sentences and tables over prose\./],
+  ["spec", /End your last message with a ten-line summary and the path \/o\/spec\.md\.$/],
+  ["spec", /thrown away after the run with any change in it: no diff is kept\. Only \/o is kept/],
 ];
 for (const [mode, phrase] of promptCases) {
   test(`the ${mode} prompt says ${phrase}`, () => assert.match(promptOf("B", "T", mode, "/o"), phrase));
 }
 
-for (const mode of ["review", "build", "research"]) {
+// [mode, a phrase its prompt must not carry]
+const notPromptCases = [
+  ["spec", /kept as a patch/],
+  ["review", /spec\.md/],
+  ["build", /spec\.md/],
+  ["research", /spec\.md/],
+];
+for (const [mode, phrase] of notPromptCases) {
+  test(`the ${mode} prompt does not say ${phrase}`, () => assert.doesNotMatch(promptOf("B", "T", mode, "/o"), phrase));
+}
+
+test("a spec is written to out/spec.md", () => assert.equal(specFileOf("/run/out"), "/run/out/spec.md"));
+
+for (const mode of ["review", "build", "research", "spec"]) {
   test(`the ${mode} prompt is the brief, the task, the out folder, then how it is judged`, () => {
     const p = promptOf("BRIEF\n", "\nTASK", mode, "/run/out");
     const at = ["BRIEF", "# Task", "TASK", "# Where kept files go", "/run/out", "# How this is judged"].map((s) => p.indexOf(s));
@@ -129,7 +202,7 @@ for (const mode of ["review", "build", "research"]) {
 }
 
 // [mode, patch file]
-for (const [mode, file] of [["build", "change.patch"], ["review", "repro.patch"], ["research", "repro.patch"]]) {
+for (const [mode, file] of [["build", "change.patch"], ["review", "repro.patch"], ["research", "repro.patch"], ["spec", null]]) {
   test(`a ${mode} keeps its diff as ${file}`, () => assert.equal(patchFileOf(mode), file));
 }
 
@@ -224,6 +297,8 @@ const nameCases = [
   [null, "review", "codex", "review-abcdef0-codex-20261119-225903"],
   [null, "research", "copilot", "research-abcdef0-copilot-20261119-225903"],
   ["t7-sequences", "build", "codex", "t7-sequences-codex-20261119-225903"],
+  [null, "spec", "codex", "spec-abcdef0-codex-20261119-225903"],
+  ["luna-smoke", "spec", "codex", "luna-smoke-codex-20261119-225903"],
 ];
 for (const [name, mode, tool, folder] of nameCases) {
   test(`run folder ${folder}`, () => assert.equal(runName({ name, mode, sha: "abcdef0123", tool, stamp: "20261119-225903" }), folder));
@@ -236,12 +311,14 @@ const date = new Date("2026-11-19T10:00:00Z");
 const rowCases = [
   [{ tool: "codex", mode: "review", model: "sol", effort: "ultra" }, null, "| 2026-11-19 | codex | review of abcdef0 | review | sol, ultra | 463 | 75 (8) | 6.90M / 6.76M / 14.7k | n/a | ? |"],
   [{ tool: "copilot", mode: "build", model: "sol", effort: "max" }, "t7", "| 2026-11-19 | copilot | t7 | build | sol, max | 463 | 75 (8) | 6.90M / 6.76M / 14.7k | ? | ? |"],
+  [{ tool: "codex", mode: "spec", model: "luna", effort: "low" }, "s193", "| 2026-11-19 | codex | s193 | spec | luna, low | 463 | 75 (8) | 6.90M / 6.76M / 14.7k | ? | ? |"],
 ];
 for (const [settings, name, row] of rowCases) {
   test(`ledger row of ${settings.tool} ${settings.mode}`, () => assert.equal(ledgerRow({ settings, sha: "abcdef0123", seconds: 462.6, stats, date, name }), row));
 }
 
-const reportBase = { sha: "abcdef0123", seconds: 61.4, status: 0, stats, dir: "/d", hasPatch: false, outFiles: 0, date, name: null };
+const reportBase = { sha: "abcdef0123", seconds: 61.4, status: 0, stats, dir: "/d", hasPatch: false, hasSpec: false, outFiles: 0, date, name: null };
+const specRun = { tool: "codex", mode: "spec", model: "luna", effort: "low" };
 // [settings and changes, phrase the report must carry]
 const reportCases = [
   [{ settings: { tool: "codex", mode: "review", model: "sol", effort: "ultra" } }, /^codex review abcdef0: finished in 61 s$/m],
@@ -257,7 +334,13 @@ const reportCases = [
   [{ settings: { tool: "codex", mode: "review", model: "sol", effort: "ultra" } }, /^out: none$/m],
   [{ settings: { tool: "codex", mode: "review", model: "sol", effort: "ultra" } }, /^last message: \/d\/last-message\.md$/m],
   [{ settings: { tool: "codex", mode: "review", model: "sol", effort: "ultra" } }, /\n\| 2026-11-19 \| codex \| review of abcdef0 \|.*\|$/],
+  [{ settings: { tool: "codex", mode: "review", model: "sol", effort: "ultra" }, hasSpec: true }, /^patch: none$/m],
+  [{ settings: specRun, hasSpec: true }, /^spec: \/d\/out\/spec\.md \(an Opus model checks it against the code before it is posted\)$/m],
+  [{ settings: specRun, hasSpec: false }, /^spec: MISSING \(\/d\/out\/spec\.md was not written\)$/m],
+  [{ settings: specRun, hasSpec: true, outFiles: 1 }, /^model gpt-6-luna at low, context 872000;/m],
 ];
+test("a spec report names no patch or repro, even with a diff", () => assert.doesNotMatch(report({ ...reportBase, settings: specRun, hasPatch: true, hasSpec: true }), /^(patch|repro):/m));
+
 for (const [changes, phrase] of reportCases) {
   test(`report ${JSON.stringify(changes)} says ${phrase}`, () => assert.match(report({ ...reportBase, ...changes }), phrase));
 }

@@ -1,4 +1,4 @@
-// `npm run peer -- <codex|copilot|both> <review|build|research> <commit> <task-file> [--model ..] [--effort ..] [--name ..] [--out dir]`
+// `npm run peer -- <codex|copilot|both> <review|build|research|spec> <commit> <task-file> [--model ..] [--effort ..] [--name ..] [--out dir]`
 // Runs Codex, Copilot or both in parallel, each in its own scratch copy of the commit (docs/agents/peers.md).
 // The shared checkout is never touched; nothing is committed or pushed. Each run leaves a folder;
 // `<base>/latest` names the folders of the last call, one per line.
@@ -7,7 +7,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runCli } from "./peer-cli.mjs";
-import { parseArgs, patchFileOf, promptOf, report, runName, settingsOf, stampOf } from "./peer.mjs";
+import { parseArgs, patchFileOf, promptOf, report, runName, settingsOf, specFileOf, stampOf } from "./peer.mjs";
 
 const git = (args, cwd) => spawnSync("git", args, { cwd, encoding: "utf8", maxBuffer: 1 << 29 });
 
@@ -42,16 +42,22 @@ async function runOne(tool) {
   const prompt = promptOf(brief, task, settings.mode, outDir);
   const run = await runCli(settings, { cwd: copy, dir, outDir, prompt, env: { ...process.env, CARGO_TARGET_DIR: join(dir, "target") } });
 
-  git(["add", "-A"], copy);
-  const diff = git(["diff", "--cached", "--binary"], copy).stdout;
-  if (diff) writeFileSync(join(dir, patchFileOf(settings.mode)), diff);
+  const patchFile = patchFileOf(settings.mode);
+  let diff = "";
+  if (patchFile) {
+    git(["add", "-A"], copy);
+    diff = git(["diff", "--cached", "--binary"], copy).stdout;
+    if (diff) writeFileSync(join(dir, patchFile), diff);
+  }
   git(["worktree", "remove", "--force", copy], repo);
   rmSync(join(dir, "target"), { recursive: true, force: true });
 
+  const hasSpec = existsSync(specFileOf(outDir));
   const outFiles = readdirSync(outDir, { recursive: true, withFileTypes: true }).filter((e) => e.isFile()).length;
-  const text = report({ settings, sha, seconds: run.seconds, status: run.status, stats: run.stats, dir, hasPatch: Boolean(diff), outFiles, date, name: args.name });
+  const text = report({ settings, sha, seconds: run.seconds, status: run.status, stats: run.stats, dir, hasPatch: Boolean(diff), hasSpec, outFiles, date, name: args.name });
   writeFileSync(join(dir, "report.md"), `${text}\n`);
-  return { status: run.status, dir, text };
+  const specMissing = settings.mode === "spec" && !hasSpec;
+  return { status: run.status === 0 && specMissing ? 1 : run.status, dir, text };
 }
 
 const results = await Promise.all(args.tools.map(runOne));

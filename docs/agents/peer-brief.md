@@ -48,7 +48,8 @@ The machine is shared: at most four build jobs, and clean up what you create. `C
 
 | Kept | Lost |
 |---|---|
-| the diff of your copy: `change.patch` for a build, `repro.patch` for a review or research (your failing tests and scripts) | everything else in the copy, the build folder |
+| the diff of your copy: `change.patch` for a build, `repro.patch` for a review or research (your failing tests and scripts). A spec keeps no diff | everything else in the copy, the build folder |
+| a spec: the one file the prompt names, `out/spec.md` | |
 | every file you write into the out folder (logs, measurements, screenshots, notes) | files outside the copy and the out folder |
 | your last message | |
 
@@ -67,5 +68,6 @@ The machine is shared: at most four build jobs, and clean up what you create. `C
 | build | a table of what you did per box (box, change, the command that proves it, red then green), then what you could not check |
 | review | a table of findings, most severe first (file:line, failing scenario, the command or test that shows it, red), then what you could not check |
 | research | the answer first, then a table of claims with their links, then what you could not check |
+| spec | a ten-line summary of the spec, then its path |
 
 No restating the task, no praise.

@@ -1,25 +1,32 @@
 // Calculations for `npm run peer` and `npm run peer:doctor` (docs/agents/peers.md): no files, no processes.
 
 export const TOOLS = ["codex", "copilot"];
-export const MODES = ["review", "build", "research"];
+export const MODES = ["review", "build", "research", "spec"];
 
 /** Short names both CLIs accept (`codex debug models`, `copilot help config`). */
 export const MODELS = {
   astra: "gpt-6.2-astra", // most capable: hard, long tasks with a check
   sol: "gpt-6.2-sol", // fast go-to: reviews, big reads
   terra: "gpt-6.1-terra", // visual understanding and computer use
+  luna: "gpt-6-luna", // fast and affordable: easy tasks
 };
 
-/** The efforts each CLI takes. Copilot has no `ultra`, Codex no `none` or `minimal`. */
+const CODEX_TOP = ["low", "medium", "high", "xhigh", "max", "ultra"];
+const COPILOT_ALL = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
+
+/**
+ * The efforts each tool takes per model. Codex: `supported_reasoning_levels` of `codex debug models`
+ * (luna has no `ultra`). Copilot lists its efforts per CLI, not per model: no `ultra`.
+ */
 export const EFFORTS = {
-  codex: ["low", "medium", "high", "xhigh", "max", "ultra"],
-  copilot: ["none", "minimal", "low", "medium", "high", "xhigh", "max"],
+  codex: { astra: CODEX_TOP, sol: CODEX_TOP, terra: CODEX_TOP, luna: CODEX_TOP.slice(0, -1) },
+  copilot: { astra: COPILOT_ALL, sol: COPILOT_ALL, terra: COPILOT_ALL, luna: COPILOT_ALL },
 };
 
 /** Model and effort when none is named: [model, effort] per tool and mode. */
 const DEFAULTS = {
-  codex: { review: ["sol", "ultra"], build: ["astra", "ultra"], research: ["astra", "ultra"] },
-  copilot: { review: ["sol", "max"], build: ["sol", "max"], research: ["sol", "max"] },
+  codex: { review: ["sol", "ultra"], build: ["astra", "ultra"], research: ["astra", "ultra"], spec: ["astra", "ultra"] },
+  copilot: { review: ["sol", "max"], build: ["sol", "max"], research: ["sol", "max"], spec: ["sol", "max"] },
 };
 
 /** The largest Codex context window (`max_context_window`); the default is 500k. */
@@ -28,9 +35,22 @@ export const LONG_CONTEXT = 872000;
 export const COPILOT_CONTEXT = "long_context";
 
 export const USAGE =
-  "usage: npm run peer -- <codex|copilot|both> <review|build|research> <commit> <task-file> [--model astra|sol|terra] [--effort <level>] [--name label] [--out dir]";
+  "usage: npm run peer -- <codex|copilot|both> <review|build|research|spec> <commit> <task-file> [--model astra|sol|terra|luna] [--effort <level>] [--name label] [--out dir]";
 
-/** The command line, or the usage text as an error. `--model` and `--effort` apply to every tool picked. */
+const orList = (items) => (items.length < 2 ? items.join("") : `${items.slice(0, -1).join(", ")} or ${items.at(-1)}`);
+
+/** Why `tool` cannot run `model` at `effort`, or null when it can. Names the models that take it. */
+export function effortRefusal(tool, model, effort) {
+  if (EFFORTS[tool][model].includes(effort)) return null;
+  const takers = Object.keys(MODELS).filter((m) => EFFORTS[tool][m].includes(effort));
+  const needs = takers.length > 0 ? `${effort} needs ${orList(takers)}` : `no ${tool} model takes ${effort}`;
+  return `peer: ${tool} ${model} takes no effort ${effort} (it takes ${EFFORTS[tool][model].join(", ")}); ${needs}`;
+}
+
+/**
+ * The command line, or the usage text as an error. `--model` and `--effort` apply to every tool picked.
+ * The effort each tool would run with (named or its mode's default) must be one its model takes.
+ */
 export function parseArgs(argv) {
   const [tool, mode, commit, task, ...rest] = argv;
   const tools = tool === "both" ? TOOLS : TOOLS.filter((t) => t === tool);
@@ -44,7 +64,9 @@ export function parseArgs(argv) {
   }
   if (options.model !== null && !(options.model in MODELS)) throw new Error(`peer: unknown model ${options.model}: ${Object.keys(MODELS).join(", ")}\n${USAGE}`);
   for (const t of tools) {
-    if (options.effort !== null && !EFFORTS[t].includes(options.effort)) throw new Error(`peer: ${t} takes no effort ${options.effort}: ${EFFORTS[t].join(", ")}\n${USAGE}`);
+    const { model, effort } = settingsOf(t, { mode, ...options });
+    const refusal = effortRefusal(t, model, effort);
+    if (refusal) throw new Error(`${refusal}${options.effort === null ? ` (the ${mode} default): name --effort` : ""}\n${USAGE}`);
   }
   if (options.name !== null && !/^[A-Za-z0-9._-]+$/.test(options.name)) throw new Error(`peer: a name is letters, digits, dot, dash, underscore: ${options.name}\n${USAGE}`);
   return { tools, mode, commit, task, ...options };
@@ -105,16 +127,25 @@ const ENDS = {
     "Leave your change uncommitted in the copy. End with the exact commands that show every box passing, and what you could not check.",
   research:
     "Primary sources first: the project's own docs, specs, source, release notes and issue tracker. Link, do not copy: summarise in your own words. Every claim has a link. Nothing meant for a public issue carries a secret, a token, a user name, a local path or a machine name. A claim you checked by running something names the command. End with what you could not check.",
+  spec: (specFile) =>
+    `Write the spec as ONE markdown file: ${specFile}. Change no file in the copy. Every claim about the code carries file:line, checked by reading that line; do not invent names. No em dashes. Short sentences and tables over prose. End your last message with a ten-line summary and the path ${specFile}.`,
 };
+
+/** Where a spec run writes its one file. */
+export const specFileOf = (outDir) => `${outDir}/spec.md`;
 
 /** The prompt: the shared brief, the task, where kept files go, then how the result is judged. */
 export function promptOf(brief, task, mode, outDir) {
-  const keep = `Your working directory is a scratch copy of the repository, thrown away after the run. Its diff is kept as a patch. Write any other evidence (logs, measurements, screenshots, notes) into ${outDir}: that folder is kept for the orchestrator.`;
-  return [brief.trim(), "# Task", task.trim(), "# Where kept files go", keep, "# How this is judged", ENDS[mode]].join("\n\n");
+  const keep =
+    mode === "spec"
+      ? `Your working directory is a scratch copy of the repository, thrown away after the run with any change in it: no diff is kept. Only ${outDir} is kept for the orchestrator.`
+      : `Your working directory is a scratch copy of the repository, thrown away after the run. Its diff is kept as a patch. Write any other evidence (logs, measurements, screenshots, notes) into ${outDir}: that folder is kept for the orchestrator.`;
+  const end = mode === "spec" ? ENDS.spec(specFileOf(outDir)) : ENDS[mode];
+  return [brief.trim(), "# Task", task.trim(), "# Where kept files go", keep, "# How this is judged", end].join("\n\n");
 }
 
-/** The patch the copy's diff is kept as: a build's change, or a review's or research's repro. */
-export const patchFileOf = (mode) => (mode === "build" ? "change.patch" : "repro.patch");
+/** The patch the copy's diff is kept as: a build's change, a review's or research's repro, none for a spec. */
+export const patchFileOf = (mode) => ({ build: "change.patch", review: "repro.patch", research: "repro.patch", spec: null })[mode];
 
 const parsed = (lines) =>
   lines.flatMap((line) => {
@@ -196,30 +227,35 @@ export function ledgerRow({ settings, sha, seconds, stats, date, name }) {
   const { tool, mode, model, effort } = settings;
   const { usage } = stats;
   const task = name ?? `${mode} of ${sha.slice(0, 7)}`;
-  const verify = mode === "build" ? "?" : "n/a";
+  const verify = mode === "build" || mode === "spec" ? "?" : "n/a";
   return `| ${date.toISOString().slice(0, 10)} | ${tool} | ${task} | ${mode} | ${model}, ${effort} | ${Math.round(seconds)} | ${stats.commands} (${stats.failed}) | ${tokens(usage.input)} / ${tokens(usage.cached)} / ${tokens(usage.output)} | ${verify} | ? |`;
 }
 
 /** The report the orchestrator reads: facts first, then where the files are, then the ledger row. */
-export function report({ settings, sha, seconds, status, stats, dir, hasPatch, outFiles, date, name }) {
+export function report({ settings, sha, seconds, status, stats, dir, hasPatch, hasSpec, outFiles, date, name }) {
   const { tool, mode, model, effort } = settings;
   const { commands, failed, messages, usage } = stats;
   const context = tool === "codex" ? `context ${LONG_CONTEXT}` : `context ${COPILOT_CONTEXT}`;
-  const patch = !hasPatch
-    ? "patch: none"
-    : mode === "build"
-      ? `patch: ${dir}/change.patch (verify it with npm run verify on a copy, then apply)`
-      : `repro: ${dir}/repro.patch (the tests and scripts it wrote: start from its red test)`;
   return [
     `${tool} ${mode} ${sha.slice(0, 7)}: ${status === 0 ? "finished" : `FAILED (exit ${status})`} in ${Math.round(seconds)} s`,
     `model ${MODELS[model]} at ${effort}, ${context}; ${commands} commands (${failed} failed), ${messages} messages`,
     `tokens: ${usage.input} in (${usage.cached} cached), ${usage.output} out, ${usage.reasoning} reasoning`,
     `last message: ${dir}/last-message.md`,
-    patch,
+    keptLine({ mode, dir, hasPatch, hasSpec }),
     outFiles > 0 ? `out: ${outFiles} ${outFiles === 1 ? "file" : "files"} in ${dir}/out` : "out: none",
     "ledger row (docs/agents/peer-runs.md):",
     ledgerRow({ settings, sha, seconds, stats, date, name }),
   ].join("\n");
+}
+
+/** The report's line for what the copy left: a spec (or its absence), a patch, a repro or none. */
+function keptLine({ mode, dir, hasPatch, hasSpec }) {
+  const spec = specFileOf(`${dir}/out`);
+  if (mode === "spec") return hasSpec ? `spec: ${spec} (an Opus model checks it against the code before it is posted)` : `spec: MISSING (${spec} was not written)`;
+  if (!hasPatch) return "patch: none";
+  return mode === "build"
+    ? `patch: ${dir}/change.patch (verify it with npm run verify on a copy, then apply)`
+    : `repro: ${dir}/repro.patch (the tests and scripts it wrote: start from its red test)`;
 }
 
 // --- npm run peer:doctor
