@@ -49,7 +49,12 @@ impl Looks {
     }
 
     pub fn all(&self) -> Vec<SavedLook> {
-        self.saved.values().map(|saved| **saved).collect()
+        self.rows().copied().collect()
+    }
+
+    /// Authored rows in file order, borrowed while preparing a saved edit.
+    pub fn rows(&self) -> impl Iterator<Item = &SavedLook> {
+        self.saved.values().map(Arc::as_ref)
     }
 
     pub fn get(&self, look: u16) -> Option<&SavedLook> {
@@ -59,6 +64,15 @@ impl Looks {
     /// Already compiled against this revision's patch.
     pub fn plan(&self, look: u16) -> Result<Arc<Plan>, Refusal> {
         self.plans.get(&look).cloned().ok_or(Refusal::NoSuchLook)
+    }
+
+    /// Bytes of compiled plans kept solely by older revisions after this edit.
+    pub fn replaced_bytes(&self, next: &Self) -> usize {
+        self.plans
+            .iter()
+            .filter(|(id, old)| next.plans.get(id).is_none_or(|new| !Arc::ptr_eq(old, new)))
+            .map(|(_, old)| old.bytes())
+            .sum()
     }
 
     /// A replacement is atomic across every parent, even when the change makes a

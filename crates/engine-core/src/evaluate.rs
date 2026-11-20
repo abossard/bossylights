@@ -74,33 +74,39 @@ fn scaled(count: u128, speed: Speed) -> u128 {
 #[derive(Clone, Copy)]
 struct Moment {
     count: u128,
+    /// Fraction of the next subcount, carried through each linked target's spread.
+    part: u128,
+    divisor: u128,
     left: bool,
 }
 
-/// Interpolate below the clock's Q32 resolution: a one-third-beat delay falls
-/// strictly between the two adjacent clock counts. Extra fractional bits also
-/// preserve a clock count through all eight nested half-speed uses.
+/// The factor of 100 makes percentages exact. The low bits leave room to halve
+/// the clock and its spread offsets at every level without losing a fraction.
 fn subcounts(clock_count: u64) -> u128 {
-    u128::from(clock_count) << 32
+    (u128::from(clock_count) << 32) * 100
 }
 
 impl Moment {
     fn at(count: u64) -> Self {
         Self {
             count: subcounts(count),
+            part: 0,
+            divisor: 1,
             left: false,
         }
     }
 
     fn left(count: u64) -> Self {
         Self {
-            count: subcounts(count),
             left: true,
+            ..Self::at(count)
         }
     }
 
-    fn before(self, edge: u128) -> bool {
-        self.count < edge || (self.left && self.count == edge)
+    fn before(self, edge: Self) -> bool {
+        let phase = (self.count, self.part * edge.divisor);
+        let edge = (edge.count, edge.part * self.divisor);
+        phase < edge || (self.left && phase == edge)
     }
 
     fn since(self, start: u64) -> Self {
@@ -110,38 +116,68 @@ impl Moment {
         }
     }
 
+    /// Normalize after adding two proper fractions or doubling one.
+    fn carry(mut self) -> Self {
+        if self.part >= self.divisor {
+            self.count += 1;
+            self.part -= self.divisor;
+        }
+        self
+    }
+
+    fn at_speed(mut self, speed: Speed) -> Self {
+        match speed {
+            Speed::Half => {
+                self.part = ((self.count % 2) * self.divisor + self.part) / 2;
+                self.count /= 2;
+                self
+            }
+            Speed::Normal => self,
+            Speed::Double => {
+                self.count *= 2;
+                self.part *= 2;
+                self.carry()
+            }
+        }
+    }
+
+    /// Add span × spread/100 × index/count. At most seven timed nodes multiply
+    /// u16 divisors, so adding their remainders fits u128. A leaf's delay is
+    /// compared separately: that cross-product has at most eight u16 factors.
+    fn shifted(mut self, span: u128, spread: u8, binding: &Binding) -> Self {
+        if spread == 0 || binding.index == 0 || binding.count == 0 {
+            return self;
+        }
+        let offset = (span / 100) * u128::from(spread) * u128::from(binding.index);
+        let lights = u128::from(binding.count);
+        self.count += offset / lights;
+        let remainder = offset % lights;
+        if remainder != 0 {
+            self.part = self.part * lights + remainder * self.divisor;
+            self.divisor *= lights;
+            self = self.carry();
+        }
+        self
+    }
+
     /// Phase in this use and whether it has a predecessor across a loop boundary.
     fn phase(self, measure: u64, settings: Use, binding: &Binding) -> (Self, bool) {
-        let length = subcounts(measure);
-        let count = scaled(self.count, settings.speed) + binding.offset(length, settings.spread);
-        let left = self.left && (settings.speed != Speed::Half || self.count.is_multiple_of(2));
-        if count < length || (left && count == length) {
-            return (Self { count, left }, false);
+        let end = Self::at(measure);
+        let mut phase = self
+            .at_speed(settings.speed)
+            .shifted(end.count, settings.spread, binding);
+        if phase.before(end) {
+            return (phase, false);
         }
         if settings.repeat == Repeat::Once {
             return (Self::left(measure), false);
         }
-        let wrapped = count % length;
-        if left && wrapped == 0 {
+        phase.count %= end.count;
+        if phase.left && phase.count == 0 && phase.part == 0 {
             (Self::left(measure), true)
         } else {
-            (
-                Self {
-                    count: wrapped,
-                    left,
-                },
-                true,
-            )
+            (phase, true)
         }
-    }
-}
-
-impl Binding {
-    fn offset(&self, span: u128, spread: u8) -> u128 {
-        if spread == 0 || self.index == 0 || self.count == 0 {
-            return 0;
-        }
-        span * u128::from(spread) * u128::from(self.index) / (100 * u128::from(self.count))
     }
 }
 
@@ -167,7 +203,7 @@ impl Sampler<'_> {
                 first,
                 count,
                 measure,
-            }) if *measure > 0 => {
+            }) if *measure > 0 && depth != 0 => {
                 let Some(items) = self.program.items.get(*first..first.saturating_add(*count))
                 else {
                     return Light::DARK;
@@ -177,7 +213,7 @@ impl Sampler<'_> {
             Some(Node::Sequence { .. }) | None => return Light::DARK,
         };
         let (phase, wrapped) = time.phase(measure, settings, binding);
-        let index = items.partition_point(|item| !phase.before(subcounts(item.end)));
+        let index = items.partition_point(|item| !phase.before(Moment::at(item.end)));
         let Some((incoming, start)) = item_at(items, index) else {
             return Light::DARK;
         };
@@ -188,10 +224,11 @@ impl Sampler<'_> {
                 self.program.nodes.get(incoming.child),
                 Some(Node::Step { .. })
             ) {
-            self.binding(incoming.child)
-                .map_or(0, |b| b.offset(width, incoming.settings.spread))
+            self.binding(incoming.child).map_or(Moment::at(0), |b| {
+                Moment::at(0).shifted(width, incoming.settings.spread, b)
+            })
         } else {
-            0
+            Moment::at(0)
         };
         let previous = || {
             let index = index
@@ -209,8 +246,9 @@ impl Sampler<'_> {
             return previous().unwrap_or(Light::DARK);
         }
         let now = self.visit(incoming.child, age, incoming.settings, depth);
-        let fade = width.saturating_sub(delay) * u128::from(incoming.transition) / 100;
-        let progress = age.count.saturating_sub(delay);
+        // Convert to interpolation weights only after deciding the exact item and entry.
+        let fade = width.saturating_sub(delay.count) * u128::from(incoming.transition) / 100;
+        let progress = age.count.saturating_sub(delay.count);
         if progress >= fade {
             return now;
         }
@@ -554,6 +592,106 @@ mod tests {
                 expected
             );
         }
+    }
+
+    #[test]
+    fn combined_spread_wraps_at_an_exact_child_edge() {
+        let mut graph = Graph::default();
+        let first = graph.step(Some(100));
+        let last = graph.step(Some(200));
+        let normal = Use::default();
+        let spread = Use {
+            spread: 100,
+            ..normal
+        };
+        let child = graph.sequence(&[(first, 8, normal, 0), (last, 8, normal, 0)]);
+        let parent = graph.sequence(&[(child, 32, spread, 0)]);
+
+        // Parent and child offsets combine to zero, one and two beats.
+        // All three lights therefore start in the child's first item.
+        let levels = [0, 1, 2].map(|light| {
+            graph
+                .program(parent)
+                .sample(&graph.bindings(light, 3), 0, spread)
+                .intensity
+        });
+        assert_eq!(levels, [Some(100); 3]);
+    }
+
+    #[test]
+    fn linked_spread_carries_between_different_targets_at_each_speed() {
+        let mut graph = Graph::default();
+        let first = graph.step(Some(100));
+        let last = graph.step(Some(200));
+        let normal = Use::default();
+        let spread = Use {
+            spread: 100,
+            ..normal
+        };
+        let child = graph.sequence(&[(first, 8, normal, 0), (last, 8, normal, 0)]);
+
+        // Parent target 1/9 and child target 1/3: after scaling the parent
+        // offset, 2/3 + 1/3 wraps the child exactly on the starting frame.
+        for (speed, parent_width, half_beat) in [
+            (Speed::Half, 192, 16),
+            (Speed::Normal, 96, 8),
+            (Speed::Double, 48, 4),
+        ] {
+            let parent = graph.sequence(&[(child, parent_width, Use { speed, ..spread }, 0)]);
+            let fade = graph.sequence(&[(parent, half_beat, spread, 0), (last, 16, normal, 100)]);
+            let mut bindings = graph.bindings(1, 3);
+            bindings[parent].count = 9;
+
+            let edge = u64::from(half_beat) * UNIT;
+            for (root, settings, at, expected) in [
+                (parent, spread, 0, 100),
+                (parent, spread, edge - 1, 100),
+                (parent, spread, edge, 200),
+                // The outgoing parent freezes the first item just before the cut.
+                (fade, normal, edge, 100),
+            ] {
+                assert_eq!(
+                    graph
+                        .program(root)
+                        .sample(&bindings, at, settings)
+                        .intensity,
+                    Some(expected),
+                    "{speed:?} at {at}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_tempo_change_preserves_the_exact_sixteenth_edge() {
+        use crate::{Bpm, Clock};
+        use core::time::Duration;
+
+        let mut graph = Graph::default();
+        let first = graph.step(Some(100));
+        let second = graph.step(Some(200));
+        let normal = Use::default();
+        let root = graph.sequence(&[(first, 1, normal, 0), (second, 16, normal, 0)]);
+        let program = graph.program(root);
+        let bindings = graph.bindings(0, 1);
+
+        // The first 12.5 ms at 120 BPM provide 0.025 beat. Another 37.5 ms at
+        // 60 BPM adds 0.0375 beat, so the item changes at exactly 50 ms.
+        let clock = Clock::START
+            .set_feed(Bpm::new(120).unwrap())
+            .settle(Duration::from_micros(12_500))
+            .set_feed(Bpm::new(60).unwrap());
+        let actual = [49_999, 50_000, 50_001].map(|micros| {
+            let elapsed = clock.elapsed_at(Duration::from_micros(micros));
+            (
+                elapsed >= UNIT,
+                program.sample(&bindings, elapsed, normal).intensity,
+            )
+        });
+        assert_eq!(
+            actual,
+            [(false, Some(100)), (true, Some(200)), (true, Some(200))]
+        );
     }
 
     #[test]

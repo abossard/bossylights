@@ -46,8 +46,8 @@
 //!
 //! A file is at most [`MOST_BYTES`] long: one over it is not read, and neither is one
 //! whose patch and looks would be written back over it. A patch kept in a file ([`LIMIT`])
-//! refuses the command that would take its file over it, beside the room every look may
-//! take ([`LOOKS_ROOM`]), so every save writes, and the file on disk always opens.
+//! reserves [`LOOKS_ROOM`] for steps and settings. Longer sequence rows share the
+//! remaining space with the patch. Edits on either side keep the next save in bounds.
 
 #![no_std]
 #![forbid(unsafe_code)]
@@ -73,7 +73,8 @@ use engine_core::{
 use fixture_library::Mode;
 use looks::Looks;
 use rig::{Limit, Patch, Placed, Unplaced};
-use serde::{Deserialize, Serialize};
+use serde::de::{IgnoredAny, SeqAccess, Visitor};
+use serde::{Deserialize, Deserializer, Serialize};
 
 /// The version of the file this engine writes and reads. Raise it with every change an
 /// engine of the old version would read wrong. An engine never reads a newer file.
@@ -100,21 +101,39 @@ pub const MOST_BYTES: usize = 64 * 1024 * 1024;
 /// joins the same parts into the text.
 pub const LIMIT: Limit = Limit {
     most: MOST_BYTES - LOOKS_ROOM,
-    fits: |patch| parts(patch).is_some_and(|parts| parts.len() <= MOST_BYTES - LOOKS_ROOM),
+    fits,
     encode,
 };
 
+/// Version 4's allowance per step, including its escaped name, target and properties.
+const STEP_MOST: usize = 2048;
+
 /// Room for a look's escaped name, target and properties, or its 64 full references.
 /// Each reference takes under 112 bytes even with the longest valid numeric fields.
-pub const LOOK_MOST: usize = 2048 + 112 * Sequence::MOST;
+pub const LOOK_MOST: usize = STEP_MOST + 112 * Sequence::MOST;
 
 /// How much longer the line of the Mixer's settings may be than the defaults' line,
 /// which a patch is measured with.
 pub const RULES_MOST: usize = 128;
 
-/// The room the looks and the Mixer's settings may take: [`LOOKS`] of [`LOOK_MOST`]
-/// bytes and [`RULES_MOST`]. A patch leaves it.
-pub const LOOKS_ROOM: usize = LOOKS * (LOOK_MOST + 6) + RULES_MOST;
+/// The space guaranteed in version 4 for every step row, line separators and settings.
+pub const LOOKS_ROOM: usize = LOOKS * (STEP_MOST + 6) + RULES_MOST;
+
+fn fits(patch: &Patch, looks: &mut dyn Iterator<Item = &SavedLook>) -> bool {
+    let Some(room) = parts(patch).and_then(|parts| LIMIT.most.checked_sub(parts.len())) else {
+        return false;
+    };
+    // Most patches have room for all the longest sequences without measuring a row.
+    if room >= LOOKS * (LOOK_MOST - STEP_MOST) {
+        return true;
+    }
+    looks
+        .filter(|look| matches!(look.definition, engine_core::Definition::Sequence(_)))
+        .try_fold(room, |left, look| {
+            left.checked_sub(line(look)?.len().saturating_sub(STEP_MOST))
+        })
+        .is_some()
+}
 
 /// The text of a definition as the file has it, under the key of its mode, indented to sit
 /// in the file.
@@ -197,7 +216,7 @@ impl Parts {
 /// looks. `None` when it would be over [`MOST_BYTES`]: that file would not open.
 pub fn write(patch: &Patch, looks: &Looks) -> Option<String> {
     let mut parts = parts(patch)?;
-    parts.looks = looks.all().iter().map(line).collect::<Option<Vec<_>>>()?;
+    parts.looks = looks.rows().map(line).collect::<Option<Vec<_>>>()?;
     parts.rules = line(&looks.rules())?;
     (parts.len() <= MOST_BYTES).then(|| parts.text())
 }
@@ -268,10 +287,25 @@ pub fn read(text: &str, empty: &Patch) -> Result<(Patch, Looks), Unopened> {
     if text.len() > MOST_BYTES {
         return Err(too_big);
     }
-    let Head { version } = serde_json::from_str(text).map_err(broken)?;
+    let (version, look_count) = match serde_json::from_str::<Counts>(text) {
+        Ok(head) => (head.version, head.looks),
+        Err(error) => {
+            // A newer version may give "looks" an entirely different shape.
+            let Head { version } = serde_json::from_str(text).map_err(broken)?;
+            if version.get() <= VERSION {
+                return Err(broken(error));
+            }
+            (version, 0)
+        }
+    };
     if version.get() > VERSION {
         return Err(Unopened::Newer {
             version: version.get(),
+        });
+    }
+    if look_count > LOOKS {
+        return Err(Unopened::Refused {
+            reason: Refusal::TooManyLooks { most: LOOKS as u16 },
         });
     }
     let file = if version.get() < 4 {
@@ -459,6 +493,33 @@ struct Head {
     version: NonZeroU32,
 }
 
+/// Count the rows while inspecting the version. All other fields are skipped during
+/// this pass, so an oversized look list never materializes a typed project.
+#[derive(Deserialize)]
+struct Counts {
+    version: NonZeroU32,
+    #[serde(default, deserialize_with = "count_looks")]
+    looks: usize,
+}
+
+fn count_looks<'de, D: Deserializer<'de>>(d: D) -> Result<usize, D::Error> {
+    struct Count;
+    impl<'de> Visitor<'de> for Count {
+        type Value = usize;
+        fn expecting(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            f.write_str("an array of saved looks")
+        }
+        fn visit_seq<A: SeqAccess<'de>>(self, mut rows: A) -> Result<usize, A::Error> {
+            let mut count = 0;
+            while rows.next_element::<IgnoredAny>()?.is_some() {
+                count += 1;
+            }
+            Ok(count)
+        }
+    }
+    d.deserialize_seq(Count)
+}
+
 /// The whole file as it is read, each look an `L`. A key it does not know: the file is
 /// broken.
 #[derive(Deserialize)]
@@ -559,6 +620,51 @@ mod sequence_tests {
     use super::*;
     use engine_core::{Color, Lights, Pixels, Universes};
     use rig::Whole;
+
+    #[test]
+    fn the_reader_stops_decoding_looks_at_the_count_limit() {
+        let empty = Patch::new(
+            Universes::new(1).unwrap(),
+            Lights::new(8).unwrap(),
+            Whole(|_| NonZeroU16::MIN),
+        );
+        let file = write(&empty, &Looks::new()).unwrap();
+        // The next element is valid JSON, but could never deserialize as a look.
+        // Only a reader that stops decoding at the limit can report TooManyLooks.
+        for count in [LOOKS - 1, LOOKS, LOOKS + 1] {
+            let mut rows: Vec<_> = (1..=count)
+                .map(|id| format!(r#"{{"look":{id},"name":"rest","step":{{"target":{{"Light":{{"light":1}}}},"values":{{}}}}}}"#))
+                .collect();
+            rows.push("null".into());
+            let text = file.replace(
+                r#""looks": []"#,
+                &format!(r#""looks": [{}]"#, rows.join(",")),
+            );
+            let result = read(&text, &empty);
+            if count < LOOKS {
+                assert!(matches!(result, Err(Unopened::Broken { .. })));
+            } else {
+                assert_eq!(
+                    result,
+                    Err(Unopened::Refused {
+                        reason: Refusal::TooManyLooks { most: LOOKS as u16 }
+                    })
+                );
+                // Count before decoding any other part of an oversized project.
+                let invalid_modes = text.replace(r#""modes": {}"#, r#""modes": false"#);
+                assert_eq!(read(&invalid_modes, &empty), result);
+            }
+        }
+        let newer = VERSION + 1;
+        let many = alloc::vec!["null"; LOOKS + 1].join(",");
+        for looks in [format!("[{many}]"), r#"{"future":"shape"}"#.into()] {
+            let future = format!(r#"{{"looks":{looks},"version":{newer}}}"#);
+            assert_eq!(
+                read(&future, &empty),
+                Err(Unopened::Newer { version: newer })
+            );
+        }
+    }
 
     #[test]
     fn a_saved_row_with_two_definition_keys_is_broken_even_if_one_is_null() {

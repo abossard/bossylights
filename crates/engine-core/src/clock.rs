@@ -138,6 +138,34 @@ pub struct Reading {
     pub elapsed: f64,
 }
 
+/// A Q32 beat count and the fraction of its next count, in tempo.span parts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct Count {
+    whole: u64,
+    part: u64,
+}
+
+impl Count {
+    const fn whole(whole: u64) -> Self {
+        Self { whole, part: 0 }
+    }
+
+    fn at_tempo(self, from: Tempo, to: Tempo) -> Self {
+        // All internal feeds share one span, so changing BPM carries the part exactly.
+        // A tap can use another span. Round up to its next part as for a grid crossing.
+        let part =
+            (u128::from(self.part) * u128::from(to.span)).div_ceil(u128::from(from.span.max(1)));
+        if part >= u128::from(to.span) {
+            Self::whole(self.whole.saturating_add(1))
+        } else {
+            Self {
+                whole: self.whole,
+                part: part as u64,
+            }
+        }
+    }
+}
+
 /// The beat clock. Every change happens at the time it was settled to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Clock {
@@ -146,13 +174,10 @@ pub struct Clock {
     /// The time the last settle asked for: when the event it comes before was sent.
     /// Earlier than `at` for an event sent before a frame it missed.
     sent: Duration,
-    /// From this time on, the clock counts at `tempo`; `elapsed` and `grid` are the
-    /// counts then, in [`ONE`]s. The grid is `part` `tempo.span`ths of a [`ONE`] past
-    /// `grid`: kept exactly, so a change of tempo moves no crossing.
+    /// From this time on the clock advances both counts at `tempo`.
     from: Duration,
-    elapsed: u64,
-    grid: u64,
-    part: u64,
+    elapsed: Count,
+    grid: Count,
     tempo: Tempo,
     feed: Bpm,
     /// A one tap that lapsed stays here: [`Clock::source`] tells it as the feed.
@@ -165,9 +190,8 @@ impl Clock {
         at: Duration::ZERO,
         sent: Duration::ZERO,
         from: Duration::ZERO,
-        elapsed: 0,
-        grid: 0,
-        part: 0,
+        elapsed: Count::whole(0),
+        grid: Count::whole(0),
         tempo: Bpm::FEED.tempo(),
         feed: Bpm::FEED,
         source: Source::Feed,
@@ -202,7 +226,7 @@ impl Clock {
 
     /// The elapsed count at `t`, which is not before the last change, in [`ONE`]s.
     pub fn elapsed_at(&self, t: Duration) -> u64 {
-        self.elapsed.saturating_add(self.count(t))
+        self.count(self.elapsed, t).whole
     }
 
     /// The elapsed count now, in [`ONE`]s.
@@ -212,27 +236,19 @@ impl Clock {
 
     /// Where the grid is now, in [`ONE`]s.
     pub fn grid(&self) -> u64 {
-        self.position().0
+        self.position().whole
     }
 
     /// Where the grid is now: whole [`ONE`]s, and the part of one in `tempo.span`ths. On
     /// a beat's crossing, exactly on that beat: the grid is there all that nanosecond.
-    fn position(&self) -> (u64, u64) {
-        let span = u128::from(self.tempo.span.max(1));
-        let total = self
-            .since(self.at)
-            .saturating_mul(u128::from(ONE) * u128::from(self.tempo.beats))
-            .saturating_add(u128::from(self.part));
-        let grid = self
-            .grid
-            .saturating_add(u64::try_from(total / span).unwrap_or(u64::MAX));
-        let part = u64::try_from(total % span).unwrap_or(0);
-        let below = grid / ONE;
-        let past = (self.grid, self.part) > (below.saturating_mul(ONE), 0);
-        if !past && self.crossing(below) == self.at {
-            (below.saturating_mul(ONE), 0)
+    fn position(&self) -> Count {
+        let grid = self.count(self.grid, self.at);
+        let below = grid.whole / ONE;
+        let beat = Count::whole(below.saturating_mul(ONE));
+        if self.grid <= beat && self.crossing(below) == self.at {
+            beat
         } else {
-            (grid, part)
+            grid
         }
     }
 
@@ -251,17 +267,17 @@ impl Clock {
     /// next. Decided by [`Clock::crossing`], as a launch is.
     fn first_beat(&self) -> u64 {
         match self.position() {
-            (grid, 0) if grid.is_multiple_of(ONE) => grid / ONE,
-            (grid, _) => (grid / ONE).saturating_add(1),
+            Count { whole, part: 0 } if whole.is_multiple_of(ONE) => whole / ONE,
+            count => (count.whole / ONE).saturating_add(1),
         }
     }
 
     /// When the grid reaches beat `beat`: the last change if it was there already.
     pub fn crossing(&self, beat: u64) -> Duration {
         let span = u128::from(self.tempo.span);
-        let at = u128::from(self.grid)
+        let at = u128::from(self.grid.whole)
             .saturating_mul(span)
-            .saturating_add(u128::from(self.part));
+            .saturating_add(u128::from(self.grid.part));
         let to = u128::from(beat.saturating_mul(ONE))
             .saturating_mul(span)
             .saturating_sub(at);
@@ -298,11 +314,9 @@ impl Clock {
         };
         let beat = self.first_beat();
         Self {
-            grid: beat.saturating_mul(ONE),
-            part: 0,
-            tempo,
+            grid: Count::whole(beat.saturating_mul(ONE)),
             source,
-            ..self.rebase()
+            ..self.rebase(tempo)
         }
     }
 
@@ -332,46 +346,36 @@ impl Clock {
         if self.tempo.same(tempo) {
             return self;
         }
-        let based = self.rebase();
-        // the part in the new span's units, rounded up: a crossing never comes late
-        let part = (u128::from(based.part) * u128::from(tempo.span))
-            .div_ceil(u128::from(based.tempo.span.max(1)));
-        let (grid, part) = match u64::try_from(part) {
-            Ok(part) if part < tempo.span => (based.grid, part),
-            Ok(_) | Err(_) => (based.grid.saturating_add(1), 0),
-        };
-        Self {
-            grid,
-            part,
-            tempo,
-            ..based
-        }
+        self.rebase(tempo)
     }
 
-    /// The same clock, its counts taken now: ready for a change of tempo or grid.
-    fn rebase(self) -> Self {
-        let (grid, part) = self.position();
+    /// Take both counts at the change instant, carrying their fractional parts.
+    fn rebase(self, tempo: Tempo) -> Self {
         Self {
             from: self.at,
-            elapsed: self.elapsed_now(),
-            grid,
-            part,
+            elapsed: self
+                .count(self.elapsed, self.at)
+                .at_tempo(self.tempo, tempo),
+            grid: self.position().at_tempo(self.tempo, tempo),
+            tempo,
             ..self
         }
     }
 
-    /// Nanoseconds from the last change to `t`.
-    fn since(&self, t: Duration) -> u128 {
-        t.saturating_sub(self.from).as_nanos()
-    }
-
-    /// Beats from the last change to `t`, in [`ONE`]s.
-    fn count(&self, t: Duration) -> u64 {
-        let count = self
-            .since(t)
+    /// Advance a count from the last change to `t`, in parts of a Q32 count.
+    fn count(&self, start: Count, t: Duration) -> Count {
+        let span = u128::from(self.tempo.span.max(1));
+        let total = t
+            .saturating_sub(self.from)
+            .as_nanos()
             .saturating_mul(u128::from(ONE) * u128::from(self.tempo.beats))
-            / u128::from(self.tempo.span.max(1));
-        u64::try_from(count).unwrap_or(u64::MAX)
+            .saturating_add(u128::from(start.part));
+        Count {
+            whole: start
+                .whole
+                .saturating_add(u64::try_from(total / span).unwrap_or(u64::MAX)),
+            part: (total % span) as u64,
+        }
     }
 
     /// The clock as a picture shows it.
@@ -723,6 +727,27 @@ mod tests {
                 "{name}: elapsed {}",
                 beats(clock.elapsed_now())
             );
+        }
+    }
+
+    #[test]
+    fn taps_and_release_carry_elapsed_fractions_across_different_tempo_spans() {
+        // At the second tap the feed has supplied 1.42 beats, the tap period is
+        // 700 ms, and the next half beat is 56 ms away.
+        let tapped = run(&[Tap(10), Tap(710)]);
+        // 4.2 ms later the tapped clock has added 0.006 beats. Releasing to
+        // 60 BPM leaves 74 ms to the same 1.5-beat edge.
+        let released = tapped
+            .set_feed(bpm(60))
+            .settle(Duration::from_micros(714_200))
+            .release();
+        for (clock, edge) in [(tapped, 766_000), (released, 788_200)] {
+            for (micros, reached) in [(edge - 1, false), (edge, true), (edge + 1, true)] {
+                assert_eq!(
+                    clock.elapsed_at(Duration::from_micros(micros)) >= 3 * ONE / 2,
+                    reached
+                );
+            }
         }
     }
 

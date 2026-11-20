@@ -472,6 +472,92 @@ fn red_step(look: u16, name: &str) -> Value {
     }}})
 }
 
+#[test]
+fn a_v4_show_with_room_for_steps_can_still_edit_a_step() {
+    use engine_core::{LOOKS, ShowFile};
+    use engine_server::show::open;
+    use std::io::Write;
+
+    // Version 4 reserved 2048 bytes per look, plus line separators and the rules.
+    let v4_patch_limit = show_file::MOST_BYTES - LOOKS * (2048 + 6) - 128;
+    let path = show_file("v4_step_room");
+    let mut file = std::io::BufWriter::new(std::fs::File::create(&path).unwrap());
+    let mut look = red_step(1, "red");
+    let row = look["PutStep"].take();
+    let header = format!(
+        r#"{{"version":4,"patch":[{{"fixture":1,"name":"PAR","mode":"m","at":{{"universe":1,"address":1}},"first":1}}],"groups":[],"looks":[{row}],"modes":{{"m":{{"maker":"Generic","model":"PAR","mode":{{"name":"RGB","channels":[{{"name":"Red"#
+    );
+    let trailer = r#"","function":"Red","byte":"Coarse","default":null,"direction":null,"ranges":[]}],"pixels":[],"layout":null,"degrees":null}}}}"#;
+    let padding = v4_patch_limit - 4096 - header.len() - trailer.len();
+    file.write_all(header.as_bytes()).unwrap();
+    for chunk in (0..padding).step_by(8192) {
+        file.write_all(&[b'x'; 8192][..(padding - chunk).min(8192)])
+            .unwrap();
+    }
+    file.write_all(trailer.as_bytes()).unwrap();
+    file.flush().unwrap();
+    drop(file);
+
+    let (_engine, mut sender) = engine::Engine::start(engine::Universes::new(1).unwrap()).unwrap();
+    let opened = open(&path, &mut sender);
+    std::fs::remove_file(&path).unwrap();
+    assert_eq!(opened, ShowFile::Kept);
+    assert_eq!(sender.looks().get(1).unwrap().name.as_str(), "red");
+    assert!(
+        show_file::write(&sender.patch(), &sender.looks())
+            .unwrap()
+            .len()
+            < v4_patch_limit
+    );
+
+    let rename = serde_json::from_value(red_step(1, "new")).unwrap();
+    assert_eq!(sender.send(rename), Ok(()));
+    assert_eq!(sender.looks().get(1).unwrap().name.as_str(), "new");
+}
+
+#[test]
+fn patch_and_sequence_edits_share_the_bytes_above_the_step_reserve() {
+    use engine_core::{LOOKS, SavedLook, Sequence};
+    let (_engine, mut sender) = engine::Engine::start(engine::Universes::new(1).unwrap()).unwrap();
+    let empty = sender.patch();
+    let library = [fixture_library::parse("Generic-Generic-RGB.qxf", GENERIC_RGB).unwrap()];
+    sender
+        .begin(serde_json::from_value(par("PAR", 1)).unwrap(), &library)
+        .unwrap();
+    let short = show_file::write(&sender.patch(), &sender.looks()).unwrap();
+    let sequence = |name| {
+        json!({ "look": 2, "name": name, "sequence": {
+            "items": vec![json!({"look": 1}); Sequence::MOST]
+        }})
+    };
+    let saved: SavedLook = serde_json::from_value(sequence("loop")).unwrap();
+    let excess = serde_json::to_string(&saved).unwrap().len() - 2048;
+    let legacy_limit = show_file::MOST_BYTES - LOOKS * (2048 + 6) - 128;
+    let padded = short.replacen(
+        r#""name": "Red"#,
+        &format!(
+            r#""name": "Red{}"#,
+            "x".repeat(legacy_limit - excess - short.len())
+        ),
+        1,
+    );
+    let (patch, _) = show_file::read(&padded, &empty).unwrap();
+    sender.load(patch.kept_in(show_file::LIMIT)).unwrap();
+    let full = Err(engine_core::Refusal::ShowFileFull {
+        most: show_file::LIMIT.most as u32,
+    });
+    for (edit, reply) in [
+        (red_step(1, "red"), Ok(())),
+        (json!({"PutSequence": sequence("loop")}), Ok(())),
+        (json!({"PutSequence": sequence("loops")}), full),
+        (json!({"Rename": {"fixture": 1, "name": "PARs"}}), full),
+        (json!({"PutSequence": sequence("run")}), Ok(())),
+        (json!({"Rename": {"fixture": 1, "name": "PARs"}}), Ok(())),
+    ] {
+        assert_eq!(sender.send(serde_json::from_value(edit).unwrap()), reply);
+    }
+}
+
 #[tokio::test]
 async fn a_step_over_a_patch_that_leaves_the_looks_no_room_is_refused_and_the_file_kept() {
     let file = show_file("no_room");

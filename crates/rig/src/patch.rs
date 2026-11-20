@@ -37,7 +37,8 @@ use alloc::vec::Vec;
 use core::num::NonZeroU16;
 use engine_core::{
     ChannelNumbers, EngineCommand, Grouped, LightChange, LightNumber, LightRun, Lights, Member,
-    OutputKind, PatchCommand, Patched, Project, Refusal, Target, Universes, Value, Writer,
+    OutputKind, PatchCommand, Patched, Project, Refusal, SavedLook, Target, Universes, Value,
+    Writer,
 };
 use fixture_library::{Fixture, Mode};
 
@@ -79,7 +80,7 @@ impl Eq for Whole {}
 #[derive(Clone, Copy, Debug)]
 pub struct Limit {
     pub most: usize,
-    pub fits: fn(&Patch) -> bool,
+    pub fits: fn(&Patch, &mut dyn Iterator<Item = &SavedLook>) -> bool,
     /// The file's text of a fixture's definition (maker, model, mode), made once when the
     /// fixture is patched and kept with it: a change of anything else does not encode it
     /// again, so `fits` sums what is kept and never encodes a mode.
@@ -191,8 +192,16 @@ impl Patch {
     /// gives it ([`Limit::most`]), so the looks have less than their room: one opened from
     /// a file at its most bytes. A patch kept in no file fits.
     pub fn fits(&self) -> Result<(), Refusal> {
+        self.fits_looks(core::iter::empty())
+    }
+
+    /// Check the prospective patch and looks together against their shared file limit.
+    pub fn fits_looks<'a>(
+        &self,
+        mut looks: impl Iterator<Item = &'a SavedLook>,
+    ) -> Result<(), Refusal> {
         match self.limit {
-            Some(limit) if !(limit.fits)(self) => Err(Refusal::ShowFileFull {
+            Some(limit) if !(limit.fits)(self, &mut looks) => Err(Refusal::ShowFileFull {
                 most: u32::try_from(limit.most).unwrap_or(u32::MAX),
             }),
             Some(_) | None => Ok(()),
@@ -213,13 +222,19 @@ impl Patch {
         command: PatchCommand,
         library: &[Fixture],
     ) -> Result<(Option<Self>, Vec<PatchEffect>), Refusal> {
+        self.update_with_looks(command, library, core::iter::empty())
+    }
+
+    /// Apply a command with the show's current looks included in the file size check.
+    pub fn update_with_looks<'a>(
+        &self,
+        command: PatchCommand,
+        library: &[Fixture],
+        looks: impl Iterator<Item = &'a SavedLook>,
+    ) -> Result<(Option<Self>, Vec<PatchEffect>), Refusal> {
         let (patch, effects) = self.changed_by(command, library)?;
-        if let (Some(limit), Some(new)) = (self.limit, &patch)
-            && !(limit.fits)(new)
-        {
-            return Err(Refusal::ShowFileFull {
-                most: u32::try_from(limit.most).unwrap_or(u32::MAX),
-            });
+        if let Some(new) = &patch {
+            new.fits_looks(looks)?;
         }
         Ok((patch, effects))
     }

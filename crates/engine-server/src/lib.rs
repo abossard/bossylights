@@ -33,9 +33,10 @@ use library::Shelf;
 use std::collections::VecDeque;
 use std::io;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock, Weak};
 use tokio::net::TcpListener;
-use tokio::sync::{Mutex, mpsc, watch};
+use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore, mpsc, watch};
 use tokio::time::MissedTickBehavior;
 
 /// Serves the API on `listener` until a client sends `Stop`. Then every connection is
@@ -70,6 +71,7 @@ pub async fn serve(
     let first = Moment::of(&sender);
     // A snapshot of a wake after every command queued so far: taken under `first`.
     let picture = Picture::of(engine.fresh().clone(), &first, &shelf, &shown);
+    let through = Arc::clone(&first.through);
     let front = Front {
         shelf: shelf.clone(),
         moments: taken,
@@ -81,7 +83,8 @@ pub async fn serve(
     let api = Arc::new(Api {
         moments,
         patch,
-        sender: Mutex::new(sender),
+        sender: Mutex::new(Publisher { sender, through }),
+        history: Arc::new(Semaphore::new(engine::PLAN_BYTES)),
         stop,
         pictures,
         shelf,
@@ -116,7 +119,9 @@ struct Api {
     origins: Vec<String>,
     /// The engine front; connections take turns. Nobody holds it while a device opens.
     /// The tick thread never sees this lock.
-    sender: Mutex<Sender>,
+    sender: Mutex<Publisher>,
+    /// Capacity for revisions awaiting a snapshot, including compiled plans they pin.
+    history: Arc<Semaphore>,
     /// The front after each change, in the order of the changes: the reader pairs each
     /// snapshot with the one it was taken under.
     moments: mpsc::UnboundedSender<Moment>,
@@ -137,7 +142,9 @@ struct Picture {
     library: Library,
     project: Project,
     patch: Arc<Patch>,
-    looks: Arc<Looks>,
+    looks: Arc<[SavedLook]>,
+    /// Compare authored revisions for deltas without pinning their compiled plans.
+    source: Weak<Looks>,
     show: ShowFile,
 }
 
@@ -153,45 +160,58 @@ impl Picture {
             library: shelf.borrow().library(),
             project: moment.project,
             patch: Arc::clone(&moment.patch),
-            looks: Arc::clone(&moment.looks),
+            looks: Arc::clone(moment.rows.get_or_init(|| moment.looks.all().into())),
+            source: Arc::downgrade(&moment.looks),
             show: *show.borrow(),
         }
     }
 }
 
-/// The front's project, patch and looks once a change ended: revision `revision`, after
-/// `sent` commands. A snapshot that read `revision` at its cutoff and applied exactly
-/// `sent` commands was taken under them.
+/// A revision covers every completed FIFO prefix from `sent` through `through`.
+/// A performance command extends that range without retaining another project.
 struct Moment {
     sent: u64,
+    through: Arc<AtomicU64>,
+    /// Pays for the preceding revision until the reader passes it.
+    credit: Option<OwnedSemaphorePermit>,
     revision: u64,
     project: Project,
     patch: Arc<Patch>,
     looks: Arc<Looks>,
+    /// Materialize one plan-free copy for all pictures taken under this revision.
+    rows: OnceLock<Arc<[SavedLook]>>,
 }
 
 impl Moment {
     fn of(sender: &Sender) -> Self {
         Self {
             sent: sender.sent(),
+            through: Arc::new(AtomicU64::new(sender.sent())),
+            credit: None,
             revision: sender.revision(),
             project: sender.project(),
             patch: sender.patch(),
             looks: sender.looks(),
+            rows: OnceLock::new(),
         }
     }
 }
 
 /// The moment a snapshot was taken under, if it is known: the one of the `revision` it
-/// read at its cutoff, with exactly its `applied` commands. `None` while the tick is part
+/// read at its cutoff, whose complete FIFO prefixes include `applied`. `None` while the tick is part
 /// way through the commands of one change, or the change is not in `kept` yet. Forgets
 /// the moments older than it: the revision never goes back.
 fn under(kept: &mut VecDeque<Moment>, applied: u64, revision: u64) -> Option<&Moment> {
     while kept.get(1).is_some_and(|next| next.revision <= revision) {
         kept.pop_front();
     }
-    kept.front()
-        .filter(|moment| moment.revision == revision && moment.sent == applied)
+    let moment = kept.front_mut()?;
+    if moment.revision != revision {
+        return None;
+    }
+    // Every preceding revision has been dropped. Edits may use its bytes again.
+    moment.credit = None;
+    (moment.sent <= applied && applied <= moment.through.load(Ordering::Acquire)).then_some(moment)
 }
 
 /// What the front holds besides the engine, as the reader takes it into each picture.
@@ -338,9 +358,24 @@ async fn answer(
     }
 }
 
+/// The only writer of the current revision's FIFO range.
+struct Publisher {
+    sender: Sender,
+    through: Arc<AtomicU64>,
+}
+
 /// How often a command prepared on a base another change replaced is prepared again,
 /// before the client is told `Stale`.
 const PREPARES: usize = 3;
+
+/// Even an edit which shares all its plans needs a place in snapshot history.
+const REVISION_BYTES: usize = engine::PLAN_BYTES.div_ceil(engine::QUEUE);
+
+fn reserve(history: &Arc<Semaphore>, bytes: usize) -> Result<OwnedSemaphorePermit, Refusal> {
+    Arc::clone(history)
+        .try_acquire_many_owned(u32::try_from(bytes).map_err(|_| Refusal::WorkLimit)?)
+        .map_err(|_| Refusal::WorkLimit)
+}
 
 /// Sends `command` to the front, with the library as it is read so far. A press is
 /// prepared and admitted under the front at once: no thread hop between it and the next
@@ -350,17 +385,32 @@ const PREPARES: usize = 3;
 /// The answer when it is taken, `Stopping` when the engine stops first: nothing changed.
 async fn send(api: &Api, command: Command) -> Result<Reply<'static>, Refusal> {
     let shelf = Arc::clone(&api.shelf.borrow());
+    // Opening a device can finish later. Reserve its single visible output change
+    // before starting it, so completion always has somewhere to publish.
+    let mut credit = if matches!(
+        command,
+        Command::SetOutput { .. } | Command::RemoveOutput { .. }
+    ) {
+        Some(reserve(&api.history, REVISION_BYTES)?)
+    } else {
+        None
+    };
     let begun = if engine::edits(&command) {
         edit(api, command, &shelf).await
     } else {
-        api.changing(|sender| sender.begin(command, shelf.fixtures()))
-            .await
+        api.changing(&mut credit, |sender| {
+            sender.begin(command, shelf.fixtures())
+        })
+        .await
     };
     match begun {
         None => Ok(Reply::Stopping),
         Some(Ok(Begun::Opening(opening))) => {
             match tokio::task::spawn_blocking(move || opening.open()).await {
-                Ok(opened) => match api.changing(|sender| sender.finish(opened)).await {
+                Ok(opened) => match api
+                    .changing(&mut credit, |sender| sender.finish(opened))
+                    .await
+                {
                     None => Ok(Reply::Stopping),
                     Some(finished) => finished.map(|()| Reply::Accepted),
                 },
@@ -380,12 +430,30 @@ async fn send(api: &Api, command: Command) -> Result<Reply<'static>, Refusal> {
 async fn edit(api: &Api, command: Command, shelf: &Arc<Shelf>) -> Option<Result<Begun, Refusal>> {
     let mut begun = Some(Err(Refusal::Stale));
     for _ in 0..PREPARES {
-        let base = api.sender.lock().await.base();
+        // Bound in-flight edits too. A full history refuses before compiling.
+        let mut credit = match reserve(&api.history, REVISION_BYTES) {
+            Ok(credit) => credit,
+            Err(reason) => return Some(Err(reason)),
+        };
+        let base = api.sender.lock().await.sender.base();
         let shelf = Arc::clone(shelf);
-        let prepared =
-            tokio::task::spawn_blocking(move || base.prepare(command, shelf.fixtures())).await;
+        let history = Arc::clone(&api.history);
+        let prepared = tokio::task::spawn_blocking(move || {
+            let prepared = base.prepare(command, shelf.fixtures())?;
+            let extra = prepared
+                .replaced_plan_bytes()
+                .saturating_sub(credit.num_permits());
+            if extra > 0 {
+                credit.merge(reserve(&history, extra)?);
+            }
+            Ok((prepared, credit))
+        })
+        .await;
         begun = match prepared {
-            Ok(Ok(prepared)) => api.changing(|sender| sender.admit(prepared)).await,
+            Ok(Ok((prepared, credit))) => {
+                api.changing(&mut Some(credit), |sender| sender.admit(prepared))
+                    .await
+            }
             // refused before the engine stops, or answered `Stopping` as an admitted one is
             Ok(Err(reason)) => (!*api.stop.borrow()).then_some(Err(reason)),
             Err(_) => None, // the task was cancelled: the engine stops
@@ -403,16 +471,31 @@ impl Api {
     /// hears only of a change of the patch or the looks: a refusal or a press saves
     /// nothing. `None` once the engine stops ([`Api::stopping`]): nothing changes then,
     /// so no change comes after the last save.
-    async fn changing<T>(&self, change: impl FnOnce(&mut Sender) -> T) -> Option<T> {
-        let mut sender = self.sender.lock().await;
+    async fn changing<T>(
+        &self,
+        credit: &mut Option<OwnedSemaphorePermit>,
+        change: impl FnOnce(&mut Sender) -> T,
+    ) -> Option<T> {
+        let mut publisher = self.sender.lock().await;
         if *self.stop.borrow() {
             return None;
         }
-        let changed = change(&mut sender);
-        sender.revise();
-        // The reader is gone only once the server stops: nobody needs the moment then.
-        let _ = self.moments.send(Moment::of(&sender));
-        self.patch.send_if_modified(|kept| kept.follow(&sender));
+        let sender = &mut publisher.sender;
+        let outputs = sender.project().outputs;
+        let changed = change(sender);
+        let edited = self.patch.send_if_modified(|kept| kept.follow(sender));
+        if edited || outputs != sender.project().outputs {
+            sender.revise();
+            let mut moment = Moment::of(sender);
+            moment.credit = credit.take();
+            debug_assert!(moment.credit.is_some());
+            publisher.through = Arc::clone(&moment.through);
+            // The reader is gone only once the server stops.
+            let _ = self.moments.send(moment);
+        } else {
+            let sent = sender.sent();
+            publisher.through.store(sent, Ordering::Release);
+        }
         Some(changed)
     }
 
@@ -432,7 +515,7 @@ fn picture(now: &Picture) -> Option<String> {
         library: now.library,
         patch: &now.patch.fixtures(),
         groups: &now.patch.groups(),
-        looks: &now.looks.all(),
+        looks: &now.looks,
         show: now.show,
         universes: now.snapshot.universes(),
         lights: &lights,
@@ -454,15 +537,14 @@ fn changed(
     let new = !Arc::ptr_eq(&last.patch, &now.patch);
     let fixtures: Option<Vec<Patched>> = new.then(|| now.patch.fixtures());
     let groups: Option<Vec<Grouped>> = new.then(|| now.patch.groups());
-    let looks: Option<Vec<SavedLook>> =
-        (!Arc::ptr_eq(&last.looks, &now.looks)).then(|| now.looks.all());
+    let looks = (!Weak::ptr_eq(&last.source, &now.source)).then_some(now.looks.as_ref());
     let reply = json(&Reply::Changed {
         state: now.snapshot.state,
         project: now.project,
         library: now.library,
         patch: fixtures.as_deref(),
         groups: groups.as_deref(),
-        looks: looks.as_deref(),
+        looks,
         show: now.show,
         channels: &channels,
         lights: &lights,
@@ -573,7 +655,7 @@ mod tests {
             (&b, vec![2], None, None),
         ];
         for (picture, looks, playing, colour) in cases {
-            let saved: Vec<u16> = picture.looks.all().iter().map(|saved| saved.look).collect();
+            let saved: Vec<u16> = picture.looks.iter().map(|saved| saved.look).collect();
             assert_eq!(saved, looks);
             let plays: Vec<u16> = picture
                 .snapshot
@@ -602,6 +684,37 @@ mod tests {
             (2.into(), Value::Null)
         );
         assert!(changed["Changed"]["state"]["plays"][play.slot()].is_null());
+    }
+
+    #[test]
+    fn a_slow_subscriber_keeps_the_authored_row_without_pinning_the_compiled_plan() {
+        let (mut engine, mut sender) = Engine::start(Universes::new(1).unwrap()).unwrap();
+        sender
+            .send(Command::PatchStrip {
+                name: Text::new("pixel").unwrap(),
+                pixels: engine_core::Pixels::try_from(1).unwrap(),
+                color: engine::Color::Rgb,
+                at: ChannelNumbers {
+                    universe: 1,
+                    address: 1,
+                },
+            })
+            .unwrap();
+        sender.send(step(1, Rgb::BLACK)).unwrap();
+        let plan = Arc::downgrade(&sender.looks().plan(1).unwrap());
+        let delivered = Picture::of(
+            engine.fresh().clone(),
+            &Moment::of(&sender),
+            &library::start(None),
+            &watch::channel(ShowFile::None).1,
+        );
+        sender.send(Command::RemoveLook { look: 1 }).unwrap();
+        assert!(
+            plan.upgrade().is_none(),
+            "readback still owns the compiled plan"
+        );
+        let reply: Value = serde_json::from_str(&picture(&delivered).unwrap()).unwrap();
+        assert_eq!(reply["Picture"]["looks"][0]["look"], 1);
     }
 
     #[test]
@@ -666,7 +779,11 @@ mod tests {
             wakes.finish().unwrap();
             let snapshot = engine.latest().clone();
             let picture = front.picture(&snapshot).expect("its moment is kept");
-            let shown = picture.looks.get(1).map(|saved| saved.name.as_str());
+            let shown = picture
+                .looks
+                .iter()
+                .find(|saved| saved.look == 1)
+                .map(|saved| saved.name.as_str());
             assert_eq!(shown, Some(name), "renamed {when}");
             wakes.run();
         }
@@ -697,6 +814,7 @@ mod tests {
                 .map(|((revision, &sent), looks)| Moment {
                     sent,
                     revision,
+                    through: Arc::new(AtomicU64::new(sent)),
                     looks: Arc::clone(looks),
                     ..Moment::of(&sender)
                 })

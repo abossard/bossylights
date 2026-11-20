@@ -49,7 +49,7 @@ use engine_core::{
     percentile, update, wait,
 };
 pub use fixture_library::Fixture;
-pub use looks::Looks;
+pub use looks::{Looks, PLAN_BYTES};
 pub use rig::Patch;
 mod grabs;
 use grabs::Grabs;
@@ -88,9 +88,9 @@ const LIGHTS: Lights = Lights::MOST;
 /// freed yet, so the queue back cannot fill up, and a release needs only a place in the
 /// command queue.
 const RETIRED: usize = QUEUE + MAX_OUTPUTS;
-/// Runs one place of the command queue carries: a change on a group of the most runs
-/// ([`Members::MOST`]) takes 86 places, a third of the queue, all in one wake.
-const RUNS_IN_PLACE: usize = 6;
+/// A release of every other light makes the most disjoint runs possible.
+/// Even that selection must fit in an empty FIFO, all in one wake.
+const RUNS_IN_PLACE: usize = (MAX_LIGHTS as usize).div_ceil(2 * QUEUE);
 /// How often the free thread frees retired devices when nobody wakes it.
 const FREE_EVERY: Duration = Duration::from_millis(100);
 /// How long `SetOutput` waits for the devices on their way back before it opens.
@@ -330,6 +330,10 @@ enum Change {
     Rules {
         looks: Looks,
     },
+    ReleaseProperty {
+        property: Property,
+        runs: Vec<LightRun>,
+    },
     UpdateGrab {
         grab: GrabId,
         value: Value,
@@ -337,6 +341,24 @@ enum Change {
     EndGrab {
         grab: GrabId,
     },
+}
+
+impl Prepared {
+    /// Plan bytes that snapshot history will pin if this edit is admitted.
+    /// Measured outside the sender lock, against the same base admission checks.
+    pub fn replaced_plan_bytes(&self) -> usize {
+        if let Change::PutLook { looks }
+        | Change::RemoveLook { looks, .. }
+        | Change::Patch {
+            rebound: Some(looks),
+            ..
+        } = &self.change
+        {
+            self.base.looks.replaced_bytes(looks)
+        } else {
+            0
+        }
+    }
 }
 
 impl Base {
@@ -371,8 +393,16 @@ impl Base {
             None => Change::Nothing,
             Some(ProjectEffect::Send(command)) => Change::Send(command),
             Some(ProjectEffect::Look(command)) => self.look(command)?,
+            Some(ProjectEffect::Patch(engine_core::PatchCommand::Release { target, property })) => {
+                Change::ReleaseProperty {
+                    property,
+                    runs: self.patch.runs(target)?,
+                }
+            }
             Some(ProjectEffect::Patch(command)) => {
-                let (patch, effects) = self.patch.update(command, library)?;
+                let (patch, effects) =
+                    self.patch
+                        .update_with_looks(command, library, self.looks.rows())?;
                 // and a change of the patch that would make one is refused
                 if let Some((_, reason)) = patch.as_ref().and_then(|p| p.unstreamed(&project)) {
                     return Err(reason);
@@ -439,7 +469,7 @@ impl Base {
     fn look(&self, command: LookCommand) -> Result<Change, Refusal> {
         Ok(match command {
             LookCommand::PutStep { look, name, step } => {
-                self.patch.fits()?;
+                self.patch.fits_looks(self.looks.rows())?;
                 Change::PutLook {
                     looks: self.looks.put(Saved { look, name, step }, &self.patch)?,
                 }
@@ -449,15 +479,14 @@ impl Base {
                 name,
                 sequence,
             } => {
-                self.patch.fits()?;
                 let saved = SavedLook {
                     look,
                     name,
                     definition: engine_core::Definition::Sequence(sequence),
                 };
-                Change::PutLook {
-                    looks: self.looks.put(saved, &self.patch)?,
-                }
+                let looks = self.looks.put(saved, &self.patch)?;
+                self.patch.fits_looks(looks.rows())?;
+                Change::PutLook { looks }
             }
             LookCommand::RemoveLook { look } => Change::RemoveLook {
                 look,
@@ -488,7 +517,7 @@ impl Base {
             LookCommand::UpdateGrab { grab, value } => Change::UpdateGrab { grab, value },
             LookCommand::EndGrab { grab } => Change::EndGrab { grab },
             LookCommand::SetMixRules { rules } => {
-                self.patch.fits()?;
+                self.patch.fits_looks(self.looks.rows())?;
                 Change::Rules {
                     looks: self.looks.with_rules(rules),
                 }
@@ -890,28 +919,37 @@ impl Sender {
                 self.grabs.clear();
                 Begun::Queued
             }
+            Change::ReleaseProperty { property, runs } => {
+                let held = self.grabs.releasing(property, &runs);
+                self.lights(LightChange::Release { property }, &held)?;
+                self.grabs.let_go(Some(property), &held);
+                Begun::Queued
+            }
             Change::UpdateGrab { grab, value } => {
-                if let Some((property, runs)) = self.grabs.get(grab) {
+                if let Some(property) = self.grabs.property(grab) {
                     if property != value.property() {
                         return Err(Refusal::OtherProperty { property });
                     }
                     // only the lights it still holds take the value
-                    self.patch.supports(&self.grabs.held(grab), value)?;
-                    let runs = runs.to_vec();
-                    self.lights(LightChange::Update { value, grab }, &runs)?;
+                    let held = self.grabs.held(grab);
+                    self.patch.supports(&held, value)?;
+                    self.lights(LightChange::Update { value, grab }, &held)?;
                 }
                 Begun::Queued
             }
             Change::EndGrab { grab } => {
-                if let Some((property, runs)) = self.grabs.get(grab) {
-                    let end = LightChange::End {
-                        property,
-                        grab,
-                        end: stops(Rank::Manual, self.looks.rules()),
-                    };
-                    let runs = runs.to_vec();
-                    self.lights(end, &runs)?;
-                    self.grabs.end(grab);
+                if let Some(property) = self.grabs.property(grab) {
+                    let end = stops(Rank::Manual, self.looks.rules());
+                    let held = self.grabs.held(grab);
+                    self.lights(
+                        LightChange::End {
+                            property,
+                            grab,
+                            end,
+                        },
+                        &held,
+                    )?;
+                    self.grabs.end(grab, property, &held, end);
                 }
                 Begun::Queued
             }
@@ -919,6 +957,9 @@ impl Sender {
                 let rules = looks.rules();
                 self.push(EngineCommand::Rules { rules }, Brings::Nothing)?;
                 self.forget(|live| unkept(live.rank, live.state, rules));
+                if unkept(Rank::Manual, PlayState::Kept, rules) {
+                    self.grabs.clear_kept();
+                }
                 self.looks = Arc::new(looks);
                 Begun::Queued
             }
@@ -932,7 +973,9 @@ impl Sender {
     fn check_work(&self, new_plans: usize, lights: usize) -> Result<(), Refusal> {
         let playing: usize = self.plays.iter().flatten().map(Live::work).sum();
         let prefix: usize = self.prefix_work.iter().map(|(_, work)| work).sum();
-        if looks::play_work(playing + new_plans) + prefix + lights > looks::WORK_LIMIT {
+        if looks::play_work(playing + new_plans) + prefix + self.grabs.reserved() + lights
+            > looks::WORK_LIMIT
+        {
             return Err(Refusal::WorkLimit);
         }
         Ok(())
@@ -1086,18 +1129,15 @@ impl Sender {
         self.room(places + changed.len(), returns)?;
         let bytes = changed.iter().map(|v| v.plan.bytes() as u64).sum();
         let lights = effects.iter().map(light_visits).sum();
-        if !changed.is_empty()
-            || effects
-                .iter()
-                .any(|e| matches!(e, PatchEffect::Grab { .. }))
-        {
-            self.check_work(changed.iter().map(|v| v.plan.work()).sum(), lights)?;
-            self.check_plan_bytes(bytes)?;
-        }
+        let mut book = lights;
         for effect in &effects {
             if let PatchEffect::Grab { value, runs } = effect {
-                self.grabs.fits(value.property(), runs)?;
+                book += self.grabs.fits(value.property(), runs)?;
             }
+        }
+        if !changed.is_empty() || book > 0 {
+            self.check_work(changed.iter().map(|v| v.plan.work()).sum(), book)?;
+            self.check_plan_bytes(bytes)?;
         }
         let at = self.clock.now();
         let chunk = self
@@ -1120,21 +1160,12 @@ impl Sender {
                         at,
                         brings: Brings::Nothing,
                     });
-                    if let EngineCommand::Lights {
-                        lights,
-                        change: LightChange::Release { property },
-                    } = command
-                    {
-                        self.grabs.let_go(Some(property), &[lights]);
-                    } else if let EngineCommand::Darken { lights } = command {
+                    if let EngineCommand::Darken { lights } = command {
                         self.grabs.let_go(None, &[lights]);
                     }
                 }
                 PatchEffect::Runs { change, runs } => {
                     queued.extend(run_commands(change, &runs, at));
-                    if let LightChange::Release { property } = change {
-                        self.grabs.let_go(Some(property), &runs);
-                    }
                 }
                 PatchEffect::Grab { value, runs } => {
                     let grab = GrabId {
@@ -1179,6 +1210,9 @@ impl Sender {
     /// place, in places of the queue made visible at once, so nothing goes back and it
     /// needs only those places.
     fn lights(&mut self, change: LightChange, runs: &[LightRun]) -> Result<(), Refusal> {
+        if runs.is_empty() {
+            return Ok(());
+        }
         let visits = run_visits(runs);
         if matches!(change, LightChange::Update { .. }) {
             self.check_work(0, visits)?;

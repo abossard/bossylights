@@ -1,14 +1,15 @@
-//! The live grabs as the front knows them, off the tick thread: which grab holds each
-//! property of each light. A grab that holds nothing any more is forgotten, an update is
-//! checked against the lights the grab still holds, and the runs kept stay within
-//! [`RUNS`], whatever a client sends.
+//! Direct holds after all admitted commands. Each live light property reserves work
+//! for an end and a release. A kept property needs only its final release.
+//! A live grab keeps its original runs within [`RUNS`] until it loses its last light.
 //!
 //! ```text
-//! grab --> live, holds its lights --a later grab or a release takes the last--> forgotten
-//!                                  --EndGrab or ReleaseAll----------------------> forgotten
+//! grab --> live --end with Keep--> kept
+//!            |                      |
+//!            +--end with Remove     +--UntilStop rules
+//!            +--release-------------+--release------> free
 //! ```
 
-use engine_core::{GrabId, LightNumber, LightRun, Lights, MAX_LIGHTS, Property, Refusal};
+use engine_core::{End, GrabId, LightNumber, LightRun, Lights, MAX_LIGHTS, Property, Refusal};
 use std::collections::HashMap;
 
 /// The most runs the live grabs keep: every property of every light held by a grab of its
@@ -23,12 +24,29 @@ struct Live {
     holds: u32,
 }
 
+/// A live grab can end and then be released. A kept property can only be released.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Holder {
+    Live(GrabId),
+    Kept,
+}
+
+fn release_work(holder: Option<Holder>) -> usize {
+    match holder {
+        Some(Holder::Live(_)) => 2,
+        Some(Holder::Kept) => 1,
+        None => 0,
+    }
+}
+
 pub struct Grabs {
-    /// Per light, per property: the live grab that holds it.
-    holders: Box<[[Option<GrabId>; Property::ALL.len()]]>,
+    /// Per light and property, who still holds it after all admitted commands.
+    holders: Box<[[Option<Holder>; Property::ALL.len()]]>,
     live: HashMap<GrabId, Live>,
     /// The runs the live grabs keep, all together.
     runs: usize,
+    /// Visits already promised to end and release these holds.
+    reserved: usize,
 }
 
 /// The light indices of `runs`.
@@ -45,6 +63,7 @@ impl Grabs {
             holders: vec![[None; Property::ALL.len()]; usize::from(MAX_LIGHTS)].into_boxed_slice(),
             live: HashMap::new(),
             runs: 0,
+            reserved: 0,
         }
     }
 
@@ -53,16 +72,20 @@ impl Grabs {
     fn holding(&self, property: Property, runs: &[LightRun]) -> HashMap<GrabId, u32> {
         let mut holding = HashMap::new();
         for light in lights(runs) {
-            if let Some(grab) = self.holder(light, property) {
+            if let Some(Holder::Live(grab)) = self.holder(light, property) {
                 *holding.entry(grab).or_insert(0) += 1;
             }
         }
         holding
     }
 
-    /// `GrabFull` unless a grab of `property` on `runs` fits within [`RUNS`], once the
-    /// grabs it leaves holding nothing are forgotten.
-    pub fn fits(&self, property: Property, runs: &[LightRun]) -> Result<(), Refusal> {
+    pub fn reserved(&self) -> usize {
+        self.reserved
+    }
+
+    /// Check the run limit after replacing earlier grabs and return the additional
+    /// visits needed to end and release the new grab.
+    pub fn fits(&self, property: Property, runs: &[LightRun]) -> Result<usize, Refusal> {
         let freed: usize = self
             .holding(property, runs)
             .into_iter()
@@ -72,7 +95,9 @@ impl Grabs {
         if self.runs - freed + runs.len() > RUNS {
             return Err(Refusal::GrabFull { most: RUNS as u32 });
         }
-        Ok(())
+        Ok(lights(runs)
+            .map(|light| 2 - release_work(self.holder(light, property)))
+            .sum())
     }
 
     /// `grab` holds `property` on the lights of `runs`, the latest: the grabs it takes the
@@ -81,10 +106,8 @@ impl Grabs {
         self.let_go(Some(property), &runs);
         let mut holds = 0;
         for light in lights(&runs) {
-            if let Some(holder) = self.holder_mut(light, property) {
-                *holder = Some(grab);
-                holds += 1;
-            }
+            self.set_holder(light, property, Some(Holder::Live(grab)));
+            holds += 1;
         }
         self.runs += runs.len();
         self.live.insert(
@@ -113,47 +136,53 @@ impl Grabs {
                 }
             }
             for light in lights(runs) {
-                if let Some(holder) = self.holder_mut(light, property) {
-                    *holder = None;
-                }
+                self.set_holder(light, property, None);
             }
         }
     }
 
-    /// The property of `grab` and the runs it was given, while it is live.
-    pub fn get(&self, grab: GrabId) -> Option<(Property, &[LightRun])> {
-        self.live
-            .get(&grab)
-            .map(|live| (live.property, live.runs.as_slice()))
+    pub fn property(&self, grab: GrabId) -> Option<Property> {
+        self.live.get(&grab).map(|live| live.property)
     }
 
-    /// The lights `grab` still holds, as runs of one light each.
+    /// The lights this grab can still update or end.
     pub fn held(&self, grab: GrabId) -> Vec<LightRun> {
         let Some(live) = self.live.get(&grab) else {
             return Vec::new();
         };
-        lights(&live.runs)
-            .filter(|&light| self.holder(light, live.property) == Some(grab))
-            .filter_map(|light| {
-                let light = LightNumber::new(u16::try_from(light).ok()?, Lights::MOST)?;
-                LightRun::new(light, 1, Lights::MOST)
-            })
-            .collect()
+        selected(&live.runs, |light| {
+            self.holder(light, live.property) == Some(Holder::Live(grab))
+        })
     }
 
-    /// Ends `grab`: its lights are held by no grab. Its property and runs.
-    pub fn end(&mut self, grab: GrabId) -> Option<(Property, Vec<LightRun>)> {
-        let live = self.live.get(&grab)?;
-        let (property, runs) = (live.property, live.runs.clone());
-        for light in lights(&runs) {
-            if let Some(holder) = self.holder_mut(light, property)
-                && *holder == Some(grab)
-            {
-                *holder = None;
-            }
+    /// A release visits only the lights on which this property is live or kept.
+    pub fn releasing(&self, property: Property, runs: &[LightRun]) -> Vec<LightRun> {
+        if self.reserved == 0 {
+            return Vec::new();
+        }
+        selected(runs, |light| self.holder(light, property).is_some())
+    }
+
+    /// Ends a grab on the lights it still owns. Kept values keep one release visit.
+    pub fn end(&mut self, grab: GrabId, property: Property, held: &[LightRun], end: End) {
+        let holder = match end {
+            End::Keep => Some(Holder::Kept),
+            End::Remove => None,
+        };
+        for light in lights(held) {
+            self.set_holder(light, property, holder);
         }
         self.forget(grab);
-        Some((property, runs))
+    }
+
+    /// The Mixer discarded stopped Manual holds on a rules change.
+    pub fn clear_kept(&mut self) {
+        for slot in self.holders.iter_mut().flatten() {
+            if *slot == Some(Holder::Kept) {
+                *slot = None;
+                self.reserved -= 1;
+            }
+        }
     }
 
     /// Every grab ends.
@@ -161,9 +190,10 @@ impl Grabs {
         self.holders.fill([None; Property::ALL.len()]);
         self.live.clear();
         self.runs = 0;
+        self.reserved = 0;
     }
 
-    fn holder(&self, light: usize, property: Property) -> Option<GrabId> {
+    fn holder(&self, light: usize, property: Property) -> Option<Holder> {
         self.holders
             .get(light)
             .and_then(|holders| holders.get(property.index()))
@@ -171,10 +201,15 @@ impl Grabs {
             .flatten()
     }
 
-    fn holder_mut(&mut self, light: usize, property: Property) -> Option<&mut Option<GrabId>> {
-        self.holders
+    fn set_holder(&mut self, light: usize, property: Property, holder: Option<Holder>) {
+        if let Some(slot) = self
+            .holders
             .get_mut(light)
             .and_then(|holders| holders.get_mut(property.index()))
+        {
+            self.reserved = self.reserved - release_work(*slot) + release_work(holder);
+            *slot = holder;
+        }
     }
 
     fn forget(&mut self, grab: GrabId) {
@@ -182,4 +217,22 @@ impl Grabs {
             self.runs -= live.runs.len();
         }
     }
+}
+
+/// Compact the matching lights of the Rig's sorted, disjoint runs.
+fn selected(runs: &[LightRun], matches: impl Fn(usize) -> bool) -> Vec<LightRun> {
+    let mut result = Vec::new();
+    let mut indices = lights(runs).filter(|&light| matches(light)).peekable();
+    while let Some(index) = indices.next() {
+        let mut end = index + 1;
+        while indices.next_if_eq(&end).is_some() {
+            end += 1;
+        }
+        if let Some(first) = LightNumber::new(index as u16, Lights::MOST)
+            && let Some(run) = LightRun::new(first, (end - index) as u16, Lights::MOST)
+        {
+            result.push(run);
+        }
+    }
+    result
 }

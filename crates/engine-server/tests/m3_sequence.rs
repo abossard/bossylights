@@ -172,18 +172,16 @@ async fn a_linked_transition_manual_release_and_a_shared_edit_reach_the_wire() {
     stop.store(true, Ordering::Relaxed);
 }
 
-/// The first published picture at or past the frame just sampled on the wire.
+/// Wait until the reader has published the last stepped frame, including any wake
+/// needed to hand back an outstanding snapshot. The clock then stays on that frame.
 async fn picture_at(socket: &mut Socket, wakes: &Wakes, at: Duration) -> Value {
-    let frame = wakes.woke();
     let waited = Instant::now();
     loop {
         send(socket, &json!("Query")).await;
         let reply = answer(socket).await;
         let picture = &reply["Picture"];
-        if picture["state"]["frame"]
-            .as_u64()
-            .is_some_and(|n| n >= frame)
-        {
+        let frame = wakes.woke();
+        if picture["state"]["frame"].as_u64() == Some(frame) {
             return picture.clone();
         }
         assert!(
@@ -191,7 +189,7 @@ async fn picture_at(socket: &mut Socket, wakes: &Wakes, at: Duration) -> Value {
             "no picture of frame {frame}"
         );
         block_in_place(|| wakes.wake_at(at)).unwrap();
-        tokio::time::sleep(Duration::from_millis(1)).await; // poll
+        tokio::time::sleep(engine::BEAT).await; // let the snapshot reader poll
     }
 }
 
@@ -362,4 +360,156 @@ async fn a_start_edit_and_restart_at_one_stamp_reach_one_frame() {
     send(&mut socket, &json!("Stop")).await;
     wakes.run();
     stop.store(true, Ordering::Relaxed);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn combined_spread_wraps_at_an_exact_child_edge_on_dmx() {
+    let _port = PORT.lock().await;
+    let (mut socket, wakes, heard, stop, zero) = pixel_desk(3).await;
+    for (id, rgb) in [(1, RED), (2, BLUE)] {
+        accepted(&mut socket, step(id, rgb)).await;
+    }
+    accepted(
+        &mut socket,
+        sequence(3, json!([{"look":1,"width":8},{"look":2,"width":8}])),
+    )
+    .await;
+    accepted(
+        &mut socket,
+        sequence(4, json!([{"look":3,"width":32,"use":{"spread":100}}])),
+    )
+    .await;
+    let command_to_start = json!({"StartLook":{"look":4,"use":{"spread":100}}});
+    assert!(command(&mut socket, command_to_start).await["Started"]["play"].is_object());
+
+    // On the root's first frame the child offsets are 0, 2/3 + 1/3, and 4/3 + 2/3 beats.
+    // The child is one beat long, so every light starts on its first item.
+    shows(&wakes, &heard, zero, [255, 0, 0, 255, 0, 0, 255, 0, 0]).await;
+    send(&mut socket, &json!("Stop")).await;
+    wakes.run();
+    stop.store(true, Ordering::Relaxed);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_sixteenth_beat_cuts_at_the_exact_edge_across_a_tempo_change() {
+    let _port = PORT.lock().await;
+    let (mut socket, wakes, heard, stop, zero) = pixel_desk(1).await;
+    for (id, rgb) in [(1, RED), (2, BLUE)] {
+        accepted(&mut socket, step(id, rgb)).await;
+    }
+    accepted(
+        &mut socket,
+        sequence(3, json!([{"look":1,"width":1},{"look":2}])),
+    )
+    .await;
+    start(&mut socket, 3, "Show").await;
+    shows(&wakes, &heard, zero, RED).await;
+
+    wakes.set_time(zero + Duration::from_millis(10));
+    accepted(&mut socket, json!({"SetInternalTempo":{"bpm":60}})).await;
+    // 10 ms at 120 BPM and 42.5 ms at 60 BPM add up to exactly 1/16 beat.
+    shows(&wakes, &heard, zero + Duration::from_micros(52_500), BLUE).await;
+    send(&mut socket, &json!("Stop")).await;
+    wakes.run();
+    stop.store(true, Ordering::Relaxed);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn idle_sequence_edits_are_bounded_while_the_reader_has_one_frame() {
+    let _port = PORT.lock().await;
+    const PIXELS: u16 = 170;
+    const PARENTS: usize = 48;
+    const BINDINGS_PER_LIGHT: usize = 2; // the parent and its one linked step
+    const PLAN_LIMIT: usize = 64 * 1024 * 1024;
+    let bytes_per_edit = PARENTS
+        * usize::from(PIXELS)
+        * BINDINGS_PER_LIGHT
+        * std::mem::size_of::<engine_core::Binding>();
+    let (mut socket, wakes, heard, stop, zero) = pixel_desk(PIXELS).await;
+    accepted(&mut socket, step(1, RED)).await;
+    for look in 2..=u16::try_from(PARENTS + 1).unwrap() {
+        accepted(&mut socket, sequence(look, json!([{"look":1}]))).await;
+    }
+    shows(&wakes, &heard, zero, [0, 0, 0]).await;
+    let before = picture_at(&mut socket, &wakes, zero).await;
+    let mut edits = 0;
+    let mut refused = false;
+    for index in 0..=PLAN_LIMIT / bytes_per_edit {
+        let rgb = if index % 2 == 0 { BLUE } else { RED };
+        let reply = command(&mut socket, step(1, rgb)).await;
+        if reply == json!({"Refused":{"reason":"WorkLimit"}})
+            || reply == json!({"Refused":{"reason":"QueueFull"}})
+        {
+            refused = true;
+            break;
+        }
+        assert_eq!(reply, json!("Accepted"));
+        edits += 1;
+    }
+    send(&mut socket, &json!("Query")).await;
+    let after = answer(&mut socket).await;
+    assert_eq!(after["Picture"]["state"]["frame"], before["state"]["frame"]);
+    if refused {
+        // The edit backlog cannot spend a performance command's FIFO room.
+        accepted(&mut socket, json!("ReleaseAll")).await;
+        let now = zero + Duration::from_secs(1);
+        shows(&wakes, &heard, now, [0, 0, 0]).await;
+        let published = picture_at(&mut socket, &wakes, now).await;
+        let last = if edits % 2 == 1 { BLUE } else { RED };
+        assert_eq!(
+            published["looks"][0]["step"]["values"]["colour"],
+            step(1, last)["PutStep"]["step"]["values"]["colour"]
+        );
+        accepted(&mut socket, step(1, GREEN)).await;
+        start(&mut socket, 2, "Manual").await;
+        shows(&wakes, &heard, now + Duration::from_secs(1), GREEN).await;
+    }
+    send(&mut socket, &json!("Stop")).await;
+    wakes.run();
+    stop.store(true, Ordering::Relaxed);
+
+    // Every accepted revision changes every parent plan. The reader cannot reclaim any
+    // of these revisions until it receives a newer frame, and these bytes count only bindings.
+    let retained = edits * bytes_per_edit;
+    assert!(
+        retained <= PLAN_LIMIT,
+        "{edits} edits retained at least {retained} plan bytes while the frame was held"
+    );
+    // Every per-light binding slice also owns a pointer and a length.
+    let slice_bytes = PARENTS * usize::from(PIXELS) * size_of::<Box<[engine_core::Binding]>>();
+    assert!(retained + edits * slice_bytes <= PLAN_LIMIT);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tiny_edits_leave_room_to_release_at_the_history_limit() {
+    let _port = PORT.lock().await;
+    let (mut socket, wakes, heard, stop, zero) = pixel_desk(1).await;
+    accepted(&mut socket, step(1, RED)).await;
+    let playing = start(&mut socket, 1, "Manual").await;
+    shows(&wakes, &heard, zero, RED).await;
+    picture_at(&mut socket, &wakes, zero).await;
+
+    // Renaming shares the compiled plan and queues no work on the tick.
+    let mut refused = false;
+    for n in 0..=engine::QUEUE {
+        let mut rename = step(1, RED);
+        rename["PutStep"]["name"] = json!(n.to_string());
+        let reply = command(&mut socket, rename).await;
+        if reply == json!({"Refused":{"reason":"WorkLimit"}})
+            || reply == json!({"Refused":{"reason":"QueueFull"}})
+        {
+            refused = true;
+            break;
+        }
+        assert_eq!(reply, json!("Accepted"));
+    }
+    accepted(&mut socket, json!({"ReleaseHold":{"play":playing}})).await;
+    let now = zero + Duration::from_secs(1);
+    shows(&wakes, &heard, now, [0, 0, 0]).await;
+    picture_at(&mut socket, &wakes, now).await;
+    accepted(&mut socket, step(1, BLUE)).await;
+    send(&mut socket, &json!("Stop")).await;
+    wakes.run();
+    stop.store(true, Ordering::Relaxed);
+    assert!(refused, "tiny edits also need a finite revision count");
 }
