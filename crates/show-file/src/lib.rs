@@ -11,7 +11,7 @@
 //!
 //! ```text
 //! {
-//!   "version": 5,
+//!   "version": 6,
 //!   "patch": [
 //!     {"fixture":1,"name":"PAR 1","mode":"Generic / Generic RGB / RGB","at":{"universe":1,"address":37},"first":1}
 //!   ],
@@ -37,7 +37,7 @@
 //! | `version` | [`VERSION`]. A newer one is not read |
 //! | `patch` | each fixture by number: its name, its mode (a key of `modes`), where, its first light |
 //! | `groups` | in the order they were made, each member a light or a fixture |
-//! | `looks` | each saved look by number: its name and either a sequence of references (version 5) or its step, the slot of each gobo wheel in `gobos`. Version 1 has none. Versions 2 and 3 hold one `gobo` of a wheel and a slot, read and checked as those engines did: read as that wheel's slot. A gobo a light with a gobo wheel cannot show is refused, a wheel past 3 among them (no wheel past 3 is shown now); on lights without a gobo wheel it showed nothing and is left out |
+//! | `looks` | each saved look by number: its name and a Wave (v6), a sequence (v5), or a step. Steps can store up to four RGB swatches from v6 and the slot of each gobo wheel in `gobos`. Version 1 has none. Versions 2 and 3 hold one `gobo` of a wheel and a slot, read and checked as those engines did: read as that wheel's slot. A gobo a light with a gobo wheel cannot show is refused, a wheel past 3 among them (no wheel past 3 is shown now); on lights without a gobo wheel it showed nothing and is left out |
 //! | `rules` | the Mixer's three settings. Versions 1 and 2 have none: the defaults |
 //! | `modes` | each mode a fixture is patched in, with its maker and model, by key |
 //!
@@ -78,7 +78,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 /// The version of the file this engine writes and reads. Raise it with every change an
 /// engine of the old version would read wrong. An engine never reads a newer file.
-pub const VERSION: u32 = 5;
+pub const VERSION: u32 = 6;
 
 /// The longest file, in bytes: 64 MiB. Far over any show, so no show meets it, and a file
 /// of gigabytes is not read whole at start.
@@ -127,6 +127,7 @@ fn fits(patch: &Patch, looks: &mut dyn Iterator<Item = &SavedLook>) -> bool {
     if room >= LOOKS * (LOOK_MOST - STEP_MOST) {
         return true;
     }
+    // Even four swatches and two fully escaped names fit a step's guaranteed room.
     looks
         .filter(|look| matches!(look.definition, engine_core::Definition::Sequence(_)))
         .try_fold(room, |left, look| {
@@ -319,6 +320,10 @@ pub fn read(text: &str, empty: &Patch) -> Result<(Patch, Looks), Unopened> {
         serde_json::from_str::<File<Saved>>(text)
             .map_err(broken)?
             .with_looks(|saved| (saved.into(), None))
+    } else if version.get() == 5 {
+        serde_json::from_str::<File<Before6>>(text)
+            .map_err(broken)?
+            .with_looks(|old| (old.0, None))
     } else {
         serde_json::from_str::<File<SavedLook>>(text)
             .map_err(broken)?
@@ -377,6 +382,10 @@ pub fn read(text: &str, empty: &Patch) -> Result<(Patch, Looks), Unopened> {
     let looks = Looks::restore(rows, rules, &patch).map_err(refused)?;
     write(&patch, &looks).map(|_| (patch, looks)).ok_or(too_big)
 }
+
+/// V5 accepted sequences and plain steps. Both decode into the current model.
+#[derive(Deserialize)]
+struct Before6(#[serde(deserialize_with = "SavedLook::deserialize_v5")] SavedLook);
 
 /// A look of a file before version 4: one `gobo`, a wheel and a slot, read as that
 /// engine read it.
@@ -688,6 +697,47 @@ mod sequence_tests {
     }
 
     #[test]
+    fn four_swatches_fit_the_space_guaranteed_in_existing_files() {
+        use engine_core::{AuthoredStep, Definition, Palette, Pattern, Swatches, WaveTarget};
+        let name = Text::new(&"\u{1}".repeat(Text::MOST)).unwrap();
+        let white = Rgb {
+            red: u16::MAX,
+            green: u16::MAX,
+            blue: u16::MAX,
+        };
+        let swatches = Swatches::new(&[white; Swatches::MOST]).unwrap();
+        for definition in [
+            Definition::Step(AuthoredStep {
+                target: Target::Group { group: name },
+                values: Light {
+                    intensity: Some(u16::MAX),
+                    colour: Some(white),
+                    zoom: Some(u16::MAX),
+                    position: Some(Position {
+                        pan: u16::MAX,
+                        tilt: u16::MAX,
+                    }),
+                    gobos: [Some(u8::MAX); Wheel::COUNT],
+                },
+                swatches,
+            }),
+            Definition::Pattern(Pattern::Wave {
+                target: WaveTarget::Group { group: name },
+                period: 32,
+                palette: Palette::Inline(swatches),
+            }),
+        ] {
+            let row = line(&SavedLook {
+                look: u16::MAX,
+                name,
+                definition,
+            })
+            .unwrap();
+            assert!(row.len() <= STEP_MOST, "{} bytes", row.len());
+        }
+    }
+
+    #[test]
     fn the_longest_sequence_fits_its_reserved_room() {
         use engine_core::{Definition, Repeat, SequenceItem, Speed, Use};
         let item = SequenceItem {
@@ -707,6 +757,71 @@ mod sequence_tests {
         };
         let line = serde_json::to_string(&saved).unwrap();
         assert!(line.len() <= LOOK_MOST, "{} bytes", line.len());
+    }
+
+    #[test]
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "the JSON fixture uses named fields"
+    )]
+    fn waves_and_swatches_first_open_in_v6_and_round_trip_together() {
+        let empty = Patch::new(
+            Universes::new(1).unwrap(),
+            Lights::new(8).unwrap(),
+            Whole(|_| NonZeroU16::MIN),
+        );
+        // A one-cell RGB strip. Parent rows occur before both of their children.
+        let patch = empty
+            .update(
+                PatchCommand::PatchStrip {
+                    name: Text::new("cell").unwrap(),
+                    pixels: Pixels::try_from(1).unwrap(),
+                    color: Color::Rgb,
+                    at: ChannelNumbers {
+                        universe: 1,
+                        address: 1,
+                    },
+                },
+                &[],
+            )
+            .unwrap()
+            .0
+            .unwrap();
+        let mut file: serde_json::Value =
+            serde_json::from_str(&write(&patch, &Looks::new()).unwrap()).unwrap();
+        file["groups"] =
+            serde_json::json!([{"name":"front","members":[{"Fixture":{"fixture":1}}]}]);
+        let step = serde_json::json!({"look":3,"name":"red","step":{
+            "target":{"Light":{"light":1}},"values":{},"swatches":[{"red":65535,"green":0,"blue":0}]
+        }});
+        let wave = serde_json::json!({"look":2,"name":"wave","pattern":{"Wave":{
+            "target":{"Group":{"group":"front"}},"period":2,"palette":{"Step":{"look":3}}
+        }}});
+        let parent =
+            serde_json::json!({"look":1,"name":"parent","sequence":{"items":[{"look":2}]}});
+
+        let inline = serde_json::json!({"look":2,"name":"inline","pattern":{"Wave":{
+            "target":{"Group":{"group":"front"}},"period":1,"palette":{"Inline":[{"red":1,"green":2,"blue":3}]}
+        }}});
+        for looks in [
+            serde_json::json!([step]),
+            serde_json::json!([inline]),
+            serde_json::json!([parent, wave, step]),
+        ] {
+            file["looks"] = looks;
+            for version in [4, 5, 6] {
+                file["version"] = version.into();
+                let opened = read(&file.to_string(), &empty);
+                if version == 6 {
+                    let (rig, looks) = opened.unwrap();
+                    let canonical = write(&rig, &looks).unwrap();
+                    assert!(canonical.contains(r#""version": 6"#));
+                    assert_eq!(read(&canonical, &empty), Ok((rig, looks)));
+                } else {
+                    assert!(matches!(opened, Err(Unopened::Broken { .. })), "v{version}");
+                }
+            }
+        }
     }
 
     #[test]

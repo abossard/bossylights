@@ -228,23 +228,34 @@ impl Project {
                     }),
                 },
                 Command::RemoveGroup { name } => patch(PatchCommand::RemoveGroup { name }),
-                Command::PutStep { look, name, step } => Ok((
-                    self,
-                    Some(ProjectEffect::Look(LookCommand::PutStep {
+                Command::PutStep { look, name, step } => {
+                    look_effect(LookCommand::Put(crate::Saved { look, name, step }.into()))
+                }
+                Command::PutAuthoredStep { look, name, step } => {
+                    look_effect(LookCommand::Put(crate::SavedLook {
                         look,
                         name,
-                        step,
-                    })),
-                )),
+                        definition: crate::Definition::Step(step),
+                    }))
+                }
                 Command::PutSequence {
                     look,
                     name,
                     sequence,
-                } => look_effect(LookCommand::PutSequence {
+                } => look_effect(LookCommand::Put(crate::SavedLook {
                     look,
                     name,
-                    sequence,
-                }),
+                    definition: crate::Definition::Sequence(sequence),
+                })),
+                Command::PutPattern {
+                    look,
+                    name,
+                    pattern,
+                } => look_effect(LookCommand::Put(crate::SavedLook {
+                    look,
+                    name,
+                    definition: crate::Definition::Pattern(pattern),
+                })),
                 Command::RemoveLook { look } => Ok((
                     self,
                     Some(ProjectEffect::Look(LookCommand::RemoveLook { look })),

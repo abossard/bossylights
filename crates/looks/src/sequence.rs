@@ -1,8 +1,11 @@
 //! Compile only the reachable graph. Shared references reuse a node, but each use
 //! contributes its full expansion to admission and keeps its own timing and spread.
 
-use crate::Looks;
 use crate::compile::{Leaf, Target as SampleTarget, Timed, WORK_LIMIT, sample_work};
+use crate::{
+    Looks,
+    pattern::{self, WaveBinding},
+};
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
 use core::mem::size_of_val;
@@ -26,6 +29,8 @@ struct Size {
 struct Built {
     node: Node,
     ordered: Vec<u16>,
+    /// A matrix repeats the horizontal spread on every row. Other nodes use the whole target.
+    columns: Option<u16>,
     size: Size,
 }
 
@@ -35,6 +40,9 @@ struct Builder<'a> {
     nodes: Vec<Built>,
     items: Vec<Item>,
     leaves: Vec<Leaf>,
+    waves: Vec<WaveBinding>,
+    /// Steps whose swatches this plan reads, independently of their playable values.
+    palettes: BTreeSet<u16>,
     indexed: BTreeMap<u16, usize>,
     path: Vec<u16>,
     bindings: usize,
@@ -58,8 +66,15 @@ impl Builder<'_> {
         let saved = self.looks.get(look).ok_or(Refusal::NoSuchLook)?;
         let built = match &saved.definition {
             Definition::Step(step) => {
-                let leaf = Leaf::new(*step, self.patch)?;
-                let ordered = ordered(&leaf, self.patch)?;
+                let leaf = Leaf::new(step.step(), self.patch)?;
+                let ordered = match step.target {
+                    Target::Group { group } => ordered_group(group, self.patch)?,
+                    Target::Light { .. } | Target::Fixture { .. } => leaf
+                        .entries
+                        .iter()
+                        .flat_map(|entry| numbers(entry.lights))
+                        .collect(),
+                };
                 let expansion = ordered.len();
                 self.leaves.push(leaf);
                 Built {
@@ -67,6 +82,7 @@ impl Builder<'_> {
                         values: step.values,
                     },
                     ordered,
+                    columns: None,
                     size: Size {
                         depth: 1,
                         expansion,
@@ -75,8 +91,32 @@ impl Builder<'_> {
                 }
             }
             Definition::Sequence(sequence) => self.sequence(sequence)?,
+            Definition::Pattern(pattern) => {
+                let (node, wave) = pattern::compile(self.looks, pattern, self.patch)?;
+                let ordered = wave.ordered(self.patch)?;
+                let columns = wave.columns;
+                let expansion = ordered.len();
+                self.waves.push(wave);
+                let palette = pattern::reference(pattern);
+                self.palettes.extend(palette);
+                Built {
+                    node,
+                    ordered,
+                    columns,
+                    size: Size {
+                        // A linked palette is an authored leaf, resolved before playback.
+                        depth: 1 + usize::from(palette.is_some()),
+                        expansion,
+                        // Each sample visits the Wave and its two neighbouring swatches.
+                        visits: 3,
+                    },
+                }
+            }
         };
         self.path.pop();
+        if self.path.len() + built.size.depth > MAX_DEPTH {
+            return Err(Refusal::WorkLimit);
+        }
         self.bindings = limited(self.bindings.checked_add(built.ordered.len()))?;
         let index = self.nodes.len();
         self.nodes.push(built);
@@ -157,6 +197,7 @@ impl Builder<'_> {
         Ok(Built {
             node,
             ordered,
+            columns: None,
             size,
         })
     }
@@ -186,6 +227,8 @@ pub(crate) fn compile(
         items: Vec::new(),
         leaves: Vec::new(),
         indexed: BTreeMap::new(),
+        palettes: BTreeSet::new(),
+        waves: Vec::new(),
         path: Vec::new(),
         bindings: 0,
     };
@@ -198,7 +241,9 @@ pub(crate) fn compile(
 
     // The graph, count of bindings and union of targets determine the complete
     // flattened plan size before allocating its per-light binding tables.
-    let storage = builder.nodes.len() * (size_of::<Node>() + size_of::<u16>())
+    let storage = builder.nodes.len() * size_of::<Node>()
+        + (builder.indexed.len() + builder.palettes.len()) * size_of::<u16>()
+        + WaveBinding::storage(&builder.waves)
         + builder.items.len() * size_of::<Item>()
         + built.ordered.len() * size_of::<SampleTarget>()
         + builder.bindings * size_of::<Binding>()
@@ -216,11 +261,12 @@ pub(crate) fn compile(
     let mut nodes = Vec::with_capacity(builder.nodes.len());
     for (node, built) in builder.nodes.into_iter().enumerate() {
         nodes.push(built.node);
-        let count = u16::try_from(built.ordered.len()).map_err(|_| Refusal::WorkLimit)?;
-        for (index, light) in (0..count).zip(built.ordered) {
+        let targets = u16::try_from(built.ordered.len()).map_err(|_| Refusal::WorkLimit)?;
+        let count = built.columns.unwrap_or(targets);
+        for (index, light) in (0..targets).zip(built.ordered) {
             by_light.entry(light).or_default().push(Binding {
                 node,
-                index,
+                index: index % count,
                 count,
                 discrete_colour: wheels.contains(&light),
             });
@@ -242,26 +288,24 @@ pub(crate) fn compile(
         Timed {
             root,
             saved: builder.indexed.into_keys().collect(),
+            palettes: builder.palettes.into_iter().collect(),
             nodes: nodes.into_boxed_slice(),
             items: builder.items.into_boxed_slice(),
             targets,
             leaves: builder.leaves.into_boxed_slice(),
+            waves: builder.waves.into_boxed_slice(),
         },
         work,
     ))
 }
 
-/// A group's set of lights in saved member order. A fixture contributes its own light
-/// and its heads in definition order. The first occurrence of a repeated light wins.
-fn ordered(leaf: &Leaf, patch: &Patch) -> Result<Vec<u16>, Refusal> {
-    let numbers = |run: LightRun| run.first().index()..run.first().index() + run.count();
-    let Target::Group { group } = leaf.step.target else {
-        return Ok(leaf
-            .entries
-            .iter()
-            .flat_map(|entry| numbers(entry.lights))
-            .collect());
-    };
+pub(crate) fn numbers(run: LightRun) -> core::ops::Range<u16> {
+    run.first().index()..run.first().index() + run.count()
+}
+
+/// A group's lights in saved member order. Each fixture contributes its light and heads
+/// in definition order. Only the first occurrence of a repeated light counts.
+pub(crate) fn ordered_group(group: engine_core::Text, patch: &Patch) -> Result<Vec<u16>, Refusal> {
     let groups = patch.groups();
     let group = groups
         .iter()

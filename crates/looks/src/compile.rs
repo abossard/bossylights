@@ -1,7 +1,7 @@
 //! Immutable plans cross to the tick by shared ownership. Only the sample buffer
 //! changes there. A standalone step goes straight to the Mixer as runs of lights.
 
-use crate::{Looks, sequence};
+use crate::{Looks, pattern::WaveBinding, sequence};
 use alloc::boxed::Box;
 use core::mem::size_of_val;
 use engine_core::{
@@ -76,10 +76,12 @@ pub(crate) struct Timed {
     pub root: usize,
     /// Stable authored IDs, sorted for checking a retained generation under the sender lock.
     pub saved: Box<[u16]>,
+    pub palettes: Box<[u16]>,
     pub nodes: Box<[Node]>,
     pub items: Box<[Item]>,
     pub targets: Box<[Target]>,
     pub leaves: Box<[Leaf]>,
+    pub waves: Box<[WaveBinding]>,
 }
 
 impl Timed {
@@ -95,18 +97,20 @@ impl Timed {
 #[derive(Debug, PartialEq, Eq)]
 enum PlanKind {
     Step(Leaf),
-    Sequence(Timed),
+    Timed(Timed),
 }
 
 impl PlanKind {
     fn storage(&self) -> usize {
         match self {
             PlanKind::Step(leaf) => size_of_val(leaf.entries.as_ref()),
-            PlanKind::Sequence(timed) => {
+            PlanKind::Timed(timed) => {
                 size_of_val(timed.saved.as_ref())
+                    + size_of_val(timed.palettes.as_ref())
                     + size_of_val(timed.nodes.as_ref())
                     + size_of_val(timed.items.as_ref())
                     + size_of_val(timed.targets.as_ref())
+                    + WaveBinding::storage(&timed.waves)
                     + size_of_val(timed.leaves.as_ref())
                     + timed
                         .targets
@@ -144,7 +148,7 @@ impl Plan {
             .ok_or(Refusal::WorkLimit)?;
         let (kind, work) = match &looks.get(look).ok_or(Refusal::NoSuchLook)?.definition {
             Definition::Step(step) => {
-                let leaf = Leaf::new(*step, patch)?;
+                let leaf = Leaf::new(step.step(), patch)?;
                 if size_of_val(leaf.entries.as_ref()) > room {
                     return Err(Refusal::WorkLimit);
                 }
@@ -155,9 +159,9 @@ impl Plan {
                     .sum();
                 (PlanKind::Step(leaf), sample_work(lights, 1)?)
             }
-            Definition::Sequence(_) => {
+            Definition::Sequence(_) | Definition::Pattern(_) => {
                 let (program, work) = sequence::compile(looks, look, patch, room)?;
-                (PlanKind::Sequence(program), work)
+                (PlanKind::Timed(program), work)
             }
         };
         let bytes = core::mem::size_of::<Self>() + kind.storage();
@@ -172,7 +176,14 @@ impl Plan {
     /// A frozen play retains its original linked IDs even when the saved graph changes.
     pub fn uses(&self, look: u16) -> bool {
         self.look == look
-            || matches!(&self.kind, PlanKind::Sequence(timed) if timed.saved.binary_search(&look).is_ok())
+            || self.uses_palette(look)
+            || matches!(&self.kind, PlanKind::Timed(timed) if timed.saved.binary_search(&look).is_ok())
+    }
+
+    /// A retained Wave still needs its palette even if the currently saved Wave
+    /// has switched to inline swatches. A sequence that just plays a step does not.
+    pub fn uses_palette(&self, look: u16) -> bool {
+        matches!(&self.kind, PlanKind::Timed(timed) if timed.palettes.binary_search(&look).is_ok())
     }
 
     pub fn is_step(&self) -> bool {
@@ -183,7 +194,7 @@ impl Plan {
     pub fn lights(&self) -> usize {
         match &self.kind {
             PlanKind::Step(_) => 0,
-            PlanKind::Sequence(timed) => timed.targets.len(),
+            PlanKind::Timed(timed) => timed.targets.len(),
         }
     }
 
@@ -200,14 +211,17 @@ impl Plan {
     pub fn bindings_match(&self, patch: &Patch) -> bool {
         match &self.kind {
             PlanKind::Step(leaf) => leaf.matches(patch),
-            PlanKind::Sequence(timed) => timed.leaves.iter().all(|leaf| leaf.matches(patch)),
+            PlanKind::Timed(timed) => {
+                timed.leaves.iter().all(|leaf| leaf.matches(patch))
+                    && timed.waves.iter().all(|wave| wave.matches(patch))
+            }
         }
     }
 
     pub fn finished(&self, elapsed: u64, usage: Use) -> bool {
         match &self.kind {
             PlanKind::Step(_) => false,
-            PlanKind::Sequence(timed) => timed.program().finished(elapsed, usage),
+            PlanKind::Timed(timed) => timed.program().finished(elapsed, usage),
         }
     }
 
@@ -215,7 +229,7 @@ impl Plan {
     pub fn sample(&self, elapsed: u64, usage: Use, scratch: &mut [Entry]) -> bool {
         match &self.kind {
             PlanKind::Step(leaf) => leaf.step.values != Light::DARK,
-            PlanKind::Sequence(timed) => {
+            PlanKind::Timed(timed) => {
                 let mut supplied = false;
                 let program = timed.program();
                 for (entry, target) in scratch.iter_mut().zip(&timed.targets) {
@@ -235,7 +249,7 @@ impl Plan {
     pub fn entries<'a>(&'a self, scratch: &'a [Entry]) -> &'a [Entry] {
         match &self.kind {
             PlanKind::Step(leaf) => &leaf.entries,
-            PlanKind::Sequence(timed) => scratch.get(..timed.targets.len()).unwrap_or_default(),
+            PlanKind::Timed(timed) => scratch.get(..timed.targets.len()).unwrap_or_default(),
         }
     }
 }

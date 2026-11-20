@@ -41,8 +41,9 @@ pub use engine_core::{
     Refusal, Reply, Request, Run, RunNumbers, State, Status, Target, Text, Universes, changes,
 };
 pub use engine_core::{
-    Bpm, Brightness, GrabId, Light, ManualEnd, MixRules, OtherEnd, PlayId, PlayState, Property,
-    Rank, Repeat, Rgb, Saved, SavedLook, Sequence, SequenceItem, Source, Speed, Use, Value, When,
+    AuthoredStep, Bpm, Brightness, GrabId, Light, ManualEnd, MixRules, OtherEnd, Palette, Pattern,
+    PlayId, PlayState, Property, Rank, Repeat, Rgb, Saved, SavedLook, Sequence, SequenceItem,
+    Source, Speed, Swatches, Use, Value, WaveTarget, When,
 };
 use engine_core::{
     EngineCommand, Histogram, LATENCY_BUCKETS, LATENESS_BUCKETS, MAX_LIGHTS, bucket, due, frame,
@@ -111,6 +112,8 @@ pub const fn edits(command: &Command) -> bool {
         | Command::SetGroup { .. }
         | Command::RemoveGroup { .. }
         | Command::PutStep { .. }
+        | Command::PutAuthoredStep { .. }
+        | Command::PutPattern { .. }
         | Command::PutSequence { .. }
         | Command::RemoveLook { .. }
         | Command::SetMixRules { .. } => true,
@@ -305,6 +308,8 @@ enum Change {
     },
     PutLook {
         looks: Looks,
+        /// The edited step if it would lose its last swatch.
+        emptied_palette: Option<u16>,
     },
     RemoveLook {
         look: u16,
@@ -347,7 +352,7 @@ impl Prepared {
     /// Plan bytes that snapshot history will pin if this edit is admitted.
     /// Measured outside the sender lock, against the same base admission checks.
     pub fn replaced_plan_bytes(&self) -> usize {
-        if let Change::PutLook { looks }
+        if let Change::PutLook { looks, .. }
         | Change::RemoveLook { looks, .. }
         | Change::Patch {
             rebound: Some(looks),
@@ -468,25 +473,19 @@ impl Base {
 
     fn look(&self, command: LookCommand) -> Result<Change, Refusal> {
         Ok(match command {
-            LookCommand::PutStep { look, name, step } => {
-                self.patch.fits_looks(self.looks.rows())?;
-                Change::PutLook {
-                    looks: self.looks.put(Saved { look, name, step }, &self.patch)?,
-                }
-            }
-            LookCommand::PutSequence {
-                look,
-                name,
-                sequence,
-            } => {
-                let saved = SavedLook {
-                    look,
-                    name,
-                    definition: engine_core::Definition::Sequence(sequence),
-                };
+            LookCommand::Put(saved) => {
+                let emptied_palette = (!saved.has_swatches()
+                    && self
+                        .looks
+                        .get(saved.look)
+                        .is_some_and(SavedLook::has_swatches))
+                .then_some(saved.look);
                 let looks = self.looks.put(saved, &self.patch)?;
                 self.patch.fits_looks(looks.rows())?;
-                Change::PutLook { looks }
+                Change::PutLook {
+                    looks,
+                    emptied_palette,
+                }
             }
             LookCommand::RemoveLook { look } => Change::RemoveLook {
                 look,
@@ -808,7 +807,20 @@ impl Sender {
                 }
                 begun
             }
-            Change::PutLook { looks } => {
+            Change::PutLook {
+                looks,
+                emptied_palette,
+            } => {
+                // A once-use can freeze an older plan before the queued replacement plays.
+                if emptied_palette.is_some_and(|look| {
+                    self.plays
+                        .iter()
+                        .flatten()
+                        .flat_map(Live::versions)
+                        .any(|v| v.plan.uses_palette(look))
+                }) {
+                    return Err(Refusal::EmptyPalette);
+                }
                 self.publish(Vec::new(), Some(&looks))?;
                 self.looks = Arc::new(looks);
                 Begun::Queued
@@ -2745,6 +2757,120 @@ mod tests {
         let (plays, intensities) = picture(&mut engine);
         assert_eq!(plays.iter().map(|p| p.play).collect::<Vec<_>>(), [retry]);
         assert_eq!(intensities, vec![Some(22); 100]);
+        wakes.run();
+    }
+
+    #[cfg(feature = "test-support")]
+    #[test]
+    #[expect(
+        clippy::unwrap_used,
+        clippy::panic,
+        reason = "a missing fixture, stream or play fails this stepped admission test"
+    )]
+    fn a_saved_wave_can_start_alone_at_the_work_limit() {
+        let universes = Universes::new(25).unwrap();
+        let (mut engine, mut sender, wakes) =
+            Engine::start_stepped(universes, Box::new(outputs::open)).unwrap();
+        wakes.hold().unwrap();
+        sender
+            .attach(
+                OutputNumber::try_from(1).unwrap(),
+                Box::new(Hears(Arc::new(Heard {
+                    frames: AtomicU64::new(0),
+                    levels: Default::default(),
+                }))),
+                RunNumbers {
+                    first: 1,
+                    count: 25,
+                }
+                .check(universes)
+                .unwrap(),
+                Rate::Sixty,
+            )
+            .unwrap();
+        let name = Text::new("wall").unwrap();
+        // The panel fills exactly 24 universes. The extra pixel begins the next one.
+        for (pixels, universe) in [(4096, 1), (1, 25)] {
+            sender
+                .send(Command::PatchStrip {
+                    name,
+                    pixels: engine_core::Pixels::try_from(pixels).unwrap(),
+                    color: Color::Rgb,
+                    at: ChannelNumbers {
+                        universe,
+                        address: 1,
+                    },
+                })
+                .unwrap();
+        }
+        sender
+            .send(Command::SetGroup {
+                name,
+                members: MemberList::Fits(
+                    Members::new(&[
+                        Member::Fixture { fixture: 1 },
+                        Member::Fixture { fixture: 2 },
+                    ])
+                    .unwrap(),
+                ),
+            })
+            .unwrap();
+        let wave = |look, target| Command::PutPattern {
+            look,
+            name,
+            pattern: Pattern::Wave {
+                target,
+                period: 1,
+                palette: Palette::Inline(Swatches::new(&[Rgb::BLACK]).unwrap()),
+            },
+        };
+        let wall = wave(1, WaveTarget::Matrix { fixture: 1 });
+        assert!(
+            edits(&wall),
+            "Wave compilation belongs in off-lock edit preparation"
+        );
+        sender.send(wall).unwrap();
+        sender
+            .send(wave(2, WaveTarget::Matrix { fixture: 2 }))
+            .unwrap();
+        let start = |look| Command::StartLook {
+            look,
+            rank: Rank::Show,
+            when: When::Now,
+        };
+        let clock = wakes.wake().unwrap();
+        let Ok(Begun::Started { play }) = sender.begin(start(1), &[]) else {
+            panic!("a saved 4096-light Wave must be playable on its own");
+        };
+        let applying_frame = |engine: &mut Engine| {
+            engine.latest();
+            wakes.wake_at(clock).unwrap();
+            let snapshot = engine.latest();
+            (
+                snapshot
+                    .state
+                    .plays
+                    .iter()
+                    .map(|row| row.play)
+                    .collect::<Vec<_>>(),
+                snapshot.lights().get(4095).and_then(|light| light.colour),
+            )
+        };
+        let before = applying_frame(&mut engine);
+        assert_eq!(before, (vec![play], Some(Rgb::BLACK)));
+        let saved = sender.looks().all();
+        let tail = sender.sent();
+        for command in [start(2), wave(3, WaveTarget::Group { group: name })] {
+            assert_eq!(sender.send(command), Err(Refusal::WorkLimit));
+            assert_eq!(sender.sent(), tail);
+            assert_eq!(sender.looks().all(), saved);
+            assert_eq!(applying_frame(&mut engine), before);
+        }
+        sender.send(Command::ReleaseHold { play }).unwrap();
+        assert_eq!(sender.send(start(2)), Err(Refusal::WorkLimit));
+        assert_eq!(applying_frame(&mut engine), (vec![], None));
+        sender.send(start(2)).unwrap();
+        assert_eq!(applying_frame(&mut engine).0.len(), 1);
         wakes.run();
     }
 

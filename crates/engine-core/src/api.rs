@@ -14,15 +14,15 @@
 
 use crate::library::{Failure, FixtureKind, Library, Match, ModeChannels, Text};
 use crate::{
-    ChannelLevel, Command, GrabId, Grouped, HeldLight, Levels, Patched, PlayId, Project, Property,
-    Saved, ShowFile, State, Step,
+    ChannelLevel, Command, GrabId, Grouped, HeldLight, Levels, Light, Patched, PlayId, Project,
+    Property, Rgb, Saved, ShowFile, State, Step, Target,
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// The version of this API. `GET /version` answers it as text. A client that speaks
 /// another version does not talk to the engine. Raise it with every change a client of
 /// the old version would get wrong.
-pub const API_VERSION: u16 = 9;
+pub const API_VERSION: u16 = 10;
 
 /// Local time and phase of a root or a reference. Spread is a percentage.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -166,24 +166,168 @@ impl<'de> Deserialize<'de> for Items {
     }
 }
 
+/// Ordered RGB16 stops. The decoder rejects a fifth swatch before storing it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(test, derive(ts_rs::TS), ts(type = "Array<Rgb>"))]
+pub struct Swatches {
+    colours: [Rgb; Self::MOST],
+    len: u8,
+}
+
+impl Default for Swatches {
+    fn default() -> Self {
+        Self {
+            colours: [Rgb::BLACK; Self::MOST],
+            len: 0,
+        }
+    }
+}
+
+impl Swatches {
+    pub const MOST: usize = 4;
+
+    pub fn new(colours: &[Rgb]) -> Option<Self> {
+        let mut swatches = Self::default();
+        swatches
+            .colours
+            .get_mut(..colours.len())?
+            .copy_from_slice(colours);
+        swatches.len = u8::try_from(colours.len()).ok()?;
+        Some(swatches)
+    }
+
+    pub fn as_slice(&self) -> &[Rgb] {
+        self.colours
+            .get(..usize::from(self.len))
+            .unwrap_or_default()
+    }
+
+    pub const fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+}
+
+impl Serialize for Swatches {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        self.as_slice().serialize(s)
+    }
+}
+
+impl<'de> Deserialize<'de> for Swatches {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct List;
+        impl<'de> serde::de::Visitor<'de> for List {
+            type Value = Swatches;
+
+            fn expecting(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                f.write_str("up to four RGB swatches")
+            }
+
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut list: A,
+            ) -> Result<Swatches, A::Error> {
+                let mut swatches = Swatches::default();
+                while let Some(colour) = list.next_element()? {
+                    let slot = swatches
+                        .colours
+                        .get_mut(usize::from(swatches.len))
+                        .ok_or_else(|| {
+                            serde::de::Error::invalid_length(Swatches::MOST + 1, &self)
+                        })?;
+                    *slot = colour;
+                    swatches.len += 1;
+                }
+                Ok(swatches)
+            }
+        }
+        d.deserialize_seq(List)
+    }
+}
+
+/// A step may also lend its swatches to a Wave. Only its target and values play directly.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct AuthoredStep {
+    pub target: Target,
+    pub values: Light,
+    #[serde(default, skip_serializing_if = "Swatches::is_empty")]
+    #[cfg_attr(test, ts(optional = nullable))]
+    pub swatches: Swatches,
+}
+
+impl AuthoredStep {
+    pub const fn step(&self) -> Step {
+        Step {
+            target: self.target,
+            values: self.values,
+        }
+    }
+}
+
+impl From<Step> for AuthoredStep {
+    fn from(step: Step) -> Self {
+        Self {
+            target: step.target,
+            values: step.values,
+            swatches: Swatches::default(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub enum Pattern {
+    Wave {
+        target: WaveTarget,
+        period: u8,
+        palette: Palette,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub enum WaveTarget {
+    Group {
+        #[cfg_attr(test, ts(type = "string"))]
+        group: Text,
+    },
+    Matrix {
+        fixture: u16,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub enum Palette {
+    Inline(Swatches),
+    Step { look: u16 },
+}
+
 /// A definition has exactly one kind for its lifetime.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[expect(
     clippy::large_enum_variant,
-    reason = "both wire definitions are bounded and travel inline with the command"
+    reason = "the wire definitions are bounded and travel inline with the command"
 )]
 pub enum Definition {
-    Step(Step),
+    Step(AuthoredStep),
     Sequence(Sequence),
+    Pattern(Pattern),
 }
 
-/// Saved rows keep the step format that existing clients and files already read.
-/// A sequence row carries its ordered references in the sequence field.
+/// Each saved row contains exactly one definition, under `step`, `sequence` or `pattern`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(
     test,
     derive(ts_rs::TS),
-    ts(type = "Saved | { look: number, name: string, sequence: Sequence }")
+    ts(
+        type = "{ look: number, name: string, step: AuthoredStep } | { look: number, name: string, sequence: Sequence } | { look: number, name: string, pattern: Pattern }"
+    )
 )]
 pub struct SavedLook {
     pub look: u16,
@@ -196,7 +340,7 @@ impl From<Saved> for SavedLook {
         Self {
             look: saved.look,
             name: saved.name,
-            definition: Definition::Step(saved.step),
+            definition: Definition::Step(saved.step.into()),
         }
     }
 }
@@ -210,43 +354,64 @@ impl Serialize for SavedLook {
         match &self.definition {
             Definition::Step(step) => row.serialize_field("step", step)?,
             Definition::Sequence(sequence) => row.serialize_field("sequence", sequence)?,
+            Definition::Pattern(pattern) => row.serialize_field("pattern", pattern)?,
         }
         row.end()
     }
 }
 
-impl<'de> Deserialize<'de> for SavedLook {
-    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        fn present<'de, T: Deserialize<'de>, D: Deserializer<'de>>(
-            d: D,
-        ) -> Result<Option<T>, D::Error> {
-            T::deserialize(d).map(Some)
-        }
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Row {
-            look: u16,
-            name: Text,
-            #[serde(default, deserialize_with = "present")]
-            step: Option<Step>,
-            #[serde(default, deserialize_with = "present")]
-            sequence: Option<Sequence>,
-        }
-        let row = Row::deserialize(d)?;
-        let definition = match (row.step, row.sequence) {
-            (Some(step), None) => Definition::Step(step),
-            (None, Some(sequence)) => Definition::Sequence(sequence),
-            _ => {
-                return Err(serde::de::Error::custom(
-                    "a look has exactly one definition",
-                ));
-            }
+// A present key must contain a definition, even when another key is present too.
+fn present<'de, T: Deserialize<'de>, D: Deserializer<'de>>(d: D) -> Result<Option<T>, D::Error> {
+    T::deserialize(d).map(Some)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, bound(deserialize = "S: Deserialize<'de>"))]
+struct Row<S> {
+    look: u16,
+    name: Text,
+    #[serde(default, deserialize_with = "present")]
+    step: Option<S>,
+    #[serde(default, deserialize_with = "present")]
+    sequence: Option<Sequence>,
+    #[serde(default, deserialize_with = "present")]
+    pattern: Option<Pattern>,
+}
+
+impl<S: Into<AuthoredStep>> Row<S> {
+    fn checked<E: serde::de::Error>(self) -> Result<SavedLook, E> {
+        let definition = match (self.step, self.sequence, self.pattern) {
+            (Some(step), None, None) => Definition::Step(step.into()),
+            (None, Some(sequence), None) => Definition::Sequence(sequence),
+            (None, None, Some(pattern)) => Definition::Pattern(pattern),
+            _ => return Err(E::custom("a look has exactly one definition")),
         };
-        Ok(Self {
-            look: row.look,
-            name: row.name,
+        Ok(SavedLook {
+            look: self.look,
+            name: self.name,
             definition,
         })
+    }
+}
+
+impl SavedLook {
+    pub fn has_swatches(&self) -> bool {
+        matches!(&self.definition, Definition::Step(step) if !step.swatches.is_empty())
+    }
+
+    /// Read a v5 step or sequence with that version's step schema.
+    pub fn deserialize_v5<'de, D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let row = Row::<Step>::deserialize(d)?;
+        if row.pattern.is_some() {
+            return Err(serde::de::Error::custom("patterns require show file v6"));
+        }
+        row.checked()
+    }
+}
+
+impl<'de> Deserialize<'de> for SavedLook {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        Row::<AuthoredStep>::deserialize(d)?.checked()
     }
 }
 
@@ -427,6 +592,10 @@ pub enum Refusal {
     WrongLookKind,
     LookCycle,
     InvalidTiming,
+    /// A Wave needs at least one swatch in its inline or referenced palette.
+    EmptyPalette,
+    /// The fixture has no matrix layout matching its heads.
+    NoMatrix,
     WorkLimit,
     /// Look `look` uses it: a saved look's target, or a play of the look.
     LookInUse {

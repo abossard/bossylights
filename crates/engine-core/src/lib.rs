@@ -36,8 +36,8 @@ mod resolve;
 mod show;
 
 pub use api::{
-    API_VERSION, Definition, MATCHES, Refusal, Repeat, Reply, Request, SavedLook, Sequence,
-    SequenceItem, Speed, Use,
+    API_VERSION, AuthoredStep, Definition, MATCHES, Palette, Pattern, Refusal, Repeat, Reply,
+    Request, SavedLook, Sequence, SequenceItem, Speed, Swatches, Use, WaveTarget,
 };
 pub use channel::{
     ADDRESSES, Channel, ChannelLevel, ChannelNumbers, ChannelSet, Levels, MAX_UNIVERSES, Universes,
@@ -260,11 +260,26 @@ pub enum Command {
     },
     /// Save `step` as look `look` named `name`, in place of the one saved there. A
     /// playing look shows the new step in the next frame and keeps its start.
+    #[serde(skip)]
+    #[cfg_attr(test, ts(skip))]
     PutStep {
         look: u16,
         #[cfg_attr(test, ts(type = "string"))]
         name: Text,
         step: Step,
+    },
+    #[serde(rename = "PutStep")]
+    PutAuthoredStep {
+        look: u16,
+        #[cfg_attr(test, ts(type = "string"))]
+        name: Text,
+        step: AuthoredStep,
+    },
+    PutPattern {
+        look: u16,
+        #[cfg_attr(test, ts(type = "string"))]
+        name: Text,
+        pattern: Pattern,
     },
     PutSequence {
         look: u16,
@@ -1984,6 +1999,11 @@ mod tests {
                 Value::decl(&config),
                 GrabId::decl(&config),
                 Step::decl(&config),
+                AuthoredStep::decl(&config),
+                Swatches::decl(&config),
+                Pattern::decl(&config),
+                WaveTarget::decl(&config),
+                Palette::decl(&config),
                 Saved::decl(&config),
                 SavedLook::decl(&config),
                 Sequence::decl(&config),

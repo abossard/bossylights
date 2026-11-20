@@ -66,16 +66,7 @@ pub struct Saved {
     reason = "bounded look definitions travel inline in a client command, off the tick thread"
 )]
 pub enum LookCommand {
-    PutStep {
-        look: u16,
-        name: Text,
-        step: Step,
-    },
-    PutSequence {
-        look: u16,
-        name: Text,
-        sequence: crate::Sequence,
-    },
+    Put(crate::SavedLook),
     RemoveLook {
         look: u16,
     },

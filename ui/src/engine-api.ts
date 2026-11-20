@@ -3,7 +3,7 @@
 
 export type Request = { "Send": { command: Command, } } | "Query" | "Subscribe" | "Stop" | { "Search": { text: string, } } | { "Fixture": { maker: string, model: string, } } | "Failures";
 
-export type Command = { "SetChannel": { channel: ChannelNumbers, value: number, } } | { "ReleaseChannel": { channel: ChannelNumbers, } } | "ReleaseChannels" | "ReleaseAll" | { "Blackout": { on: boolean, } } | { "SetOutput": { output: OutputNumber, kind: OutputKind, universes: RunNumbers, rate: Rate | null, } } | { "RemoveOutput": { output: OutputNumber, } } | { "Patch": { name: string, maker: string, model: string, mode: string, at: ChannelNumbers, } } | { "PatchStrip": { name: string, pixels: Pixels, color: Color, at: ChannelNumbers, } } | { "Move": { fixture: number, at: ChannelNumbers, } } | { "Unpatch": { fixture: number, } } | { "Rename": { fixture: number, name: string, } } | { "SetIntensity": { target: Target, intensity: number, } } | { "SetColour": { target: Target, red: number, green: number, blue: number, } } | { "ReleaseIntensity": { target: Target, } } | { "ReleaseColour": { target: Target, } } | { "SetProperty": { target: Target, value: Value, } } | { "UpdateGrab": { grab: GrabId, value: Value, } } | { "EndGrab": { grab: GrabId, } } | { "ReleaseProperty": { target: Target, property: Property, } } | { "SetGroup": { name: string, members: Array<Member>, } } | { "RemoveGroup": { name: string, } } | { "PutStep": { look: number, name: string, step: Step, } } | { "PutSequence": { look: number, name: string, sequence: Sequence, } } | { "RemoveLook": { look: number, } } | { "StartLook": { look: number, use?: Use, rank?: Rank, 
+export type Command = { "SetChannel": { channel: ChannelNumbers, value: number, } } | { "ReleaseChannel": { channel: ChannelNumbers, } } | "ReleaseChannels" | "ReleaseAll" | { "Blackout": { on: boolean, } } | { "SetOutput": { output: OutputNumber, kind: OutputKind, universes: RunNumbers, rate: Rate | null, } } | { "RemoveOutput": { output: OutputNumber, } } | { "Patch": { name: string, maker: string, model: string, mode: string, at: ChannelNumbers, } } | { "PatchStrip": { name: string, pixels: Pixels, color: Color, at: ChannelNumbers, } } | { "Move": { fixture: number, at: ChannelNumbers, } } | { "Unpatch": { fixture: number, } } | { "Rename": { fixture: number, name: string, } } | { "SetIntensity": { target: Target, intensity: number, } } | { "SetColour": { target: Target, red: number, green: number, blue: number, } } | { "ReleaseIntensity": { target: Target, } } | { "ReleaseColour": { target: Target, } } | { "SetProperty": { target: Target, value: Value, } } | { "UpdateGrab": { grab: GrabId, value: Value, } } | { "EndGrab": { grab: GrabId, } } | { "ReleaseProperty": { target: Target, property: Property, } } | { "SetGroup": { name: string, members: Array<Member>, } } | { "RemoveGroup": { name: string, } } | { "PutStep": { look: number, name: string, step: AuthoredStep, } } | { "PutPattern": { look: number, name: string, pattern: Pattern, } } | { "PutSequence": { look: number, name: string, sequence: Sequence, } } | { "RemoveLook": { look: number, } } | { "StartLook": { look: number, use?: Use, rank?: Rank, 
 /**
  * At once when not given, or on the next beat or bar of the grid: then the
  * play waits, and plays from the frame of that crossing.
@@ -71,7 +71,7 @@ show: ShowFile, channels: Array<ChannelLevel>,
  */
 lights: Array<HeldLight>, } } | { "Found": { fixtures: Array<Match>, } } | { "Fixture": { maker: string, model: string, kind: FixtureKind, modes: Array<ModeChannels>, } } | { "Failures": { failures: Array<Failure>, } };
 
-export type Refusal = "NotACommand" | { "NoSuchUniverse": { universes: number, } } | "NoSuchAddress" | "QueueFull" | "CannotOpen" | "NoSuchFixture" | "Opening" | { "TooManyUniverses": { most: number, } } | "NoSuchMode" | { "PastTheEnd": { channels: number, } } | { "NotStreamed": { first: number, last: number, } } | { "NotSent": { output: number, universe: number, address: number, } } | { "StreamsFixture": { fixture: number, } } | { "Overlaps": { fixture: number, } } | "NoLightsLeft" | "NotPatched" | "NoSuchLight" | "NoSuchGroup" | { "TooManyMembers": { most: number, } } | { "ShowFileFull": { most: number, } } | "NoSuchLook" | "WrongLookKind" | "LookCycle" | "InvalidTiming" | "WorkLimit" | { "LookInUse": { look: number, } } | { "TooManyLooks": { most: number, } } | "PlayFull" | { "Unsupported": { light: number, property: Property, } } | "Stale" | "EmptyGroup" | { "OtherProperty": { property: Property, } } | { "GrabFull": { most: number, } };
+export type Refusal = "NotACommand" | { "NoSuchUniverse": { universes: number, } } | "NoSuchAddress" | "QueueFull" | "CannotOpen" | "NoSuchFixture" | "Opening" | { "TooManyUniverses": { most: number, } } | "NoSuchMode" | { "PastTheEnd": { channels: number, } } | { "NotStreamed": { first: number, last: number, } } | { "NotSent": { output: number, universe: number, address: number, } } | { "StreamsFixture": { fixture: number, } } | { "Overlaps": { fixture: number, } } | "NoLightsLeft" | "NotPatched" | "NoSuchLight" | "NoSuchGroup" | { "TooManyMembers": { most: number, } } | { "ShowFileFull": { most: number, } } | "NoSuchLook" | "WrongLookKind" | "LookCycle" | "InvalidTiming" | "EmptyPalette" | "NoMatrix" | "WorkLimit" | { "LookInUse": { look: number, } } | { "TooManyLooks": { most: number, } } | "PlayFull" | { "Unsupported": { light: number, property: Property, } } | "Stale" | "EmptyGroup" | { "OtherProperty": { property: Property, } } | { "GrabFull": { most: number, } };
 
 export type State = { 
 /**
@@ -135,9 +135,19 @@ export type GrabId = { generation: number, };
 
 export type Step = { target: Target, values: Light, };
 
+export type AuthoredStep = { target: Target, values: Light, swatches?: Swatches, };
+
+export type Swatches = Array<Rgb>;
+
+export type Pattern = { "Wave": { target: WaveTarget, period: number, palette: Palette, } };
+
+export type WaveTarget = { "Group": { group: string, } } | { "Matrix": { fixture: number, } };
+
+export type Palette = { "Inline": Swatches } | { "Step": { look: number, } };
+
 export type Saved = { look: number, name: string, step: Step, };
 
-export type SavedLook = Saved | { look: number, name: string, sequence: Sequence };
+export type SavedLook = { look: number, name: string, step: AuthoredStep } | { look: number, name: string, sequence: Sequence } | { look: number, name: string, pattern: Pattern };
 
 export type Sequence = { items: Array<SequenceItem>, };
 
@@ -272,4 +282,4 @@ export type ShowFile = "None" | "Kept" | "NotSaved" | { "LeftAlone": { why: Unop
 
 export type Unopened = "CannotRead" | { "Broken": { line: number, column: number, } } | { "Newer": { version: number, } } | { "Taken": { fixture: number, } } | { "Refused": { reason: Refusal, } } | { "TooBig": { most: number, } };
 
-export const API_VERSION = 9;
+export const API_VERSION = 10;

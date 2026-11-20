@@ -1,16 +1,23 @@
 //! Sample a compiled look at one clock position for one light. The compiler supplies
 //! its target order for each linked look, including shared children used in two places.
 
-use crate::{Light, Position, Repeat, Rgb, Speed, Use};
+#[path = "wave.rs"]
+mod wave;
+
+use crate::{Light, Position, Repeat, Rgb, Speed, Swatches, Use};
 
 /// The maximum number of looks from the root to a leaf, counting both.
 pub const MAX_DEPTH: usize = 8;
 
-/// A compiled look. Sequence ends and measures use the clock's Q32 beats.
+/// A compiled look. Sequence ends and timed measures use the clock's Q32 beats.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Node {
     Step {
         values: Light,
+    },
+    Wave {
+        measure: u64,
+        swatches: Swatches,
     },
     Sequence {
         first: usize,
@@ -27,7 +34,8 @@ pub struct Item {
     pub transition: u8,
 }
 
-/// Where this light falls in a node's ordered target. A wheel cuts at entry.
+/// A light's place in the ordered target, or its column and width for a matrix Wave.
+/// A wheel cuts at entry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Binding {
     pub node: usize,
@@ -47,8 +55,13 @@ impl Program<'_> {
     /// A once-use ends when the *unspread* clock reaches its measure. Its final
     /// sample still exists: the Mixer decides whether to keep or remove it.
     pub fn finished(&self, elapsed: u64, settings: Use) -> bool {
-        matches!(self.nodes.get(self.root), Some(Node::Sequence { measure, .. })
-            if settings.repeat == Repeat::Once && scaled(u128::from(elapsed), settings.speed) >= u128::from(*measure))
+        match self.nodes.get(self.root) {
+            Some(Node::Sequence { measure, .. } | Node::Wave { measure, .. }) => {
+                settings.repeat == Repeat::Once
+                    && scaled(u128::from(elapsed), settings.speed) >= u128::from(*measure)
+            }
+            Some(Node::Step { .. }) | None => false,
+        }
     }
 
     /// Sample one light at the clock's elapsed count since this play began.
@@ -141,9 +154,9 @@ impl Moment {
         }
     }
 
-    /// Add span × spread/100 × index/count. At most seven timed nodes multiply
-    /// u16 divisors, so adding their remainders fits u128. A leaf's delay is
-    /// compared separately: that cross-product has at most eight u16 factors.
+    /// Add span × spread/100 × index/count. At most eight nodes multiply
+    /// divisors, each at most MAX_LIGHTS (2¹⁴). Their product fits in 112 bits,
+    /// including the binding of a Wave at maximum depth.
     fn shifted(mut self, span: u128, spread: u8, binding: &Binding) -> Self {
         if spread == 0 || binding.index == 0 || binding.count == 0 {
             return self;
@@ -192,13 +205,20 @@ impl Sampler<'_> {
         self.bindings.get(index)
     }
 
-    /// Descend at most MAX_DEPTH nodes, including the terminal step.
+    /// Descend at most MAX_DEPTH nodes, including the terminal step or Wave.
     fn visit(&self, node: usize, time: Moment, settings: Use, depth: usize) -> Light {
         let (Some(depth), Some(binding)) = (depth.checked_sub(1), self.binding(node)) else {
             return Light::DARK;
         };
         let (items, measure) = match self.program.nodes.get(node) {
             Some(Node::Step { values }) => return *values,
+            Some(Node::Wave { measure, swatches }) if *measure > 0 => {
+                let (phase, _) = time.phase(*measure, settings, binding);
+                return Light {
+                    colour: wave::colour(swatches.as_slice(), phase, subcounts(*measure)),
+                    ..Light::DARK
+                };
+            }
             Some(Node::Sequence {
                 first,
                 count,
@@ -210,7 +230,7 @@ impl Sampler<'_> {
                 };
                 (items, *measure)
             }
-            Some(Node::Sequence { .. }) | None => return Light::DARK,
+            Some(Node::Sequence { .. } | Node::Wave { .. }) | None => return Light::DARK,
         };
         let (phase, wrapped) = time.phase(measure, settings, binding);
         let index = items.partition_point(|item| !phase.before(Moment::at(item.end)));

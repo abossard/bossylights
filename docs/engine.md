@@ -38,7 +38,7 @@ How an output gets on and off the tick thread:
 
 ## API
 
-Version 9. `GET /version` returns the API version. `GET /health` returns `ok` while the engine runs. Clients send commands on the WebSocket at `GET /api`. Generate the TypeScript types in `ui/src/engine-api.ts` with `UPDATE_TS=1 cargo test -p engine-core`.
+Version 10. `GET /version` returns the API version. `GET /health` returns `ok` while the engine runs. Clients send commands on the WebSocket at `GET /api`. Generate the TypeScript types in `ui/src/engine-api.ts` with `UPDATE_TS=1 cargo test -p engine-core`.
 
 | Who may open `/api` | Why |
 |---|---|
@@ -70,6 +70,8 @@ Looks and who wins (`docs/design/looks-slice-3.md`, the Mixer's table in `engine
 
 | Command | Does | Refused |
 |---|---|---|
+| `PutStep` (look, name, step) | saves the target and sparse property values. Optional `step.swatches` holds up to four ordered RGB16 colours. A Wave can reference them by look ID | `EmptyPalette` if a saved Wave or retained play still uses the last swatch |
+| `PutPattern` (look, name, pattern) | saves a Wave on an ordered group or a fixture matrix. Its period is 1 to 32 whole beats. Each target light must support continuous colour | `NoMatrix`, `Unsupported`, `InvalidTiming`, `NoSuchLook`, `WrongLookKind`, `EmptyPalette`, `WorkLimit` |
 | `PutSequence` (look, name, sequence) | saves an ordered list of linked looks. Editing a step or sequence updates its running parents on the applying frame. Each keeps its start time and order | `NoSuchLook`, `WrongLookKind`, `LookCycle`, `InvalidTiming`, `WorkLimit` |
 | `StartLook` (look, rank, when, use) | returns `{"Started": {"play": {"slot": 0, "generation": 1}}}`. Rank defaults to `Manual`, with `Show` and `Autopilot` available. Start defaults to `Now`. `Beat` and `Bar` launch at the first matching boundary on or after the request. A fresh start replaces that look at that rank | `NoSuchLook`, `InvalidTiming`, `PlayFull`, `WorkLimit`, `QueueFull` |
 | `StopLook` (play) | Cancels a waiting play. For a playing look, `UntilRelease` keeps its Manual sample and `Stay` keeps its Show or Autopilot sample. A rest, `UntilStop` or `Reveal` ends the play | |
@@ -93,6 +95,18 @@ A sequence referencing looks 1 and 2 fades from the first into the second over o
 | `use.speed` | `Half`, `Normal` or `Double` | `Normal` |
 | `use.repeat` | `Loop` or `Once`. A nested once-use holds its last sample until the item's end. A standalone step holds until stopped or released | `Loop` |
 | `use.spread` | 0 through 100 percent across the ordered target. Timed looks offset phase. Step items delay entry | 0 |
+
+A Wave over a matrix can use the palette saved in step 3.
+
+```json
+{"Send":{"command":{"PutPattern":{"look":7,"name":"Panel sweep","pattern":{"Wave":{"target":{"Matrix":{"fixture":1}},"period":4,"palette":{"Step":{"look":3}}}}}}}
+```
+
+| Wave field | Effect |
+|---|---|
+| `target` | `{"Group":{"group":"front"}}` follows saved member order. `{"Matrix":{"fixture":1}}` follows head definition order, one row at a time. A shared master has no cell. |
+| `palette` | `{"Step":{"look":3}}` follows palette edits. `{"Inline":[{"red":65535,"green":0,"blue":0}]}` stores the colours on the Wave. |
+| `use.spread` | At 100%, group member `i` starts at `i / count` of a period. A matrix cell starts at `column / width` on every row. The blend wraps from the last swatch to the first. |
 
 Each sequence item and each `StartLook` accepts its own `use`. A stop samples the play at the stop event. A once-use ends with its final sample, even if the next wake comes later. An empty step supplies a rest.
 
@@ -148,7 +162,7 @@ stateDiagram-v2
 | Start | `npm run engine -- --show <file>`: the patch and the groups, opened at start, saved after every change and on `Stop` |
 | Holds | each fixture by number with its mode whole (opens without the library), its first light, the groups in order. Not the outputs yet |
 | A save | a new file `<file>.saving`, then renamed over the file, on the blocking pool. Never half written, never on the tick thread |
-| Opening | the same checks as the commands. A file that fails one is left alone: empty patch, never written. Format: `crates/show-file` |
+| Opening | Show file v6 stores Waves and step swatches. It reads v1 through v5 with their original schemas and applies the same checks as the commands. A file that fails one is left alone: empty patch, never written. Format: `crates/show-file` |
 | State | `show` in `Picture` and `Changed`: `None`, `Kept`, `NotSaved`, `LeftAlone { why }`: `CannotRead`, `Broken { line, column }`, `Newer { version }`, `Taken { fixture }`, `Refused { reason }` |
 
 ## Each output's states

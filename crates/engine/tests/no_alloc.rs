@@ -4,7 +4,7 @@
 //! 256 runs, start, restart, replan and release a play of a step over that group, grab,
 //! update, end (kept or let go) and release a direct hold on one run and on two, clear the
 //! kept ones by a change of the rules, mix it with the direct holds and hand a reader a
-//! snapshot on every frame. Linked sequences also run, replan and end inside the
+//! snapshot on every frame. A Wave runs over two strip pixels. Linked sequences run, replan and end inside the
 //! counting window. With the stepped clock all 32 once-uses finish between wakes.
 //! The tick frees nothing: the old writers, runs, plans and a replaced device with its thread go to
 //! the free thread. A
@@ -456,6 +456,54 @@ fn main() {
             .plays
             .iter()
             .any(|p| p.look == 3 && p.state == engine::PlayState::Kept)
+    });
+    // Sample a moving Wave on the two ends of the strip while counting.
+    // Both swatches carry the same green, so every phase identifies this source.
+    counting::uncounted(|| {
+        use engine_core::{Palette, Pattern, Swatches, Use, WaveTarget};
+        let swatches = Swatches::new(&[
+            Rgb {
+                red: u16::MAX,
+                green: 4321,
+                blue: 0,
+            },
+            Rgb {
+                red: 0,
+                green: 4321,
+                blue: u16::MAX,
+            },
+        ])
+        .unwrap();
+        sender
+            .send(Command::PutPattern {
+                look: 4,
+                name: text("wave"),
+                pattern: Pattern::Wave {
+                    target: WaveTarget::Group {
+                        group: text("ends"),
+                    },
+                    period: 2,
+                    palette: Palette::Inline(swatches),
+                },
+            })
+            .unwrap();
+        sender
+            .send(Command::StartUse {
+                look: 4,
+                rank: Rank::Manual,
+                when: engine::When::Now,
+                usage: Use {
+                    spread: 100,
+                    ..Use::default()
+                },
+            })
+            .unwrap();
+    });
+    mock::wait_until("both strip pixels receive Wave", || {
+        let lights = engine.latest().lights();
+        [usize::from(LIGHTS), usize::from(LIGHTS) + 2]
+            .iter()
+            .all(|&index| lights[index].colour.is_some_and(|rgb| rgb.green == 4321))
     });
     // a Manual play live as all is released
     let start = Command::StartLook {

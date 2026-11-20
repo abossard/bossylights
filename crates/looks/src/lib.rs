@@ -13,6 +13,7 @@
 extern crate alloc;
 
 mod compile;
+mod pattern;
 mod sequence;
 
 use alloc::collections::{BTreeMap, BTreeSet};
@@ -22,6 +23,15 @@ use engine_core::{Definition, LOOKS, MixRules, Refusal, SavedLook};
 use rig::Patch;
 
 pub use compile::{PLAN_BYTES, Plan, WORK_LIMIT, compile, play_work};
+
+/// Edges of the authored graph, including a Wave that reads a step's swatches.
+fn references(definition: &Definition, mut uses: impl FnMut(u16) -> bool) -> bool {
+    match definition {
+        Definition::Step(_) => false,
+        Definition::Sequence(sequence) => sequence.as_slice().iter().any(|item| uses(item.look)),
+        Definition::Pattern(pattern) => pattern::reference(pattern).is_some_and(uses),
+    }
+}
 
 /// Definitions and plans belong to one revision. The sender can start any look by
 /// sharing its precompiled plan, even while another revision is being prepared.
@@ -95,12 +105,7 @@ impl Looks {
         loop {
             let before = parents.len();
             for saved in next.saved.values() {
-                if let Definition::Sequence(sequence) = &saved.definition
-                    && sequence
-                        .as_slice()
-                        .iter()
-                        .any(|item| parents.contains(&item.look))
-                {
+                if references(&saved.definition, |id| parents.contains(&id)) {
                     parents.insert(saved.look);
                 }
             }
@@ -145,9 +150,11 @@ impl Looks {
 
     /// Remove an unreferenced definition. The sender also checks play reservations.
     pub fn remove(&self, look: u16) -> Result<Self, Refusal> {
-        if let Some(parent) = self.saved.values().find(|saved| {
-            matches!(&saved.definition, Definition::Sequence(sequence) if sequence.as_slice().iter().any(|item| item.look == look))
-        }) {
+        if let Some(parent) = self
+            .saved
+            .values()
+            .find(|saved| references(&saved.definition, |id| id == look))
+        {
             return Err(Refusal::LookInUse { look: parent.look });
         }
         let mut next = self.clone();
@@ -215,7 +222,7 @@ mod tests {
     use engine_core::{Saved, Step};
     use rig::Whole;
 
-    fn patch() -> Patch {
+    pub(super) fn patch() -> Patch {
         let empty = Patch::new(
             Universes::new(1).unwrap(),
             Lights::new(32).unwrap(),
@@ -239,7 +246,7 @@ mod tests {
             .unwrap()
     }
 
-    fn leaf(look: u16) -> Saved {
+    pub(super) fn leaf(look: u16) -> Saved {
         Saved {
             look,
             name: Text::new("rest").unwrap(),
@@ -250,7 +257,7 @@ mod tests {
         }
     }
 
-    fn item(look: u16) -> SequenceItem {
+    pub(super) fn item(look: u16) -> SequenceItem {
         SequenceItem {
             look,
             width: 16,
@@ -259,7 +266,7 @@ mod tests {
         }
     }
 
-    fn sequence(look: u16, items: &[SequenceItem]) -> SavedLook {
+    pub(super) fn sequence(look: u16, items: &[SequenceItem]) -> SavedLook {
         SavedLook {
             look,
             name: Text::new("sequence").unwrap(),
