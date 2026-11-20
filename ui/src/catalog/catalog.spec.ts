@@ -298,6 +298,35 @@ for (const [id, dx, readout] of drags) {
   });
 }
 
+// [px out, px back]: a thing that is not placed, dropped where it started, sends nothing
+for (const [out, back] of [[60, -60], [200, -200], [0, 0]] as const) {
+  test(`UX-05 songs.section.edge dragged ${out} px and back ${back} px sends nothing`, async ({ page }) => {
+    await page.goto("/#/songs.section.edge");
+    const edge = frame(page, "alone").getByRole("separator");
+    const box = await edge.boundingBox();
+    if (!box) throw new Error("the edge is not on screen");
+    const [x, y] = [box.x + box.width / 2, box.y + box.height / 2];
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x + out, y, { steps: 5 });
+    await page.mouse.move(x + out + back, y, { steps: 5 });
+    await page.mouse.up();
+    await expect(sent(page, "alone")).toHaveText("Nothing sent yet");
+  });
+}
+
+test("UX-05 songs.section.edge dragged 80 px sends where it landed", async ({ page }) => {
+  await page.goto("/#/songs.section.edge");
+  const edge = frame(page, "alone").getByRole("separator");
+  const box = await edge.boundingBox();
+  if (!box) throw new Error("the edge is not on screen");
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2 + 80, box.y + box.height / 2, { steps: 5 });
+  await page.mouse.up();
+  await expect(sent(page, "alone")).toHaveText("MoveSectionEdge where it landed");
+});
+
 // [control, the words before, the words while on, the command of the first press]
 const toggles = [
   ["inout.out.test", "Test", "Testing", "TestOutput on: true"],
@@ -337,7 +366,7 @@ test("UX-07 OSC goes back off on the second press", async ({ page }) => {
   await expect(sent(page, "alone")).toHaveText("SetOsc on: false");
 });
 
-for (const id of ["top.workspaces", "console.speed", "inout.tempo.feed", "looks.pattern.shape"]) {
+for (const id of ["top.workspaces", "console.speed", "inout.tempo.feed", "looks.pattern.shape", "looks.step.gobo"]) {
   test(`UX-08 arrows keep moving in ${id}: the picked option has the focus`, async ({ page }) => {
     await page.goto(`/#/${id}`);
     await frame(page, "alone").locator('.k-pick-opt[tabindex="0"]').focus();
@@ -365,7 +394,8 @@ for (const id of ["top.workspaces", "console.speed", "inout.tempo.feed", "looks.
 const recording = [
   ["live-on", "armed"],
   ["lock", "armed"],
-  ["no-song", "armed"],
+  ["no-song", "ready"],
+  ["alone", "ready"],
   ["state:armed", "armed"],
   ["recording", "writing"],
   ["state:on", "writing"],
@@ -377,7 +407,11 @@ for (const [key, is] of recording) {
       const button = frame(page, key).getByRole("button");
       for (let i = 0; i < presses; i++) await button.click();
       await expect(button).toHaveAttribute("aria-pressed", "true");
-      if (is === "armed") {
+      if (is === "ready") {
+        await expect(button.locator(".k-lamp")).not.toHaveAttribute("data-colour", "danger");
+        await expect(button).toHaveAttribute("aria-label", /ready/);
+        await expect(button).not.toContainText("Armed");
+      } else if (is === "armed") {
         await expect(button.locator(".k-lamp")).not.toHaveAttribute("data-colour", "danger");
         await expect(button).toContainText("Armed");
       } else await expect(button.locator(".k-lamp")).toHaveAttribute("data-colour", "danger");
@@ -415,6 +449,7 @@ for (const [key, plays] of nowFrames) {
 const refusals = [
   ["patch.panel.add", "state:off: Universe 2 is already used", "Universe 2 is already used"],
   ["patch.add.next", "state:off: Pick a free address", "Pick a free address"],
+  ["patch.panel.add", "state:off: It needs universes past 64", "It needs universes past 64"],
 ] as const;
 for (const [id, key, reason] of refusals) {
   test(`UX-11 ${id} is off and says why: ${reason}`, async ({ page }) => {
@@ -427,6 +462,8 @@ for (const [id, key, reason] of refusals) {
 
 /** What a field of the panel's draft shows as sent: it changes the draft, Add the panel sends the panel. */
 const PANEL = "Sends nothing: it changes the draft of the panel";
+/** What a field that saves only on Enter says when it is left with a text not saved. */
+const NOT_SAVED = "Not saved. Enter saves it";
 
 // [control, typed, how it is left, sent, the value it keeps, the reason]
 const typed = [
@@ -434,24 +471,54 @@ const typed = [
   ["inout.osc.port", "", "Enter", "Nothing sent yet", "9000", ""],
   ["inout.osc.port", "9001", "Tab", "SetOsc 9001", "9001", ""],
   ["inout.osc.port", "9001", "Enter", "SetOsc 9001", "9001", ""],
-  ["inout.out.universes", "Banana", "Enter", "Nothing sent yet", "2 to 9", "One universe from 1 to 32768, as 1, or a range, as 2 to 9"],
-  ["inout.out.universes", "9 to 2", "Tab", "Nothing sent yet", "2 to 9", "One universe from 1 to 32768, as 1, or a range, as 2 to 9"],
+  ["inout.out.universes", "Banana", "Enter", "Nothing sent yet", "2 to 9", "One universe from 1 to 64, as 1, or a range, as 2 to 9"],
+  ["inout.out.universes", "9 to 2", "Tab", "Nothing sent yet", "2 to 9", "One universe from 1 to 64, as 1, or a range, as 2 to 9"],
   ["inout.out.universes", "3", "Tab", "SetOutput 3", "3", ""],
   ["inout.mapping.message", "Banana", "Enter", "Nothing sent yet", "Note 36", "A note, as Note 36, or a controller, as CC 48"],
   ["inout.mapping.message", "CC 48", "Tab", "UpdateMapping CC 48", "CC 48", ""],
   ["inout.mapping.message", "", "Tab", "Nothing sent yet", "Note 36", ""],
   ["looks.name", "", "Enter", "Nothing sent yet", "Warm wash", ""],
   ["inout.osc.port", "007", "Enter", "SetOsc 7", "7", ""],
-  ["inout.out.universes", "99999999", "Enter", "Nothing sent yet", "2 to 9", "One universe from 1 to 32768, as 1, or a range, as 2 to 9"],
-  ["inout.out.universes", "2 to 40000", "Tab", "Nothing sent yet", "2 to 9", "One universe from 1 to 32768, as 1, or a range, as 2 to 9"],
-  ["patch.panel.size", "Banana", "Enter", PANEL, "16 x 16", "Columns x rows, as 16 x 16, each from 1 to 1024"],
-  ["patch.panel.size", "0", "Enter", PANEL, "16 x 16", "Columns x rows, as 16 x 16, each from 1 to 1024"],
-  ["patch.panel.size", "-3", "Enter", PANEL, "16 x 16", "Columns x rows, as 16 x 16, each from 1 to 1024"],
-  ["patch.panel.size", "Banana", "Tab", PANEL, "16 x 16", "Columns x rows, as 16 x 16, each from 1 to 1024"],
+  ["inout.out.universes", "99999999", "Enter", "Nothing sent yet", "2 to 9", "One universe from 1 to 64, as 1, or a range, as 2 to 9"],
+  ["inout.out.universes", "2 to 40000", "Tab", "Nothing sent yet", "2 to 9", "One universe from 1 to 64, as 1, or a range, as 2 to 9"],
+  ["patch.panel.size", "Banana", "Enter", PANEL, "16 x 16", "Columns x rows, as 16 x 16, at most 10880 pixels"],
+  ["patch.panel.size", "0", "Enter", PANEL, "16 x 16", "Columns x rows, as 16 x 16, at most 10880 pixels"],
+  ["patch.panel.size", "-3", "Enter", PANEL, "16 x 16", "Columns x rows, as 16 x 16, at most 10880 pixels"],
+  ["patch.panel.size", "Banana", "Tab", PANEL, "16 x 16", "Columns x rows, as 16 x 16, at most 10880 pixels"],
   ["patch.panel.size", "32 x 8", "Enter", PANEL, "32 x 8", ""],
-  ["patch.panel.start", "40000", "Enter", PANEL, "2", "A universe is a number from 1 to 32768"],
-  ["patch.panel.start", "Banana", "Tab", PANEL, "2", "A universe is a number from 1 to 32768"],
+  ["patch.panel.start", "40000", "Enter", PANEL, "2", "A universe is a number from 1 to 64"],
+  ["patch.panel.start", "Banana", "Tab", PANEL, "2", "A universe is a number from 1 to 64"],
+  ["inout.out.universes", "1 to 32768", "Enter", "Nothing sent yet", "2 to 9", "One universe from 1 to 64, as 1, or a range, as 2 to 9"],
+  ["inout.out.universes", "2 to 64", "Enter", "SetOutput 2 to 64", "2 to 64", ""],
+  ["patch.panel.start", "65", "Enter", PANEL, "2", "A universe is a number from 1 to 64"],
+  ["patch.panel.start", "64", "Enter", PANEL, "64", ""],
+  ["patch.panel.size", "1024 x 1024", "Enter", PANEL, "16 x 16", "Columns x rows, as 16 x 16, at most 10880 pixels"],
 ] as const;
+// [control, typed and left by Tab, what stays in the field, it says it is not saved]: a field that saves only on Enter keeps a fitting text as a draft and says so
+const drafts = [
+  ["patch.panel.start", "7", "7", true],
+  ["patch.panel.start", "007", "007", true],
+  ["patch.panel.start", "", "2", false],
+  ["patch.panel.size", "32 x 8", "32 x 8", true],
+  ["patch.panel.size", "", "16 x 16", false],
+  ["patch.panel.start", "2", "2", false],
+] as const;
+for (const [id, text, stays, draft] of drafts) {
+  test(`UX-31 ${id}: "${text}" and Tab ${draft ? "stays a draft and says so" : "keeps the value"}`, async ({ page }) => {
+    await page.goto(`/#/${id}`);
+    const field = frame(page, "alone").getByRole("textbox");
+    await field.fill(text);
+    await field.press("Tab");
+    await expect(field).toHaveValue(stays);
+    await expect(frame(page, "alone").locator(".c-stage .k-reason")).toHaveCount(0);
+    const note = frame(page, "alone").locator(".c-stage .k-unsaved");
+    if (!draft) return await expect(note).toHaveCount(0);
+    await expect(note).toHaveText(NOT_SAVED);
+    await field.press("Enter");
+    await expect(note).toHaveCount(0);
+  });
+}
+
 for (const [id, text, leave, command, keeps, reason] of typed) {
   test(`UX-31 ${id}: "${text}" and ${leave}`, async ({ page }) => {
     await page.goto(`/#/${id}`);

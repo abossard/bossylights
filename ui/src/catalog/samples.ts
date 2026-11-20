@@ -201,7 +201,7 @@ export const STATE_LOOKS: Record<string, Record<string, Sample>> = {
 export const SITUATION_STATE: Record<string, Partial<Record<SituationId, string>>> = {
   "top.live": { "live-on": "on", lock: "on", recording: "on" },
   "top.indicator.dj": { "live-on": "on", lock: "on", recording: "on", song: "on" },
-  "top.indicator.recording": { "live-on": "armed", lock: "armed", recording: "on", "no-song": "armed" },
+  "top.indicator.recording": { "live-on": "armed", lock: "armed", recording: "on" },
   "top.indicator.autopilot": { "live-on": "on", lock: "on", recording: "on", autopilot: "on" },
   "top.indicator.lock": { "live-on": "on", lock: "on", recording: "on" },
   "console.autopilot.on": { "live-on": "on", lock: "on", recording: "on", autopilot: "on" },

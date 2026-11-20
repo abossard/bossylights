@@ -86,7 +86,7 @@ export const TOP: Control[] = [
   }),
   indicator("recording", "Recording", "SetRecording", "While LIVE is on and a song plays, what you play is written into its Recorded row", {
     recording: works("Turns recording off. The pass being written ends and is kept"),
-    "no-song": works("On, and armed: it writes when a song starts. The lamp is red only while it writes"),
+    "no-song": works("Ready, as LIVE is off: with LIVE on it is armed and writes when a song starts. The lamp is red only while it writes"),
     empty: works("Works. With no song analysed there is no row to write into"),
   }, ["armed"]),
   indicator("autopilot", "Autopilot", "SetAutopilot", "While LIVE is on, the autopilot plays its picks. The same state as the Autopilot button in Running", {

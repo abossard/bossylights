@@ -1,6 +1,6 @@
 // In/Out: the tempo, the outputs, and the list of what was mapped with Learn.
 import { off, works, type Cell, type SituationId } from "../situations.ts";
-import { button, change, choice, control, field, liveToggle, remove, select, toggle, LOCKED, NOT_A_BUTTON, NOT_A_LIST, no, type Control, type Row } from "../spec.ts";
+import { button, change, choice, control, field, liveToggle, remove, select, toggle, LOCKED, NOT_A_BUTTON, NOT_A_LIST, UNIVERSES, no, type Control, type Row } from "../spec.ts";
 
 const LIVE_IS_ON = off("LIVE is on");
 const ROW = no("It belongs to one row of a list that changes");
@@ -203,7 +203,7 @@ export const INOUT: Control[] = [
     kit: "Field.text",
     does: "Which universes the output carries: '1', or '2 to 9'. A universe another output carries is refused and the field says which",
     sends: ["SetOutput"],
-    gestures: field("one universe or a range", "Enter or leaving the field saves, Escape puts the old one back"),
+    gestures: field(`one universe or a range, each from 1 to ${UNIVERSES}`, "Enter or leaving the field saves, Escape puts the old one back"),
     learn: NOT_A_BUTTON,
   }),
   output({

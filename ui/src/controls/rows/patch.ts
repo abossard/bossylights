@@ -1,7 +1,7 @@
 // Patch: universes, the universe grid, the fixtures, and the two flows that add things.
 // Rows are checked with the sample patch: 15 lights on universe 1, one address clash, a pixel panel on 2 to 4.
 import { gone, off, works, type Cell, type SituationId } from "../situations.ts";
-import { button, change, choice, control, draggable, field, keep, liveToggle, no, remove, select, toggle, NOT_A_BUTTON, NOT_A_LIST, ONLY_DRAGGED, type Control, type Row } from "../spec.ts";
+import { button, change, choice, control, draggable, field, keep, liveToggle, no, remove, select, toggle, NOT_A_BUTTON, NOT_A_LIST, ONLY_DRAGGED, PIXELS, UNIVERSES, type Control, type Row } from "../spec.ts";
 
 const NO_LIGHTS = gone("No lights yet. 'Add lights' is the one thing to do");
 const ON_SCREEN = no("Patching is done on screen");
@@ -328,7 +328,7 @@ export const PATCH: Control[] = [
     kit: "Field.text",
     does: "How many pixels wide and high. The line under the form says how many universes that needs",
     ui: "the draft of the panel",
-    gestures: field("columns x rows, as 16 x 16, each from 1 to 1024", "Enter adds the panel"),
+    gestures: field(`columns x rows, as 16 x 16, at most ${PIXELS} pixels`, "Enter adds the panel"),
     learn: NOT_A_BUTTON,
   }),
   panel({
@@ -368,7 +368,7 @@ export const PATCH: Control[] = [
     kit: "Field.text",
     does: "The first universe of the panel. The first free one is proposed",
     ui: "the draft of the panel",
-    gestures: field("a number from 1 to 32768", "Enter adds the panel"),
+    gestures: field(`a number from 1 to ${UNIVERSES}`, "Enter adds the panel"),
     learn: NOT_A_BUTTON,
   }),
   control({
@@ -384,8 +384,8 @@ export const PATCH: Control[] = [
     gestures: button("Adds the panel"),
     in: { empty: works("Works. A panel can be the first thing patched") },
     learn: ON_SCREEN,
-    first: change("It lets a panel land on universes that are already used, and nothing says so. It is off then and says which universe is taken"),
-    states: ["off: Universe 2 is already used"],
+    first: change(`It lets a panel land on universes that are already used, and nothing says so. It is off then and says which universe is taken. A panel that runs past universe ${UNIVERSES}, the engine's last, is off too`),
+    states: ["off: Universe 2 is already used", `off: It needs universes past ${UNIVERSES}`],
   }),
   // ---- in the mockups since review 4 (decision 29)
   edit({

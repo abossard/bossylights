@@ -20,7 +20,10 @@ export interface TextProps extends Shared {
   placeholder?: string;
   /** Why a text does not fit: a calculation, undefined when it fits. A refused text is never sent and the old value stays. */
   refuse?: (text: string) => string | undefined;
-  /** `enter or leave`: leaving the field saves too, as Enter does. Leaving with a text that is refused puts the old one back, either way. */
+  /**
+   * `enter or leave`: leaving the field saves too, as Enter does. Leaving with a text that is refused puts the old one back, either way.
+   * `enter`: leaving keeps a text that fits as it is, not saved, and says so under the field. An empty one puts the old one back.
+   */
   saves?: "enter" | "enter or leave";
   onText: (text: string) => void;
 }
@@ -54,17 +57,23 @@ export function Field(props: FieldProps) {
   );
 }
 
+/** What a field that saves only on Enter says when it is left with a text that is not saved. */
+const NOT_SAVED = "Not saved. Enter saves it";
+
 /**
  * A text field. Enter saves, Escape puts the old value back. An empty field keeps the old value.
  * A text that does not fit is refused: nothing is sent, the reason stands under the field, the old value stays.
+ * Text on screen is the value or says it is not saved: it never differs from the value unsaid.
  */
 function Text(props: TextProps) {
-  // Why the last text was refused: the field's own state, gone with the next letter.
+  // Why the last text was refused, and whether a text that fits was left unsaved: the field's own state, gone with the next letter.
   const [refused, setRefused] = createSignal<string>();
+  const [unsaved, setUnsaved] = createSignal(false);
   const save = (input: HTMLInputElement) => {
     const text = input.value.trim();
     const reason = text === "" || text === props.value ? undefined : props.refuse?.(text);
     setRefused(reason);
+    setUnsaved(false);
     if (text === "") input.value = props.value;
     else if (reason === undefined && text !== props.value) props.onText(text);
   };
@@ -74,6 +83,7 @@ function Text(props: TextProps) {
     if (e.key === "Escape") {
       e.currentTarget.value = props.value;
       setRefused(undefined);
+      setUnsaved(false);
     }
   };
   // Leaving saves where it says so. Elsewhere a text that does not fit is refused on leaving too: it is never kept unsaid.
@@ -83,6 +93,8 @@ function Text(props: TextProps) {
     else {
       const text = e.currentTarget.value.trim();
       setRefused(text === "" || text === props.value ? undefined : props.refuse?.(text));
+      setUnsaved(refused() === undefined && text !== "" && text !== props.value);
+      if (text === "") e.currentTarget.value = props.value;
     }
     if (refused() !== undefined) e.currentTarget.value = props.value;
   };
@@ -96,11 +108,17 @@ function Text(props: TextProps) {
         placeholder={props.placeholder ?? ""}
         disabled={props.off !== undefined}
         aria-invalid={refused() !== undefined}
-        onInput={(e) => (props.kind === "search" ? props.onText(e.currentTarget.value) : setRefused(undefined))}
+        onInput={(e) => {
+          if (props.kind === "search") props.onText(e.currentTarget.value);
+          setRefused(undefined);
+          setUnsaved(false);
+        }}
         onKeyDown={key}
         onBlur={leave}
       />
-      <Show when={props.off ?? refused()}>{(reason) => <span class="k-reason">{reason()}</span>}</Show>
+      <Show when={props.off ?? refused()} fallback={<Show when={unsaved()}><span class="k-sub k-unsaved">{NOT_SAVED}</span></Show>}>
+        {(reason) => <span class="k-reason">{reason()}</span>}
+      </Show>
     </label>
   );
 }

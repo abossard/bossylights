@@ -44,7 +44,8 @@ export function Live(props: { control: Control; look: Look; act: (act: Act) => v
   const sideOff = (option: string | undefined) => (l().off && option !== undefined && l().offOption === option ? l().off : undefined);
   const drags = USES[c.id]?.machine === "drag";
   const lift = () => props.act({ is: "lift" });
-  const drop = () => props.act({ is: "drop" });
+  /** Dropped. `dx`, `dy`: how far it went, in px. A keyboard step has none: it always lands elsewhere. */
+  const drop = (dx?: number, dy?: number) => props.act(dx === undefined ? { is: "drop" } : { is: "drop", by: stepsOf(dx, dy ?? 0) });
   const cancel = () => props.act({ is: "cancel" });
   const dragged = () => (drags ? { onLift: lift, onDrop: drop, onCancel: cancel } : {});
   /** A step from the keyboard: lifted and dropped at once. */
@@ -68,6 +69,7 @@ export function Live(props: { control: Control; look: Look; act: (act: Act) => v
   const options = createMemo((): PickOption[] => named(l().options), [], { equals: sameOptions });
   const tabs = createMemo(() => options().map((o, i) => (l().variant === "marked" && i === 1 ? { ...o, marked: true } : o)), [], { equals: sameOptions });
   const cards = createMemo(() => options().map((o) => ({ ...o, ...offWith(sideOff(o.name)) })), [], { equals: sameOptions });
+  const pictures = createMemo(() => gobos(l().options), [], { equals: sameOptions });
   /** A bar that is placed: a drag and the arrows move it, its readout says where. */
   const placing = () =>
     placed(c.id)
@@ -117,7 +119,7 @@ export function Live(props: { control: Control; look: Look; act: (act: Act) => v
     case "Picker.segments":
       return <Picker kind="segments" label={c.name} options={options()} picked={l().picked} {...some("size", oneOrNone(r.props.size, ["small"]))} {...some("fires", oneOrNone(r.props.fires, ["down"]))} {...off()} onPick={pick} />;
     case "Picker.pictures":
-      return <Picker kind="pictures" label={c.name} options={gobos(l().options)} picked={l().picked} {...off()} onPick={pick} />;
+      return <Picker kind="pictures" label={c.name} options={pictures()} picked={l().picked} {...off()} onPick={pick} />;
     case "Picker.cards":
       return <Picker kind="cards" label={c.name} options={cards()} picked={l().picked} {...off()} onPick={pick} />;
     case "Picker.list":

@@ -4,6 +4,12 @@ import type { CommandName } from "./commands.ts";
 import type { MachineName } from "./machines.ts";
 import { works, off, gone, type Cell, type Gesture, type SituationId } from "./situations.ts";
 
+/** The engine's limits, as `crates/engine-core/src/channel.rs` has them (`MAX_UNIVERSES`, `ADDRESSES`). A test reads them there. */
+export const UNIVERSES = 64;
+export const ADDRESSES = 512;
+/** Whole RGB pixels in all the engine's universes: 170 a universe. */
+export const PIXELS = UNIVERSES * Math.floor(ADDRESSES / 3);
+
 export type Screen = "Top bar" | "Console" | "Songs" | "Looks" | "Patch" | "DMX" | "In/Out" | "How it works" | "Modules" | "Menu bar";
 
 /** The primitives of `ui/src/kit`, named by what they are for, and the kinds of each. */

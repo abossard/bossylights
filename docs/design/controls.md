@@ -122,7 +122,7 @@ The test of `DESIGN.md`, run on every control. Proposals until the owner rates t
 | Address `patch.details.address` | Patch | At address 1 and at the last place that fits, a press does nothing and nothing says so. The button that cannot move is off and says 'First address' or 'Last address that fits' |
 | Move to a free address `patch.details.move-to-free` | Patch | With no free place it reads 'Move to no free' and does nothing. It is off then and says 'No free place in this universe' |
 | Back `patch.add.back` | Patch | Off with no reason in step 1. It is gone there |
-| Add the panel `patch.panel.add` | Patch | It lets a panel land on universes that are already used, and nothing says so. It is off then and says which universe is taken |
+| Add the panel `patch.panel.add` | Patch | It lets a panel land on universes that are already used, and nothing says so. It is off then and says which universe is taken. A panel that runs past universe 64, the engine's last, is off too |
 | Release channels `dmx.held.release-all` | DMX | The mockup says 'Release all', the words of the Console button that gives back everything. The owner's decision 22: this one gives back raw channels only and says 'Release channels' |
 | Tempo feed `inout.tempo.feed` | In/Out | A feed with no signal can be picked, and then nothing drives the beat. It is off and says 'No signal' |
 | Follows `inout.follows` | In/Out | In the mockup it sits in the header of one song. The owner's decision 26: it is a setting of the whole app and sits on In/Out, beside the tempo feed. DJ link stays the on or off |
@@ -821,7 +821,7 @@ stateDiagram-v2
 | Recording indicator | LIVE on | works | Goes between on and turned off, at once |
 | Recording indicator | Recording on | works | Turns recording off. The pass being written ends and is kept |
 | Recording indicator | Nothing patched | works | Works. With no song analysed there is no row to write into |
-| Recording indicator | No song plays | works | On, and armed: it writes when a song starts. The lamp is red only while it writes |
+| Recording indicator | No song plays | works | Ready, as LIVE is off: with LIVE on it is armed and writes when a song starts. The lamp is red only while it writes |
 | Autopilot indicator | LIVE off | works | Goes between ready and turned off. Nothing starts before LIVE |
 | Autopilot indicator | LIVE on | works | Goes between on and turned off, at once |
 | Autopilot indicator | Autopilot on | works | Turns the autopilot off. Its looks end, what was underneath shows |
@@ -2113,11 +2113,11 @@ stateDiagram-v2
 | Back | Goes one step back. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
 | Start over | Starts the flow again. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
 | Panel name | Puts the cursor in the field | Selects a word, as the system does | Selects a word | Selects text | Type the name. Enter adds the panel | Opens the on-screen keyboard. 44 px high |
-| Columns and rows | Puts the cursor in the field | Selects a word, as the system does | Selects a word | Selects text | Type columns x rows, as 16 x 16, each from 1 to 1024. Enter adds the panel | Opens the on-screen keyboard. 44 px high |
+| Columns and rows | Puts the cursor in the field | Selects a word, as the system does | Selects a word | Selects text | Type columns x rows, as 16 x 16, at most 10880 pixels. Enter adds the panel | Opens the on-screen keyboard. 44 px high |
 | Wiring | Picks that wiring. Fires on the way up | Nothing more | As one press: the choice is already made | Nothing. Sliding to another option picks nothing | Tab to the group, arrows move and pick | As a press. 44 px |
 | Pixel type | Picks that type. Fires on the way up | Nothing more | As one press: the choice is already made | Nothing. Sliding to another option picks nothing | Tab to the group, arrows move and pick | As a press. 44 px |
 | Colour order | Opens the list. A press on an entry: the panel uses that order | Nothing more | Opens and closes the list | Nothing | Tab to it, arrows change the choice, Enter opens the list | Opens the system's picker. 44 px high |
-| Start universe | Puts the cursor in the field | Selects a word, as the system does | Selects a word | Selects text | Type a number from 1 to 32768. Enter adds the panel | Opens the on-screen keyboard. 44 px high |
+| Start universe | Puts the cursor in the field | Selects a word, as the system does | Selects a word | Selects text | Type a number from 1 to 64. Enter adds the panel | Opens the on-screen keyboard. 44 px high |
 | Add the panel | Adds the panel. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
 | Name of the light | Puts the cursor in the field | Selects a word, as the system does | Selects a word | Selects text | Type the name. Enter saves, Escape puts the old text back | Opens the on-screen keyboard. 44 px high |
 | Mode of the light | Opens the list. A press on an entry: the light is patched in that mode | Nothing more | Opens and closes the list | Nothing | Tab to it, arrows change the choice, Enter opens the list | Opens the system's picker. 44 px high |
@@ -2159,7 +2159,7 @@ stateDiagram-v2
 | Pixel type | At once: the screen owns this state | None | no. Nothing in the show file changes | no. Patching is done on screen | **keep**. It says what it is and what a press does |
 | Colour order | At once: the screen owns this state | None | no. Nothing in the show file changes | no. A list that opens has no pad or fader to stand for it | **keep**. It says what it is and what a press does |
 | Start universe | At once: the screen owns this state | None | no. Nothing in the show file changes | no. Text cannot come from a pad or a fader | **keep**. It says what it is and what a press does |
-| Add the panel | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | no. Patching is done on screen | **change**. It lets a panel land on universes that are already used, and nothing says so. It is off then and says which universe is taken |
+| Add the panel | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | no. Patching is done on screen | **change**. It lets a panel land on universes that are already used, and nothing says so. It is off then and says which universe is taken. A panel that runs past universe 64, the engine's last, is off too |
 | Name of the light | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | no. Text cannot come from a pad or a fader | **keep**. It says what it is and what a press does |
 | Mode of the light | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | no. A list that opens has no pad or fader to stand for it | **keep**. It says what it is and what a press does |
 | Group of the light | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | no. A list that opens has no pad or fader to stand for it | **keep**. It says what it is and what a press does |
@@ -2438,7 +2438,7 @@ stateDiagram-v2
 | Remove a mapping | Removes the mapping. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
 | Set up an output | Opens the output to set up. Pressed again: it is text again. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
 | Kind of an output | Opens the list. A press on an entry: the output sends as that kind | Nothing more | Opens and closes the list | Nothing | Tab to it, arrows change the choice, Enter opens the list | Opens the system's picker. 44 px high |
-| Universes of an output | Puts the cursor in the field | Selects a word, as the system does | Selects a word | Selects text | Type one universe or a range. Enter or leaving the field saves, Escape puts the old one back | Opens the on-screen keyboard. 44 px high |
+| Universes of an output | Puts the cursor in the field | Selects a word, as the system does | Selects a word | Selects text | Type one universe or a range, each from 1 to 64. Enter or leaving the field saves, Escape puts the old one back | Opens the on-screen keyboard. 44 px high |
 | Frames a second | The output sends at that rate. Fires on the way up | Nothing more | As one press: the choice is already made | Nothing. Sliding to another option picks nothing | Tab to the group, arrows move and pick | As a press. 44 px |
 | Remove output | Removes the output. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
 | Add output | Adds an output. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
