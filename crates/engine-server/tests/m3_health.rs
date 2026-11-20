@@ -2,8 +2,7 @@
 //! the test steps one 30 Hz wake at a time (`engine/src/wake.rs`); a fake DMX USB Pro
 //! writes each frame to a fake serial port the test decodes, and fails while told to.
 //! The reader samples in real time, so the test waits for it after every wake (engine
-//! time moves 33 ms at most between two reads) and, from the first window on, for the
-//! `Health` of each half-second grid endpoint before it steps on.
+//! time moves 33 ms at most between two reads during window measurements).
 //!
 //! ```text
 //! attach --4 s--> first window E --4 s--> E + 4 s: RunningLate (two bad windows, apart)
@@ -37,6 +36,7 @@ const GIVE_UP: Duration = Duration::from_secs(10);
 #[derive(Default)]
 struct Devices {
     fail: AtomicBool,
+    fail_only: AtomicUsize,
     took: [AtomicUsize; 16],
     accepted: [AtomicUsize; 16],
 }
@@ -51,7 +51,9 @@ struct Flaky {
 
 impl Device for Flaky {
     fn take(&mut self, frame: &[Levels]) -> Outcome {
-        let outcome = if self.devices.fail.load(Ordering::SeqCst) {
+        let fails = self.devices.fail.load(Ordering::SeqCst)
+            || self.devices.fail_only.load(Ordering::SeqCst) == self.slot + 1;
+        let outcome = if fails {
             Outcome::Failed
         } else {
             self.port
@@ -119,8 +121,7 @@ struct Watcher {
     frame: u64,
     state: Value,
     pictures: usize,
-    /// Each `Health`, when it came.
-    healths: Vec<(Instant, Value)>,
+    healths: Vec<Value>,
 }
 
 impl Watcher {
@@ -162,7 +163,7 @@ impl Watcher {
             self.frame = changed["state"]["frame"].as_u64().unwrap();
             self.state = changed["state"].clone();
         } else if reply.get("Health").is_some() {
-            self.healths.push((Instant::now(), reply.clone()));
+            self.healths.push(reply.clone());
         }
         Some(reply)
     }
@@ -176,40 +177,40 @@ impl Watcher {
                 panic!(
                     "{what}: frame {}, last Health {:?}",
                     self.frame,
-                    self.healths.last().map(|(_, health)| health)
+                    self.healths.last()
                 );
             }
         }
     }
 
     fn last(&self) -> &Value {
-        &self.healths.last().expect("a Health").1
+        self.healths.last().expect("a Health")
     }
 
     /// The events of every `Health` from the `from`th on, in order.
     fn events(&self, from: usize) -> Vec<Value> {
         self.healths[from..]
             .iter()
-            .flat_map(|(_, health)| health["Health"]["events"].as_array().unwrap().clone())
+            .flat_map(|health| health["Health"]["events"].as_array().unwrap().clone())
             .collect()
     }
 
     fn missed(&self) -> u64 {
         self.healths
             .iter()
-            .map(|(_, health)| health["Health"]["missed"].as_u64().unwrap())
+            .map(|health| health["Health"]["missed"].as_u64().unwrap())
             .sum()
     }
 
-    /// The `Health` whose window ends at `end`.
-    fn at(&self, end: Duration) -> &Value {
-        let end = ms(end);
-        &self
-            .healths
-            .iter()
-            .find(|(_, health)| end_ms(health) == Some(end))
-            .unwrap_or_else(|| panic!("no Health for the window ending at {end} ms"))
-            .1
+    /// A round trip on this socket also reads any earlier subscription messages.
+    async fn query(&mut self) -> Value {
+        send(&mut self.socket, &json!("Query")).await;
+        loop {
+            let reply = self.next().await;
+            if reply.get("Picture").is_some() {
+                return reply;
+            }
+        }
     }
 }
 
@@ -229,9 +230,9 @@ struct Rig {
     /// The newest frame time, and the due time of output 1's last frame.
     now: Duration,
     due: Duration,
-    /// The first grid endpoint with a window: from it on every endpoint waits for its
-    /// `Health`.
+    /// A Query captures each covered grid window even when the socket coalesces replies.
     windows_from: Duration,
+    windows: Vec<Value>,
 }
 
 impl Rig {
@@ -262,6 +263,7 @@ impl Rig {
             now: Duration::ZERO,
             due: Duration::ZERO,
             windows_from: Duration::MAX,
+            windows: vec![],
         };
         (rig, picture)
     }
@@ -306,8 +308,12 @@ impl Rig {
         at
     }
 
-    /// After a wake at `at`: its frames on the wire, the reader past it, and from the
-    /// first window on, the `Health` of a grid endpoint it crossed.
+    async fn wake_at(&mut self, at: Duration) {
+        let at = block_in_place(|| self.wakes.wake_at(at)).unwrap();
+        self.after(at).await;
+    }
+
+    /// Wait for the DMX writes and the reader, then save any newly covered window.
     async fn after(&mut self, at: Duration) {
         let before = self.now;
         self.now = at;
@@ -323,13 +329,16 @@ impl Rig {
             .await;
         let endpoint = floor_grid(at);
         if endpoint > before && endpoint >= self.windows_from {
-            let end = ms(endpoint);
-            self.watcher
-                .until(&format!("the Health of {end} ms"), |w| {
-                    w.healths.last().and_then(|(_, h)| end_ms(h)) == Some(end)
-                })
-                .await;
+            let picture = self.watcher.query().await;
+            self.windows.push(picture["Picture"]["health"].clone());
         }
+    }
+
+    fn window(&self, end: Duration) -> &Value {
+        self.windows
+            .iter()
+            .find(|h| h["outputs"][0]["measurement"]["Window"]["end_ms"] == ms(end))
+            .unwrap_or_else(|| panic!("no window ending at {end:?}"))
     }
 
     /// Waits until every adapter took each frame it was handed, and the fake port got
@@ -363,17 +372,6 @@ impl Rig {
         self.heard.lock().unwrap().iter().map(|c| c[0]).collect()
     }
 
-    /// At most one `Health` per 500 ms on the watcher (receipt jitter allowed).
-    fn paced(&self) {
-        for pair in self.watcher.healths.windows(2) {
-            let gap = pair[1].0 - pair[0].0;
-            assert!(
-                gap >= Duration::from_millis(400),
-                "two Health {gap:?} apart"
-            );
-        }
-    }
-
     async fn stop(mut self) {
         send(&mut self.desk, &json!("Stop")).await;
         self.stop.store(true, Ordering::Relaxed);
@@ -391,33 +389,37 @@ async fn frames_2_ms_late_warn_once_at_the_second_bad_window_then_recover_once_o
         rig.step(LATE).await;
     }
     // the first window, and every one before the second bad one apart from it: no warning
-    assert_eq!(
-        rig.watcher.healths.iter().find_map(|(_, h)| end_ms(h)),
-        Some(ms(first))
-    );
+    assert_eq!(rig.watcher.healths.iter().find_map(end_ms), Some(ms(first)));
     let mut end = first;
     while end < warned {
-        let health = rig.watcher.at(end);
-        assert_eq!(row(health)["state"], json!("Measuring"), "{health}");
+        assert_eq!(rig.window(end)["outputs"][0]["state"], "Measuring");
         end += GRID;
     }
-    let health = rig.watcher.at(warned);
-    let samples = &row(health)["measurement"]["Window"]["lateness"]["samples"];
+    let health = rig.window(warned);
+    let samples = &health["outputs"][0]["measurement"]["Window"]["lateness"]["samples"];
     assert!((119..=121).contains(&samples.as_u64().unwrap()), "{health}");
     assert_eq!(
-        row(health),
-        &json!({"output": 1, "generation": 1, "status": "Running",
+        health["outputs"][0],
+        json!({"output": 1, "generation": 1, "status": "Running",
             "state": {"Late": {"reason": "HandoffLateness"}},
             "measurement": {"Window": {"end_ms": ms(warned),
                 "lateness": {"p99_us": 2000, "worst_us": 2000, "samples": samples},
                 "press_to_light": null, "press_missing": 0, "dropped": 0, "failed": 0,
                 "off_beat": 0, "frames_handed": samples}}})
     );
-    assert_eq!(health["Health"]["health"]["window_ms"], 4000);
-    assert_eq!(health["Health"]["missed"], 0);
+    assert_eq!(health["window_ms"], 4000);
+    assert_eq!(rig.watcher.missed(), 0);
     let running_late = json!({"output": 1, "generation": 1, "at_ms": ms(warned),
         "event": {"RunningLate": {"reason": "HandoffLateness"}}});
-    assert_eq!(health["Health"]["events"], json!([running_late]));
+
+    let warning = rig
+        .watcher
+        .healths
+        .iter()
+        .find(|reply| reply["Health"]["events"] == json!([running_late]))
+        .expect("a Health carrying the warning");
+    let delivered = Duration::from_millis(end_ms(warning).expect("a covered window"));
+    assert_eq!(&warning["Health"]["health"], rig.window(delivered));
     assert_eq!(rig.watcher.events(0), vec![running_late]);
     assert_eq!(
         row(rig.watcher.last())["state"],
@@ -457,10 +459,10 @@ async fn frames_2_ms_late_warn_once_at_the_second_bad_window_then_recover_once_o
     );
     let at = Duration::from_millis(at);
     assert_eq!(
-        row(rig.watcher.at(at - GRID))["state"],
+        rig.window(at - GRID)["outputs"][0]["state"],
         json!({"Recovering": {"reason": "HandoffLateness"}})
     );
-    assert_eq!(row(rig.watcher.at(at))["state"], json!("Healthy"));
+    assert_eq!(rig.window(at)["outputs"][0]["state"], json!("Healthy"));
     assert_eq!(row(rig.watcher.last())["state"], json!("Healthy"));
 
     late.until("the late subscriber hears the recovery", recovered)
@@ -471,7 +473,6 @@ async fn frames_2_ms_late_warn_once_at_the_second_bad_window_then_recover_once_o
     let wire = rig.wire();
     assert_eq!(wire.len(), rig.handed[0].len());
     assert!(wire.iter().all(|level| *level == LEVEL), "{wire:?}");
-    rig.paced();
     rig.stop().await;
 }
 
@@ -483,7 +484,10 @@ async fn a_press_1_ms_before_a_deadline_served_2_ms_after_is_in_the_first_eligib
     while rig.now < rig.windows_from {
         rig.step(ON_TIME).await;
     }
-    assert_eq!(row(rig.watcher.last())["state"], json!("Healthy"));
+    assert_eq!(
+        rig.window(rig.windows_from)["outputs"][0]["state"],
+        "Healthy"
+    );
 
     let deadline = rig.due + PERIOD;
     rig.wakes.set_time(deadline - Duration::from_millis(1));
@@ -495,7 +499,7 @@ async fn a_press_1_ms_before_a_deadline_served_2_ms_after_is_in_the_first_eligib
     let window = |w: &Watcher| {
         w.healths
             .last()
-            .is_some_and(|(_, h)| !row(h)["measurement"]["Window"]["press_to_light"].is_null())
+            .is_some_and(|h| !row(h)["measurement"]["Window"]["press_to_light"].is_null())
     };
     while !window(&rig.watcher) {
         assert!(rig.now < at + 3 * GRID, "no window shows the press");
@@ -519,7 +523,6 @@ async fn a_press_1_ms_before_a_deadline_served_2_ms_after_is_in_the_first_eligib
         .map(|frame| if frame < pressed { 0 } else { LEVEL })
         .collect();
     assert_eq!(wire, expected, "pressed in frame {pressed}");
-    rig.paced();
     rig.stop().await;
 }
 
@@ -539,9 +542,10 @@ async fn a_device_that_fails_then_takes_frames_is_lost_once_then_back_once() {
     let lost = rig.now;
     let lost_event =
         json!({"output": 1, "generation": 1, "at_ms": ms(lost), "event": "OutputLost"});
-    rig.watcher
-        .until("OutputLost", |w| w.events(0).contains(&lost_event))
-        .await;
+    while !rig.watcher.events(0).contains(&lost_event) {
+        assert!(rig.now < lost + 2 * GRID, "OutputLost not delivered");
+        rig.step(ON_TIME).await;
+    }
     assert!(
         reconnecting(&row(rig.watcher.last())["status"]),
         "{}",
@@ -555,9 +559,10 @@ async fn a_device_that_fails_then_takes_frames_is_lost_once_then_back_once() {
     let back = rig.now;
     let back_event = json!({"output": 1, "generation": 1, "at_ms": ms(back),
         "event": {"Recovered": {"reason": "OutputAvailable"}}});
-    rig.watcher
-        .until("Recovered", |w| w.events(0).contains(&back_event))
-        .await;
+    while !rig.watcher.events(0).contains(&back_event) {
+        assert!(rig.now < back + 2 * GRID, "Recovered not delivered");
+        rig.step(ON_TIME).await;
+    }
     assert_eq!(row(rig.watcher.last())["status"], "Running");
     assert_eq!(rig.watcher.events(0), vec![lost_event, back_event]);
 
@@ -566,7 +571,151 @@ async fn a_device_that_fails_then_takes_frames_is_lost_once_then_back_once() {
     assert_eq!(wire.len(), rig.devices.accepted[0].load(Ordering::SeqCst));
     assert!(wire.len() < rig.handed[0].len(), "no frame failed");
     assert!(wire.iter().all(|level| *level == LEVEL), "{wire:?}");
-    rig.paced();
+    rig.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_query_keeps_pending_events_and_health_waits_500_ms_of_engine_time() {
+    let (mut rig, _) = Rig::start().await;
+    rig.level(LEVEL).await;
+    rig.attach(1).await;
+    while status(&rig.watcher.state, 0) != "Running" {
+        rig.step(ON_TIME).await;
+    }
+
+    let (mut sub, _) = Watcher::subscribe(connect(rig.address).await).await;
+    let mut sent = rig.now;
+    // Start at the subscription Picture, then at the first Health delivery.
+    for previous in 0..2 {
+        // Finish the preceding send on the server while the engine still holds at `sent`.
+        sub.query().await;
+        let due = sent + GRID;
+        rig.fail(true);
+        while !reconnecting(status(&rig.watcher.state, 0)) {
+            assert!(rig.now < due, "no failed handoff");
+            rig.wake_at(rig.now + PERIOD).await;
+        }
+        let lost = ms(rig.now);
+        let picture = sub.query().await;
+        assert!(reconnecting(
+            &picture["Picture"]["health"]["outputs"][0]["status"]
+        ));
+
+        rig.fail(false);
+        while status(&rig.watcher.state, 0) != "Running" {
+            assert!(rig.now < due, "no successful handoff");
+            rig.wake_at(rig.now + PERIOD).await;
+        }
+        let back = ms(rig.now);
+        rig.wake_at(due - Duration::from_nanos(1)).await;
+        sub.until("the last frame before delivery is due", |w| {
+            w.frame == rig.wakes.woke()
+        })
+        .await;
+        // Keep engine time fixed while more than a whole delivery interval passes on the host.
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        let picture = sub.query().await;
+        assert_eq!(
+            picture["Picture"]["health"]["outputs"][0]["status"],
+            "Running"
+        );
+        assert_eq!(sub.healths.len(), previous, "early Health at {:?}", rig.now);
+
+        rig.wake_at(due).await;
+        sub.until("the pending events at 500 ms", |w| {
+            w.healths.len() > previous
+        })
+        .await;
+        assert_eq!(
+            sub.last()["Health"]["events"],
+            json!([
+                {"output": 1, "generation": 1, "at_ms": lost, "event": "OutputLost"},
+                {"output": 1, "generation": 1, "at_ms": back, "event": {"Recovered": {"reason": "OutputAvailable"}}},
+            ])
+        );
+        assert_eq!(sub.last()["Health"]["missed"], 0);
+        sent = due;
+    }
+    assert_eq!(rig.wire().last(), Some(&LEVEL));
+    rig.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_loss_at_the_last_grid_time_resets_the_timing_state() {
+    let (mut rig, _) = Rig::start().await;
+    rig.level(LEVEL).await;
+    rig.attach(1).await;
+    let end = rig.windows_from;
+    while rig.due + 2 * PERIOD <= end {
+        rig.step(ON_TIME).await;
+    }
+
+    // The failed frame is handed at the endpoint, and the next wake reads its result
+    // at the same engine time. The first read still has the preceding accepted frame.
+    rig.fail(true);
+    rig.wake_at(end).await;
+    assert_eq!(rig.window(end)["outputs"][0]["state"], "Healthy");
+    assert_eq!(rig.wire().last(), Some(&LEVEL));
+
+    let started = Instant::now();
+    while !reconnecting(status(&rig.watcher.state, 0)) {
+        assert!(started.elapsed() < GIVE_UP, "no failed frame result"); // guard
+        rig.wake_at(end).await;
+    }
+    let loss = json!({"output": 1, "generation": 1, "at_ms": ms(end), "event": "OutputLost"});
+    let picture = rig.watcher.query().await;
+    let current = &picture["Picture"]["health"]["outputs"][0];
+    assert!(reconnecting(&current["status"]));
+    assert_eq!(current["state"], "Measuring", "{current}");
+    rig.wake_at(end + GRID).await;
+    rig.watcher
+        .until("the loss at the same grid point", |w| {
+            w.events(0).contains(&loss)
+        })
+        .await;
+    let current = row(rig.watcher.last());
+    assert!(reconnecting(&current["status"]));
+    assert_eq!(current["state"], "Measuring", "{current}");
+    rig.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_return_after_the_grid_does_not_warn_at_the_unavailable_endpoint() {
+    let (mut rig, _) = Rig::start().await;
+    rig.level(LEVEL).await;
+    rig.attach(2).await;
+    let end = rig.windows_from + WINDOW;
+    while rig.due + 3 * PERIOD + LATE < end - 2 * GRID {
+        rig.step(LATE).await;
+    }
+    rig.devices.fail_only.store(1, Ordering::SeqCst);
+    while rig.due + 2 * PERIOD + LATE < end {
+        rig.step(LATE).await;
+    }
+    assert!(reconnecting(status(&rig.watcher.state, 0)));
+
+    // This success reaches the reader only on the first wake after the endpoint.
+    rig.devices.fail_only.store(0, Ordering::SeqCst);
+    assert!(rig.step(LATE).await < end);
+    assert!(reconnecting(status(&rig.watcher.state, 0)));
+    assert_eq!(rig.wire().last(), Some(&LEVEL));
+    let after = end + Duration::from_millis(1);
+    let (mut subscriber, _) = Watcher::subscribe(connect(rig.address).await).await;
+    rig.wake_at(after).await;
+    assert_eq!(status(&rig.watcher.state, 0), "Running");
+
+    assert_eq!(rig.window(end)["outputs"][0]["state"], "Measuring");
+    rig.wake_at(after + GRID).await;
+    subscriber
+        .until("warning and return", |w| !w.healths.is_empty())
+        .await;
+    let expected = json!([
+        {"output": 2, "generation": 1, "at_ms": ms(end),
+            "event": {"RunningLate": {"reason": "HandoffLateness"}}},
+        {"output": 1, "generation": 1, "at_ms": ms(after),
+            "event": {"Recovered": {"reason": "OutputAvailable"}}}
+    ]);
+    assert_eq!(subscriber.last()["Health"]["events"], expected);
     rig.stop().await;
 }
 
@@ -608,6 +757,7 @@ async fn a_fresh_engine_has_no_health_and_a_slow_socket_counts_what_it_missed_an
         }
     }
     let total = cycles * 16 * 2;
+    rig.wake_at(rig.now + GRID).await;
     slow.until("every event heard or counted missed", |w| {
         w.events(0).len() as u64 + w.missed() >= total
     })

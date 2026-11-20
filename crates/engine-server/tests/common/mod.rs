@@ -4,7 +4,7 @@
 #![allow(dead_code, reason = "each test binary uses a part")]
 
 use engine::{Adapter, Device, Engine, Open, OutputKind, Sender};
-use futures_util::{SinkExt, StreamExt};
+use futures_util::{SinkExt, Stream, StreamExt};
 use outputs::dmx_usb_pro::{DmxUsbPro, Find, MESSAGE, never_wait};
 use serde_json::Value;
 use serialport::{SerialPort, TTYPort};
@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use tokio::net::TcpStream;
-use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::{Error, Message};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
 pub type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
@@ -107,8 +107,8 @@ pub async fn send(socket: &mut Socket, request: &Value) {
         .unwrap();
 }
 
-/// The next message that is not a `Changed`.
-pub async fn answer(socket: &mut Socket) -> Value {
+/// The reply to a request, skipping subscription updates.
+pub async fn answer(socket: &mut (impl Stream<Item = Result<Message, Error>> + Unpin)) -> Value {
     loop {
         let message = tokio::time::timeout(Duration::from_secs(5), socket.next())
             .await
@@ -116,7 +116,7 @@ pub async fn answer(socket: &mut Socket) -> Value {
             .unwrap()
             .unwrap();
         let reply: Value = serde_json::from_str(message.to_text().unwrap()).unwrap();
-        if reply.get("Changed").is_none() {
+        if reply.get("Changed").is_none() && reply.get("Health").is_none() {
             return reply;
         }
     }

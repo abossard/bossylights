@@ -19,6 +19,7 @@ const EVENTS: usize = 64;
 pub(super) struct Reader {
     outputs: Box<[(OutputNumber, Tracker)]>,
     sample: Box<HealthSample>,
+    events_at_read: Vec<OutputHealthEvent>,
     view: View,
 }
 
@@ -32,6 +33,7 @@ impl Reader {
         Self {
             outputs,
             sample: Box::new(HealthSample::new(Duration::ZERO, 0, Status::NotFound)),
+            events_at_read: Vec::with_capacity(3 * MAX_OUTPUTS),
             view: View::default(),
         }
     }
@@ -51,14 +53,22 @@ impl Reader {
         let mut changed = false;
         for (output, tracker) in &mut self.outputs {
             let present = read(*output, &mut self.sample);
-            if let Some(row) =
-                tracker.observe(*output, present.then_some(&self.sample), &mut view.log)
-            {
+            if let Some(row) = tracker.observe(
+                *output,
+                present.then_some(&self.sample),
+                &mut view.log,
+                &mut self.events_at_read,
+            ) {
                 let rows = view.rows.get_or_insert([row; MAX_OUTPUTS]);
                 changed |= count >= view.count || rows[count] != row;
                 rows[count] = row;
                 count += 1;
             }
+        }
+        // Every output in a snapshot shares its read time. The crossed grid
+        // endpoint comes first. Events at the read keep their original order.
+        for event in self.events_at_read.drain(..) {
+            view.log.record(event);
         }
         if changed || count != view.count || view.end() != previous_end {
             view.revision += 1;
@@ -113,19 +123,7 @@ struct Log {
 }
 
 impl Log {
-    fn record(
-        &mut self,
-        output: OutputNumber,
-        generation: u64,
-        at: Duration,
-        event: health::HealthEvent,
-    ) {
-        let entry = OutputHealthEvent {
-            output,
-            generation,
-            at_ms: u64::try_from(at.as_millis()).unwrap_or(u64::MAX),
-            event: event.into(),
-        };
+    fn record(&mut self, entry: OutputHealthEvent) {
         let ring = self.ring.get_or_insert([entry; EVENTS]);
         ring[self.next as usize % EVENTS] = entry;
         self.next += 1;
@@ -146,6 +144,10 @@ struct Tracker {
     measurement: OutputMeasurement,
 }
 
+fn available(status: Status) -> bool {
+    matches!(status, Status::Running | Status::Connecting)
+}
+
 impl Tracker {
     fn new() -> Self {
         Self {
@@ -162,6 +164,10 @@ impl Tracker {
         self.previous = None;
         self.grid.clear();
         self.measurement = OutputMeasurement::Measuring;
+        self.without_window(input);
+    }
+
+    fn without_window(&mut self, input: HealthInput) {
         self.state = next(
             self.state,
             Verdict::Insufficient,
@@ -176,6 +182,7 @@ impl Tracker {
         output: OutputNumber,
         sample: Option<&HealthSample>,
         log: &mut Log,
+        events_at_read: &mut Vec<OutputHealthEvent>,
     ) -> Option<OutputHealth> {
         let Some(sample) = sample else {
             if self.previous.is_some() {
@@ -186,6 +193,12 @@ impl Tracker {
         if let Some(previous) = &self.previous {
             debug_assert!(sample.at >= previous.at);
         }
+        let entry = |at: Duration, event: health::HealthEvent| OutputHealthEvent {
+            output,
+            generation: sample.generation,
+            at_ms: u64::try_from(at.as_millis()).unwrap_or(u64::MAX),
+            event: event.into(),
+        };
         if self
             .previous
             .as_ref()
@@ -197,14 +210,23 @@ impl Tracker {
                 .into_iter()
                 .flatten()
             {
-                log.record(output, sample.generation, sample.at, event);
+                events_at_read.push(entry(sample.at, event));
             }
         }
 
         let (coverage, step) = Coverage::observe(self.coverage, sample.generation, sample.at);
         self.coverage = Some(coverage);
         if let Some((at, event)) = self.timing(step, sample) {
-            log.record(output, sample.generation, at, event);
+            if at == sample.at {
+                events_at_read.push(entry(at, event));
+            } else {
+                log.record(entry(at, event));
+            }
+        }
+        // The published row follows the latest read, even between verdicts
+        // and on a repeat of a grid endpoint.
+        if !available(sample.status) {
+            self.without_window(HealthInput::Present(sample.status));
         }
         self.previous = Some(*sample);
         Some(OutputHealth {
@@ -222,71 +244,73 @@ impl Tracker {
         sample: &HealthSample,
     ) -> Option<(Duration, health::HealthEvent)> {
         use Verdict::Insufficient;
-        let (at, verdict, earlier) = match step {
+        let end = match step {
+            CoverageStep::BetweenGridPoints => return None,
             CoverageStep::SameGridPoint { end } => {
-                let point = self
-                    .grid
-                    .back_mut()
-                    .expect("coverage already stored this endpoint");
-                debug_assert_eq!(point.end, end);
-                point.sample = *sample;
+                if let Some(point) = self.grid.back_mut().filter(|point| point.end == end) {
+                    point.sample = *sample;
+                } else {
+                    self.restart_coverage(sample);
+                }
                 return None;
             }
-            CoverageStep::BetweenGridPoints => {
-                if matches!(sample.status, Status::Connecting | Status::Running) {
-                    return None;
-                }
-                (sample.at, Insufficient, Insufficient)
+            CoverageStep::ClockDiscontinuity { .. } => {
+                self.restart_coverage(sample);
+                return None;
             }
-            CoverageStep::Measuring { end } | CoverageStep::ClockDiscontinuity { end } => {
-                self.measurement = if matches!(step, CoverageStep::ClockDiscontinuity { .. }) {
-                    self.grid.clear();
-                    OutputMeasurement::ClockDiscontinuity
-                } else {
-                    OutputMeasurement::Measuring
-                };
-                if let Some(end) = end {
-                    self.store(end, sample, Insufficient);
-                }
-                (sample.at, Insufficient, Insufficient)
+            CoverageStep::Measuring { end } => {
+                self.measurement = OutputMeasurement::Measuring;
+                end?
             }
-            CoverageStep::Window { end } => {
-                let start = end - WINDOW_DURATION;
-                let before = self
-                    .grid
-                    .iter()
-                    .find(|p| p.end == start)
-                    .expect("covered windows have both endpoints");
-                let measured = window(&before.sample, self.at_endpoint(end, sample));
-                let earlier = before.verdict;
-                self.store(end, sample, measured.verdict);
-                self.measurement = (end, measured).into();
-                (end, measured.verdict, earlier)
-            }
+            CoverageStep::Window { end } => end,
         };
-        let (state, event) = next(
-            self.state,
-            verdict,
-            earlier,
-            HealthInput::Present(sample.status),
-        );
-        self.state = state;
-        event.map(|event| (at, event))
-    }
 
-    /// After crossing an endpoint the preceding read was the newest sample at that time.
-    fn at_endpoint<'a>(&'a self, end: Duration, sample: &'a HealthSample) -> &'a HealthSample {
-        if sample.at == end {
+        // A crossed endpoint uses the preceding read for both counters and status.
+        let endpoint = if end == sample.at {
             sample
+        } else if let Some(previous) = self.previous.as_ref() {
+            previous
         } else {
-            self.previous
-                .as_ref()
-                .expect("crossing an endpoint needs a previous read")
-        }
+            self.restart_coverage(sample);
+            return None;
+        };
+        let (verdict, earlier) = if matches!(step, CoverageStep::Window { .. }) {
+            let start = end - WINDOW_DURATION;
+            let Some(before) = self.grid.iter().find(|point| point.end == start) else {
+                self.restart_coverage(sample);
+                return None;
+            };
+            let measured = window(&before.sample, endpoint);
+            self.measurement = (end, measured).into();
+            (measured.verdict, before.verdict)
+        } else {
+            (Insufficient, Insufficient)
+        };
+        let status = endpoint.status;
+        let verdict = if available(status) {
+            verdict
+        } else {
+            Insufficient
+        };
+        self.store(end, *endpoint, verdict);
+        let (state, event) = next(self.state, verdict, earlier, HealthInput::Present(status));
+        self.state = state;
+        event.map(|event| (end, event))
     }
 
-    fn store(&mut self, end: Duration, sample: &HealthSample, verdict: Verdict) {
-        let sample = *self.at_endpoint(end, sample);
+    /// A missing endpoint breaks coverage just like a gap between reads.
+    fn restart_coverage(&mut self, sample: &HealthSample) {
+        let (coverage, first) = Coverage::observe(None, sample.generation, sample.at);
+        self.coverage = Some(coverage);
+        self.grid.clear();
+        if let CoverageStep::Measuring { end: Some(end) } = first {
+            self.store(end, *sample, Verdict::Insufficient);
+        }
+        self.measurement = OutputMeasurement::ClockDiscontinuity;
+        self.without_window(HealthInput::Present(sample.status));
+    }
+
+    fn store(&mut self, end: Duration, sample: HealthSample, verdict: Verdict) {
         if self.grid.len() == GRID_POINTS {
             self.grid.pop_front();
         }
@@ -418,8 +442,9 @@ mod tests {
     }
 
     #[test]
-    fn unavailable_status_resets_timing_between_endpoints() {
-        for status in [Status::Reconnecting { failures: 1 }, Status::NotFound] {
+    fn unavailable_status_resets_timing_even_on_a_second_read_of_the_endpoint() {
+        let lost = Status::Reconnecting { failures: 1 };
+        for (ms, status) in [(4_000, lost), (4_010, lost), (4_000, Status::NotFound)] {
             let mut reader = Reader::new();
             for i in 0..=16 {
                 let mut clean = sample(i * 250, i * 2);
@@ -429,8 +454,9 @@ mod tests {
             }
             let healthy = row(&reader);
             assert_eq!(healthy.state, OutputHealthState::Healthy);
-            let mut unavailable = sample(4_010, 32);
+            let mut unavailable = sample(ms, 32);
             unavailable.status = status;
+            unavailable.outages = 1;
             observe(&mut reader, Some(&unavailable));
             let current = row(&reader);
             assert_eq!(
@@ -438,6 +464,153 @@ mod tests {
                 (status, OutputHealthState::Measuring, healthy.measurement)
             );
         }
+    }
+
+    #[test]
+    fn crossing_an_endpoint_keeps_timing_and_status_events_in_engine_time_order() {
+        let reason = LateReason::HandoffLateness;
+        for (status, state, status_events) in [
+            (
+                Status::Running,
+                OutputHealthState::Late { reason },
+                vec![
+                    HealthEvent::OutputLost,
+                    HealthEvent::Recovered {
+                        reason: RecoveredReason::OutputAvailable,
+                    },
+                ],
+            ),
+            (
+                Status::Reconnecting { failures: 1 },
+                OutputHealthState::Measuring,
+                vec![HealthEvent::OutputLost],
+            ),
+        ] {
+            let mut reader = Reader::new();
+            for i in 0..=31 {
+                observe(&mut reader, Some(&sample(i * 250, i * 2)));
+            }
+            let mut after = sample(8_010, 64);
+            after.status = status;
+            after.outages = 1;
+            observe(&mut reader, Some(&after));
+
+            let mut expected = vec![event(8_000, HealthEvent::RunningLate { reason })];
+            expected.extend(status_events.into_iter().map(|edge| event(8_010, edge)));
+            assert_eq!(reader.view().events_since(0), (expected, 0), "{status:?}");
+            assert_eq!(row(&reader).state, state);
+        }
+    }
+
+    #[test]
+    fn a_return_at_or_after_the_endpoint_uses_the_status_at_the_endpoint() {
+        let late = HealthEvent::RunningLate {
+            reason: LateReason::HandoffLateness,
+        };
+        let back = HealthEvent::Recovered {
+            reason: RecoveredReason::OutputAvailable,
+        };
+        for (ms, state, events) in [
+            (
+                8_010,
+                OutputHealthState::Measuring,
+                vec![event(8_010, back)],
+            ),
+            (
+                8_000,
+                OutputHealthState::Late {
+                    reason: LateReason::HandoffLateness,
+                },
+                vec![event(8_000, back), event(8_000, late)],
+            ),
+        ] {
+            let mut reader = Reader::new();
+            for i in 0..=31 {
+                observe(&mut reader, Some(&sample(i * 250, i * 2)));
+            }
+            let mut down = sample(7_990, 63);
+            down.status = Status::Reconnecting { failures: 1 };
+            down.outages = 1;
+            observe(&mut reader, Some(&down));
+            assert_eq!(row(&reader).state, OutputHealthState::Measuring);
+            let cursor = reader.view().end();
+
+            let mut up = sample(ms, 64);
+            up.outages = 1;
+            observe(&mut reader, Some(&up));
+            assert_eq!(reader.view().events_since(cursor), (events, 0), "at {ms}");
+            assert_eq!(row(&reader).state, state);
+        }
+    }
+
+    #[test]
+    fn only_available_endpoints_can_confirm_a_later_warning() {
+        let reason = LateReason::HandoffLateness;
+        for (status, expected) in [
+            (Status::Running, OutputHealthState::Late { reason }),
+            (Status::Connecting, OutputHealthState::Late { reason }),
+            (Status::NotFound, OutputHealthState::Measuring),
+            (
+                Status::Reconnecting { failures: 1 },
+                OutputHealthState::Measuring,
+            ),
+        ] {
+            let mut reader = Reader::new();
+            for i in 0..=32 {
+                let mut read = sample(i * 250, i * 2);
+                if i == 16 {
+                    read.status = status;
+                }
+                observe(&mut reader, Some(&read));
+            }
+            assert_eq!(row(&reader).state, expected, "{status:?} at 4 s");
+        }
+    }
+
+    // Coverage normally guarantees these samples. Remove one to exercise the
+    // reader's recovery through the same observations that publish its rows.
+    fn check_missing_endpoint(repeat: bool) {
+        let mut reader = Reader::new();
+        let last = if repeat { 16 } else { 15 };
+        for i in 0..=last {
+            observe(&mut reader, Some(&sample(i * 250, i * 2)));
+        }
+        let grid = &mut reader.outputs[0].1.grid;
+        if repeat {
+            grid.clear();
+        } else {
+            grid.pop_front();
+        }
+        observe(&mut reader, Some(&sample(4_000, 32)));
+        assert_eq!(
+            row(&reader).measurement,
+            OutputMeasurement::ClockDiscontinuity
+        );
+        for i in 17..=32 {
+            observe(&mut reader, Some(&sample(i * 250, i * 2)));
+        }
+        assert_eq!(window(&reader), (8_000, 32));
+        assert_eq!(reader.view().end(), 0);
+    }
+
+    #[test]
+    fn a_repeat_without_its_grid_point_restarts_measurement() {
+        check_missing_endpoint(true);
+    }
+
+    #[test]
+    fn a_window_without_its_first_grid_point_restarts_measurement() {
+        check_missing_endpoint(false);
+    }
+
+    #[test]
+    fn crossing_without_a_preceding_sample_restarts_measurement() {
+        let mut tracker = super::Tracker::new();
+        let later = sample(510, 8);
+        let end = Some(Duration::from_millis(500));
+        let step = super::CoverageStep::Measuring { end };
+        assert_eq!(tracker.timing(step, &later), None);
+        assert_eq!(tracker.measurement, OutputMeasurement::ClockDiscontinuity);
     }
 
     #[test]
@@ -484,6 +657,78 @@ mod tests {
         observe(&mut reader, Some(&again));
         assert_eq!(row(&reader).measurement, OutputMeasurement::Measuring);
         assert_eq!(reader.view().events_since(cursor), (vec![], 0));
+    }
+
+    #[test]
+    fn every_event_of_a_partly_filled_log_is_delivered_in_order() {
+        let mut reader = Reader::new();
+        observe(&mut reader, Some(&sample(0, 0)));
+        let mut expected = Vec::new();
+        for ms in 1_u64..=63 {
+            let mut read = sample(ms, 0);
+            read.outages = ms.div_ceil(2);
+            let edge = if ms % 2 == 1 {
+                read.status = Status::Reconnecting { failures: 1 };
+                HealthEvent::OutputLost
+            } else {
+                HealthEvent::Recovered {
+                    reason: RecoveredReason::OutputAvailable,
+                }
+            };
+            observe(&mut reader, Some(&read));
+            expected.push(event(ms, edge));
+            let (events, missed) = reader.view().events_since(0);
+            assert_eq!(missed, 0);
+            assert_eq!(events, expected, "log after {ms} events");
+        }
+    }
+
+    #[test]
+    fn the_largest_health_reply_fits_in_16_kib() {
+        use engine_core::{Health, LatenessWindow, MAX_OUTPUTS, PressWindow, Reply};
+
+        let reason = LateReason::HandoffLateness;
+        let rows: [_; MAX_OUTPUTS] = std::array::from_fn(|slot| OutputHealth {
+            output: OutputNumber::try_from(u8::try_from(slot + 1).unwrap()).unwrap(),
+            generation: u64::MAX,
+            status: Status::Reconnecting { failures: u16::MAX },
+            state: OutputHealthState::Recovering { reason },
+            measurement: OutputMeasurement::Window {
+                end_ms: u64::MAX,
+                lateness: Some(LatenessWindow {
+                    p99_us: u32::MAX,
+                    worst_us: u32::MAX,
+                    samples: u32::MAX,
+                }),
+                press_to_light: Some(PressWindow {
+                    p95_us: u32::MAX,
+                    worst_us: u32::MAX,
+                    samples: u32::MAX,
+                }),
+                press_missing: u32::MAX,
+                dropped: u32::MAX,
+                failed: u32::MAX,
+                off_beat: u32::MAX,
+                frames_handed: u32::MAX,
+            },
+        });
+        let events = [OutputHealthEvent {
+            output: rows[MAX_OUTPUTS - 1].output,
+            generation: u64::MAX,
+            at_ms: u64::MAX,
+            event: HealthEvent::RunningLate { reason },
+        }; super::EVENTS];
+        let wire = crate::json(&Reply::Health {
+            health: Health {
+                window_ms: 4_000,
+                outputs: &rows,
+            },
+            events: &events,
+            missed: u32::MAX,
+        })
+        .unwrap();
+        eprintln!("Largest Health reply: {} bytes", wire.len());
+        assert!(wire.len() < 16 * 1024, "Health is {} bytes", wire.len());
     }
 
     #[test]

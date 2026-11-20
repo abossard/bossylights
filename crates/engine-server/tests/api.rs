@@ -1,6 +1,9 @@
 //! End to end: a client adds a DDP output over the WebSocket, sends "set channel", and
 //! sees it in the state stream and in the bytes on the DDP socket in the next frame.
 
+mod common;
+
+use common::{Socket, answer, connect as open, send};
 use engine::{Engine, Universes};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
@@ -11,9 +14,6 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
 use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
-
-type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
 async fn connect() -> Socket {
     let (_, socket, _) = start().await;
@@ -27,13 +27,6 @@ async fn start() -> (SocketAddr, Socket, JoinHandle<std::io::Result<Engine>>) {
     let address = listener.local_addr().unwrap();
     let served = tokio::spawn(engine_server::serve(listener, engine, sender, None, None));
     (address, open(address).await, served)
-}
-
-async fn open(address: SocketAddr) -> Socket {
-    let (socket, _) = tokio_tungstenite::connect_async(format!("ws://{address}/api"))
-        .await
-        .unwrap();
-    socket
 }
 
 /// A DDP receiver here, and the request that adds it as output 1 for universe 1, RGB.
@@ -60,13 +53,6 @@ async fn packet(udp: &UdpSocket) -> Vec<u8> {
     packet
 }
 
-async fn send(socket: &mut Socket, request: &Value) {
-    socket
-        .send(Message::text(request.to_string()))
-        .await
-        .unwrap();
-}
-
 /// The next message from the engine, as JSON.
 async fn next(socket: &mut Socket) -> Value {
     let message = tokio::time::timeout(Duration::from_secs(2), socket.next())
@@ -77,21 +63,59 @@ async fn next(socket: &mut Socket) -> Value {
     serde_json::from_str(message.to_text().unwrap()).unwrap()
 }
 
-/// The next message that is not a `Changed`.
-async fn answer(socket: &mut Socket) -> Value {
-    loop {
-        let reply = next(socket).await;
-        if reply.get("Changed").is_none() {
-            return reply;
-        }
-    }
-}
-
 fn set(universe: u16, address: u16, value: u16) -> Value {
     json!({"Send": {"command": {"SetChannel": {
         "channel": {"universe": universe, "address": address},
         "value": value,
     }}}})
+}
+
+#[tokio::test]
+async fn subscribed_requests_skip_queued_health() {
+    let (address, mut desk, _) = start().await;
+    let (udp, attach) = receiver().await;
+    let mut clients = [open(address).await, open(address).await];
+    for socket in &mut clients {
+        send(socket, &json!("Subscribe")).await;
+        assert!(next(socket).await.get("Picture").is_some());
+    }
+    send(&mut desk, &attach).await;
+    assert_eq!(answer(&mut desk).await, "Accepted");
+    assert_eq!(&packet(&udp).await[10..], &[0; 510]);
+
+    let mut received = Vec::new();
+    for (socket, request) in clients.into_iter().zip([set(1, 1, 91), json!("Query")]) {
+        let mut socket = std::pin::pin!(socket.peekable());
+        // Leave the first Health at the head of this client's queue.
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let message = socket.as_mut().peek().await.unwrap().as_ref().unwrap();
+                let reply: Value = serde_json::from_str(message.to_text().unwrap()).unwrap();
+                if reply.get("Health").is_some() {
+                    break;
+                }
+                socket.next().await.unwrap().unwrap();
+            }
+        })
+        .await
+        .expect("the first Health after attach");
+        socket
+            .send(Message::text(request.to_string()))
+            .await
+            .unwrap();
+        let reply = answer(&mut socket).await;
+        received.push(if reply.get("Picture").is_some() {
+            json!("Picture")
+        } else {
+            reply
+        });
+    }
+    assert_eq!(received, [json!("Accepted"), json!("Picture")]);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while packet(&udp).await[10] != 91 {}
+    })
+    .await
+    .expect("channel 1 reaches the DDP output");
 }
 
 #[tokio::test]

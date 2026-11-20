@@ -39,7 +39,7 @@ use std::sync::{Arc, OnceLock, Weak};
 use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore, mpsc, watch};
-use tokio::time::{Instant, MissedTickBehavior, sleep_until};
+use tokio::time::MissedTickBehavior;
 
 /// Serves the API on `listener` until a client sends `Stop`. Then every connection is
 /// closed, the last change is saved, and this returns the engine: the caller reports and
@@ -319,27 +319,28 @@ async fn talk(mut socket: WebSocket, api: Arc<Api>) {
     let mut subscription: Option<Subscription> = None;
     let mut stopped = api.stop.subscribe();
     loop {
-        let due = subscription
-            .as_ref()
-            .and_then(|sub| sub.health_due(&pictures.borrow().health));
-        let reply = tokio::select! {
-            () = async { let _ = stopped.wait_for(|stop| *stop).await; } => {
-                let _ = socket.send(Message::Close(None)).await;
-                return;
-            }
-            message = socket.recv() => match message {
-                Some(Ok(Message::Text(text))) => answer(&api, &text, &mut pictures, &mut subscription).await,
-                Some(Ok(Message::Binary(_))) => json(&Reply::Refused { reason: Refusal::NotACommand }),
-                Some(Ok(Message::Ping(_) | Message::Pong(_))) => None,
-                Some(Ok(Message::Close(_)) | Err(_)) | None => return,
-            },
-            Ok(()) = pictures.changed(), if subscription.is_some() => {
-                let now = Arc::clone(&pictures.borrow_and_update());
-                subscription.as_mut().and_then(|sub| sub.changed(now))
-            }
-            _ = sleep_until(due.unwrap_or_else(Instant::now)), if due.is_some() => {
-                let now = Arc::clone(&pictures.borrow());
-                subscription.as_mut().and_then(|sub| sub.health(&now.health))
+        let health = subscription.as_mut().and_then(|sub| {
+            let now = Arc::clone(&pictures.borrow());
+            sub.health(&now)
+        });
+        let reply = if health.is_some() {
+            health
+        } else {
+            tokio::select! {
+                () = async { let _ = stopped.wait_for(|stop| *stop).await; } => {
+                    let _ = socket.send(Message::Close(None)).await;
+                    return;
+                }
+                message = socket.recv() => match message {
+                    Some(Ok(Message::Text(text))) => answer(&api, &text, &mut pictures, &mut subscription).await,
+                    Some(Ok(Message::Binary(_))) => json(&Reply::Refused { reason: Refusal::NotACommand }),
+                    Some(Ok(Message::Ping(_) | Message::Pong(_))) => None,
+                    Some(Ok(Message::Close(_)) | Err(_)) | None => return,
+                },
+                Ok(()) = pictures.changed(), if subscription.is_some() => {
+                    let now = Arc::clone(&pictures.borrow_and_update());
+                    subscription.as_mut().and_then(|sub| sub.changed(now))
+                }
             }
         };
         if let Some(reply) = reply {
@@ -347,7 +348,8 @@ async fn talk(mut socket: WebSocket, api: Arc<Api>) {
                 return; // client gone
             }
             if let Some(sub) = &mut subscription {
-                sub.health_sent_at.get_or_insert_with(Instant::now);
+                sub.health_sent_at
+                    .get_or_insert_with(|| pictures.borrow().snapshot.state.now);
             }
         }
     }
@@ -562,7 +564,7 @@ struct Subscription {
     revision: u64,
     cursor: u64,
     /// Set after the socket finishes sending the subscription Picture or a Health reply.
-    health_sent_at: Option<Instant>,
+    health_sent_at: Option<Duration>,
 }
 
 impl Subscription {
@@ -575,12 +577,13 @@ impl Subscription {
         }
     }
 
-    fn health_due(&self, view: &health::View) -> Option<Instant> {
-        let sent = self.health_sent_at?;
-        (self.revision != view.revision()).then_some(sent + Duration::from_millis(500))
-    }
-
-    fn health(&mut self, view: &health::View) -> Option<String> {
+    fn health(&mut self, picture: &Picture) -> Option<String> {
+        let view = &picture.health;
+        let now = picture.snapshot.state.now;
+        let since = now.saturating_sub(self.health_sent_at?);
+        if self.revision == view.revision() || since < Duration::from_millis(500) {
+            return None;
+        }
         let (events, missed) = view.events_since(self.cursor);
         self.cursor = view.end();
         self.revision = view.revision();
