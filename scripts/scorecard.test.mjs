@@ -148,7 +148,7 @@ for (const [files, expected] of surfaceCases) {
 test("the performance scorecard keeps each output, rejects missing samples and uses strict timing targets", async () => {
   const { performanceRows, performanceTable, missedReferenceTarget } = await import("./scorecard.mjs");
   const run = (output, hz, p99, p95, drops = 0) => ({ output, hz, p99, p95, drops });
-  const result = (outputs, pressSamples = 267) => JSON.stringify({ workload: "m3", seconds: 60, events: 400, pressSamples, outputs });
+  const result = (outputs, pressSamples = 267) => JSON.stringify({ workload: "show", seconds: 60, events: 400, pressSamples, outputs });
   const good = [run(1, 44, 999999, 27727271), run(2, 60, 999999, 21666665, 3)];
   const limits = good.map((row, i) => ({ ...row, p99: i ? 999999 : 1000000, p95: i ? 21666666 : 0 }));
   for (const [output, count, expected] of [
@@ -156,39 +156,39 @@ test("the performance scorecard keeps each output, rejects missing samples and u
     [[good[0], good[0]], 2, null], [[good[0], { ...good[1], p95: null }], 2, null],
     [[good[0], { ...good[1], hz: 44 }], 2, null],
   ]) {
-    if (expected === null) assert.throws(() => performanceRows(result(output), count, 60, "m3"));
-    else assert.deepEqual(performanceRows(result(output), count, 60, "m3").outputs.map((row) => row.pass), expected);
+    if (expected === null) assert.throws(() => performanceRows(result(output), count, 60, "show"));
+    else assert.deepEqual(performanceRows(result(output), count, 60, "show").outputs.map((row) => row.pass), expected);
   }
-  const rows = performanceRows(result(good), 2, 60, "m3");
-  assert.match(performanceTable([["M3", rows]]), /M3 \| 2 \| 60 \| 999.999 \| 21666.665 \| 3 \| pass/);
-  assert.throws(() => performanceRows(result(good), 2, 5, "m3"));
-  assert.throws(() => performanceTable([["M2", rows], ["M3", { ...rows, events: 399 }]]));
-  assert.throws(() => performanceTable([["M2", rows], ["M3", { ...rows, pressSamples: 266 }]]));
+  const rows = performanceRows(result(good), 2, 60, "show");
+  assert.match(performanceTable([["normal show", rows]]), /normal show \| 2 \| 60 \| 999.999 \| 21666.665 \| 3 \| pass/);
+  assert.throws(() => performanceRows(result(good), 2, 5, "show"));
+  assert.throws(() => performanceTable([["normal show", rows], ["biggest show", { ...rows, events: 399 }]]));
+  assert.throws(() => performanceTable([["normal show", rows], ["biggest show", { ...rows, pressSamples: 266 }]]));
   for (const missing of [0, 401, null]) {
-    assert.throws(() => performanceRows(result(good, missing), 2, 60, "m3"));
+    assert.throws(() => performanceRows(result(good, missing), 2, 60, "show"));
   }
-  assert.throws(() => performanceRows(JSON.stringify({ workload: "m3", seconds: 60, events: 0, outputs: good }), 2, 60, "m3"), /positive event count/);
+  assert.throws(() => performanceRows(JSON.stringify({ workload: "show", seconds: 60, events: 0, outputs: good }), 2, 60, "show"), /positive event count/);
   assert.match(performanceTable([]), /Not measured on CI/);
-  const smoke = performanceTable([["M3 at limits", { ...rows, seconds: 5 }]]);
+  const smoke = performanceTable([["biggest show", { ...rows, seconds: 5 }]]);
   assert.match(smoke, /Each run took 5 s/);
   assert.match(smoke, /Runs of 60 s or longer check the caps/);
   assert.match(smoke, /267 Manual presses and releases per output/);
   assert.match(smoke, /10,922 RGB pixels, 32 roots, 65,536 reserved visits and 16 outputs/);
-  const missed = performanceRows(result(limits), 2, 60, "m3");
+  const missed = performanceRows(result(limits), 2, 60, "show");
   for (const [runs, fails] of [
     [[], false],
-    [[["M2", rows], ["M3", rows]], false],
-    [[["M2", rows], ["M3", missed]], true],
-    [[["M3 at limits", { ...missed, seconds: 5 }]], false],
+    [[["normal show", rows], ["biggest show", rows]], false],
+    [[["normal show", rows], ["biggest show", missed]], true],
+    [[["biggest show", { ...missed, seconds: 5 }]], false],
   ]) assert.equal(missedReferenceTarget(runs), fails);
 });
 
 test("a rig refuses a measurement from a different or unnamed workload", async () => {
   const { performanceRows } = await import("./scorecard.mjs");
   const outputs = [44, 60].map((hz, i) => ({ hz, output: i + 1, p99: 1, p95: 1, drops: 0 }));
-  for (const workload of ["m2", undefined]) {
+  for (const workload of ["biggest", undefined]) {
     const json = JSON.stringify({ workload, outputs, seconds: 60, events: 5, pressSamples: 4 });
-    assert.throws(() => performanceRows(json, 2, 60, "m3"), /expected workload m3/);
+    assert.throws(() => performanceRows(json, 2, 60, "show"), /expected workload show/);
   }
 });
 
@@ -207,10 +207,11 @@ test("a burst row requires complete batches of raw channel sends and plan swaps"
   }
 });
 
-test("the scorecard command labels each workload and gates runs of at least 60 seconds", (t) => {
+test("the scorecard command prints the normal show, the biggest show and the burst, and gates runs of at least 60 seconds", (t) => {
   const dir = mkdtempSync(join(tmpdir(), "scorecard-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   // Feed the command recorded numbers in place of starting a real-time measurement on CI.
+  // A workload without a recorded file prints nothing, so an extra rig fails the command.
   writeFileSync(join(dir, "cargo"), `#!/bin/sh
 if [ "$1" = metadata ]; then echo '{"packages":[]}'; exit 0; fi
 while [ "$#" -gt 0 ] && [ "$1" != -- ]; do shift; done
@@ -223,8 +224,9 @@ esac
   const env = { ...process.env, SCORECARD_FIXTURES: dir, PATH: dir + delimiter + process.env.PATH };
   delete env.CI;
   delete env.GITHUB_STEP_SUMMARY;
+  const rigRow = /^\| ([^|]+) \| \d+ \| (?:44|60) \|/;
   for (const [seconds, missed, expectedExit] of [[59, true, 0], [60, false, 0], [60, true, 1], [120, true, 1]]) {
-    for (const [workload, count, ns] of [["m2", 2, 1000], ["m3", 2, 2000], ["worst", 16, 3000], ["burst", 16, 4000]]) {
+    for (const [workload, count, ns] of [["show", 2, 2000], ["biggest", 16, 3000], ["burst", 16, 4000]]) {
       const outputs = Array.from({ length: count }, (_, i) => ({
         output: i + 1, hz: i % 2 === 0 ? 44 : 60, p99: ns, p95: 1, drops: 0,
       }));
@@ -238,11 +240,13 @@ esac
       encoding: "utf8", env,
     });
     assert.equal(status, expectedExit, `${seconds} s, missed=${missed}: ${stderr}`);
-    for (const row of ["| M2 | 1 | 44 | 1 |", "| M3 | 1 | 44 | 2 |", "| M3 at limits | 1 | 44 | 3 |"]) {
+    const rigs = new Set(stdout.split("\n").map((line) => rigRow.exec(line)?.[1]).filter(Boolean));
+    assert.deepEqual([...rigs], ["normal show", "biggest show", "biggest show plus burst"]);
+    assert.doesNotMatch(stdout, /\bM[23]\b|earlier/);
+    for (const row of ["| normal show | 1 | 44 | 2 |", "| biggest show | 1 | 44 | 3 |", "| biggest show plus burst | 1 | 44 | 4 |"]) {
       assert.ok(stdout.includes(row), row);
     }
-    assert.ok(stdout.includes("| M3 at limits (burst) | 1 | 44 | 4 |"));
-    assert.ok(stdout.includes(`| M3 at limits (burst) | 2 | 60 | ${missed ? 1000 : 4} | 0.001 | 0 | ${missed ? "fail" : "pass"} |`));
+    assert.ok(stdout.includes(`| biggest show plus burst | 2 | 60 | ${missed ? 1000 : 4} | 0.001 | 0 | ${missed ? "fail" : "pass"} |`));
     assert.match(stdout, /2 bursts of 256 FIFO commands/);
     assert.match(stdout, /452 raw channel sends per output/);
     assert.match(stdout, /first accepted handoff/);

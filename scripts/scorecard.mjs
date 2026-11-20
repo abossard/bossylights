@@ -91,7 +91,7 @@ export function performanceRows(json, count, seconds, workload) {
   return { workload, seconds, events: run.events, pressSamples: run.pressSamples, bursts: run.bursts, outputs };
 }
 
-/** Compare the same seeded schedule on each rig without pooling either output's samples. */
+/** Compare the normal show and the biggest show on the same seeded schedule, without pooling any output's samples. */
 export function performanceTable(runs) {
   if (runs.length === 0) return "## Performance\n\nNot measured on CI.\n";
   const seconds = runs[0][1].seconds;
@@ -109,10 +109,10 @@ export function performanceTable(runs) {
       "",
     ] : []),
     ...(burst ? [
-      `The rig at limits applied ${burst.bursts} bursts of 256 FIFO commands. Each burst landed in one tick with 30 plan swaps and 226 raw channel sends. Its p95 covers ${burst.pressSamples} raw channel sends per output. Each output contributes one lateness sample at its first accepted handoff carrying new burst commands.`,
+      `The biggest show plus burst applied ${burst.bursts} bursts of 256 FIFO commands. Each burst landed in one tick with 30 plan swaps and 226 raw channel sends. Its p95 covers ${burst.pressSamples} raw channel sends per output. Each output contributes one lateness sample at its first accepted handoff carrying new burst commands.`,
       "",
     ] : []),
-    "M2 used direct colour on 10,000 RGB pixels. M3 used the same rig with a Wave and a sequence. M3 at limits used 10,922 RGB pixels, 32 roots, 65,536 reserved visits and 16 outputs.",
+    "The normal show ran a Wave and a sequence on 10,000 RGB pixels and 2 outputs. The biggest show used 10,922 RGB pixels, 32 roots, 65,536 reserved visits and 16 outputs.",
     "",
     "| Rig | Output | Hz | Handoff lateness p99 (µs) | Send to handoff p95 (µs) | Drops | Target |",
     "|---|---:|---:|---:|---:|---:|---|",

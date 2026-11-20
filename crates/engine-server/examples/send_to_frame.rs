@@ -1,5 +1,5 @@
 //! The reference scorecard. `baseline [seconds]` prints the original one-output
-//! send-to-frame p95 in microseconds. `m2|m3|worst|burst [seconds]` prints JSON with
+//! send-to-frame p95 in microseconds. `show|biggest|burst [seconds]` prints JSON with
 //! lateness p99 and command-to-device-handoff p95 in nanoseconds for each output.
 
 use engine::{
@@ -26,14 +26,13 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     };
     if args.next().is_some() || seconds == Some(0) {
-        eprintln!("send_to_frame [baseline|m2|m3|worst|burst] [seconds]");
+        eprintln!("send_to_frame [baseline|show|biggest|burst] [seconds]");
         return ExitCode::FAILURE;
     }
     let profile = match mode.as_str() {
         "baseline" => return baseline(Duration::from_secs(seconds.unwrap_or(10))),
-        "m2" => Workload::M2,
-        "m3" => Workload::M3,
-        "worst" => Workload::Worst,
+        "show" => Workload::Show,
+        "biggest" => Workload::Biggest,
         "burst" => Workload::Burst,
         other => {
             eprintln!("unknown run {other:?}");
@@ -321,7 +320,7 @@ fn measure(
 ) -> Result<serde_json::Value, Box<dyn Error>> {
     let universes = Universes::new(engine::MAX_UNIVERSES).ok_or("invalid universe count")?;
     let (mut engine, mut sender, mut timings) = Engine::start_measured(universes)?;
-    let outputs = if matches!(profile, Workload::Worst | Workload::Burst) {
+    let outputs = if matches!(profile, Workload::Biggest | Workload::Burst) {
         engine::MAX_OUTPUTS
     } else {
         2
@@ -448,36 +447,33 @@ mod workload {
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub(crate) enum Workload {
-        M2,
-        M3,
-        Worst,
+        Show,
+        Biggest,
         Burst,
     }
 
     impl Workload {
         pub(super) fn name(self) -> &'static str {
             match self {
-                Self::M2 => "m2",
-                Self::M3 => "m3",
-                Self::Worst => "worst",
+                Self::Show => "show",
+                Self::Biggest => "biggest",
                 Self::Burst => "burst",
             }
         }
 
-        /// The same 10,000-pixel rig for the matched runs. At the limit all 10,922 whole
+        /// The normal show runs on 10,000 pixels. In the biggest show all 10,922 whole
         /// RGB pixels fit, and the three target sizes jointly fill the visit budget.
         fn strips(self) -> (u16, u16, u16) {
             match self {
-                Self::M2 | Self::M3 => (1024, 256, 10_000 - 1024 - 256),
-                Self::Worst | Self::Burst => (77, 198, 10_922 - 77 - 198),
+                Self::Show => (1024, 256, 10_000 - 1024 - 256),
+                Self::Biggest | Self::Burst => (77, 198, 10_922 - 77 - 198),
             }
         }
 
         fn waves(self) -> usize {
             match self {
-                Self::M2 => 0,
-                Self::M3 => 1,
-                Self::Worst | Self::Burst => engine_core::PLAYS - 2,
+                Self::Show => 1,
+                Self::Biggest | Self::Burst => engine_core::PLAYS - 2,
             }
         }
     }
@@ -579,21 +575,8 @@ mod workload {
             ),
         )?;
         send(sender, wave_group(false))?;
-        if workload == Workload::M2 {
-            send(
-                sender,
-                Command::SetIntensity {
-                    target: all,
-                    intensity: u16::MAX,
-                },
-            )?;
-            send(sender, colour(all, BACKGROUND))?;
-            eprintln!("10,000 RGB pixels, direct colour and intensity, no playing looks");
-            return Ok(());
-        }
-
         let probe = "two lights";
-        if matches!(workload, Workload::Worst | Workload::Burst) {
+        if matches!(workload, Workload::Biggest | Workload::Burst) {
             send(
                 sender,
                 group(
@@ -688,7 +671,7 @@ mod workload {
                 },
             )?;
         }
-        if matches!(workload, Workload::Worst | Workload::Burst) {
+        if matches!(workload, Workload::Biggest | Workload::Burst) {
             // With all variable visits booked, the desk guarantees a one-light grab.
             // Prove this is the admitted edge before measuring it.
             let refused = sender.send(colour(Target::Group { group: text(probe) }, RED));
@@ -965,7 +948,7 @@ mod workload {
 
         #[test]
         fn worst_rig_one_pixel_short_is_refused_even_when_the_probe_fails() {
-            let mode = Workload::Worst;
+            let mode = Workload::Biggest;
             let universes = Universes::new(64).unwrap();
             let (_engine, mut sender) = Engine::start(universes).unwrap();
             stream(&mut sender, universes);
@@ -1088,9 +1071,8 @@ mod workload {
         fn measured_rigs_patch_all_the_pixels_and_run_the_expected_roots() {
             let universes = Universes::new(64).unwrap();
             for (mode, pixels, roots) in [
-                (Workload::M2, 10_000, 0),
-                (Workload::M3, 10_000, 3),
-                (Workload::Worst, 10_922, engine_core::PLAYS),
+                (Workload::Show, 10_000, 3),
+                (Workload::Biggest, 10_922, engine_core::PLAYS),
             ] {
                 let (mut engine, mut sender) = Engine::start(universes).unwrap();
                 stream(&mut sender, universes);
@@ -1195,7 +1177,7 @@ mod handoff_tests {
     #[test]
     fn lateness_p99_is_the_99th_of_100_handoffs() {
         let output = OutputNumber::try_from(1).unwrap();
-        let mut run = Samples::new(Workload::M3, 1, 0, Duration::ZERO, Duration::from_secs(1));
+        let mut run = Samples::new(Workload::Show, 1, 0, Duration::ZERO, Duration::from_secs(1));
         run.record(Applied {
             number: 1,
             at: Duration::ZERO,
@@ -1225,14 +1207,14 @@ mod handoff_tests {
             })
             .unwrap();
         assert_eq!(report["outputs"][0]["p99"], 99);
-        assert_eq!(report["workload"], "m3");
+        assert_eq!(report["workload"], "show");
     }
 
     #[test]
     fn one_edit_swapping_thirty_plans_does_not_outweigh_the_two_manual_sends() {
         let ms = Duration::from_millis;
         let output = OutputNumber::try_from(1).unwrap();
-        let mut run = Samples::new(Workload::Worst, 1, 100, ms(0), ms(1000));
+        let mut run = Samples::new(Workload::Biggest, 1, 100, ms(0), ms(1000));
         // A group reorder publishes 30 swaps. The following press and release
         // each have their own FIFO number and reach the device in 1 and 3 ms.
         for number in 101..=130 {
@@ -1273,7 +1255,7 @@ mod handoff_tests {
         let ms = Duration::from_millis;
         let a = OutputNumber::try_from(1).unwrap();
         let b = OutputNumber::try_from(2).unwrap();
-        let mut run = Samples::new(Workload::M2, 2, 9, ms(1000), ms(2000));
+        let mut run = Samples::new(Workload::Show, 2, 9, ms(1000), ms(2000));
         for event in [
             Applied {
                 number: 10,

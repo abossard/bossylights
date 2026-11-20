@@ -66,7 +66,7 @@ const summary = scorecard(
   seconds,
 );
 const duration = seconds ?? 60;
-const rigs = { m2: ["M2", 2], m3: ["M3", 2], worst: ["M3 at limits", 16], burst: ["M3 at limits (burst)", 16] };
+const rigs = { show: ["normal show", 2], biggest: ["biggest show", 16], burst: ["biggest show plus burst", 16] };
 const runs = measured ? Object.entries(rigs).map(([workload, [name, outputs]]) => [
   name, performanceRows(example("send_to_frame", workload, String(duration)), outputs, duration, workload),
 ]) : [];
