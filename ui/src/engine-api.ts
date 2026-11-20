@@ -48,7 +48,7 @@ show: ShowFile, universes: Array<Levels>,
 /**
  * Every light that holds a part, by number.
  */
-lights: Array<HeldLight>, } } | { "Changed": { state: State, project: Project, library: Library, 
+lights: Array<HeldLight>, health: Health, } } | { "Health": { health: Health, events: Array<OutputHealthEvent>, missed: number, } } | { "Changed": { state: State, project: Project, library: Library, 
 /**
  * The whole patch when it changed since the last message, else `None`.
  */
@@ -70,6 +70,26 @@ show: ShowFile, channels: Array<ChannelLevel>,
  * `None`.
  */
 lights: Array<HeldLight>, } } | { "Found": { fixtures: Array<Match>, } } | { "Fixture": { maker: string, model: string, kind: FixtureKind, modes: Array<ModeChannels>, } } | { "Failures": { failures: Array<Failure>, } };
+
+export type Health = { window_ms: number, outputs: Array<OutputHealth>, };
+
+export type OutputHealth = { output: OutputNumber, generation: number, status: Status, state: OutputHealthState, measurement: OutputMeasurement, };
+
+export type OutputHealthState = "Measuring" | "Healthy" | { "Late": { reason: LateReason, } } | { "Recovering": { reason: LateReason, } };
+
+export type OutputMeasurement = "Measuring" | "ClockDiscontinuity" | { "Window": { end_ms: number, lateness: LatenessWindow | null, press_to_light: PressWindow | null, press_missing: number, dropped: number, failed: number, off_beat: number, frames_handed: number, } };
+
+export type LatenessWindow = { p99_us: number, worst_us: number, samples: number, };
+
+export type PressWindow = { p95_us: number, worst_us: number, samples: number, };
+
+export type LateReason = "HandoffLateness" | "PressToLight" | "Both";
+
+export type RecoveredReason = "WithinTargets" | "OutputAvailable";
+
+export type OutputHealthEvent = { output: OutputNumber, generation: number, at_ms: number, event: HealthEvent, };
+
+export type HealthEvent = { "RunningLate": { reason: LateReason, } } | { "Recovered": { reason: RecoveredReason, } } | "OutputLost";
 
 export type Refusal = "NotACommand" | { "NoSuchUniverse": { universes: number, } } | "NoSuchAddress" | "QueueFull" | "CannotOpen" | "NoSuchFixture" | "Opening" | { "TooManyUniverses": { most: number, } } | "NoSuchMode" | { "PastTheEnd": { channels: number, } } | { "NotStreamed": { first: number, last: number, } } | { "NotSent": { output: number, universe: number, address: number, } } | { "StreamsFixture": { fixture: number, } } | { "Overlaps": { fixture: number, } } | "NoLightsLeft" | "NotPatched" | "NoSuchLight" | "NoSuchGroup" | { "TooManyMembers": { most: number, } } | { "ShowFileFull": { most: number, } } | "NoSuchLook" | "WrongLookKind" | "LookCycle" | "InvalidTiming" | "EmptyPalette" | "NoMatrix" | "WorkLimit" | { "LookInUse": { look: number, } } | { "TooManyLooks": { most: number, } } | "PlayFull" | { "Unsupported": { light: number, property: Property, } } | "Stale" | "EmptyGroup" | { "OtherProperty": { property: Property, } } | { "GrabFull": { most: number, } };
 
@@ -282,4 +302,4 @@ export type ShowFile = "None" | "Kept" | "NotSaved" | { "LeftAlone": { why: Unop
 
 export type Unopened = "CannotRead" | { "Broken": { line: number, column: number, } } | { "Newer": { version: number, } } | { "Taken": { fixture: number, } } | { "Refused": { reason: Refusal, } } | { "TooBig": { most: number, } };
 
-export const API_VERSION = 10;
+export const API_VERSION = 11;

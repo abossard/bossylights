@@ -37,8 +37,10 @@ mod resolve;
 mod show;
 
 pub use api::{
-    API_VERSION, AuthoredStep, Definition, MATCHES, Palette, Pattern, Refusal, Repeat, Reply,
-    Request, SavedLook, Sequence, SequenceItem, Speed, Swatches, Use, WaveTarget,
+    API_VERSION, AuthoredStep, Definition, Health, HealthEvent, LateReason, LatenessWindow,
+    MATCHES, OutputHealth, OutputHealthEvent, OutputHealthState, OutputMeasurement, Palette,
+    Pattern, PressWindow, RecoveredReason, Refusal, Repeat, Reply, Request, SavedLook, Sequence,
+    SequenceItem, Speed, Swatches, Use, WaveTarget,
 };
 pub use channel::{
     ADDRESSES, Channel, ChannelLevel, ChannelNumbers, ChannelSet, Levels, MAX_UNIVERSES, Universes,
@@ -1986,6 +1988,16 @@ mod tests {
                 Color::decl(&config),
                 Rate::decl(&config),
                 Reply::decl(&config),
+                Health::decl(&config),
+                OutputHealth::decl(&config),
+                OutputHealthState::decl(&config),
+                OutputMeasurement::decl(&config),
+                LatenessWindow::decl(&config),
+                PressWindow::decl(&config),
+                LateReason::decl(&config),
+                RecoveredReason::decl(&config),
+                OutputHealthEvent::decl(&config),
+                HealthEvent::decl(&config),
                 Refusal::decl(&config),
                 State::decl(&config),
                 Priority::decl(&config),

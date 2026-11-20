@@ -56,6 +56,19 @@ fn listen(mut end: TTYPort, heard: Option<Heard>, stop: Arc<AtomicBool>) {
     }
 }
 
+/// A fake serial port for the adapter: `listen` reads its other end into `heard`, or
+/// nobody reads.
+pub fn find(heard: Option<Heard>, stop: Arc<AtomicBool>) -> Find {
+    Box::new(move || {
+        let (mut end, port) = TTYPort::pair()?;
+        never_wait(&port)?;
+        end.set_timeout(Duration::from_millis(20))?;
+        let (heard, stop) = (heard.clone(), Arc::clone(&stop));
+        thread::spawn(move || listen(end, heard, stop));
+        Ok(port)
+    })
+}
+
 /// The engine's `open`: DDP as the engine opens it, adapter 1 a fake serial port whose
 /// other end `listen` reads into `heard`, or nobody reads.
 pub fn open(heard: Option<Heard>, stop: Arc<AtomicBool>) -> Open {
@@ -63,15 +76,7 @@ pub fn open(heard: Option<Heard>, stop: Arc<AtomicBool>) -> Open {
         OutputKind::DmxUsbPro {
             adapter: Adapter::FIRST,
         } => {
-            let (heard, stop) = (heard.clone(), Arc::clone(&stop));
-            let find: Find = Box::new(move || {
-                let (mut end, port) = TTYPort::pair()?;
-                never_wait(&port)?;
-                end.set_timeout(Duration::from_millis(20))?;
-                let (heard, stop) = (heard.clone(), Arc::clone(&stop));
-                thread::spawn(move || listen(end, heard, stop));
-                Ok(port)
-            });
+            let find = find(heard.clone(), Arc::clone(&stop));
             Ok(Box::new(DmxUsbPro::open(find)?) as Box<dyn Device>)
         }
         OutputKind::Ddp { .. } | OutputKind::DmxUsbPro { .. } => outputs::open(kind),
