@@ -1,12 +1,12 @@
 // One control, live: the primitive of its row, drawn from its recipe and a `Look`, its gestures reported as acts.
 // The only place that turns a row into a primitive with props.
-import { createMemo, type JSX } from "solid-js";
+import { createMemo, Show, type JSX } from "solid-js";
 import type { Control } from "../controls/spec.ts";
 import { Block, Button, Fader, Field, Handle, Item, named, offWith, Pad, Picker, XY, type PickOption, type StatusProps } from "../kit/index.ts";
 import type { Act } from "./act.ts";
 import { linesOf, recipe } from "./compose.ts";
 import type { Look } from "./look.ts";
-import { gobos } from "./drawings.tsx";
+import { gobos, PICTURES } from "./drawings.tsx";
 import { dragged as stepsOf, placed, resizes } from "./place.ts";
 import { NOW } from "./samples.ts";
 import { SHAPES, tidy } from "./shapes.ts";
@@ -66,10 +66,10 @@ export function Live(props: { control: Control; look: Look; act: (act: Act) => v
     ...some("fires", oneOrNone(r.props.fires, ["down"])),
     ...some("size", oneOrNone(r.props.size, ["small", "large"])),
   });
-  const options = createMemo((): PickOption[] => named(l().options), [], { equals: sameOptions });
+  const options = createMemo((): PickOption[] => (PICTURES[c.id] ?? named)(l().options), [], { equals: sameOptions });
   const tabs = createMemo(() => options().map((o, i) => (l().variant === "marked" && i === 1 ? { ...o, marked: true } : o)), [], { equals: sameOptions });
   const cards = createMemo(() => options().map((o) => ({ ...o, ...offWith(sideOff(o.name)) })), [], { equals: sameOptions });
-  const pictures = createMemo(() => gobos(l().options), [], { equals: sameOptions });
+  const pictures = createMemo(() => (PICTURES[c.id] ?? gobos)(l().options), [], { equals: sameOptions });
   /** A bar that is placed: a drag and the arrows move it, its readout says where. */
   const placing = () =>
     placed(c.id)
@@ -170,8 +170,36 @@ export function Live(props: { control: Control; look: Look; act: (act: Act) => v
           onPress={press}
         />
       );
-    case "Item.entry":
-      return <Item kind="entry" title={l().label} {...some("sub", l().sub)} {...some("lead", LAMPS[l().variant])} standing={standing()} {...off()} onPress={press} />;
+    case "Item.entry": {
+      // The menu bar item opens its menu: the state in words, the frame counter, Open window, Stop engine.
+      const opens = c.id === "menubar.item";
+      const entry = (inMenu: boolean) => (
+        <Item kind="entry" title={l().label} {...some("sub", l().sub)} {...some("lead", LAMPS[l().variant])} standing={opens ? "plain" : standing()} {...(opens ? { expanded: l().on } : {})} inMenu={inMenu} {...off()} onPress={press} />
+      );
+      // An entry of the menu is drawn in its menu.
+      if (!opens)
+        return (
+          <div role="menu" aria-label="Bossylights">
+            {entry(true)}
+          </div>
+        );
+      const id = `menu-${c.id}`;
+      return (
+        <div class="c-menubar">
+          {entry(false)}
+          <Show when={l().on}>
+            <div class="c-menu">
+              <p id={`${id}-state`}>{l().sub || "Running"}</p>
+              <p id={`${id}-frame`}>Frame 1 204 816</p>
+              <div role="menu" aria-label={l().label} aria-describedby={`${id}-state ${id}-frame`}>
+                <Item kind="entry" title="Open window" inMenu onPress={() => undefined} />
+                <Item kind="entry" title="Stop engine" inMenu onPress={() => undefined} />
+              </div>
+            </div>
+          </Show>
+        </div>
+      );
+    }
     case "Item.chip":
       return <Item kind="chip" title={l().label} {...off()} onRemove={() => props.act({ is: "remove" })} />;
     case "Item.strip": {

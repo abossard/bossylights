@@ -5,6 +5,7 @@ import { MACHINES, step, type Machine } from "../controls/machines.ts";
 import type { Control } from "../controls/spec.ts";
 import { inState, type Look } from "./look.ts";
 import { place, placed, type Move } from "./place.ts";
+import { stepped } from "./steps.ts";
 import { USES, type Gesture, type Use } from "./uses.ts";
 
 /** A gesture, with what it carries. */
@@ -63,19 +64,31 @@ function gestureOf(act: Act): Gesture | undefined {
 }
 
 /** The look after a gesture and what was sent. A control that is gone or off does nothing. */
-export function act(control: Control, look: Look, gesture: Act): Result {
+export function act(control: Control, before: Look, gesture: Act): Result {
+  // A refusal is said once: the next gesture takes it away.
+  const look = { ...before, refused: "" };
   const nothing: Result = { look, sent: [] };
   if (look.gone || (look.off && !look.offOption)) return nothing;
-  // Learn waits: the press picks the control and does not fire it.
-  if (look.learn) return gesture.is === "press" || gesture.is === "down" ? { look, sent: [{ name: "StartLearn", value: control.id }] } : nothing;
+  // Learn waits: the press picks the control and does not fire it. Escape ends Learn.
+  if (look.learn) {
+    if (gesture.is === "cancel") return { look: { ...look, learn: false }, sent: [] };
+    return gesture.is === "press" || gesture.is === "down" ? { look, sent: [{ name: "StartLearn", value: control.id }] } : nothing;
+  }
+  const done = withMachine(control, look, gesture);
+  // Without the engine, a drop that would send is refused: the drag ends, nothing is sent.
+  if (look.offline && gesture.is === "drop" && done.sent.length > 0) return { look: { ...done.look, refused: "Engine not connected" }, sent: [] };
+  return done;
+}
+
+function withMachine(control: Control, look: Look, gesture: Act): Result {
   const result = plainAct(control, look, gesture);
-  // Whether a song plays is a fact of the frame: no gesture changes it.
-  const plain = { ...result, look: { ...result.look, song: look.song } };
+  // Whether a song plays and whether the engine is there are facts of the frame: no gesture changes them.
+  const plain = { ...result, look: { ...result.look, song: look.song, offline: look.offline } };
   const use = USES[control.id];
   const kind = gestureOf(gesture);
   const events = use && kind ? use.on[kind] : undefined;
   // A control with a machine that reports down and up: what its machine does not list does nothing.
-  if (use && !events && (gesture.is === "down" || gesture.is === "up")) return nothing;
+  if (use && !events && (gesture.is === "down" || gesture.is === "up")) return { look, sent: [] };
   // The gesture changes the look, the machine keeps its own place.
   // A drop where it started: a placed thing back at its place, any other thing that went nowhere.
   const stayed = gesture.is === "drop" && (placed(control.id) ? plain.look.sub === look.sub : gesture.by !== undefined && gesture.by.across === 0 && gesture.by.down === 0);
@@ -100,11 +113,14 @@ function machineAct(control: Control, look: Look, use: Use, events: readonly str
   const shows = (look.song ? undefined : use.noSong?.[at]) ?? use.shows?.[at];
   // Not listed: the look stays. Empty: back to plain, with what the gesture itself changed.
   const next = shows === undefined ? look : shows === "" ? { ...look, variant: "" } : inState(control, shows);
-  return { look: { ...next, at, song: look.song }, sent };
+  return { look: { ...next, at, song: look.song, offline: look.offline, refused: "" }, sent };
 }
 
 /** A press on these picks the thing: it stays marked. */
 const PICKS = new Set<Control["kit"]>(["Item.row", "Item.tile", "Item.cell", "Block.bar"]);
+
+/** A press picks it: it sends nothing of its own, or what it sends is for a drag. */
+const picks = (control: Control) => PICKS.has(control.kit) && (control.sends.length === 0 || USES[control.id]?.machine === "drag");
 
 /** A control with no machine: its primitive says what a gesture means, the row names the command. */
 function plainAct(control: Control, look: Look, gesture: Act): Result {
@@ -114,7 +130,11 @@ function plainAct(control: Control, look: Look, gesture: Act): Result {
     case "press": {
       if (control.kit === "Button.toggle") return flip(control, look);
       if (control.id === "menubar.item") return { look: { ...look, on: !look.on }, sent: [] };
-      return { look: PICKS.has(control.kit) && !first ? { ...look, on: !look.on } : look, sent: send() };
+      const words = WORDS[control.id];
+      if (words) return { look: { ...look, ...nextWords(words, look) }, sent: send() };
+      const goes = GOES[control.id];
+      if (goes) return { look: inState(control, goes), sent: send() };
+      return { look: picks(control) ? { ...look, on: !look.on } : look, sent: send() };
     }
     // A pad with no machine of its own plays in an explainer: down is a flash, a short press latches.
     case "down":
@@ -129,7 +149,9 @@ function plainAct(control: Control, look: Look, gesture: Act): Result {
       return { look: { ...look, picked: gesture.text }, sent: send(gesture.text) };
     case "step": {
       const side = look.options[gesture.by < 0 ? 0 : 1] ?? "";
-      return side === look.offOption ? { look, sent: [] } : { look, sent: send(side) };
+      if (side === look.offOption) return { look, sent: [] };
+      const to = stepped(control.id, look.sub, gesture.by, look.options);
+      return to ? { look: { ...look, ...to }, sent: send(to.sub) } : { look, sent: send(side) };
     }
     case "remove": {
       const name = control.sends.find((n) => n.startsWith("Remove")) ?? first;
@@ -156,6 +178,32 @@ function plainAct(control: Control, look: Look, gesture: Act): Result {
 export const ENDS_BY_ITSELF: Record<string, { while: string; back: string; ms: number }> = {
   "inout.out.test": { while: "Testing", back: "Test", ms: 3000 },
 };
+
+/** A press that takes it away: the state it is in after it was used. Data. */
+export const GOES: Record<string, string> = {
+  "looks.autopilot.use-style": "gone while in use",
+};
+
+/** A button that goes through words of its own: the steps of a walk, a trace played. Data. */
+export const WORDS: Record<string, readonly Pick<Look, "label" | "sub">[]> = {
+  "how.walk.step": [
+    { label: "Start", sub: "" },
+    { label: "Next", sub: "Step 1 of 4: Press" },
+    { label: "Next", sub: "Step 2 of 4: Command" },
+    { label: "Next", sub: "Step 3 of 4: Engine" },
+    { label: "Again", sub: "Step 4 of 4: Lights" },
+  ],
+  "modules.trace": [
+    { label: "Trace", sub: "" },
+    { label: "Trace", sub: "Played: Controller, Playback, Mixer, Output" },
+  ],
+};
+
+/** The words after a press: the next, and after the last the first step again. */
+function nextWords(words: readonly Pick<Look, "label" | "sub">[], look: Look): Pick<Look, "label" | "sub"> {
+  const at = words.findIndex((w) => w.label === look.label && w.sub === look.sub);
+  return words[at + 1] ?? words[1] ?? look;
+}
 
 /** A toggle goes to the other of its first two states. With two commands the first turns it on, the second off. */
 function flip(control: Control, look: Look): Result {

@@ -412,7 +412,7 @@ export function ShelfView(props: { shelf: Shelf }) {
     <section class="c-shelf" data-shelf={props.shelf.title}>
       <h2>{props.shelf.title}</h2>
       <p class="c-fact">{props.shelf.note}</p>
-      <div class="c-specimens" style={props.shelf.across ? { "grid-template-columns": `repeat(${props.shelf.across}, minmax(0, 1fr))` } : {}}>
+      <div class="c-specimens" data-across={props.shelf.across ? "" : undefined} style={props.shelf.across ? { "--across": String(props.shelf.across) } : {}}>
         <For each={props.shelf.specimens}>
           {(specimen) => (
             <figure class="c-specimen" data-specimen>

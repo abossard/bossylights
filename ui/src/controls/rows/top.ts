@@ -152,7 +152,7 @@ export const TOP: Control[] = [
     from: ["shell/TempoSource/from-tap-give-the-beat"],
     kit: "Button.action",
     kind: "play",
-    does: "Says who drives the beat. While taps hold it, the words 'from Tap' are a button: a press gives the beat back to the picked feed. Checked with taps holding the beat",
+    does: "Says who drives the beat: 'from Tap' or the name of the feed. While taps hold it, the words 'from Tap' are a button: a press gives the beat back to the picked feed. With the feed they are words, not a button. Checked with taps holding the beat",
     sends: ["ReleaseTempo"],
     gestures: liveButton("Gives the beat back to the picked feed"),
     in: {
@@ -168,7 +168,7 @@ export const TOP: Control[] = [
     undo: no("Tap again"),
     first: keep("The owner's decision 23: taps hold until you press the words 'from Tap'. The way back is where the eye already is, not on In/Out"),
     machine: "tempo",
-    states: ["from Tap", "gone: the feed drives the beat"],
+    states: ["from Tap", "from the feed"],
   }),
   control({
     id: "top.blackout",

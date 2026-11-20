@@ -1,6 +1,7 @@
 // The one place the catalog keeps reviews outside itself: the browser's store, and the file of the
 // repository that the dev server writes (`reviews-file.mjs`). Actions, kept thin.
-import { parse, type Reviews } from "./review.ts";
+// One review at a time: a second tab never writes over what the first one rated.
+import { parse, put, reviewOf, type Review, type Reviews } from "./review.ts";
 
 const KEY = "bossylights.catalog.reviews.v1";
 const FILE = "/reviews.json";
@@ -14,23 +15,32 @@ export function loadReviews(): Reviews {
   }
 }
 
-export function saveReviews(reviews: Reviews): void {
+/** Puts one review into the store as it is now, so the reviews of another tab stay. False: the store took nothing. */
+export function storeReview(id: string, review: Review | undefined): boolean {
   try {
-    localStorage.setItem(KEY, JSON.stringify(reviews));
+    const now = parse(localStorage.getItem(KEY));
+    localStorage.setItem(KEY, JSON.stringify(put(now, id, review ?? reviewOf({}, id))));
+    return true;
   } catch {
-    // see loadReviews
+    return false;
   }
 }
 
-/** The reviews in the file of the repository. None where no server keeps one: the headless run, a built catalog. */
-export async function pullReviews(): Promise<Reviews> {
+/** The reviews in the file of the repository. Undefined where no server keeps one: a built catalog. */
+export async function pullReviews(): Promise<Reviews | undefined> {
   try {
-    return parse(await (await fetch(FILE)).text());
+    const response = await fetch(FILE);
+    return response.ok ? parse(await response.text()) : undefined;
   } catch {
-    return {};
+    return undefined;
   }
 }
 
-export function pushReviews(reviews: Reviews): void {
-  fetch(FILE, { method: "PUT", body: JSON.stringify(reviews) }).catch(() => undefined);
+/** Writes one review into the file. A review of none takes it out. False: the server did not take it. */
+export async function sendReview(id: string, review: Review | undefined): Promise<boolean> {
+  try {
+    return (await fetch(FILE, { method: "PUT", body: JSON.stringify({ id, review: review ?? null }) })).ok;
+  } catch {
+    return false;
+  }
 }

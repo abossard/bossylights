@@ -1,4 +1,4 @@
-import { For, Show } from "solid-js";
+import { createUniqueId, For, Show } from "solid-js";
 import { unbroken, type Pressable } from "./common.ts";
 import { capture } from "./dragging.ts";
 import { Status } from "./Status.tsx";
@@ -34,6 +34,7 @@ const RUNS: Record<PadState, string> = { idle: "", manual: "Manual", flash: "Fla
  * and a long hold mean is decided by the one who listens, from `onDown` and `onUp(heldMs)`.
  */
 export function Pad(props: PadProps) {
+  const reason = createUniqueId();
   let downAt = 0;
   let down = false;
   const running = () => RUNS[props.state] !== "";
@@ -65,6 +66,7 @@ export function Pad(props: PadProps) {
       aria-pressed={running()}
       aria-label={running() ? `${props.label}, running: ${RUNS[props.state]}` : props.state === "kept" ? `${props.label}, off, still held until Release` : props.label}
       disabled={props.off !== undefined}
+      aria-describedby={props.off === undefined ? undefined : reason}
       onPointerDown={pointerDown}
       onPointerUp={pointerUp}
       onPointerCancel={pointerUp}
@@ -90,7 +92,13 @@ export function Pad(props: PadProps) {
       <span class="k-pad-name" aria-hidden="true">
         {unbroken(props.label)}
       </span>
-      <Show when={props.off ?? (running() ? RUNS[props.state] : undefined)}>{(line) => <span class="k-pad-runs">{line()}</span>}</Show>
+      <Show when={props.off ?? (running() ? RUNS[props.state] : undefined)}>
+        {(line) => (
+          <span class="k-pad-runs" id={reason}>
+            {line()}
+          </span>
+        )}
+      </Show>
     </button>
   );
 }

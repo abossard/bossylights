@@ -9,7 +9,7 @@ export interface PickOption {
   off?: string;
   /** Something behind it has trouble: a red mark. */
   marked?: boolean;
-  /** What it looks like, drawn above its name: a gobo, a slot of a colour wheel (`Disc`), an effect (`Preview`). Pictures show it. */
+  /** What it looks like, drawn above its name: a gobo, a slot of a colour wheel (`Disc`), an effect (`Preview`), a model. Pictures show it, cards and segments too where it is given. */
   picture?: () => JSX.Element;
 }
 
@@ -45,6 +45,16 @@ export interface PickerProps extends Pressable {
   /** Tabs only: one action after the last tab, as "Add page". It is a button, never a tab. */
   after?: { label: string; onPress: () => void };
   onPick: (name: string) => void;
+}
+
+/** The picked tab is scrolled into its strip, sideways. The page around it never moves. */
+function inStrip(tab: HTMLElement) {
+  const strip = tab.parentElement;
+  if (!strip) return;
+  const s = strip.getBoundingClientRect();
+  const t = tab.getBoundingClientRect();
+  if (t.left < s.left) strip.scrollLeft -= s.left - t.left;
+  else if (t.right > s.right) strip.scrollLeft += t.right - s.right;
 }
 
 /** Plain names as options. */
@@ -86,13 +96,13 @@ function Group(props: Inner) {
               aria-selected={tabs() ? option.name === props.picked : undefined}
               aria-checked={tabs() ? undefined : option.name === props.picked}
               tabindex={option.name === props.picked ? 0 : -1}
-              ref={(el) => createEffect(() => tabs() && option.name === props.picked && el.scrollIntoView({ block: "nearest", inline: "nearest" }))}
+              ref={(el) => createEffect(() => tabs() && option.name === props.picked && inStrip(el))}
               disabled={!props.open.includes(option.name)}
               onPointerDown={(e) => props.fires === "down" && e.button === 0 && props.onPick(option.name)}
               // A click with no pointer behind it (detail 0) is Enter or Space.
               onClick={(e) => (props.fires !== "down" || e.detail === 0) && props.onPick(option.name)}
             >
-              <Show when={props.kind === "pictures" ? option.picture : undefined}>
+              <Show when={option.picture}>
                 {(draw) => (
                   <span class="k-pick-picture" aria-hidden="true">
                     {draw()()}

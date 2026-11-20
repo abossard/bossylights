@@ -11,8 +11,8 @@ import { screensOf, search } from "./frames.ts";
 import { Home } from "./Home.tsx";
 import { KitPage } from "./KitPage.tsx";
 import { Page } from "./Page.tsx";
-import { comment, kitKey, merge, rate, reviewOf, same, type Reviews } from "./review.ts";
-import { loadReviews, pullReviews, pushReviews, saveReviews } from "./storage.ts";
+import { comment, kitKey, merge, rate, reviewOf, type Reviews } from "./review.ts";
+import { loadReviews, pullReviews, sendReview, storeReview } from "./storage.ts";
 import "./catalog.css";
 
 const KIT = Object.keys(PRIMITIVES) as Primitive[];
@@ -34,18 +34,32 @@ function Catalog() {
   window.addEventListener("hashchange", follow);
   onCleanup(() => window.removeEventListener("hashchange", follow));
 
-  const keep = (next: Reviews) => {
-    setReviews(next);
-    saveReviews(next);
-    pushReviews(next);
+  // Why the last review was not kept. Empty: it was.
+  const [unsaved, setUnsaved] = createSignal("");
+  // Whether a server keeps the file: a built catalog has none, and nothing is written there.
+  let hasFile = false;
+  /** One review is kept: in this browser's store and in the file, each as it is now. */
+  const send = (id: string, all: Reviews) => {
+    const one = all[id];
+    const stored = storeReview(id, one);
+    setUnsaved(stored ? "" : "Not kept in this browser: its store is off");
+    if (hasFile) void sendReview(id, one).then((written) => written || setUnsaved("Not written to the file: the catalog's server did not take it"));
   };
-  // Once, at the start: the file of the repository and this browser meet. The file is written only when this browser adds to it.
+  const keep = (id: string, next: Reviews) => {
+    setReviews(next);
+    send(id, next);
+  };
+  // Another tab kept a review: this one shows it too.
+  const fromAnotherTab = () => setReviews(loadReviews());
+  window.addEventListener("storage", fromAnotherTab);
+  onCleanup(() => window.removeEventListener("storage", fromAnotherTab));
+  // Once, at the start: the file of the repository and this browser meet. What only this browser has is written to the file.
   void pullReviews().then((file) => {
-    const all = merge(file, reviews());
-    if (same(all, file)) {
-      setReviews(all);
-      saveReviews(all);
-    } else keep(all);
+    if (file === undefined) return;
+    hasFile = true;
+    const browser = reviews();
+    setReviews(merge(file, browser));
+    for (const id of Object.keys(browser)) if (JSON.stringify(browser[id]) !== JSON.stringify(file[id])) send(id, browser);
   });
 
   const found = createMemo(() => search(CONTROLS, query()).filter((c) => screen() === EVERY_SCREEN || c.screen === screen()));
@@ -119,10 +133,10 @@ function Catalog() {
       </nav>
       <main class="c-main" ref={(el) => (main = el)}>
         <Show when={kit()} keyed>
-          {(p) => <KitPage primitive={p} controls={CONTROLS} reviews={reviews()} review={reviewOf(reviews(), kitKey(p))} onRate={(rating) => keep(rate(reviews(), kitKey(p), rating))} onComment={(text) => keep(comment(reviews(), kitKey(p), text))} />}
+          {(p) => <KitPage primitive={p} controls={CONTROLS} reviews={reviews()} review={reviewOf(reviews(), kitKey(p))} unsaved={unsaved()} onRate={(rating) => keep(kitKey(p), rate(reviews(), kitKey(p), rating))} onComment={(text) => keep(kitKey(p), comment(reviews(), kitKey(p), text))} />}
         </Show>
         <Show when={open()} keyed>
-          {(c) => <Page control={c} review={reviewOf(reviews(), c.id)} onRate={(rating) => keep(rate(reviews(), c.id, rating))} onComment={(text) => keep(comment(reviews(), c.id, text))} />}
+          {(c) => <Page control={c} review={reviewOf(reviews(), c.id)} unsaved={unsaved()} onRate={(rating) => keep(c.id, rate(reviews(), c.id, rating))} onComment={(text) => keep(c.id, comment(reviews(), c.id, text))} />}
         </Show>
         <Show when={!kit() && !open()}>
           <Home controls={CONTROLS} primitives={KIT} reviews={reviews()} />

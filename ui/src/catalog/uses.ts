@@ -49,8 +49,8 @@ export const USES: Record<string, Use> = {
     shows: { off: "off", flash: "held", held: "held", latched: "latched", latchedDown: "latched" },
   },
   "top.tap": { machine: "tempo", on: { press: ["tap"] } },
-  "top.tempo.source": { machine: "tempo", on: { press: ["back"] }, at: "tap", shows: { tap: "from Tap", feed: "gone: the feed drives the beat", oneTap: "gone: the feed drives the beat" } },
-  "top.learn": { machine: "learn", on: { upShort: ["press"], upLong: ["hold"] }, shows: { off: "off", pick: "pick", wait: "wait" } },
+  "top.tempo.source": { machine: "tempo", on: { press: ["back"] }, at: "tap", shows: { tap: "from Tap", feed: "from the feed", oneTap: "from the feed" } },
+  "top.learn": { machine: "learn", on: { upShort: ["press"], upLong: ["hold"], cancel: ["cancel"] }, shows: { off: "off", pick: "pick", wait: "wait" } },
   "console.edit-surface": { machine: "surface", on: { press: ["edit"] }, shows: { playing: "there", locked: "locked", editing: "gone: 'Done editing' is in its place" } },
   "console.done-editing": { machine: "surface", on: { press: ["done"] }, at: "editing", shows: { editing: "", playing: "gone: Not editing", locked: "gone: Not editing" } },
   "console.pad": {
@@ -59,6 +59,7 @@ export const USES: Record<string, Use> = {
     shows: { off: "idle", flash: "flash", on: "running by hand", onDown: "running by hand", kept: "pad off, still held" },
   },
   "looks.try": { machine: "playPad", on: PAD_ON, shows: { off: "idle", flash: "flash", on: "running", onDown: "running" } },
+  "how.pad": { machine: "playPad", on: PAD_ON, shows: { off: "idle", flash: "flash", on: "running", onDown: "running" } },
   "console.widget.frame": DRAG,
   "console.widget.resize": DRAG,
   "songs.section.edge": DRAG,

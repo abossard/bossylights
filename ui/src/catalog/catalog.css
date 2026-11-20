@@ -4,7 +4,6 @@
 html, body, #root { height: 100%; }
 body { background: var(--bg); color: var(--paper); font: 500 var(--text-md) / 1.3 var(--font-ui); font-variant-numeric: tabular-nums; -webkit-font-smoothing: antialiased; scrollbar-color: var(--line) var(--bg); }
 button, input, textarea, select { font: inherit; color: inherit; }
-:focus-visible { outline: 3px solid var(--paper); outline-offset: 2px; }
 ::selection { background: var(--paper); color: var(--ink); }
 a { color: var(--paper); text-underline-offset: 3px; }
 code { font: 600 var(--text-sm) / 1.2 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--mute); }
@@ -65,7 +64,7 @@ b[data-verdict="change"], b[data-verdict="remove"] { text-decoration: underline;
 .c-rate[aria-pressed="true"] { background: var(--paper); border-color: var(--paper); color: var(--ink); }
 .c-rating-says { margin-left: var(--sp-2); font-size: var(--text-sm); font-weight: 700; color: var(--mute); }
 .c-comment { display: flex; flex-direction: column; gap: var(--sp-1); font-size: var(--text-sm); font-weight: 700; color: var(--mute); }
-.c-comment textarea, .c-export textarea { width: 100%; padding: 8px 10px; background: var(--s1); border: var(--rule) solid var(--line); color: var(--paper); font-weight: 500; resize: vertical; }
+.c-comment textarea, .c-export textarea { width: 100%; padding: 8px 10px; background: var(--s1); border: var(--rule) solid var(--edge); color: var(--paper); font-weight: 500; resize: vertical; }
 .c-log { list-style: none; display: flex; flex-direction: column; gap: var(--sp-1); min-height: 28px; }
 .c-log li { display: flex; align-items: center; gap: var(--sp-2); }
 .c-log-from { font-size: var(--text-sm); color: var(--mute); }
@@ -80,10 +79,13 @@ b[data-verdict="change"], b[data-verdict="remove"] { text-decoration: underline;
 .c-is[data-is="gone"] { color: var(--mute); text-decoration: line-through; }
 .c-fact { min-height: 2.6em; font-size: var(--text-sm); color: var(--mute); }
 .c-stage { min-height: 148px; padding: var(--sp-4); display: grid; place-items: center; background: var(--bg); overflow-x: auto; }
+/* A control never runs past its stage: what is too wide wraps, a row of tabs scrolls in its strip. */
+.c-stage > * { max-width: 100%; min-width: 0; }
 .c-frame[data-is="gone"] .c-stage { border: var(--rule) dashed var(--line); background: none; }
 .c-gone { font-size: var(--text-sm); font-weight: 700; color: var(--mute); }
 /* Learn waits for a pick: the same dashed paper frame as the mockups' Learn mode */
-.c-stage.is-learn > * { outline: var(--rule) dashed var(--paper); outline-offset: 4px; cursor: copy; }
+.c-stage.is-learn { outline: var(--rule) dashed var(--paper); outline-offset: -6px; }
+.c-stage.is-learn > * { cursor: copy; }
 .c-says { flex: 1; font-size: var(--text-sm); }
 .c-sent { min-height: 26px; display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1); }
 .c-sent-none { font-size: var(--text-sm); color: var(--mute); }
@@ -97,13 +99,14 @@ b[data-verdict="change"], b[data-verdict="remove"] { text-decoration: underline;
 /* a control that needs the width of a screen: the Now strip */
 .c-page[data-wide] .c-top { grid-template-columns: 1.4fr 1fr; }
 .c-page[data-wide] .c-alone { grid-column: 1 / -1; }
-.c-page[data-wide] .c-frames { grid-template-columns: repeat(auto-fill, minmax(520px, 1fr)); }
+.c-page[data-wide] .c-frames { grid-template-columns: repeat(auto-fill, minmax(min(520px, 100%), 1fr)); }
 .c-page[data-wide] .c-stage, .c-specimen .c-stage:has(.k-item[data-kind="strip"]) { justify-items: stretch; }
 
 /* ---- a primitive: its kinds, states and colours side by side */
 .c-shelf { display: flex; flex-direction: column; gap: var(--sp-2); }
 .c-shelf .c-fact { min-height: 0; max-width: 90ch; }
 .c-specimens { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: var(--sp-2); }
+.c-specimens[data-across] { grid-template-columns: repeat(var(--across), minmax(0, 1fr)); }
 .c-specimen { min-width: 0; display: flex; flex-direction: column; gap: var(--sp-2); padding: var(--sp-2); background: var(--s1); }
 .c-specimen .c-stage { flex: 1; min-height: 88px; padding: var(--sp-3); }
 .c-specimen figcaption { font-size: var(--text-sm); font-weight: 600; color: var(--mute); }
@@ -126,4 +129,6 @@ b[data-verdict="change"], b[data-verdict="remove"] { text-decoration: underline;
   .c-list { max-height: 40vh; }
   .c-top { grid-template-columns: 1fr; }
   .c-page { padding: var(--sp-4); }
+  /* a narrow screen: one specimen a line, as wide as it needs */
+  .c-specimens[data-across] { grid-template-columns: 1fr; }
 }

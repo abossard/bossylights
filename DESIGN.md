@@ -6,6 +6,7 @@ colors:
   surface: "#26231f"
   surface-raised: "#36322c"
   line: "#46413a"
+  edge: "#756e62"
   paper: "#f4efe6"
   mute: "#c4bbad"
   ink: "#1c1a17"
@@ -136,6 +137,7 @@ Warm off-black and paper, plus one flat colour for each of the three rows.
 | `--s1` | `#26231f` | Panels, idle pads, deck slabs |
 | `--s2` | `#36322c` | Hover, fader fill, unlit lamps |
 | `--line` | `#46413a` | Rules and quiet borders |
+| `--edge` | `#756e62` | The edge of a field, a fader track, an XY pad: 3:1 against the ground. `--line` is only a rule |
 | `--paper` | `#f4efe6` | Text, NOW, LIVE on, selected, primary action |
 | `--mute` | `#c4bbad` | Secondary text |
 | `--ink` | `#1c1a17` | Text on any colour or on paper |
@@ -275,7 +277,7 @@ Decks are numbered 1 and 2. Their states are Playing, Cued and Stopped. The deck
 | Toggle on | Paper fill | Any pressed toggle |
 | Disabled with reason | Dashed outline, the reason under the label | "Edit surface / Locked while LIVE is on" |
 
-44 px high, square, hover brightens the border, pressed darkens the fill. Focus: 3 px paper outline, 2 px off the control.
+44 px high, square, hover brightens the border, pressed darkens the fill. Focus: 3 px paper outline, 2 px off the control. It wins over every other mark: kept, picked and lifted are drawn inside the control, Learn on its stage.
 
 ### Tabs, Segmented, Fader, XY pad
 
@@ -291,7 +293,7 @@ What you touch on the Console stays yours until Release. Three marks say so, all
 | Where | Mark |
 |---|---|
 | Notice above the pads | "You hold, until Release", one line per pad or control with what it touched ("brightness of PAR 1-8"), a dashed "pad off" chip, and the Release button |
-| Pad that is off but still held | 3 px pink outline and a pink "held" tag in the corner. No NOW flag, no fill |
+| Pad that is off but still held | 3 px pink edge inside the pad and a pink "held" tag in the corner. No NOW flag, no fill |
 | Timetable, Manual row | The block continues as a dashed tail "held, pad off" |
 
 ### Who wins (DMX)

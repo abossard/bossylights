@@ -533,3 +533,278 @@ for (const [id, text, leave, command, keeps, reason] of typed) {
     if (leave === "Tab" || !reason) await expect(field).toHaveValue(keeps);
   });
 }
+
+// ---- #189: the should-fix list and the nits
+
+/** Drags the first control of a frame by `dy` px down. */
+async function dragDown(page: Page, key: string, dy: number) {
+  const control = frame(page, key).locator(".c-stage button").first();
+  await control.scrollIntoViewIfNeeded();
+  const box = await control.boundingBox();
+  if (!box) throw new Error("the control is not on screen");
+  await page.mouse.move(box.x + 20, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + 20, box.y + box.height / 2 + dy, { steps: 6 });
+  await page.mouse.up();
+}
+
+test("UX-03 without the engine a look dragged onto a group is refused and says why", async ({ page }) => {
+  await page.goto("/#/looks.library.look");
+  await dragDown(page, "no-engine", 60);
+  await expect(sent(page, "no-engine")).toHaveText("Refused: Engine not connected");
+});
+
+test("UX-03 a press opens the look and marks it, without the engine too", async ({ page }) => {
+  await page.goto("/#/looks.library.look");
+  for (const key of ["alone", "no-engine"]) {
+    await frame(page, key).locator(".k-item").click();
+    await expect(frame(page, key).locator('.k-item[data-standing="picked"]')).toHaveCount(1);
+    await expect(sent(page, key)).toHaveText("Nothing sent yet");
+  }
+});
+
+test("UX-06 Escape ends Learn from anywhere", async ({ page }) => {
+  await page.goto("/#/top.learn");
+  const learn = frame(page, "state:wait").getByRole("button");
+  await expect(learn).toHaveAttribute("aria-pressed", "true");
+  await page.locator("h1").click();
+  await page.keyboard.press("Escape");
+  await expect(learn).toHaveAttribute("aria-pressed", "false");
+  await expect(sent(page, "state:wait")).toHaveText("CancelLearn");
+});
+
+test("UX-06 Escape ends Learn in a control that waits to be picked", async ({ page }) => {
+  await page.goto("/#/top.tap");
+  await expect(frame(page, "learn").locator(".c-stage.is-learn")).toHaveCount(1);
+  await page.locator("h1").click();
+  await page.keyboard.press("Escape");
+  await expect(frame(page, "learn").locator(".c-stage.is-learn")).toHaveCount(0);
+});
+
+// [control, the options it shows, how many have a picture]
+const pictured = [
+  ["looks.pattern.shape", ["Plasma", "Stripes", "Wave", "Sparkle"], 4],
+  ["patch.panel.wiring", ["Snake", "Zigzag"], 2],
+  ["patch.add.model", ["LED PAR 64", "Moving head 250", "Strobe 1500"], 3],
+] as const;
+for (const [id, names, pictures] of pictured) {
+  test(`UX-10, UX-27 ${id} shows its real choices, each with a picture`, async ({ page }) => {
+    await page.goto(`/#/${id}`);
+    const options = frame(page, "alone").locator(".k-pick-opt");
+    await expect(options.locator(".k-label")).toHaveText([...names]);
+    await expect(options.locator(".k-pick-picture")).toHaveCount(pictures);
+  });
+}
+
+test("UX-12 a second tab rating another control keeps the first tab's rating", async ({ context }) => {
+  const a = await context.newPage();
+  const b = await context.newPage();
+  await a.goto("/#/top.tap");
+  await b.goto("/#/top.undo");
+  await a.getByRole("button", { name: "4 of 5" }).click();
+  await b.getByRole("button", { name: "3 of 5" }).click();
+  await a.reload();
+  await expect(a.locator(".c-rating-says")).toHaveText("4 of 5");
+  await b.goto("/#/top.undo");
+  await b.reload();
+  await expect(b.locator(".c-rating-says")).toHaveText("3 of 5");
+});
+
+test("UX-12 a review that is not written to the file says so", async ({ page }) => {
+  await page.route("**/reviews.json", (route) => (route.request().method() === "PUT" ? route.fulfill({ status: 500 }) : route.continue()));
+  await page.goto("/#/top.tap");
+  await page.getByRole("button", { name: "4 of 5" }).click();
+  await expect(page.locator("[data-unsaved]")).toContainText("Not written to the file");
+});
+
+/** The contrast of two colours as `rgb(…)`, after WCAG. */
+const contrast = (a: string, b: string) => {
+  const lum = (c: string) => {
+    const [r, g, bl] = (c.match(/\d+(\.\d+)?/g) ?? []).slice(0, 3).map((v) => Number(v) / 255).map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
+    return 0.2126 * (r ?? 0) + 0.7152 * (g ?? 0) + 0.0722 * (bl ?? 0);
+  };
+  const [x, y] = [lum(a), lum(b)];
+  return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
+};
+
+// [page, the edge that must be seen]
+const edges = [
+  ["inout.osc.port", ".k-input"],
+  ["console.fader", ".k-fader-track"],
+  ["console.xy", ".k-xy"],
+  ["top.tap", ".c-comment textarea"],
+] as const;
+for (const [id, selector] of edges) {
+  test(`UX-13 the edge of ${selector} reaches 3:1 against the stage`, async ({ page }) => {
+    await page.goto(`/#/${id}`);
+    const edge = await page.locator(selector).first().evaluate((el) => getComputedStyle(el).borderTopColor);
+    const stage = await page.locator(".c-stage").first().evaluate((el) => getComputedStyle(el).backgroundColor);
+    expect(contrast(edge, stage)).toBeGreaterThanOrEqual(3);
+  });
+}
+
+// [page, frame, the control]: marks drawn round a control, which the focus ring must still be seen over
+const marked = [
+  ["console.pad", "holding", ".k-pad"],
+  ["looks.seq.bar", "state:dragged", ".k-block"],
+  ["top.tap", "learn", ".c-stage button"],
+  ["looks.step.colour.add", "alone", ".c-stage button"],
+] as const;
+for (const [id, key, selector] of marked) {
+  test(`UX-14 the focus ring wins over the marks of ${id} in ${key}`, async ({ page }) => {
+    await page.goto(`/#/${id}`);
+    const control = frame(page, key).locator(selector).first();
+    const look = () => control.evaluate((el) => {
+      const s = getComputedStyle(el);
+      return { ring: `${s.outlineStyle} ${s.outlineWidth} ${s.outlineColor} ${s.outlineOffset}`, all: `${s.outline} ${s.outlineOffset} ${s.boxShadow}` };
+    });
+    const blurred = await look();
+    await page.keyboard.press("Tab");
+    await control.focus();
+    const focused = await look();
+    expect(focused.ring).toBe("solid 3px rgb(244, 239, 230) 2px");
+    expect(focused.all).not.toBe(blurred.all);
+  });
+}
+
+test("UX-14 a picked bar looks different with the focus", async ({ page }) => {
+  await page.goto("/#/looks.seq.bar");
+  const bar = frame(page, "alone").locator(".k-block");
+  await bar.click();
+  await expect(bar).toHaveAttribute("data-standing", "picked");
+  const look = () => bar.evaluate((el) => `${getComputedStyle(el).outline} ${getComputedStyle(el).boxShadow}`);
+  await page.locator("h1").click();
+  const blurred = await look();
+  await page.keyboard.press("Tab");
+  await bar.focus();
+  expect(await look()).not.toBe(blurred);
+});
+
+// [page, the control that is off without the engine]
+const offline = [
+  ["console.xy", ".k-xy"],
+  ["console.fader", '[role="slider"]'],
+] as const;
+for (const [id, selector] of offline) {
+  test(`UX-17 ${id} without the engine is said off, says why and keeps the focus`, async ({ page }) => {
+    await page.goto(`/#/${id}`);
+    const control = frame(page, "no-engine").locator(selector);
+    await expect(control).toHaveAttribute("aria-disabled", "true");
+    await expect(control).toHaveAttribute("tabindex", "0");
+    await expect(control).toHaveAccessibleDescription("Engine not connected");
+  });
+}
+
+test("UX-17 an offline pad says why", async ({ page }) => {
+  await page.goto("/#/console.pad");
+  await expect(frame(page, "no-engine").locator(".k-pad")).toHaveAccessibleDescription("Engine not connected");
+});
+
+test("UX-18 the menu bar item opens its menu", async ({ page }) => {
+  await page.goto("/#/menubar.item");
+  const f = frame(page, "window-closed");
+  await f.getByRole("button").first().click();
+  await expect(f.getByRole("button").first()).toHaveAttribute("aria-expanded", "true");
+  const menu = f.getByRole("menu");
+  await expect(menu).toHaveAccessibleDescription(/^Running Frame \d/);
+  await expect(menu.getByRole("menuitem")).toHaveText(["Open window", "Stop engine"]);
+});
+
+for (const [id, width] of [["top.now-strip", 400], ["top.workspaces", 400], ["top.workspaces", 1280], ["looks.seq.width", 1280], ["console.speed", 1280]] as const) {
+  test(`UX-21, UX-22 ${id} at ${width} px: nothing runs past the page or its frame`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto(`/#/${id}`);
+    await expect(page.locator(".c-frame").first()).toBeVisible();
+    const main = await page.locator(".c-main").evaluate((el) => el.scrollWidth - el.clientWidth);
+    expect(main).toBeLessThanOrEqual(1);
+    const over = await page.locator(".c-stage").evaluateAll((stages) => stages.filter((s) => s.scrollWidth > s.clientWidth + 1).map((s) => s.closest(".c-frame")?.getAttribute("data-frame")));
+    expect(over).toEqual([]);
+  });
+}
+
+for (const width of [400, 1280]) {
+  test(`UX-24 at ${width} px a page of tabs opens at its top, and a pick scrolls only the tab strip`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 700 });
+    await page.goto("/#/top.workspaces");
+    await expect(page.locator(".c-frame").first()).toBeVisible();
+    await expect(page.locator("h1")).toBeInViewport();
+    const f = frame(page, "live-on");
+    await f.scrollIntoViewIfNeeded();
+    const before = await page.evaluate(() => [document.querySelector(".c-main")?.scrollTop, document.scrollingElement?.scrollTop]);
+    await f.getByRole("tab", { name: "In/Out" }).click();
+    await expect(f.getByRole("tab", { name: "In/Out" })).toHaveAttribute("aria-selected", "true");
+    expect(await page.evaluate(() => [document.querySelector(".c-main")?.scrollTop, document.scrollingElement?.scrollTop])).toEqual(before);
+  });
+}
+
+test("UX-28 the tab of a lost output carries the trouble mark in its name", async ({ page }) => {
+  await page.goto("/#/dmx.universe");
+  await expect(frame(page, "output-lost").getByRole("tab", { name: "2 has trouble" })).toHaveCount(1);
+});
+
+test("UX-32 a lifted bar keeps its colour at full strength", async ({ page }) => {
+  await page.goto("/#/looks.seq.bar");
+  await expect(frame(page, "state:dragged").locator(".k-block")).toHaveCSS("opacity", "1");
+});
+
+test("UX-33 the explainer pad stops on a second press", async ({ page }) => {
+  await page.goto("/#/how.pad");
+  const pad = frame(page, "alone").locator(".k-pad");
+  await pad.click();
+  await expect(pad).toHaveAttribute("aria-pressed", "true");
+  await pad.click();
+  await expect(pad).toHaveAttribute("aria-pressed", "false");
+});
+
+// [page, the target that must be 44 px both ways]
+const targets = [
+  ["console.speed", ".k-pick-opt"],
+  ["songs.section.remove-look", ".k-item .k-btn"],
+] as const;
+for (const [id, selector] of targets) {
+  test(`UX-15 ${id}: every target is 44 px both ways`, async ({ page }) => {
+    await page.goto(`/#/${id}`);
+    const sizes = await frame(page, "alone").locator(selector).evaluateAll((els) => els.map((el) => el.getBoundingClientRect()).map((r) => Math.min(Math.round(r.width), Math.round(r.height))));
+    expect(Math.min(...sizes)).toBeGreaterThanOrEqual(44);
+  });
+}
+
+// [page, frame, key, what is sent]
+const keys = [
+  ["top.undo", "alone", "ControlOrMeta+z", "Undo"],
+  ["top.redo", "state:has a step", "ControlOrMeta+Shift+z", "Redo"],
+] as const;
+for (const [id, key, keys_, command] of keys) {
+  test(`UX-20 ${keys_} in a frame of ${id} sends ${command}`, async ({ page }) => {
+    await page.goto(`/#/${id}`);
+    await frame(page, key).locator(".c-stage").click({ position: { x: 4, y: 4 } });
+    await page.keyboard.press(keys_);
+    await expect(sent(page, key)).toContainText(command);
+  });
+}
+
+test("UX-20 Redo with nothing to redo sends nothing", async ({ page }) => {
+  await page.goto("/#/top.redo");
+  await frame(page, "alone").locator(".c-stage").click({ position: { x: 4, y: 4 } });
+  await page.keyboard.press("ControlOrMeta+Shift+z");
+  await expect(sent(page, "alone")).toHaveText("Nothing sent yet");
+});
+
+test("UX-20 a number key in a frame of the workspaces picks that workspace", async ({ page }) => {
+  await page.goto("/#/top.workspaces");
+  await frame(page, "alone").locator(".c-stage").click({ position: { x: 4, y: 4 } });
+  await page.keyboard.press("2");
+  await expect(frame(page, "alone").getByRole("tab", { name: "Songs" })).toHaveAttribute("aria-selected", "true");
+});
+
+test("UX-23 at 400 px a specimen of the kit is not squeezed", async ({ page }) => {
+  await page.setViewportSize({ width: 400, height: 900 });
+  await page.goto("/#/kit/Block");
+  const squeezed = await page.locator(".c-specimen .c-stage").evaluateAll((stages) => stages.filter((s) => s.scrollWidth > s.clientWidth + 1).length);
+  expect(squeezed).toBe(0);
+});
+
+test("UX-30 the review export has a name", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByRole("textbox", { name: "Review Markdown" })).toHaveCount(1);
+});

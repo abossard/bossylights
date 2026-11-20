@@ -129,7 +129,7 @@ export function Home(props: { controls: readonly Control[]; primitives: readonly
 
       <h2>Take the reviews away</h2>
       <div class="c-export">
-        <textarea readonly rows={8} data-export value={asMarkdown(props.reviews, props.controls, props.primitives)} />
+        <textarea readonly rows={8} aria-label="Review Markdown" data-export value={asMarkdown(props.reviews, props.controls, props.primitives)} />
         <button type="button" class="c-rate c-copy" onClick={copy}>
           Copy as Markdown
         </button>

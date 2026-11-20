@@ -24,6 +24,7 @@ export const EXPLAINERS: Control[] = [
       keyboard: "Tab to it, Enter is a short press",
       touch: "As a press. 44 px or more",
     },
+    machine: "playPad",
     states: ["idle", "running", "flash"],
   }),
   explains("How it works", {

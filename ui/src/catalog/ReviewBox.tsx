@@ -1,10 +1,10 @@
 // The owner's rating and comment on one thing of the catalog: a control or a primitive.
-import { For } from "solid-js";
+import { For, Show } from "solid-js";
 import type { Rating, Review } from "./review.ts";
 
 const RATINGS: readonly Rating[] = [1, 2, 3, 4, 5];
 
-export function ReviewBox(props: { review: Review; onRate: (rating: Rating) => void; onComment: (text: string) => void }) {
+export function ReviewBox(props: { review: Review; unsaved: string; onRate: (rating: Rating) => void; onComment: (text: string) => void }) {
   return (
     <>
       <h2>Your review</h2>
@@ -22,6 +22,9 @@ export function ReviewBox(props: { review: Review; onRate: (rating: Rating) => v
         <span>What works, what does not?</span>
         <textarea rows={3} value={props.review.comment} onInput={(e) => props.onComment(e.currentTarget.value)} />
       </label>
+      <p class="c-unsaved" data-unsaved role="status">
+        <Show when={props.unsaved}>{(why) => <span class="k-reason">{why()}</span>}</Show>
+      </p>
     </>
   );
 }

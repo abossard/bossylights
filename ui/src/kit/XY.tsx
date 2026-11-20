@@ -1,4 +1,4 @@
-import { createSignal, Show } from "solid-js";
+import { createSignal, createUniqueId, Show } from "solid-js";
 import { keyStep, level, placeIn, wheelAt, wheelColour, wheelSpot, type Pressable } from "./common.ts";
 import { capture } from "./dragging.ts";
 
@@ -29,6 +29,7 @@ const NAMES: Record<XYKind, readonly [string, string]> = { position: ["pan", "ti
  * A colour: a wheel with a ring where the colour is. The mark follows the finger, also outside.
  */
 export function XY(props: XYProps) {
+  const reason = createUniqueId();
   const [down, setDown] = createSignal(false);
   const kind = () => props.kind ?? "position";
   const wheel = () => kind() === "colour";
@@ -70,9 +71,11 @@ export function XY(props: XYProps) {
         data-kind={kind()}
         classList={{ "is-held": props.held === true, "is-off": props.off !== undefined }}
         role="application"
-        tabindex={props.off === undefined ? 0 : -1}
+        // Off, it keeps the focus: the keyboard hears why.
+        tabindex={0}
         aria-disabled={props.off !== undefined}
-        aria-label={`${reads()}. Arrows move`}
+        aria-label={props.off === undefined ? `${reads()}. Arrows move` : reads()}
+        aria-describedby={props.off === undefined ? undefined : reason}
         onPointerDown={press}
         onPointerMove={(e) => down() && follow(e)}
         onPointerUp={() => setDown(false)}
@@ -101,7 +104,13 @@ export function XY(props: XYProps) {
         </Show>
         {reads()}
       </span>
-      <Show when={props.off}>{(reason) => <span class="k-reason">{reason()}</span>}</Show>
+      <Show when={props.off}>
+        {(why) => (
+          <span class="k-reason" id={reason}>
+            {why()}
+          </span>
+        )}
+      </Show>
     </div>
   );
 }

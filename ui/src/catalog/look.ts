@@ -5,6 +5,7 @@ import type { SituationId } from "../controls/situations.ts";
 import type { Control } from "../controls/spec.ts";
 import type { Colour } from "../kit/common.ts";
 import { SAMPLES, SITUATION_STATE, STATE_LOOKS } from "./samples.ts";
+import { atLimit } from "./steps.ts";
 import { USES } from "./uses.ts";
 
 export interface Look {
@@ -37,9 +38,13 @@ export interface Look {
   learn: boolean;
   /** A song plays: a fact of the frame, not of the control. A gesture never changes it. */
   song: boolean;
+  /** The engine is not connected: a fact of the frame. What would send is refused. */
+  offline: boolean;
+  /** Why the last gesture was refused. Empty: it was not. The next gesture takes it away. */
+  refused: string;
 }
 
-const PLAIN: Look = { label: "", sub: "", colour: "plain", on: false, off: "", offOption: "", gone: "", value: 62, value2: 40, options: [], picked: "", variant: "", at: "", learn: false, song: false };
+const PLAIN: Look = { label: "", sub: "", colour: "plain", on: false, off: "", offOption: "", gone: "", value: 62, value2: 40, options: [], picked: "", variant: "", at: "", learn: false, song: false, offline: false, refused: "" };
 
 /** The usual look of a control: nothing special is true. */
 export function usual(control: Control): Look {
@@ -85,6 +90,9 @@ export function inState(control: Control, state: string): Look {
   const side = /^(.+) off at (.+)$/.exec(state) ?? /^(first|last)(: no '.+')$/.exec(state);
   if (side?.[1] && side[2]) {
     const end = side[1] === "first" ? 0 : side[1] === "last" ? 1 : look.options.findIndex((o) => same(o, side[1] ?? ""));
+    // A stepper at its limit shows the value there and says why.
+    const limited = atLimit(control.id, end === 0 ? -1 : 1, look.options);
+    if (limited) return { ...look, ...limited };
     const reason = side[1] === "first" ? "It is the first" : side[1] === "last" ? "It is the last" : `At ${side[2]}`;
     return { ...look, off: reason, offOption: look.options[Math.max(end, 0)] ?? "" };
   }
@@ -137,7 +145,7 @@ const SONG_PLAYS: ReadonlySet<SituationId> = new Set(["song", "recording"]);
 /** The look of a control in one situation: the cell of the row decides if it is there and if it can be pressed. */
 export function inSituation(control: Control, situation: SituationId): Look {
   const cell = control.cells[situation];
-  const look = { ...inState(control, SITUATION_STATE[control.id]?.[situation] ?? ""), song: SONG_PLAYS.has(situation) };
+  const look = { ...inState(control, SITUATION_STATE[control.id]?.[situation] ?? ""), song: SONG_PLAYS.has(situation), offline: situation === "no-engine" };
   if (cell.is === "gone") return { ...look, gone: cell.says };
   if (cell.is === "off") return { ...look, off: cell.says, offOption: "" };
   const picked = situation === "learn" && control.learn.yes && cell.says.startsWith("It is picked");

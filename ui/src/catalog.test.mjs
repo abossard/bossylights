@@ -7,7 +7,7 @@ import { framesOf, screensOf, search } from "./catalog/frames.ts";
 import { inSituation, inState, usual } from "./catalog/look.ts";
 import { place } from "./catalog/place.ts";
 import { asMarkdown, comment, kitKey, merge, parse, rate, reviewOf, same } from "./catalog/review.ts";
-import { fileText } from "./catalog/reviews-file.mjs";
+import { fileText, withReview } from "./catalog/reviews-file.mjs";
 import { SAMPLES, SITUATION_STATE, STATE_LOOKS } from "./catalog/samples.ts";
 import { SHAPES } from "./catalog/shapes.ts";
 import { USES } from "./catalog/uses.ts";
@@ -117,7 +117,6 @@ const plays = [
   ["Learn held picks itself", "top.learn", "alone", [{ is: "down" }, { is: "up", long: true }], ["StartLearn"], { on: true, at: "wait" }],
   ["in Learn mode a press picks the control and does not fire it", "top.tap", "learn", [{ is: "press" }], ["StartLearn top.tap"], { learn: true }],
   ["two taps: the beat follows the taps", "top.tap", "alone", [{ is: "press" }, { is: "press" }], ["TapTempo", "TapTempo"], { at: "tap" }],
-  ["the words 'from Tap' give the beat back to the feed", "top.tempo.source", "alone", [{ is: "press" }], ["ReleaseTempo"], { gone: "The feed drives the beat", at: "feed" }],
   ["Release all is off while nothing is held", "console.running.release-all", "alone", [{ is: "press" }], [], { off: "Nothing held" }],
   ["Release all gives back what is held", "console.running.release-all", "holding", [{ is: "press" }], ["ReleaseAll"], { off: "" }],
   ["a fader sends its level", "console.fader", "alone", [{ is: "set", value: 80, value2: 0 }], ["SetMaster 80"], { value: 80 }],
@@ -127,7 +126,7 @@ const plays = [
   ["a toggle with two commands: on, then off", "songs.play-from", "alone", [{ is: "press" }, { is: "press" }], ["PlayFrom", "StopPlayFrom"], { on: false }],
   ["a feed with no signal cannot be picked", "inout.tempo.feed", "state:off: no signal", [{ is: "pick", option: "Timecode" }], [], { off: "No signal", offOption: "Timecode" }],
   ["a feed with a signal can", "inout.tempo.feed", "state:off: no signal", [{ is: "pick", option: "Audio" }], ["SetTempoFeed Audio"], { picked: "Audio" }],
-  ["a stepper at its end goes only the other way", "looks.seq.width", "state:narrower off at a quarter beat", [{ is: "step", by: -1 }, { is: "step", by: 1 }], ["SetSequenceEntry Wider"], { offOption: "Narrower" }],
+  ["a stepper at its end goes only the other way", "looks.seq.width", "state:narrower off at a quarter beat", [{ is: "step", by: -1 }, { is: "step", by: 1 }], ["SetSequenceEntry ½ beat"], { offOption: "", sub: "½ beat" }],
   ["a drop sends once, with where it landed", "patch.grid.light", "alone", [{ is: "lift" }, { is: "drop", by: { across: 1, down: 0, wider: 0 } }], ["SetAddress 18 to 24"], { variant: "", at: "idle", sub: "18 to 24" }],
   ["a drop of a thing that is not placed says it landed", "console.widget.frame", "edit-surface", [{ is: "lift" }, { is: "drop" }], ["PlaceWidget where it landed"], { at: "idle" }],
   ["an arrow moves a placed bar and sends where it is", "looks.seq.bar", "alone", [{ is: "nudge", by: { across: 1, down: 0, wider: 0 } }], ["SetSequenceEntry At beat 1¼, 1 beat"], { sub: "At beat 1¼, 1 beat" }],
@@ -147,6 +146,29 @@ const plays = [
   ["Stop engine works with the window closed", "menubar.stop-engine", "window-closed", [{ is: "press" }], ["StopEngine"], { gone: "" }],
   ["the menu bar item opens its menu and sends nothing", "menubar.item", "window-closed", [{ is: "press" }], [], { on: true }],
   ["a control of a screen is not there with the window closed", "top.blackout", "window-closed", [{ is: "press" }], [], { gone: "The window is closed" }],
+  // #189
+  ["UX-03 a press opens the look and marks it", "looks.library.look", "alone", [{ is: "press" }], [], { on: true, refused: "" }],
+  ["UX-03 a press without the engine still opens the look", "looks.library.look", "no-engine", [{ is: "press" }], [], { on: true }],
+  ["UX-03 a look dropped on a group joins it", "looks.library.look", "alone", [{ is: "lift" }, { is: "drop", by: { across: 0, down: 2, wider: 0 } }], ["AddToGroup where it landed"], { refused: "" }],
+  ["UX-03 without the engine the drop is refused", "looks.library.look", "no-engine", [{ is: "lift" }, { is: "drop", by: { across: 0, down: 2, wider: 0 } }], [], { refused: "Engine not connected", variant: "", at: "idle" }],
+  ["UX-03 the refusal goes with the next gesture", "looks.library.look", "no-engine", [{ is: "lift" }, { is: "drop", by: { across: 0, down: 2, wider: 0 } }, { is: "press" }], [], { refused: "", on: true }],
+  ["UX-06 Escape ends Learn while it waits for a pick", "top.learn", "state:pick", [{ is: "cancel" }], [], { on: false, at: "off" }],
+  ["UX-06 Escape ends Learn while it waits for the hardware", "top.learn", "state:wait", [{ is: "cancel" }], ["CancelLearn"], { on: false, at: "off" }],
+  ["UX-06 Escape ends Learn in a control that waits to be picked", "top.tap", "learn", [{ is: "cancel" }], [], { learn: false }],
+  ["UX-19 Wider adds a quarter beat and sends the width", "looks.seq.width", "alone", [{ is: "step", by: 1 }], ["SetSequenceEntry 1¼ beats"], { sub: "1¼ beats", off: "" }],
+  ["UX-19 Narrower down to a quarter beat, then it is off", "looks.seq.width", "alone", [{ is: "step", by: -1 }, { is: "step", by: -1 }, { is: "step", by: -1 }, { is: "step", by: -1 }], ["SetSequenceEntry ¾ beat", "SetSequenceEntry ½ beat", "SetSequenceEntry ¼ beat"], { sub: "¼ beat", off: "A quarter beat is the least", offOption: "Narrower" }],
+  ["UX-19 ×2 doubles the measure", "looks.pattern.measure", "alone", [{ is: "step", by: 1 }], ["SetPattern 8 beats"], { sub: "8 beats" }],
+  ["UX-19 ×2 stops at 32 beats", "looks.pattern.measure", "alone", [{ is: "step", by: 1 }, { is: "step", by: 1 }, { is: "step", by: 1 }, { is: "step", by: 1 }], ["SetPattern 8 beats", "SetPattern 16 beats", "SetPattern 32 beats"], { sub: "32 beats", off: "32 beats is the most", offOption: "×2" }],
+  ["UX-19 ÷2 at 1 beat is off", "looks.pattern.measure", "state:÷2 off at 1", [{ is: "step", by: -1 }], [], { sub: "1 beat" }],
+  ["UX-19 Higher moves the light one address up", "patch.details.address", "alone", [{ is: "step", by: 1 }], ["SetAddress 18"], { sub: "18" }],
+  ["UX-19 the proposed address changes and sends nothing", "patch.add.address", "alone", [{ is: "step", by: -1 }], [], { sub: "32" }],
+  ["UX-25 the autopilot turned on says no more that it waits", "console.autopilot.on", "live-on", [], [], { sub: "" }],
+  ["UX-26 Use this style goes once it is used", "looks.autopilot.use-style", "alone", [{ is: "press" }, { is: "press" }], ["SetAutopilotStyle"], { gone: "While in use" }],
+  ["UX-26 the beat back from Tap names the feed", "top.tempo.source", "alone", [{ is: "press" }], ["ReleaseTempo"], { label: "from VirtualDJ", gone: "", at: "feed" }],
+  ["UX-33 the explainer pad stops on a second short press", "how.pad", "alone", [{ is: "down" }, { is: "up", long: false }, { is: "down" }, { is: "up", long: false }], ["StartLook", "EndFlash"], { variant: "idle", on: false }],
+  ["UX-33 the walk steps on and starts again", "how.walk.step", "alone", [{ is: "press" }], [], { label: "Next", sub: "Step 1 of 4: Press" }],
+  ["UX-33 the walk ends with Again", "how.walk.step", "alone", [{ is: "press" }, { is: "press" }, { is: "press" }, { is: "press" }], [], { label: "Again", sub: "Step 4 of 4: Lights" }],
+  ["UX-33 the trace shows the steps it played", "modules.trace", "alone", [{ is: "press" }], [], { sub: "Played: Controller, Playback, Mixer, Output" }],
 ];
 for (const [what, id, key, gestures, sent, after] of plays) {
   test(`play: ${what}`, () => {
@@ -155,6 +177,24 @@ for (const [what, id, key, gestures, sent, after] of plays) {
     for (const [field, value] of Object.entries(after)) assert.deepEqual(result.look[field], value, field);
   });
 }
+
+// #189: [what, id, frame, field, expected]
+const facts = [
+  ["UX-10 the shapes of a pattern", "looks.pattern.shape", "alone", "options", ["Plasma", "Stripes", "Wave", "Sparkle"]],
+  ["UX-10 a pattern runs on a group or a matrix", "looks.pattern.runs-on", "alone", "options", ["PARs", "Movers", "Panel"]],
+  ["UX-25 the autopilot waits for LIVE only while ready", "console.autopilot.on", "state:on", "sub", ""],
+  ["UX-25 off says nothing about LIVE", "console.autopilot.on", "state:off", "sub", ""],
+  ["UX-25 ready waits for LIVE", "console.autopilot.on", "alone", "sub", "Waits for LIVE"],
+  ["UX-27 every colour order", "patch.panel.order", "alone", "options", ["RGB", "RBG", "GRB", "GBR", "BRG", "BGR"]],
+  ["UX-27 the three walks", "how.walk", "alone", "options", ["Press a pad", "Record and replay", "The autopilot yields"]],
+  ["UX-28 the tab of a lost output is marked", "dmx.universe", "output-lost", "variant", "marked"],
+  ["UX-29 the universe search says what it searches", "patch.universes.search", "alone", "label", "Search universes"],
+  ["UX-29 the drawer adds a pad", "console.drawer.add", "alone", "label", "Pads"],
+  ["UX-19 Narrower at its end shows a quarter beat", "looks.seq.width", "state:narrower off at a quarter beat", "sub", "¼ beat"],
+  ["UX-19 Narrower at its end says why", "looks.seq.width", "state:narrower off at a quarter beat", "off", "A quarter beat is the least"],
+  ["UX-19 ×2 at its end shows 32 beats", "looks.pattern.measure", "state:×2 off at 32", "sub", "32 beats"],
+];
+for (const [what, id, key, field, expected] of facts) test(what, () => assert.deepEqual(frame(id, key).look[field], expected));
 
 test("the usual look of a control with a machine starts where the control lives in it", () => {
   assert.equal(usual(byId("console.pad")).at, "off");
@@ -369,6 +409,22 @@ const puts = [
   ["not an object", "7", undefined],
 ];
 for (const [what, body, expected] of puts) test(`the reviews file: ${what}`, () => assert.equal(fileText(body), expected));
+
+// UX-12: one review at a time, put into the file as it is now. [what, file, body, file after]
+const ones = [
+  ["a review joins the others", { a: R(2) }, { id: "b", review: R(3, "ok") }, { a: R(2), b: R(3, "ok") }],
+  ["a review replaces its old one only", { a: R(2), b: R(1) }, { id: "b", review: R(5) }, { a: R(2), b: R(5) }],
+  ["a review taken back leaves the file", { a: R(2), b: R(1) }, { id: "b", review: null }, { a: R(2) }],
+  ["a broken file is an empty one", "{nope", { id: "b", review: R(4) }, { b: R(4) }],
+  ["a body with no name is refused", { a: R(2) }, { review: R(4) }, undefined],
+  ["a body with a broken review is refused", { a: R(2) }, { id: "b", review: { rating: 9, comment: "" } }, undefined],
+];
+for (const [what, file, body, expected] of ones) {
+  test(`the reviews file, one review: ${what}`, () => {
+    const after = withReview(typeof file === "string" ? file : JSON.stringify(file), JSON.stringify(body));
+    assert.deepEqual(after === undefined ? undefined : JSON.parse(after), expected);
+  });
+}
 
 test("the export is a table: primitives first, then controls in the order of the behaviour table", () => {
   const text = asMarkdown({ "top.tap": { rating: 4, comment: "fine | really\nyes" }, "top.live": { rating: 0, comment: "wider" }, [kitKey("Picker")]: { rating: 5, comment: "" } }, CONTROLS, KIT);

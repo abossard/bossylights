@@ -1,4 +1,4 @@
-import { createSignal, Show } from "solid-js";
+import { createSignal, createUniqueId, Show } from "solid-js";
 import { keyStep, level, placeIn, type Pressable } from "./common.ts";
 import { capture } from "./dragging.ts";
 import { Status } from "./Status.tsx";
@@ -15,6 +15,7 @@ export interface FaderProps extends Pressable {
  * The number above is `value`: what came back, not what was asked for.
  */
 export function Fader(props: FaderProps) {
+  const reason = createUniqueId();
   // The place of the finger while it is down: a drag in progress is the screen's own state.
   const [finger, setFinger] = createSignal<number>();
   const shown = () => finger() ?? level(props.value);
@@ -46,8 +47,10 @@ export function Fader(props: FaderProps) {
       <div
         class="k-fader-track"
         role="slider"
-        tabindex={props.off === undefined ? 0 : -1}
+        // Off, it keeps the focus: the keyboard hears why.
+        tabindex={0}
         aria-label={props.label}
+        aria-describedby={props.off === undefined ? undefined : reason}
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={level(props.value)}
@@ -65,7 +68,13 @@ export function Fader(props: FaderProps) {
         </Show>
       </div>
       <span class="k-fader-label">{props.label}</span>
-      <Show when={props.off}>{(reason) => <span class="k-reason">{reason()}</span>}</Show>
+      <Show when={props.off}>
+        {(why) => (
+          <span class="k-reason" id={reason}>
+            {why()}
+          </span>
+        )}
+      </Show>
     </div>
   );
 }

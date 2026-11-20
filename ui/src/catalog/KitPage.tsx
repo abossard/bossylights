@@ -13,7 +13,7 @@ export const propWords = (control: Control): string[] => {
   return [...(r.colour === "plain" ? [] : [r.colour]), ...Object.entries(r.props).map(([name, value]) => (value === "yes" ? name : `${name} ${value}`))];
 };
 
-export function KitPage(props: { primitive: Primitive; controls: readonly Control[]; reviews: Reviews; review: Review; onRate: (rating: Rating) => void; onComment: (text: string) => void }) {
+export function KitPage(props: { primitive: Primitive; controls: readonly Control[]; reviews: Reviews; review: Review; unsaved: string; onRate: (rating: Rating) => void; onComment: (text: string) => void }) {
   const p = props.primitive;
   const users = props.controls.filter((c) => primitiveOf(c.kit) === p);
   const kinds: readonly string[] = PRIMITIVES[p];
@@ -70,7 +70,7 @@ export function KitPage(props: { primitive: Primitive; controls: readonly Contro
       </Show>
 
       <section class="c-review c-review-wide" aria-label="Your review">
-        <ReviewBox review={props.review} onRate={props.onRate} onComment={props.onComment} />
+        <ReviewBox review={props.review} unsaved={props.unsaved} onRate={props.onRate} onComment={props.onComment} />
       </section>
     </article>
   );

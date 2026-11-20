@@ -56,7 +56,7 @@ Fixed props are the ones that never change for the control. Its words, its state
 | --- | --- | --- | --- | --- | --- |
 | Trouble chip | `top.trouble` | Top bar | danger | holds: 4 lines |  |
 | Tap | `top.tap` | Top bar | plain | fires: down |  |
-| Tempo source | `top.tempo.source` | Top bar | manual | fires: down |  |
+| Tempo source | `top.tempo.source` | Top bar | manual | fires: down, holds: 2 lines |  |
 | Blackout | `top.blackout` | Top bar | danger | fires: down, held: short press and hold, holds: 3 lines |  |
 | Undo | `top.undo` | Top bar | plain | holds: 2 lines |  |
 | Cancel Learn | `top.learn.cancel` | Top bar | plain |  |  |
@@ -127,7 +127,7 @@ Fixed props are the ones that never change for the control. Its words, its state
 | Remove output | `inout.out.remove` | In/Out | plain |  |  |
 | Add output | `inout.out.add` | In/Out | plain |  |  |
 | Release | `how.release` | How it works | plain |  |  |
-| Walk: Back, Next, Again | `how.walk.step` | How it works | plain | holds: 4 lines |  |
+| Walk: Back, Next, Again | `how.walk.step` | How it works | plain | holds: 3 lines |  |
 | Trace a press | `modules.trace` | Modules | plain |  |  |
 | Screen that uses a module | `modules.jump` | Modules | plain |  |  |
 

@@ -32,6 +32,10 @@ export interface ItemProps extends Pressable {
   standing?: Standing;
   /** What a screen reader hears, where the words on it are not enough. */
   says?: string;
+  /** An entry: one of an open menu. Elsewhere it is a button. */
+  inMenu?: boolean;
+  /** An entry that opens a menu: whether it is open. */
+  expanded?: boolean;
   /** A press picks or opens it. A chip has none: it is only taken out. */
   onPress?: () => void;
   /** The cross of a chip takes it out of this place. It never deletes the thing itself. */
@@ -85,7 +89,9 @@ export function Item(props: ItemProps) {
         type="button"
         class="k-item"
         {...shared()}
-        role={props.kind === "entry" ? "menuitem" : undefined}
+        role={props.kind === "entry" && props.inMenu ? "menuitem" : undefined}
+        aria-haspopup={props.expanded === undefined ? undefined : "menu"}
+        aria-expanded={props.expanded}
         aria-current={props.standing === "picked"}
         aria-label={props.says}
         disabled={props.off !== undefined}

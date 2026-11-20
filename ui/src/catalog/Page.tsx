@@ -19,7 +19,10 @@ interface Logged {
   sent: Sent;
 }
 
-export function Page(props: { control: Control; review: Review; onRate: (rating: Rating) => void; onComment: (text: string) => void }) {
+/** Controls that need the width of a screen, or a row of tabs: their frames are wide. */
+const WIDE = new Set<Control["kit"]>(["Item.strip", "Picker.tabs"]);
+
+export function Page(props: { control: Control; review: Review; unsaved: string; onRate: (rating: Rating) => void; onComment: (text: string) => void }) {
   const c = props.control;
   const frames = framesOf(c);
   const of = (kind: Frame["kind"]) => frames.filter((f) => f.kind === kind);
@@ -29,7 +32,7 @@ export function Page(props: { control: Control; review: Review; onRate: (rating:
   const logged = (frame: Frame, sent: readonly Sent[]) => setLog([...sent.map((s) => ({ frame: frame.title, sent: s })).reverse(), ...log()].slice(0, LOG));
 
   return (
-    <article class="c-page" data-page={c.id} data-wide={c.kit === "Item.strip" ? "" : undefined}>
+    <article class="c-page" data-page={c.id} data-wide={WIDE.has(c.kit) ? "" : undefined}>
       <header class="c-page-head">
         <p class="c-crumb">
           <a href={`#/kit/${primitiveOf(c.kit)}`} data-kit-of>
@@ -104,7 +107,7 @@ export function Page(props: { control: Control; review: Review; onRate: (rating:
         </section>
 
         <section class="c-review" aria-label="Your review">
-          <ReviewBox review={props.review} onRate={props.onRate} onComment={props.onComment} />
+          <ReviewBox review={props.review} unsaved={props.unsaved} onRate={props.onRate} onComment={props.onComment} />
           <h2>Sent on this page</h2>
           <ol class="c-log" data-log>
             <For each={log()} fallback={<li class="c-sent-none">Play a frame: the command shows as it fires</li>}>

@@ -396,7 +396,7 @@ export const CONSOLE: Control[] = [
     from: ["console/WidgetDrawer/button"],
     kit: "Item.row",
     kind: "edit",
-    does: "Puts a widget of that kind on the page: button, slider, XY pad, cue list, speed dial, label, frame",
+    does: "Puts a widget of that kind on the page: pads, slider, XY pad, cue list, speed dial, label, frame",
     sends: ["AddWidget"],
     gestures: button("Adds that widget at the first free place"),
     in: whileEditing(works("Adds the widget. On a full page it adds nothing and says to make one smaller first")),

@@ -17,7 +17,8 @@ const NONE: Review = { rating: 0, comment: "" };
 
 export const reviewOf = (reviews: Reviews, id: string): Review => reviews[id] ?? NONE;
 
-function put(reviews: Reviews, id: string, review: Review): Reviews {
+/** The reviews with one put in. A review with no rating and no comment takes it out. */
+export function put(reviews: Reviews, id: string, review: Review): Reviews {
   const { [id]: _old, ...rest } = reviews;
   return review.rating === 0 && review.comment.trim() === "" ? rest : { ...rest, [id]: review };
 }

@@ -367,7 +367,7 @@ stateDiagram-v2
 
 ### Play on lights
 
-Used by: `looks.try`
+Used by: `looks.try`, `how.pad`
 
 ```mermaid
 stateDiagram-v2
@@ -758,7 +758,7 @@ stateDiagram-v2
 | Lock indicator | `top.indicator.lock` | While LIVE is on, nothing can change what a press does: the Console layout, its pads and pages, Learn and the mappings are locked | `SetLock` | setting |
 | Trouble chip | `top.trouble` | Says what is wrong with the way to the lights, and opens In/Out | nothing: the open workspace | view |
 | Tap | `top.tap` | Sets the tempo by tapping along. After two taps the beat follows the taps, and stays with them until the words 'from Tap' are pressed | `TapTempo` | play |
-| Tempo source | `top.tempo.source` | Says who drives the beat. While taps hold it, the words 'from Tap' are a button: a press gives the beat back to the picked feed. Checked with taps holding the beat | `ReleaseTempo` | play |
+| Tempo source | `top.tempo.source` | Says who drives the beat: 'from Tap' or the name of the feed. While taps hold it, the words 'from Tap' are a button: a press gives the beat back to the picked feed. With the feed they are words, not a button. Checked with taps holding the beat | `ReleaseTempo` | play |
 | Blackout | `top.blackout` | Every light goes dark. The only way to go dark | `Blackout` | play |
 | Undo | `top.undo` | Takes back the last change to the show file. Not what was played | `Undo` | edit |
 | Workspace tabs | `top.workspaces` | Opens one of the six workspaces: Console, Songs, Looks, Patch, DMX, In/Out | nothing: the open workspace | view |
@@ -996,7 +996,7 @@ stateDiagram-v2
 | Widget edit frame | `console.widget.frame` | Moves a widget on the 12 by 12 grid, only where it fits. Says its name and size | `PlaceWidget` `RemoveWidget` | edit |
 | Widget resize handle | `console.widget.resize` | Resizes a widget from its bottom right corner, not below its smallest size | `PlaceWidget` | edit |
 | Remove widget | `console.widget.remove` | Takes the widget off the page. Its looks and faders stay in the show file | `RemoveWidget` | edit |
-| Add a widget | `console.drawer.add` | Puts a widget of that kind on the page: button, slider, XY pad, cue list, speed dial, label, frame | `AddWidget` | edit |
+| Add a widget | `console.drawer.add` | Puts a widget of that kind on the page: pads, slider, XY pad, cue list, speed dial, label, frame | `AddWidget` | edit |
 | Name of the page | `console.page.name` | The name on the tab of the open page | `RenamePage` | edit |
 | Page earlier or later | `console.page.move` | Moves the open page one tab to the left or to the right. Its place shows between the two buttons | `MovePage` | edit |
 | Delete page | `console.page.delete` | Removes the open page and its widgets. Looks and faders stay in the show file. The last page stays | `DeletePage` | edit |
