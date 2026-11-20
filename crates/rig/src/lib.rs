@@ -45,6 +45,7 @@
 extern crate alloc;
 
 mod capabilities;
+pub mod channels;
 mod patch;
 
 pub use capabilities::{shows_one_gobo, supports};

@@ -69,6 +69,14 @@ impl Wheels {
         }
     }
 
+    /// The byte a colour wheel of a light that mixes colour rests at: its bypass, so the
+    /// mix shows. `None` for any other channel, and for a wheel without a bypass.
+    pub(crate) fn rest(&self, channel: &fixture_library::Channel) -> Option<u8> {
+        (is_colour_wheel(channel) && !self.mixers.is_empty())
+            .then(|| bypass(channel, self.adds, &self.mixers))
+            .flatten()
+    }
+
     /// The writers of the coarse channel `index` of the mode, at `at`, when it is a wheel
     /// of `light`. `None` when it is not a wheel.
     pub(crate) fn bind(
@@ -296,7 +304,7 @@ fn colour_slots(channel: &fixture_library::Channel) -> Vec<(Rgb, u8)> {
         if let Some(colour) = colour
             && !slots.iter().any(|(slot, _)| *slot == colour)
         {
-            slots.push((colour, midpoint(range)));
+            slots.push((colour, slot_byte(range)));
         }
     }
     slots
@@ -330,7 +338,7 @@ fn gobo_slots(channel: &fixture_library::Channel) -> Vec<u8> {
         .ranges
         .iter()
         .filter(|r| gobo(r) || open(r))
-        .map(midpoint)
+        .map(slot_byte)
         .collect()
 }
 
@@ -367,7 +375,7 @@ fn bypass(channel: &fixture_library::Channel, adds: bool, mixers: &[usize]) -> O
                 || names_the_mix(range, mixers)
                 || turns_the_macro_off(range)
         })
-        .map(midpoint)
+        .map(slot_byte)
         .or_else(|| neutral(channel).filter(|_| !adds))
 }
 
@@ -478,8 +486,9 @@ const fn unsupported(light: u16, property: Property) -> Refusal {
     Refusal::Unsupported { light, property }
 }
 
-/// The lower midpoint of a range: 20 to 29 is 24.
-fn midpoint(range: &Range) -> u8 {
+/// The byte of a slot: the lower midpoint of its range, 20 to 29 is 24.
+#[must_use]
+pub fn slot_byte(range: &Range) -> u8 {
     let mid = (u16::from(range.min) + u16::from(range.max)) / 2;
     u8::try_from(mid).unwrap_or(range.min)
 }

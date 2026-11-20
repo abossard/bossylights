@@ -331,3 +331,49 @@ fn a_shutter_or_strobe_channel_has_a_value_that_lets_light_out() {
         assert_eq!(only_channel(&channel).open(), open, "{name}");
     }
 }
+
+// where no light comes out: the first range marked closed
+#[test]
+fn a_channel_is_closed_at_the_first_range_marked_closed() {
+    let shutter = |ranges: &str| {
+        format!(r#"<Channel Name="C"><Group Byte="0">Shutter</Group>{ranges}</Channel>"#)
+    };
+    let range = |min: u8, max: u8, preset: &str, label: &str| {
+        format!(r#"<Capability Min="{min}" Max="{max}" {preset}>{label}</Capability>"#)
+    };
+    let cases: Vec<(&str, String, Option<u8>)> = vec![
+        (
+            "closed first",
+            shutter(
+                &[
+                    range(0, 7, r#"Preset="ShutterClose""#, "Closed"),
+                    range(8, 255, r#"Preset="ShutterOpen""#, "Open"),
+                ]
+                .concat(),
+            ),
+            Some(0),
+        ),
+        (
+            "the first of two closed ranges",
+            shutter(
+                &[
+                    range(0, 9, r#"Preset="ShutterOpen""#, "Open"),
+                    range(10, 19, r#"Preset="ShutterClose""#, "Closed"),
+                    range(250, 255, r#"Preset="ShutterClose""#, "Closed"),
+                ]
+                .concat(),
+            ),
+            Some(10),
+        ),
+        // a dark label without the preset is not marked closed
+        (
+            "labelled blackout only",
+            shutter(&range(0, 9, "", "Blackout")),
+            None,
+        ),
+        ("no ranges", shutter(""), None),
+    ];
+    for (name, channel, closed) in cases {
+        assert_eq!(only_channel(&channel).closed(), closed, "{name}");
+    }
+}

@@ -52,9 +52,17 @@ fn from_preset(stem: &str) -> Option<Function> {
     Some(function)
 }
 
-/// A channel's colour or dimmer, said only by its name inside the Intensity group.
+/// A channel's colour or dimmer, said only by its name inside the Intensity group. A name
+/// with fog, haze or smoke in it ("Amount of Fog") is no dimmer: it is `Other`.
 fn intensity_by_name(name: &str) -> Function {
-    match name.trim().to_ascii_lowercase().as_str() {
+    let lower = name.trim().to_ascii_lowercase();
+    if lower
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|word| matches!(word, "fog" | "haze" | "smoke"))
+    {
+        return Function::Other(name.to_string());
+    }
+    match lower.as_str() {
         "red" => Function::Red,
         "green" => Function::Green,
         "blue" => Function::Blue,

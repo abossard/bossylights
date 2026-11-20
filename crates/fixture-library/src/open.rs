@@ -38,6 +38,16 @@ impl Channel {
                 .unwrap_or(self.default.unwrap_or(0)),
         )
     }
+
+    /// The lowest value of the first range marked closed (`ShutterClose`): where no light
+    /// comes out. `None` when no range is marked closed.
+    #[must_use]
+    pub fn closed(&self) -> Option<u8> {
+        self.ranges
+            .iter()
+            .find(|r| r.does == Some(Does::Closed))
+            .map(|r| r.min)
+    }
 }
 
 fn lets_light_out(range: &Range) -> bool {

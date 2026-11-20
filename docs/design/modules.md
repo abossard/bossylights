@@ -87,7 +87,7 @@ The bar shows depth: interface size on the left, what it hides on the right.
 | **Mixer** | `apply` `frame` | the who-wins rules (one table), fades, launch on beat, flash, release, masters, blackout | ▮▮ → ▮▮▮▮▮▮▮▮ |
 | **Sources** | `evaluate` | chases, movement maths, pixel matrices, audio scripts, palettes, laser shapes | ▮ → ▮▮▮▮▮▮▮▮ |
 | **Clock** | `now` `follow` | tap, audio beat, MIDI clock, DJ position, timecode, smoothing | ▮▮ → ▮▮▮▮▮▮ |
-| **Rig** | `fixtures` `groups` `resolve` | addresses, modes, 16-bit, colour mixing, pan/tilt limits, curves, fixture swap | ▮▮▮ → ▮▮▮▮▮▮▮▮▮ |
+| **Rig** | `fixtures` `groups` `resolve` `lower` | addresses, modes, 16-bit, colour mixing, pan/tilt limits, curves, fixture swap, the default rules of each channel | ▮▮▮ → ▮▮▮▮▮▮▮▮▮ |
 | **Fixture library** | `search` `model` | QLC+, OFL and GDTF file formats | ▮▮ → ▮▮▮▮▮ |
 | **Output** | `devices` `send` | USB timing, the rate of each device (44 for DMX, 60 for DDP by default), reconnects, Art-Net, sACN, DDP, laser DAC | ▮▮ → ▮▮▮▮▮▮▮▮ |
 | **Project** | `read` `edit` `undo` `redo` | file format, autosave, migration, history | ▮▮▮▮ → ▮▮▮▮▮▮ |
@@ -96,6 +96,25 @@ The bar shows depth: interface size on the left, what it hides on the right.
 | **Show** | `record` `play` `edit` | tracks, clips, nested song shows, quantize, section blocks | ▮▮▮ → ▮▮▮▮▮▮ |
 | **Music** | `playing` `analyse` | VirtualDJ protocols, analysis pipeline, beat grids, confidence | ▮▮ → ▮▮▮▮▮▮ |
 | **Autopilot** | `start` `stop` | choosing looks, not repeating, staying out of your hands' way | ▮▮ → ▮▮▮▮▮ |
+
+### Rig: a mode becomes channels (channel model, #239)
+
+`rig::channels::lower` is a calculation off the tick. `resolve` (writers per light) goes at T4, when the tick runs on channels.
+
+```mermaid
+flowchart LR
+  M["Mode + first channel"] --> L["lower"]
+  L --> C["Per channel<br/>rest, dark, fade or jump,<br/>ties, follows, travel"]
+  L --> P["Pairs<br/>coarse + fine, adjacent or not"]
+  L --> K["Compounds<br/>Byte, Word, Xy, Rgb, Rgbw,<br/>Rgba, Cmy, Slot, Components"]
+```
+
+| Hides | Rule |
+|---|---|
+| which channels follow Master and Blackout | from the function: dimmers, emitters no dimmer carries, a shutter with a closed range. Fog and unknown channels stay independent |
+| where a pair is | a fine byte joins the first coarse byte of its head that does the same |
+| what a typed value is set on | one compound per head, every channel in one Byte or Word |
+| the helpers | `word_split`, `word_join`, `to_native`, `rgb_to_rgbw`, `slot_byte`, `degrees` |
 
 All who-wins rules live in the Mixer, in one table. No screen and no other module decides between two values for the same light. See [who-wins.md](who-wins.md).
 

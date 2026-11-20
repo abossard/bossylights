@@ -173,6 +173,27 @@ fn a_channel_does_what_its_group_or_name_says() {
             Dimmer,
             Fine,
         ),
+        // fog, haze or smoke in the Intensity group is no dimmer
+        (
+            r#"<Channel Name="Amount of Fog"><Group Byte="0">Intensity</Group></Channel>"#,
+            other("Amount of Fog"),
+            Coarse,
+        ),
+        (
+            r#"<Channel Name="Haze"><Group Byte="0">Intensity</Group></Channel>"#,
+            other("Haze"),
+            Coarse,
+        ),
+        (
+            r#"<Channel Name="Smoke-output"><Group Byte="0">Intensity</Group></Channel>"#,
+            other("Smoke-output"),
+            Coarse,
+        ),
+        (
+            r#"<Channel Name="Foggy dimmer"><Group Byte="0">Intensity</Group></Channel>"#,
+            Dimmer,
+            Coarse,
+        ),
         (
             r#"<Channel Name="C"><Group Byte="0">Pan</Group></Channel>"#,
             Pan,
