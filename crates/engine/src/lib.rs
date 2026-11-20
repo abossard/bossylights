@@ -720,7 +720,7 @@ impl Engine {
             // `run` puts in the priority, once the thread has it.
             now: Box::new(Snapshot::new(universes, Priority::RealTime)),
             hand,
-            channels: Box::new(Channels::NEW),
+            channels: channels(),
             carried: Box::new(Carried::new()),
             staged: Box::new([None; (lane::BOXES + 1) * MAX_OUTPUTS]),
             clock: clock.clone(),
@@ -1655,6 +1655,13 @@ impl Drop for Engine {
             drop(free.join());
         }
     }
+}
+
+/// Every channel at rest, on the heap. Its own frame: the 256 KiB a debug build passes
+/// through the stack is gone again before the engine starts its threads.
+#[inline(never)]
+fn channels() -> Box<Channels> {
+    Box::new(Channels::NEW)
 }
 
 /// What the tick thread owns. Every buffer is made before it starts.
