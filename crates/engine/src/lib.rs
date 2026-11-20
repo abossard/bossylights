@@ -838,7 +838,8 @@ impl Sender {
                 self.generation = generation;
                 if let Some(live) = self.plays.get_mut(slot) {
                     if let Some(old) = live.as_ref() {
-                        self.prefix_work.push_back((self.sent, 2 * old.work()));
+                        self.prefix_work
+                            .push_back((self.sent, looks::play_work(old.work())));
                     }
                     *live = Some(Live {
                         play,
@@ -931,7 +932,7 @@ impl Sender {
     fn check_work(&self, new_plans: usize, lights: usize) -> Result<(), Refusal> {
         let playing: usize = self.plays.iter().flatten().map(Live::work).sum();
         let prefix: usize = self.prefix_work.iter().map(|(_, work)| work).sum();
-        if (playing + new_plans) * 2 + prefix + lights > looks::WORK_LIMIT {
+        if looks::play_work(playing + new_plans) + prefix + lights > looks::WORK_LIMIT {
             return Err(Refusal::WorkLimit);
         }
         Ok(())
@@ -956,7 +957,8 @@ impl Sender {
     fn release(&mut self, play: PlayId) -> Result<(), Refusal> {
         self.push(EngineCommand::Release { play }, Brings::Nothing)?;
         if let Some(old) = self.plays.get_mut(play.slot()).and_then(Option::take) {
-            self.prefix_work.push_back((self.sent, 2 * old.work()));
+            self.prefix_work
+                .push_back((self.sent, looks::play_work(old.work())));
         }
         Ok(())
     }
@@ -1007,7 +1009,8 @@ impl Sender {
             if slot.as_ref().is_some_and(&ends)
                 && let Some(old) = slot.take()
             {
-                self.prefix_work.push_back((self.sent, 2 * old.work()));
+                self.prefix_work
+                    .push_back((self.sent, looks::play_work(old.work())));
                 self.retired += 1;
             }
         }
@@ -1158,7 +1161,7 @@ impl Sender {
         for version in changed {
             if let Some(Some(live)) = self.plays.get_mut(version.play.slot()) {
                 self.prefix_work
-                    .push_back((self.sent, 2 * live.current.plan.work()));
+                    .push_back((self.sent, looks::play_work(live.current.plan.work())));
                 if live.current.usage.repeat == Repeat::Once {
                     Arc::make_mut(live.earlier.get_or_insert_with(Default::default))
                         .push(live.current.clone());

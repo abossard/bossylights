@@ -12,6 +12,18 @@ use rig::Patch;
 /// Maximum variable visits booked for one wake.
 pub const WORK_LIMIT: usize = 65_536;
 
+/// A play reserves its frame sample and a possible terminal sample in the same wake.
+pub const fn play_work(sample: usize) -> usize {
+    sample.saturating_mul(2)
+}
+
+pub(crate) fn sample_work(lights: usize, visits_per_light: usize) -> Result<usize, Refusal> {
+    lights
+        .checked_mul(visits_per_light)
+        .filter(|&sample| play_work(sample) <= WORK_LIMIT)
+        .ok_or(Refusal::WorkLimit)
+}
+
 /// Maximum compiled storage in a saved revision. Queued and retired plan references
 /// share the same immutable objects until their last owner lets go.
 pub const PLAN_BYTES: usize = 64 * 1024 * 1024;
@@ -136,12 +148,12 @@ impl Plan {
                 if size_of_val(leaf.entries.as_ref()) > room {
                     return Err(Refusal::WorkLimit);
                 }
-                let work = leaf
+                let lights = leaf
                     .entries
                     .iter()
                     .map(|entry| usize::from(entry.lights.count()))
                     .sum();
-                (PlanKind::Step(leaf), work)
+                (PlanKind::Step(leaf), sample_work(lights, 1)?)
             }
             Definition::Sequence(_) => {
                 let (program, work) = sequence::compile(looks, look, patch, room)?;

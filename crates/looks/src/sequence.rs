@@ -2,7 +2,7 @@
 //! contributes its full expansion to admission and keeps its own timing and spread.
 
 use crate::Looks;
-use crate::compile::{Leaf, Target as SampleTarget, Timed, WORK_LIMIT};
+use crate::compile::{Leaf, Target as SampleTarget, Timed, WORK_LIMIT, sample_work};
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
 use core::mem::size_of_val;
@@ -194,7 +194,7 @@ pub(crate) fn compile(
     // Charge the binding search at every visited node, and the sample write and mix
     // for each target light. The front also books event samples for the FIFO prefix.
     let per_light = built.size.visits * (1 + comparisons(builder.nodes.len())) + 2;
-    let work = limited(per_light.checked_mul(built.ordered.len()))?;
+    let work = sample_work(built.ordered.len(), per_light)?;
 
     // The graph, count of bindings and union of targets determine the complete
     // flattened plan size before allocating its per-light binding tables.

@@ -676,5 +676,23 @@ fn linked_ends() {
         before,
         "linked ends allocated or freed on the tick"
     );
+    // Each live play holds one return place. With the tick paused, every restart
+    // reserves another until these commands fill all the remaining places.
+    let restart = Command::StartLook {
+        look: 1,
+        rank: Rank::Show,
+        when: When::Now,
+    };
+    for _ in PLAYS..engine::QUEUE + engine::MAX_OUTPUTS {
+        mock::wait_until(
+            "a once-end plan swap never returned its place",
+            || match sender.send(restart) {
+                Ok(()) => true,
+                Err(Refusal::QueueFull) => false,
+                Err(reason) => panic!("restart refused: {reason:?}"),
+            },
+        );
+    }
+    assert_eq!(sender.send(restart), Err(Refusal::QueueFull));
     wakes.run();
 }

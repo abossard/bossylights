@@ -8,7 +8,7 @@ use engine::{
     Begun, ChannelNumbers, Color, Command, Engine, Fixture, GrabId, Member, MemberList, Members,
     Property, QUEUE, Rate, Refusal, Rgb, RunNumbers, Sender, Target, Text, Universes, Value,
 };
-use engine_core::Pixels;
+use engine_core::{Pixels, Sequence, SequenceItem, Step};
 use mock::Heard;
 use std::sync::Arc;
 
@@ -82,6 +82,112 @@ fn send(sender: &mut Sender, command: Command) -> Result<Option<u16>, Refusal> {
 
 fn bytes(heard: &Heard, universe: u16, first: u16) -> [u8; 3] {
     [0, 1, 2].map(|offset| heard.level(universe, first + offset))
+}
+
+fn sequence_on(target: Target) -> [Command; 2] {
+    [
+        Command::PutStep {
+            look: 1,
+            name: text("red"),
+            step: Step {
+                target,
+                values: engine::Light {
+                    intensity: Some(u16::MAX),
+                    colour: Some(Rgb {
+                        red: u16::MAX,
+                        ..Rgb::BLACK
+                    }),
+                    ..engine::Light::DARK
+                },
+            },
+        },
+        Command::PutSequence {
+            look: 2,
+            name: text("linked"),
+            sequence: Sequence::new(&[SequenceItem {
+                look: 1,
+                ..Default::default()
+            }])
+            .unwrap(),
+        },
+    ]
+}
+
+#[test]
+fn a_saved_sequence_must_fit_its_first_start() {
+    // One linked step costs 11 visits per pixel for each of the frame and terminal samples.
+    for (pixels, expected) in [(2978, Ok(())), (2979, Err(Refusal::WorkLimit))] {
+        let universes = Universes::new(18).unwrap();
+        let (mut engine, mut sender) = Engine::start(universes).unwrap();
+        let run = RunNumbers {
+            first: 1,
+            count: 18,
+        };
+        let heard = mock::attach(&mut sender, universes, 1, run, Rate::Sixty);
+        sender
+            .send(Command::PatchStrip {
+                name: text("strip"),
+                pixels: Pixels::try_from(pixels).unwrap(),
+                color: Color::Rgb,
+                at: at(1, 1),
+            })
+            .unwrap();
+        let [step, sequence] = sequence_on(Target::Fixture { fixture: 1 });
+        sender.send(step).unwrap();
+        engine.fresh();
+        let start = Command::StartLook {
+            look: 2,
+            rank: engine::Rank::Show,
+            when: engine::When::Now,
+        };
+        assert_eq!(sender.send(sequence), expected, "{pixels} pixels");
+        if expected.is_ok() {
+            sender.send(start).unwrap();
+            heard.two_more_frames();
+            assert_eq!(bytes(&heard, 1, 1), [255, 0, 0]);
+        } else {
+            assert_eq!(sender.send(start), Err(Refusal::NoSuchLook));
+        }
+    }
+}
+
+#[test]
+fn a_start_between_group_prepare_and_admit_protects_its_bindings() {
+    let (_engine, mut sender, heard) = start();
+    sender.begin(par("A", 1, 1), &library()).unwrap();
+    sender.begin(par("B", 1, 4), &library()).unwrap();
+    let group = text("row");
+    let on = |light| Command::SetGroup {
+        name: group,
+        members: MemberList::Fits(Members::new(&[Member::Light { light }]).unwrap()),
+    };
+    sender.send(on(1)).unwrap();
+    for command in sequence_on(Target::Group { group }) {
+        sender.send(command).unwrap();
+    }
+    let edit = sender.base().prepare(on(2), &[]).unwrap();
+    let start = Command::StartLook {
+        look: 2,
+        rank: engine::Rank::Show,
+        when: engine::When::Now,
+    };
+    let Begun::Started { play } = sender.begin(start, &[]).unwrap() else {
+        panic!("the sequence starts");
+    };
+    assert_eq!(
+        sender.admit(edit).err(),
+        Some(Refusal::LookInUse { look: 2 })
+    );
+    heard.two_more_frames();
+    assert_eq!(bytes(&heard, 1, 1), [255, 0, 0]);
+    assert_eq!(bytes(&heard, 1, 4), [0, 0, 0]);
+
+    sender.send(Command::ReleaseHold { play }).unwrap();
+    sender.send(on(2)).unwrap();
+    sender.send(start).unwrap();
+    heard.two_more_frames();
+    assert_eq!(bytes(&heard, 1, 1), [0, 0, 0]);
+    assert_eq!(bytes(&heard, 1, 4), [255, 0, 0]);
 }
 
 #[test]

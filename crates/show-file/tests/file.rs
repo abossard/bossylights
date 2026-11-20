@@ -586,6 +586,28 @@ fn a_file_of_version_1_has_no_looks() {
 }
 
 #[test]
+fn sequence_rows_first_open_in_version_5() {
+    let patch = patched(vec![lib(par("PAR", 1))]);
+    let mut file: serde_json::Value = serde_json::from_str(&write(&patch).unwrap()).unwrap();
+    file["looks"] = serde_json::json!([
+        {"look": 1, "name": "red", "step": {"target": {"Fixture": {"fixture": 1}}, "values": RED}},
+        {"look": 2, "name": "sequence", "sequence": {"items": [{"look": 1}]}}
+    ]);
+    for (version, opens) in [(4, false), (5, true)] {
+        file["version"] = version.into();
+        let opened = show_file::read(&file.to_string(), &empty());
+        if opens {
+            assert!(opened.unwrap().1.plan(2).is_ok(), "v{version}");
+        } else {
+            assert!(
+                matches!(opened, Err(Unopened::Broken { .. })),
+                "v{version}: {opened:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn a_look_the_patch_refuses_is_not_read() {
     let patch = patched(vec![lib(par("PAR 1", 1))]);
     let looks = Looks::new()

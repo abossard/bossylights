@@ -21,7 +21,7 @@ use alloc::vec::Vec;
 use engine_core::{Definition, LOOKS, MixRules, Refusal, SavedLook};
 use rig::Patch;
 
-pub use compile::{PLAN_BYTES, Plan, WORK_LIMIT, compile};
+pub use compile::{PLAN_BYTES, Plan, WORK_LIMIT, compile, play_work};
 
 /// Definitions and plans belong to one revision. The sender can start any look by
 /// sharing its precompiled plan, even while another revision is being prepared.
@@ -323,12 +323,17 @@ mod tests {
     }
 
     #[test]
-    fn compiled_spread_keeps_the_first_occurrence_in_saved_group_order() {
+    fn compiled_spread_uses_each_looks_own_order_and_skips_repeated_lights() {
         use engine_core::{Entry, Member, Members};
+        const BEAT: u64 = 1 << 32;
         let group = Text::new("front").unwrap();
-        for (members, expected) in [
-            ([3, 1, 3, 2], [Some(22), Some(22), Some(11)]),
-            ([1, 2, 2, 3], [Some(11), Some(22), Some(22)]),
+        let spread = Use {
+            spread: 100,
+            ..Use::default()
+        };
+        for (members, sequence_phase, step_entry) in [
+            ([3, 1, 3, 2], [22, 22, 11], [11, 11, 22]),
+            ([1, 2, 2, 3], [11, 22, 22], [22, 11, 11]),
         ] {
             let patch = patch()
                 .update(
@@ -343,31 +348,48 @@ mod tests {
                 .0
                 .unwrap();
             let mut looks = Looks::new();
-            for (id, value) in [(1, 11), (2, 22)] {
+            for (id, value, target) in [
+                (1, 11, Target::Group { group }),
+                (2, 22, Target::Group { group }),
+                (3, 11, Target::Fixture { fixture: 1 }),
+            ] {
                 let mut saved = leaf(id);
-                saved.step.target = Target::Group { group };
+                saved.step.target = target;
                 saved.step.values.intensity = Some(value);
                 looks = looks.put(saved, &patch).unwrap();
             }
-            let looks = looks.put(sequence(3, &[item(1), item(2)]), &patch).unwrap();
-            let plan = looks.plan(3).unwrap();
             let initial = Entry {
                 lights: patch.runs(Target::Light { light: 1 }).unwrap()[0],
                 values: Light::DARK,
             };
-            let mut scratch = alloc::vec![initial; plan.lights()];
-            let spread = Use {
-                spread: 100,
-                ..Use::default()
+            let delayed = SequenceItem {
+                usage: spread,
+                ..item(2)
             };
-            assert!(plan.sample(1 << 31, spread, &mut scratch));
-            assert_eq!(
-                plan.entries(&scratch)
-                    .iter()
-                    .map(|e| e.values.intensity)
-                    .collect::<Vec<_>>(),
-                expected
-            );
+            for (items, at, usage, expected) in [
+                ([item(1), item(2)], BEAT / 2, spread, sequence_phase),
+                // The fixture gives the parent order 1, 2, 3. A quarter into the
+                // group step, only its first distinct light should have entered.
+                (
+                    [item(3), delayed],
+                    BEAT + BEAT / 4,
+                    Use::default(),
+                    step_entry,
+                ),
+            ] {
+                let looks = looks.put(sequence(4, &items), &patch).unwrap();
+                let plan = looks.plan(4).unwrap();
+                let mut scratch = alloc::vec![initial; plan.lights()];
+                assert!(plan.sample(at, usage, &mut scratch));
+                assert_eq!(
+                    plan.entries(&scratch)
+                        .iter()
+                        .map(|e| e.values.intensity)
+                        .collect::<Vec<_>>(),
+                    expected.map(Some),
+                    "members {members:?} at {at}"
+                );
+            }
         }
     }
 
