@@ -18,6 +18,7 @@ mod api;
 mod channel;
 mod clock;
 mod evaluate;
+pub mod health;
 pub use clock::{BEATS_PER_BAR, BeatTime, Bpm, Clock, Reading, Source, When, beats};
 pub use evaluate::{Binding, Elapsed, Item, MAX_DEPTH, Node, Program};
 mod kinds;
