@@ -20,7 +20,7 @@ Origin: **Q** = QLC+ v5 parity, **F** = built in the fork, **N** = new.
 
 | ID | Requirement | Test |
 |---|---|---|
-| r-first60 | First light changes within 60 seconds of launch | Stopwatch from launch to first user-caused change in the rig view, no form in between |
+| r-first60 | A press on a pad changes the real lights at once | The app opens on the example setup with nothing playing; a pad press shows on the DMX screen in the next frame and, with an output connected, on the lights. No timed first run (owner decision D11, `docs/design/screens-slice-1.md`) |
 | r-visible | State is always visible | LIVE on or off, tempo, running items and master are on screen in every view |
 | r-layers | Simple by default, expert on request | Default layer shows a handful of controls. Channels and priorities are one level down |
 | r-words | Plain words | No "HTP", "LTP" or "function" in the default layer |
@@ -44,7 +44,7 @@ Origin: **Q** = QLC+ v5 parity, **F** = built in the fork, **N** = new.
   - Engine tick at 50 Hz like QLC+, output at up to 44 Hz.
 - **f-project (N)** Project file with autosave and resume. Readable, versioned, friendly to git.
 - **f-undo (Q)** Undo for everything. QLC+ v5 has it in parts (Tardis), with gaps in the Virtual Console editor.
-- **f-qxw (N)** Import QLC+ workspaces: patch, functions, Virtual Console.
+- **f-qxw (N)** Import QLC+ workspaces: patch, functions, Virtual Console. Later (map #88); the first show is hand-written in the Bossylights format.
 
 ## Fixtures and patch
 
@@ -143,23 +143,11 @@ Origin: **Q** = QLC+ v5 parity, **F** = built in the fork, **N** = new.
 
 ## First five minutes
 
-- **f-demo (N)** Opens on a running demo rig.
+- **f-demo (N)** Opens on an example setup of the owner's rig: real fixtures, a real show file in the Bossylights format, real looks, nothing playing. Nothing is a demo or a mock.
 - **f-golive (N)** Connect your lights, then LIVE. Lights follow the app at once. The LIVE switch starts the night: DJ link, recording, autopilot, lock. There is no preview mode.
 - **f-panic (N)** Blackout, panic and "surprise me".
 
-Target script:
-
-| Time | What happens |
-|---|---|
-| 0:00 | Demo rig plays a beat-synced look in the rig view |
-| 0:20 | Launchpad found, pads mirror the look grid, a press changes the rig view |
-| 0:45 | "Connect your lights": interface found, pick fixtures from a list with photos, address proposed |
-| 2:00 | The lights are on. Each fixture flashes, you confirm which one it is |
-| 2:40 | Generated looks fill the grid |
-| 3:15 | BPM from mic or line-in, tap pad as backup |
-| 3:45 | Fire looks, launches land on the bar |
-| 4:15 | Hold a pad to tweak color, speed, size |
-| 4:45 | Autosave. "Record set" and "Autopilot" offered |
+Order of the first screens (`docs/design/screens-slice-1.md`): shell with DMX, then USB and DDP output setup saved with the show, then offline Patch, Looks and the Console, then Art-Net, sACN, controllers and richer editors. There is no timed script: every reachable control works end to end.
 
 ## Laser
 
