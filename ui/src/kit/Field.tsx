@@ -74,7 +74,7 @@ function Text(props: TextProps) {
     const reason = text === "" || text === props.value ? undefined : props.refuse?.(text);
     setRefused(reason);
     setUnsaved(false);
-    if (text === "") input.value = props.value;
+    if (text === "" || text === props.value) input.value = props.value;
     else if (reason === undefined && text !== props.value) props.onText(text);
   };
   const key = (e: KeyboardEvent & { currentTarget: HTMLInputElement }) => {
@@ -94,7 +94,7 @@ function Text(props: TextProps) {
       const text = e.currentTarget.value.trim();
       setRefused(text === "" || text === props.value ? undefined : props.refuse?.(text));
       setUnsaved(refused() === undefined && text !== "" && text !== props.value);
-      if (text === "") e.currentTarget.value = props.value;
+      if (text === "" || text === props.value) e.currentTarget.value = props.value;
     }
     if (refused() !== undefined) e.currentTarget.value = props.value;
   };

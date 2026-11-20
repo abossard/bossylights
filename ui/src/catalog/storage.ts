@@ -41,11 +41,16 @@ export async function pullReviews(): Promise<Reviews | undefined> {
   }
 }
 
-/** Writes one review into the file. A review of none takes it out. False: the server did not take it. */
-export async function sendReview(id: string, review: Review | undefined): Promise<boolean> {
+/**
+ * Writes the part of one review a tab changed into the file. The file after it, as the server answers;
+ * null: the server took it and keeps no file; undefined: the server did not take it.
+ */
+export async function sendReview(id: string, part: Partial<Review>): Promise<Reviews | null | undefined> {
   try {
-    return (await fetch(FILE, { method: "PUT", body: JSON.stringify({ id, review: review ?? null }) })).ok;
+    const response = await fetch(FILE, { method: "PUT", body: JSON.stringify({ id, review: part }) });
+    if (!response.ok) return undefined;
+    return response.status === 204 ? null : parse(await response.text());
   } catch {
-    return false;
+    return undefined;
   }
 }

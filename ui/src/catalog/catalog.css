@@ -78,8 +78,8 @@ b[data-verdict="change"], b[data-verdict="remove"] { text-decoration: underline;
 .c-is[data-is="off"] { color: var(--mute); }
 .c-is[data-is="gone"] { color: var(--mute); text-decoration: line-through; }
 .c-fact { min-height: 2.6em; font-size: var(--text-sm); color: var(--mute); }
-.c-stage { min-height: 148px; padding: var(--sp-4); display: grid; place-items: center; background: var(--bg); overflow-x: auto; }
-/* A control never runs past its stage: what is too wide wraps, a row of tabs scrolls in its strip. */
+.c-stage { min-height: 148px; padding: var(--sp-4); display: grid; grid-template-columns: minmax(0, 1fr); place-items: center; background: var(--bg); overflow-x: auto; }
+/* A control never runs past its stage: the one column is the stage, so 100% is its width. What is too wide wraps, a row of tabs scrolls in its strip. */
 .c-stage > * { max-width: 100%; min-width: 0; }
 .c-frame[data-is="gone"] .c-stage { border: var(--rule) dashed var(--line); background: none; }
 .c-gone { font-size: var(--text-sm); font-weight: 700; color: var(--mute); }

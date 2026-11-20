@@ -249,7 +249,7 @@
 .k-pick[data-kind="tabs"] .k-pick-opt[aria-selected="true"], .k-pick[data-kind="tabs"] .k-pick-opt[aria-selected="true"]:hover { background: var(--paper); color: var(--ink); }
 /* segments */
 .k-pick[data-kind="segments"] { border: var(--rule) solid var(--line); }
-.k-pick[data-kind="segments"] .k-pick-opt { min-height: var(--target); min-width: var(--target); justify-content: center; padding: 0 14px; }
+.k-pick[data-kind="segments"] .k-pick-opt { min-height: var(--target); min-width: var(--target); justify-content: center; padding: 0 14px; white-space: normal; text-align: center; }
 .k-pick[data-kind="segments"][data-size="small"] .k-pick-opt { min-height: 26px; padding: 0 10px; font-size: var(--text-sm); }
 .k-pick[data-kind="segments"] .k-pick-opt + .k-pick-opt { border-left: var(--rule) solid var(--line); }
 .k-pick[data-kind="segments"] .k-pick-opt:hover:not(:disabled) { background: var(--s1); }
@@ -276,6 +276,8 @@
 /* tabs that do not fit scroll sideways. One action may follow them: a button, never a tab */
 .k-pick-wrap:has(> .k-pick[data-kind="tabs"]) { flex-direction: row; align-items: center; max-width: 100%; }
 .k-pick[data-kind="tabs"] { overflow-x: auto; scrollbar-width: none; min-width: 0; }
+/* a scroller clips what lies past it: room for the whole focus ring (3 px, 2 px off), the strip stays where it was */
+.k-pick[data-kind="tabs"] { padding: 5px; margin: -5px; }
 .k-pick-after { flex: none; height: var(--target); padding: 0 12px; background: none; border: var(--rule) dashed var(--line); color: var(--paper); cursor: pointer; white-space: nowrap; }
 .k-pick-after:hover:not(:disabled) { border-color: var(--paper); border-style: solid; }
 /* preview: an effect on a small model. Read only */

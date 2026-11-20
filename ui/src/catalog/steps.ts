@@ -1,6 +1,7 @@
 // What a stepper reads after one step: the value between its two buttons, and the button that is off at a limit.
 // Data and calculations. The readout is the value: it is read, stepped and written back, and it is what is sent.
 import { ADDRESSES, WIDTH_SIXTEENTHS } from "../controls/spec.ts";
+import { SAMPLE_LIGHT } from "./samples.ts";
 
 interface Stepper {
   read: (readout: string) => number | undefined;
@@ -35,9 +36,6 @@ const readBeats = (readout: string) => {
 
 const readWhole = (readout: string) => (/^\d+$/.test(readout) ? Number(readout) : undefined);
 
-/** The channels of the sample light. In a universe of 512 addresses the last it fits at is 506. */
-const SAMPLE_CHANNELS = 7;
-
 const address = (high: number): Stepper => ({
   read: readWhole,
   write: String,
@@ -56,8 +54,9 @@ const STEPPERS: Record<string, Stepper> = {
   "looks.seq.width": { read: readQuarters, write: quarters, step: (value, by) => value + by, low: 1, high: WIDEST, atLow: "A quarter beat is the least", atHigh: `${quarters(WIDEST)} is the most` },
   // Halves or doubles, from 1 to 32 beats.
   "looks.pattern.measure": { read: readBeats, write: beats, step: (value, by) => (by > 0 ? value * 2 : value / 2), low: 1, high: 32, atLow: "1 beat is the least", atHigh: "32 beats is the most" },
-  "patch.details.address": address(ADDRESSES - SAMPLE_CHANNELS + 1),
-  "patch.add.address": address(ADDRESSES - SAMPLE_CHANNELS + 1),
+  // The last address the sample light fits at: 506 of 512 for 7 channels.
+  "patch.details.address": address(ADDRESSES - SAMPLE_LIGHT.channels + 1),
+  "patch.add.address": address(ADDRESSES - SAMPLE_LIGHT.channels + 1),
 };
 
 /** The readout after one step, and the button that is off at the limit it reached. Undefined: not a stepper, or a readout that is not its value. */

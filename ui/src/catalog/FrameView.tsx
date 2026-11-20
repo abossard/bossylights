@@ -52,10 +52,14 @@ export function FrameView(props: { control: Control; frame: Frame; onSent: (fram
     props.onSent(props.frame, result.sent);
   };
 
-  // Escape ends Learn from anywhere: the Learn button that waits, and a control that waits to be picked.
+  // Escape ends Learn from anywhere but a text field and another frame: the Learn button that waits, and a control that waits to be picked.
   const learns = USES[props.control.id]?.machine === "learn";
+  let section: HTMLElement | undefined;
   const escape = (e: KeyboardEvent) => {
-    if (e.key === "Escape" && (look().learn || (learns && look().at !== "off"))) play({ is: "cancel" });
+    if (e.key !== "Escape" || typing(e.target)) return;
+    const inFrame = e.target instanceof Element ? e.target.closest(".c-frame") : null;
+    if (inFrame !== null && inFrame !== section) return;
+    if (look().learn || (learns && look().at !== "off")) play({ is: "cancel" });
   };
   onMount(() => window.addEventListener("keydown", escape));
   onCleanup(() => window.removeEventListener("keydown", escape));
@@ -120,7 +124,7 @@ export function FrameView(props: { control: Control; frame: Frame; onSent: (fram
 
   return (
     // tabindex -1: a press anywhere in the frame takes the focus into it, so its keys reach it.
-    <section class="c-frame" data-frame={props.frame.key} data-is={props.frame.is} data-kind={props.frame.kind} tabindex="-1" onKeyDown={frameKey}>
+    <section ref={(el) => (section = el)} class="c-frame" data-frame={props.frame.key} data-is={props.frame.is} data-kind={props.frame.kind} tabindex="-1" onKeyDown={frameKey}>
       <header class="c-frame-head">
         <h3>{props.frame.title}</h3>
         <span class="c-is" data-is={props.frame.is}>

@@ -33,13 +33,28 @@ export function comment(reviews: Reviews, id: string, text: string): Reviews {
   return put(reviews, id, { ...reviewOf(reviews, id), comment: text });
 }
 
+/** The fields of a review a tab changed: what it writes to the file. */
+export type ReviewField = keyof Review;
+
+/** The part of one review that names only these fields. */
+export const partOf = (reviews: Reviews, id: string, fields: readonly ReviewField[]): Partial<Review> => Object.fromEntries(fields.map((f) => [f, reviewOf(reviews, id)[f]]));
+
+/**
+ * The file answered a write of these fields of one review: the file's copy comes in, the fields this tab wrote stay
+ * as this tab has them now. A rating another tab took back stays taken back; what was typed since stays typed.
+ */
+export const written = (now: Reviews, file: Reviews, id: string, fields: readonly ReviewField[]): Reviews => put(now, id, { ...reviewOf(file, id), ...partOf(now, id, fields) });
+
 /** The file of the repository and this browser meet: a control reviewed in both keeps the browser's. */
 export const merge = (file: Reviews, browser: Reviews): Reviews => ({ ...file, ...browser });
 
+/** The reviews that differ between two sets of reviews. */
+export const changed = (before: Reviews, after: Reviews): string[] =>
+  [...new Set([...Object.keys(before), ...Object.keys(after)])].filter((id) => !same({ [id]: reviewOf(before, id) }, { [id]: reviewOf(after, id) }));
+
 /** Another tab changed the store from `before` to `after`: only the reviews it changed come in, the rest of this tab stays. */
 export function arrived(now: Reviews, before: Reviews, after: Reviews): Reviews {
-  const changed = new Set([...Object.keys(before), ...Object.keys(after)].filter((id) => !same({ [id]: reviewOf(before, id) }, { [id]: reviewOf(after, id) })));
-  return [...changed].reduce((next, id) => put(next, id, reviewOf(after, id)), now);
+  return changed(before, after).reduce((next, id) => put(next, id, reviewOf(after, id)), now);
 }
 
 export function same(a: Reviews, b: Reviews): boolean {

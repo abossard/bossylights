@@ -2,6 +2,7 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 import { SITUATIONS, type SituationId } from "../controls/situations.ts";
 import { PRIMITIVES } from "../controls/spec.ts";
 import { CONTROLS } from "../controls/table.ts";
+import { withReview } from "./reviews-file.mjs";
 
 // The headless run of the catalog: every page mounts, and a gesture shows the command it sends.
 // It checks what is sent, never how fast.
@@ -726,11 +727,10 @@ test("UX-12 a review in another tab shows in this one without a reload", async (
 });
 
 test("UX-12 a review only in the file stays when another tab rates, and a comment keeps its rating", async ({ context }) => {
-  const puts: string[] = [];
-  const file = JSON.stringify({ "top.tap": { rating: 4, comment: "from the file" } });
+  let file = JSON.stringify({ "top.tap": { rating: 4, comment: "from the file" } });
   await context.route("**/reviews.json", (route) => {
     if (route.request().method() !== "PUT") return route.fulfill({ status: 200, contentType: "application/json", body: file });
-    puts.push(route.request().postData() ?? "");
+    file = withReview(file, route.request().postData() ?? "") ?? file;
     return route.fulfill({ status: 204 });
   });
   const a = await context.newPage();
@@ -744,7 +744,7 @@ test("UX-12 a review only in the file stays when another tab rates, and a commen
   await expect(a.locator(".c-comment textarea")).toHaveValue("from the file");
   await a.locator(".c-comment textarea").press("End");
   await a.locator(".c-comment textarea").pressSequentially(" ok");
-  await expect.poll(() => puts.at(-1)).toBe(JSON.stringify({ id: "top.tap", review: { rating: 4, comment: "from the file ok" } }));
+  await expect.poll((): unknown => JSON.parse(file)).toEqual({ "console.fader": { rating: 2, comment: "" }, "top.tap": { rating: 4, comment: "from the file ok" } });
   await a.goto("/#/");
   await expect(a.locator("textarea[data-export]")).toHaveValue(/from the file ok/);
 });
@@ -961,4 +961,140 @@ test("UX-23 at 400 px a specimen of the kit is not squeezed", async ({ page }) =
 test("UX-30 the review export has a name", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByRole("textbox", { name: "Review Markdown" })).toHaveCount(1);
+});
+
+// ---- #191: the catalog's leftovers, each row red before its fix
+
+test("#191 G1 a review taken back in one tab does not come back from a comment in another", async ({ context }) => {
+  let file = JSON.stringify({ "top.tap": { rating: 4, comment: "" } });
+  await context.route("**/reviews.json", (route) => {
+    if (route.request().method() === "PUT") file = withReview(file, route.request().postData() ?? "") ?? file;
+    return route.fulfill({ status: 200, contentType: "application/json", body: file });
+  });
+  const a = await context.newPage();
+  const b = await context.newPage();
+  await a.goto("/#/top.tap");
+  await b.goto("/#/top.tap");
+  await expect(a.locator(".c-rating-says")).toHaveText("4 of 5");
+  await expect(b.locator(".c-rating-says")).toHaveText("4 of 5");
+  await b.getByRole("button", { name: "4 of 5" }).click();
+  await expect.poll((): unknown => JSON.parse(file)).toEqual({});
+  // the browser's store was empty and stays so: no store event tells A
+  await expect(a.locator(".c-rating-says")).toHaveText("4 of 5");
+  await a.locator(".c-comment textarea").fill("note from A");
+  await expect.poll((): unknown => JSON.parse(file)).toEqual({ "top.tap": { rating: 0, comment: "note from A" } });
+  await expect(a.locator(".c-rating-says")).toHaveText("Not rated");
+  await a.goto("/#/");
+  await expect(a.locator("textarea[data-export]")).not.toHaveValue(/4 of 5/);
+});
+
+test("#191 G1 an answer of the file that comes late does not undo what another tab wrote since", async ({ context }) => {
+  let file = JSON.stringify({ "top.tap": { rating: 4, comment: "" } });
+  let late: (() => Promise<void>) | undefined;
+  const a = await context.newPage();
+  const b = await context.newPage();
+  await context.route("**/reviews.json", (route) => {
+    if (route.request().method() !== "PUT") return route.fulfill({ status: 200, contentType: "application/json", body: file });
+    file = withReview(file, route.request().postData() ?? "") ?? file;
+    const answer = file;
+    // B's answer is held until A has written: it is older than what A wrote
+    if (route.request().frame().page() !== b) return route.fulfill({ status: 200, contentType: "application/json", body: answer });
+    late = () => route.fulfill({ status: 200, contentType: "application/json", body: answer });
+  });
+  await a.goto("/#/top.tap");
+  await b.goto("/#/top.tap");
+  await expect(b.locator(".c-rating-says")).toHaveText("4 of 5");
+  await b.getByRole("button", { name: "4 of 5" }).click();
+  await expect.poll((): unknown => JSON.parse(file)).toEqual({});
+  await a.locator(".c-comment textarea").fill("note from A");
+  await expect(b.locator(".c-comment textarea")).toHaveValue("note from A");
+  await late?.();
+  await expect.poll((): unknown => JSON.parse(file)).toEqual({ "top.tap": { rating: 0, comment: "note from A" } });
+  for (const page of [a, b]) {
+    await expect(page.locator(".c-comment textarea")).toHaveValue("note from A");
+    await expect(page.locator(".c-rating-says")).toHaveText("Not rated");
+  }
+});
+
+const TABS = CONTROLS.filter((c) => c.kit === "Picker.tabs").map((c) => c.id);
+
+for (const id of TABS) {
+  test(`#191 G2 at 1280 px every tab strip of ${id} shows all its tabs, in every frame`, async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto(`/#/${id}`);
+    await expect(page.locator(".c-frame").first()).toBeVisible();
+    const cut = await page.locator('.c-frame .k-pick[data-kind="tabs"]').evaluateAll((strips) => strips.filter((s) => s.scrollWidth > s.clientWidth + 1).map((s) => s.closest(".c-frame")?.getAttribute("data-frame")));
+    expect(cut).toEqual([]);
+  });
+
+  test(`#191 F-ring the focus ring of every tab of ${id} is drawn whole`, async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto(`/#/${id}`);
+    const tabs = frame(page, "alone").getByRole("tab");
+    await expect(tabs.first()).toBeVisible();
+    for (const tab of await tabs.all()) {
+      await tab.focus();
+      // the ring's box, and every box around it that clips: the ring must lie inside each
+      const clipped = await tab.evaluate((el) => {
+        const style = getComputedStyle(el);
+        if (!el.matches(":focus-visible") || style.outlineStyle === "none") return "no ring";
+        const out = parseFloat(style.outlineWidth) + parseFloat(style.outlineOffset);
+        const r = el.getBoundingClientRect();
+        const ring = { left: r.left - out, top: r.top - out, right: r.right + out, bottom: r.bottom + out };
+        for (let up = el.parentElement; up; up = up.parentElement) {
+          const s = getComputedStyle(up);
+          if (s.overflowX === "visible" && s.overflowY === "visible") continue;
+          const b = up.getBoundingClientRect();
+          const box = { left: b.left + up.clientLeft, top: b.top + up.clientTop, right: b.left + up.clientLeft + up.clientWidth, bottom: b.top + up.clientTop + up.clientHeight };
+          if (ring.left < box.left - 0.5 || ring.top < box.top - 0.5 || ring.right > box.right + 0.5 || ring.bottom > box.bottom + 0.5) return up.className;
+        }
+        return "";
+      });
+      expect(clipped, await tab.textContent() ?? "").toBe("");
+    }
+  });
+}
+
+for (const width of [400, 1280]) {
+  test(`#191 F-row at ${width} px no control runs past its stage, on any page`, async ({ page }) => {
+    test.setTimeout(180_000);
+    await page.setViewportSize({ width, height: 900 });
+    const over: string[] = [];
+    for (const control of CONTROLS) {
+      await page.goto(`/#/${control.id}`);
+      await expect(page.locator(`[data-page="${control.id}"] h1`)).toHaveText(control.name);
+      const frames = await page.locator(".c-stage").evaluateAll((stages) => stages.filter((s) => s.scrollWidth > s.clientWidth + 1).map((s) => s.closest(".c-frame")?.getAttribute("data-frame")));
+      over.push(...frames.map((f) => `${control.id} ${f}`));
+    }
+    expect(over).toEqual([]);
+  });
+}
+
+test("#191 N Escape in the review notes keeps Learn", async ({ page }) => {
+  await page.goto("/#/top.learn");
+  const learn = frame(page, "state:wait").getByRole("button");
+  await expect(learn).toHaveAttribute("aria-pressed", "true");
+  await page.getByLabel("What works, what does not?").focus();
+  await page.keyboard.press("Escape");
+  await expect(learn).toHaveAttribute("aria-pressed", "true");
+});
+
+test("#191 N Escape in one frame ends Learn in that frame only", async ({ page }) => {
+  await page.goto("/#/top.learn");
+  const wait = frame(page, "state:wait").getByRole("button");
+  const pick = frame(page, "state:pick").getByRole("button");
+  await expect(wait).toHaveAttribute("aria-pressed", "true");
+  await expect(pick).toHaveAttribute("aria-pressed", "true");
+  await wait.focus();
+  await page.keyboard.press("Escape");
+  await expect(wait).toHaveAttribute("aria-pressed", "false");
+  await expect(pick).toHaveAttribute("aria-pressed", "true");
+});
+
+test("#191 N a field left with its own value between spaces shows it without them", async ({ page }) => {
+  await page.goto("/#/patch.panel.size");
+  const field = frame(page, "alone").getByRole("textbox");
+  await field.fill(" 16 x 16 ");
+  await field.press("Enter");
+  await expect(field).toHaveValue("16 x 16");
 });

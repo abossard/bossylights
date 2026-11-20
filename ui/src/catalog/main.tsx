@@ -11,7 +11,7 @@ import { screensOf, search } from "./frames.ts";
 import { Home } from "./Home.tsx";
 import { KitPage } from "./KitPage.tsx";
 import { Page } from "./Page.tsx";
-import { arrived, comment, kitKey, merge, rate, reviewOf, type Reviews } from "./review.ts";
+import { arrived, changed, comment, kitKey, merge, partOf, rate, reviewOf, written, type ReviewField, type Reviews } from "./review.ts";
 import { loadReviews, pullReviews, sendReview, storeChange, storeReview } from "./storage.ts";
 import "./catalog.css";
 
@@ -36,23 +36,37 @@ function Catalog() {
 
   // Why the last review was not kept. Empty: it was.
   const [unsaved, setUnsaved] = createSignal("");
+  // How often another tab changed each review: the news a write's answer must not be older than.
+  const heard = new Map<string, number>();
   // Whether a server keeps the file: a built catalog has none, and nothing is written there.
   let hasFile = false;
-  /** One review is kept: in this browser's store and in the file, each as it is now. */
-  const send = (id: string, all: Reviews) => {
-    const one = all[id];
-    const stored = storeReview(id, one);
+  /**
+   * One review is kept: in this browser's store as it is now, and in the file only the fields this tab changed.
+   * The file answers with what it holds: another tab may have changed the review there, and that comes in here too.
+   */
+  const send = (id: string, fields: readonly ReviewField[]) => {
+    const stored = storeReview(id, reviews()[id]);
     setUnsaved(stored ? "" : "Not kept in this browser: its store is off");
-    if (hasFile) void sendReview(id, one).then((written) => written || setUnsaved("Not written to the file: the catalog's server did not take it"));
+    if (!hasFile) return;
+    const news = heard.get(id) ?? 0;
+    void sendReview(id, partOf(reviews(), id, fields)).then((file) => {
+      if (file === undefined) return setUnsaved("Not written to the file: the catalog's server did not take it");
+      // Another tab's news of this review came after the write left: the answer may be older than it.
+      if (file === null || (heard.get(id) ?? 0) !== news) return;
+      setReviews(written(reviews(), file, id, fields));
+      storeReview(id, reviews()[id]);
+    });
   };
-  const keep = (id: string, next: Reviews) => {
+  const keep = (id: string, next: Reviews, field: ReviewField) => {
     setReviews(next);
-    send(id, next);
+    send(id, [field]);
   };
   // Another tab kept a review: this one shows it too, and keeps what the other tab did not touch (a review only in the file).
   const fromAnotherTab = (event: StorageEvent) => {
     const change = storeChange(event);
-    if (change) setReviews(arrived(reviews(), ...change));
+    if (!change) return;
+    for (const id of changed(...change)) heard.set(id, (heard.get(id) ?? 0) + 1);
+    setReviews(arrived(reviews(), ...change));
   };
   window.addEventListener("storage", fromAnotherTab);
   onCleanup(() => window.removeEventListener("storage", fromAnotherTab));
@@ -62,7 +76,7 @@ function Catalog() {
     hasFile = true;
     const browser = reviews();
     setReviews(merge(file, browser));
-    for (const id of Object.keys(browser)) if (JSON.stringify(browser[id]) !== JSON.stringify(file[id])) send(id, browser);
+    for (const id of Object.keys(browser)) if (JSON.stringify(browser[id]) !== JSON.stringify(file[id])) send(id, ["rating", "comment"]);
   });
 
   const found = createMemo(() => search(CONTROLS, query()).filter((c) => screen() === EVERY_SCREEN || c.screen === screen()));
@@ -136,10 +150,10 @@ function Catalog() {
       </nav>
       <main class="c-main" ref={(el) => (main = el)}>
         <Show when={kit()} keyed>
-          {(p) => <KitPage primitive={p} controls={CONTROLS} reviews={reviews()} review={reviewOf(reviews(), kitKey(p))} unsaved={unsaved()} onRate={(rating) => keep(kitKey(p), rate(reviews(), kitKey(p), rating))} onComment={(text) => keep(kitKey(p), comment(reviews(), kitKey(p), text))} />}
+          {(p) => <KitPage primitive={p} controls={CONTROLS} reviews={reviews()} review={reviewOf(reviews(), kitKey(p))} unsaved={unsaved()} onRate={(rating) => keep(kitKey(p), rate(reviews(), kitKey(p), rating), "rating")} onComment={(text) => keep(kitKey(p), comment(reviews(), kitKey(p), text), "comment")} />}
         </Show>
         <Show when={open()} keyed>
-          {(c) => <Page control={c} review={reviewOf(reviews(), c.id)} unsaved={unsaved()} onRate={(rating) => keep(c.id, rate(reviews(), c.id, rating))} onComment={(text) => keep(c.id, comment(reviews(), c.id, text))} />}
+          {(c) => <Page control={c} review={reviewOf(reviews(), c.id)} unsaved={unsaved()} onRate={(rating) => keep(c.id, rate(reviews(), c.id, rating), "rating")} onComment={(text) => keep(c.id, comment(reviews(), c.id, text), "comment")} />}
         </Show>
         <Show when={!kit() && !open()}>
           <Home controls={CONTROLS} primitives={KIT} reviews={reviews()} />

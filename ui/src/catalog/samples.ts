@@ -7,6 +7,10 @@ type Sample = Partial<Look>;
 
 const RED = { colour: "danger" } as const;
 
+/** The light the Patch frames show. Where the last address it fits at lies follows from its channels (`steps.ts`). */
+export const SAMPLE_LIGHT = { name: "PAR 3", address: 17, channels: 7 } as const;
+const { name: LIGHT, address: AT, channels: CHANNELS } = SAMPLE_LIGHT;
+
 export const SAMPLES: Record<string, Sample> = {
   // ---- top bar
   "top.indicator.dj": { label: "DJ link", variant: "ready" },
@@ -110,21 +114,21 @@ export const SAMPLES: Record<string, Sample> = {
   "looks.seq.take-out": { label: "Take out", sub: "Warm wash" },
   "looks.step.colour.wheel": { label: "Colour wheel", value: 8, value2: 80 },
   // ---- Patch
-  "patch.details.name": { label: "Name", picked: "PAR 3" },
-  "patch.details.mode": { label: "Mode", options: ["7 channels", "4 channels", "16 channels"] },
+  "patch.details.name": { label: "Name", picked: LIGHT },
+  "patch.details.mode": { label: "Mode", options: [`${CHANNELS} channels`, "4 channels", "16 channels"] },
   "patch.details.group": { label: "Group", options: ["PARs", "Movers", "Bars", "Laser"] },
   "patch.universes.search": { label: "Search universes" },
   "patch.universes.panel": { label: "Universes", value: 4 },
   "patch.universe": { label: "Universe 1", sub: "15 lights" },
   "patch.grid.panel": { label: "Panel", sub: "16 x 16" },
-  "patch.grid.light": { label: "PAR 3", sub: "17 to 23" },
-  "patch.fixtures.order": { label: "Order of PAR 3" },
-  "patch.fixtures.light": { label: "PAR 3", sub: "Address 17, 7 channels" },
+  "patch.grid.light": { label: LIGHT, sub: `${AT} to ${AT + CHANNELS - 1}` },
+  "patch.fixtures.order": { label: `Order of ${LIGHT}` },
+  "patch.fixtures.light": { label: LIGHT, sub: `Address ${AT}, ${CHANNELS} channels` },
   "patch.fixtures.move": { label: "Order", sub: "3 of 8", options: ["Earlier", "Later"] },
-  "patch.details.address": { label: "Address", sub: "17", options: ["Lower", "Higher"] },
+  "patch.details.address": { label: "Address", sub: String(AT), options: ["Lower", "Higher"] },
   "patch.add.search": { label: "Find a light" },
   "patch.add.model": { options: ["LED PAR 64", "Moving head 250", "Strobe 1500"] },
-  "patch.add.mode": { options: ["7 channels", "4 channels"] },
+  "patch.add.mode": { options: [`${CHANNELS} channels`, "4 channels"] },
   "patch.add.address": { label: "Address", sub: "33", options: ["Lower", "Higher"] },
   "patch.panel.name": { label: "Name", picked: "Panel" },
   "patch.panel.size": { label: "Columns and rows", picked: "16 x 16" },
@@ -132,9 +136,9 @@ export const SAMPLES: Record<string, Sample> = {
   "patch.panel.start": { label: "Start universe", picked: "2" },
   // ---- DMX
   "dmx.universe": { options: ["1", "2", "3", "4"] },
-  "dmx.channel": { label: "PAR 3 red", value: 128 },
-  "dmx.channel.fader": { label: "Channel 17" },
-  "dmx.held.channel": { label: "Channel 17", sub: "PAR 3 red, at 255" },
+  "dmx.channel": { label: `${LIGHT} red`, value: 128 },
+  "dmx.channel.fader": { label: `Channel ${AT}` },
+  "dmx.held.channel": { label: `Channel ${AT}`, sub: `${LIGHT} red, at 255` },
   "dmx.output.row": { label: "DMX USB Pro", sub: "Universe 1, running" },
   // ---- In/Out
   "inout.tempo.feed": { options: ["Tap", "Audio", "MIDI clock", "VirtualDJ", "Timecode"], picked: "VirtualDJ" },
