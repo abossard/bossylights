@@ -85,7 +85,6 @@ impl SourceTag {
 pub struct Follows(pub(crate) u8);
 
 impl Follows {
-    pub const NONE: Self = Self(0);
     /// Every channel follows Blackout, until the patch sets rules per channel.
     pub const BLACKOUT: Self = Self(1 << BLACKOUT);
 }
@@ -198,6 +197,18 @@ impl ChannelSet {
         self.0
             .get(address / 64)
             .is_some_and(|word| word & (1 << (address % 64)) != 0)
+    }
+
+    /// The addresses in the set, in order.
+    pub(crate) fn addresses(&self) -> impl Iterator<Item = usize> + '_ {
+        (0..).zip(&self.0).flat_map(|(word, bits)| {
+            let mut bits = *bits;
+            core::iter::from_fn(move || {
+                let bit = bits.trailing_zeros() as usize;
+                bits &= bits.wrapping_sub(1);
+                (bit < 64).then_some(word * 64 + bit)
+            })
+        })
     }
 
     fn put(&mut self, address: usize, on: bool) {
@@ -316,6 +327,12 @@ mod tests {
                     assert_eq!(channel(u, a).marked(&sets), has, "{on:?} {off:?}: {u} {a}");
                     assert_eq!(sets[usize::from(u - 1)].has(usize::from(a - 1)), has);
                 }
+                let listed: Vec<_> = sets[usize::from(u - 1)].addresses().collect();
+                let expected: Vec<_> = (1..=512)
+                    .filter(|a| after.contains(&(u, *a)))
+                    .map(|a| usize::from(a - 1))
+                    .collect();
+                assert_eq!(listed, expected, "{on:?} {off:?}: universe {u}");
             }
         }
         // past the universe, or on a shorter buffer: nothing

@@ -392,30 +392,42 @@ pub(crate) fn channels(
         source,
         ..
     } = channels;
-    let rules = dark
-        .chunks_exact(ADDRESSES)
-        .zip(flags.chunks_exact(ADDRESSES))
-        .zip(follows.chunks_exact(ADDRESSES));
     let rows = value.iter_mut().zip(source.chunks_exact_mut(ADDRESSES));
-    for (universe, ((value, source), ((dark, flags), follows))) in rows.zip(rules).enumerate() {
-        let lit = lit.get(universe).unwrap_or(&ChannelSet::NONE);
-        let held = raw.get(universe).zip(holds.get(universe));
-        let channel = value.0.iter_mut().zip(source.iter_mut());
-        let rule = dark.iter().zip(flags).zip(follows);
-        for (address, ((value, source), ((dark, flags), follows))) in channel.zip(rule).enumerate()
+    for (universe, (value, source)) in rows.enumerate() {
+        for address in lit
+            .get(universe)
+            .into_iter()
+            .flat_map(ChannelSet::addresses)
         {
-            if lit.has(address) {
+            if let Some(source) = source.get_mut(address) {
                 *source = SourceTag::LIGHTS;
             }
-            if let Some((raw, holds)) = held
-                && holds.has(address)
-            {
-                *value = raw.0.get(address).copied().unwrap_or_default();
+        }
+        let (Some(raw), Some(holds)) = (raw.get(universe), holds.get(universe)) else {
+            continue;
+        };
+        for address in holds.addresses() {
+            if let (Some(value), Some(source), Some(raw)) = (
+                value.0.get_mut(address),
+                source.get_mut(address),
+                raw.0.get(address),
+            ) {
+                *value = *raw;
                 *source = SourceTag::RAW;
             }
-            if *follows != Follows::NONE {
-                *value = follow(*value, *dark, *flags, *follows, levels);
-            }
+        }
+    }
+    // every level full: no follower moves
+    if levels == [u8::MAX; MODIFIERS] {
+        return;
+    }
+    let by = scales(levels);
+    let bytes = value.iter_mut().flat_map(|row| row.0.iter_mut());
+    for (value, ((dark, flags), follows)) in
+        bytes.zip(dark.iter().zip(flags.iter()).zip(follows.iter()))
+    {
+        if let Some(by) = by.get(usize::from(follows.0)) {
+            *value = scale(*value, *dark, *flags, *by);
         }
     }
 }
@@ -424,13 +436,33 @@ pub(crate) fn channels(
 /// `follows`, `dark + (value - dark) x m1 x ... x mn / 255^n` with one rounding at the end,
 /// half away from `dark`. A channel that jumps goes all the way or not at all: `dark`
 /// when a level it follows is 0, else `value`.
-pub(crate) fn follow(
-    value: u8,
-    dark: u8,
-    flags: Flags,
-    follows: Follows,
-    levels: [u8; MODIFIERS],
-) -> u8 {
+#[cfg(test)]
+fn follow(value: u8, dark: u8, flags: Flags, follows: Follows, levels: [u8; MODIFIERS]) -> u8 {
+    scale(value, dark, flags, scale_of(follows, levels))
+}
+
+/// What the levels of a set of modifier slots multiply to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Scale {
+    /// Every level full: the byte stays.
+    Full,
+    /// A level at 0: the byte goes to dark.
+    Dark,
+    /// `product / whole`, both above 0, `product` below `whole`.
+    Part { product: i128, whole: i128 },
+}
+
+/// The scale of every set of slots, by its bits: worked out once a frame, so a channel
+/// only looks its own up.
+fn scales(levels: [u8; MODIFIERS]) -> [Scale; 1 << MODIFIERS] {
+    let mut scales = [Scale::Full; 1 << MODIFIERS];
+    for (follows, scale) in (0..=u8::MAX).zip(scales.iter_mut()) {
+        *scale = scale_of(Follows(follows), levels);
+    }
+    scales
+}
+
+fn scale_of(follows: Follows, levels: [u8; MODIFIERS]) -> Scale {
     let (mut product, mut whole) = (1_i128, 1_i128);
     for (slot, level) in levels.iter().enumerate() {
         if follows.0 & (1 << slot) != 0 {
@@ -438,12 +470,25 @@ pub(crate) fn follow(
             whole *= 255;
         }
     }
-    if !flags.fades() {
-        return if product == 0 { dark } else { value };
+    match product {
+        0 => Scale::Dark,
+        _ if product == whole => Scale::Full,
+        _ => Scale::Part { product, whole },
     }
-    let distance = (i128::from(value) - i128::from(dark)) * product;
-    let moved = (2 * distance.abs() + whole) / (2 * whole);
-    u8::try_from(i128::from(dark) + distance.signum() * moved).unwrap_or(dark)
+}
+
+/// [`follow`], with the levels multiplied already.
+fn scale(value: u8, dark: u8, flags: Flags, scale: Scale) -> u8 {
+    match scale {
+        Scale::Full => value,
+        Scale::Dark => dark,
+        Scale::Part { .. } if !flags.fades() => value,
+        Scale::Part { product, whole } => {
+            let distance = (i128::from(value) - i128::from(dark)) * product;
+            let moved = (2 * distance.abs() + whole) / (2 * whole);
+            u8::try_from(i128::from(dark) + distance.signum() * moved).unwrap_or(dark)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -739,7 +784,7 @@ mod tests {
                 200,
                 0,
                 fade,
-                Follows::NONE,
+                Follows(0),
                 [0; MODIFIERS],
                 200,
             ),
