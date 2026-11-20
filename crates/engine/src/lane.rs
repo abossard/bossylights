@@ -77,10 +77,10 @@ struct Frame {
     sent: Option<(Outcome, Duration)>,
 }
 
-/// The commands in a frame and the attachment they went to.
+/// The number of presses applied through this frame and the attachment it went to.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Prefix {
-    pub applied: u64,
+    pub presses: u64,
     pub generation: u64,
 }
 
@@ -392,7 +392,7 @@ mod tests {
         let mut lane = Lane::start(Box::new(gate), Universes::ONE, Clock::wall()).unwrap();
         // Every frame is due at once: the thread sends what it finds.
         let prefix = |n| Prefix {
-            applied: 100 + n,
+            presses: 100 + n,
             generation: 10 + n,
         };
         let hand =

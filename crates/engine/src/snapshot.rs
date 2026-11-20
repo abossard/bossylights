@@ -144,6 +144,15 @@ impl Snapshot {
             .map_or(0, |h| h.handed)
     }
 
+    /// The stepped ordering test samples the histogram at handoff and at the end of the wake.
+    #[cfg(all(test, feature = "test-support"))]
+    pub(crate) fn presses_in_first_bucket(&self) -> u64 {
+        self.output_health
+            .iter()
+            .filter_map(|health| health.press.counts.first())
+            .sum()
+    }
+
     /// The time from a send to the frame that carries it, for 95 of 100 commands:
     /// counted once per output, when that output's next frame is handed over. `None`
     /// before the first frame that carried a command.
