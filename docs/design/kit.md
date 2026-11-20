@@ -127,7 +127,7 @@ Fixed props are the ones that never change for the control. Its words, its state
 | Remove output | `inout.out.remove` | In/Out | plain |  |  |
 | Add output | `inout.out.add` | In/Out | plain |  |  |
 | Release | `how.release` | How it works | plain |  |  |
-| Walk: Back, Next, Again | `how.walk.step` | How it works | plain | holds: 3 lines |  |
+| Walk: Next, Again | `how.walk.step` | How it works | plain | holds: 3 lines |  |
 | Trace a press | `modules.trace` | Modules | plain |  |  |
 | Screen that uses a module | `modules.jump` | Modules | plain |  |  |
 

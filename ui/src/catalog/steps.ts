@@ -1,5 +1,6 @@
 // What a stepper reads after one step: the value between its two buttons, and the button that is off at a limit.
 // Data and calculations. The readout is the value: it is read, stepped and written back, and it is what is sent.
+import { ADDRESSES, WIDTH_SIXTEENTHS } from "../controls/spec.ts";
 
 interface Stepper {
   read: (readout: string) => number | undefined;
@@ -34,7 +35,9 @@ const readBeats = (readout: string) => {
 
 const readWhole = (readout: string) => (/^\d+$/.test(readout) ? Number(readout) : undefined);
 
-/** A universe has 512 addresses. The sample light has 7 channels: the last address it fits at is 506. */
+/** The channels of the sample light. In a universe of 512 addresses the last it fits at is 506. */
+const SAMPLE_CHANNELS = 7;
+
 const address = (high: number): Stepper => ({
   read: readWhole,
   write: String,
@@ -45,13 +48,16 @@ const address = (high: number): Stepper => ({
   atHigh: "Last address that fits",
 });
 
+/** The widest item in quarter beats. */
+const WIDEST = Math.floor(WIDTH_SIXTEENTHS / 4);
+
 const STEPPERS: Record<string, Stepper> = {
-  // A quarter beat narrower or wider. The row names no widest.
-  "looks.seq.width": { read: readQuarters, write: quarters, step: (value, by) => value + by, low: 1, high: Number.POSITIVE_INFINITY, atLow: "A quarter beat is the least", atHigh: "" },
+  // A quarter beat narrower or wider, up to the widest the engine keeps: 4095¾ beats.
+  "looks.seq.width": { read: readQuarters, write: quarters, step: (value, by) => value + by, low: 1, high: WIDEST, atLow: "A quarter beat is the least", atHigh: `${quarters(WIDEST)} is the most` },
   // Halves or doubles, from 1 to 32 beats.
   "looks.pattern.measure": { read: readBeats, write: beats, step: (value, by) => (by > 0 ? value * 2 : value / 2), low: 1, high: 32, atLow: "1 beat is the least", atHigh: "32 beats is the most" },
-  "patch.details.address": address(512 - 7 + 1),
-  "patch.add.address": address(512 - 7 + 1),
+  "patch.details.address": address(ADDRESSES - SAMPLE_CHANNELS + 1),
+  "patch.add.address": address(ADDRESSES - SAMPLE_CHANNELS + 1),
 };
 
 /** The readout after one step, and the button that is off at the limit it reached. Undefined: not a stepper, or a readout that is not its value. */

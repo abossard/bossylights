@@ -11,8 +11,8 @@ import { screensOf, search } from "./frames.ts";
 import { Home } from "./Home.tsx";
 import { KitPage } from "./KitPage.tsx";
 import { Page } from "./Page.tsx";
-import { comment, kitKey, merge, rate, reviewOf, type Reviews } from "./review.ts";
-import { loadReviews, pullReviews, sendReview, storeReview } from "./storage.ts";
+import { arrived, comment, kitKey, merge, rate, reviewOf, type Reviews } from "./review.ts";
+import { loadReviews, pullReviews, sendReview, storeChange, storeReview } from "./storage.ts";
 import "./catalog.css";
 
 const KIT = Object.keys(PRIMITIVES) as Primitive[];
@@ -49,8 +49,11 @@ function Catalog() {
     setReviews(next);
     send(id, next);
   };
-  // Another tab kept a review: this one shows it too.
-  const fromAnotherTab = () => setReviews(loadReviews());
+  // Another tab kept a review: this one shows it too, and keeps what the other tab did not touch (a review only in the file).
+  const fromAnotherTab = (event: StorageEvent) => {
+    const change = storeChange(event);
+    if (change) setReviews(arrived(reviews(), ...change));
+  };
   window.addEventListener("storage", fromAnotherTab);
   onCleanup(() => window.removeEventListener("storage", fromAnotherTab));
   // Once, at the start: the file of the repository and this browser meet. What only this browser has is written to the file.

@@ -2,7 +2,7 @@
 // The only place that turns a row into a primitive with props.
 import { createMemo, Show, type JSX } from "solid-js";
 import type { Control } from "../controls/spec.ts";
-import { Block, Button, Fader, Field, Handle, Item, named, offWith, Pad, Picker, XY, type PickOption, type StatusProps } from "../kit/index.ts";
+import { Block, Button, Fader, Field, Handle, Item, named, offWith, Pad, Picker, Status, XY, type PickOption, type StatusProps } from "../kit/index.ts";
 import type { Act } from "./act.ts";
 import { linesOf, recipe } from "./compose.ts";
 import type { Look } from "./look.ts";
@@ -84,7 +84,11 @@ export function Live(props: { control: Control; look: Look; act: (act: Act) => v
 
   switch (c.kit) {
     case "Button.action":
-      return <Button {...button()} filled={l().on} {...some("glyph", r.props.glyph)} {...some("own", r.props.own)} />;
+      return (
+        <Show when={!l().words} fallback={<Status kind="value" label={l().label} />}>
+          <Button {...button()} filled={l().on} {...some("glyph", r.props.glyph)} {...some("own", r.props.own)} />
+        </Show>
+      );
     case "Button.toggle":
       return (
         <Button

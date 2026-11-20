@@ -77,13 +77,13 @@ export const EXPLAINERS: Control[] = [
   }),
   explains("How it works", {
     id: "how.walk.step",
-    name: "Walk: Back, Next, Again",
+    name: "Walk: Next, Again",
     part: "Three walks",
     from: ["how/Screen/back", "how/Screen/again", "how/Screen/start"],
     kit: "Button.action",
-    does: "Steps through the walk: 'Start', then 'Next', and 'Again' at the end. 'Back' goes one step back",
-    gestures: button("Goes one step on, or back"),
-    first: { verdict: "keep", why: "It changes only which step shows" },
+    does: "Steps through the walk: 'Start', then 'Next', and 'Again' at the end, which starts over at Step 1",
+    gestures: button("Goes one step on"),
+    first: change("The mockup has 'Back'. It goes: the walk is four steps, 'Again' starts it over. It changes only which step shows"),
     states: ["Start", "Next", "Again"],
   }),
   explains("Modules", {

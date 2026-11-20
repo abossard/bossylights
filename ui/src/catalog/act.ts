@@ -68,7 +68,7 @@ export function act(control: Control, before: Look, gesture: Act): Result {
   // A refusal is said once: the next gesture takes it away.
   const look = { ...before, refused: "" };
   const nothing: Result = { look, sent: [] };
-  if (look.gone || (look.off && !look.offOption)) return nothing;
+  if (look.gone || look.words || (look.off && !look.offOption)) return nothing;
   // Learn waits: the press picks the control and does not fire it. Escape ends Learn.
   if (look.learn) {
     if (gesture.is === "cancel") return { look: { ...look, learn: false }, sent: [] };
@@ -105,7 +105,8 @@ function machineAct(control: Control, look: Look, use: Use, events: readonly str
     const from = at;
     const next = step(machine, from, event);
     at = next.to;
-    for (const name of next.sends ?? []) sent.push({ name, value: name === "Blackout" ? `on: ${at !== "off"}` : "" });
+    // The row names what the control sends: an explainer plays the machine on its own model and sends nothing.
+    for (const name of (next.sends ?? []).filter((n) => control.sends.includes(n))) sent.push({ name, value: name === "Blackout" ? `on: ${at !== "off"}` : "" });
     // A lamp sends its own command. A drop sends the command of what was dragged, once. Dropped where it started, it sends nothing.
     if (use.machine === "indicator" && event === "press" && first) sent.push({ name: first, value: `on: ${at === "ready" || at === "on"}` });
     if (use.machine === "drag" && from === "dragging" && event === "up" && first && !stayed) sent.push({ name: first, value: placed(control.id) ? look.sub : "where it landed" });

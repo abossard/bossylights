@@ -23,6 +23,8 @@ export interface Look {
   offOption: string;
   /** Why it is not on screen. Empty: it is. */
   gone: string;
+  /** Plain words, not a button: there is nothing to press. */
+  words: boolean;
   /** 0 to 100: a level, a pan. For a fold: how much is inside. */
   value: number;
   /** 0 to 100: a tilt. */
@@ -44,7 +46,7 @@ export interface Look {
   refused: string;
 }
 
-const PLAIN: Look = { label: "", sub: "", colour: "plain", on: false, off: "", offOption: "", gone: "", value: 62, value2: 40, options: [], picked: "", variant: "", at: "", learn: false, song: false, offline: false, refused: "" };
+const PLAIN: Look = { label: "", sub: "", colour: "plain", on: false, off: "", offOption: "", gone: "", words: false, value: 62, value2: 40, options: [], picked: "", variant: "", at: "", learn: false, song: false, offline: false, refused: "" };
 
 /** The usual look of a control: nothing special is true. */
 export function usual(control: Control): Look {

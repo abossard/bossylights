@@ -10,7 +10,7 @@ flowchart LR
   I --> N["37 not controls<br/>each with a reason"]
   R --> C["103 commands"]
   R --> S["9 state machines"]
-  R --> F["Function first<br/>166 keep, 40 change, 6 remove"]
+  R --> F["Function first<br/>165 keep, 41 change, 6 remove"]
 ```
 
 | Where | What |
@@ -89,7 +89,7 @@ The test of `DESIGN.md`, run on every control. Proposals until the owner rates t
 | Output row `dmx.output.row` | DMX | Two controls for one thing: the universe tabs open a universe. A status table whose rows are also buttons says two things |
 | Tap, on In/Out `inout.tempo.tap` | In/Out | Two controls for one thing. Tap is in the top bar on every screen, right above this one. The Tap feed says 'Tap in the top bar' |
 
-### Changed: 40
+### Changed: 41
 
 | Control | Screen | What changes |
 | --- | --- | --- |
@@ -133,6 +133,7 @@ The test of `DESIGN.md`, run on every control. Proposals until the owner rates t
 | Record `how.record` | How it works | In the mockup it plays on the same lights as the Console. The owner's decision 25: the explainers ship, and play on their own small model. They never touch the lights |
 | Replay on Show `how.replay` | How it works | In the mockup it plays on the same lights as the Console. The owner's decision 25: the explainers ship, and play on their own small model. They never touch the lights |
 | Release `how.release` | How it works | In the mockup it plays on the same lights as the Console. The owner's decision 25: the explainers ship, and play on their own small model. They never touch the lights |
+| Walk: Next, Again `how.walk.step` | How it works | The mockup has 'Back'. It goes: the walk is four steps, 'Again' starts it over. It changes only which step shows |
 
 ## Contradictions: 30, each resolved
 
@@ -1544,7 +1545,7 @@ stateDiagram-v2
 | Open an item | `looks.seq.open` | Opens the step or the inner sequence the item uses. The breadcrumb leads back | nothing: the path of open looks | view |
 | Item bar | `looks.seq.bar` | Moves an item on the beat grid, in quarter beats | `SetSequenceEntry` | edit |
 | Item width handle | `looks.seq.bar.edge` | Changes how long an item lasts, from its right edge | `SetSequenceEntry` | edit |
-| Item width | `looks.seq.width` | Makes the selected item a quarter beat narrower or wider. The width shows between the two buttons | `SetSequenceEntry` | edit |
+| Item width | `looks.seq.width` | Makes the selected item a quarter beat narrower or wider, from a quarter beat to 4095¾ beats, the widest the engine keeps. The width shows between the two buttons | `SetSequenceEntry` | edit |
 | Item speed | `looks.seq.speed` | The selected item runs at half, normal or double speed in this sequence. At double, a note warns when movers may not reach every position | `SetSequenceEntry` | edit |
 | Loop or once | `looks.seq.repeat` | The selected item loops for its whole width, or plays once and holds | `SetSequenceEntry` | edit |
 | Spread | `looks.seq.spread` | How far the item is spread across the fixtures: 0 is all together | `SetSequenceEntry` | edit |
@@ -2482,7 +2483,7 @@ stateDiagram-v2
 | Replay on Show | `how.replay` | Sends the written commands again, on the Show row of the explainer | nothing: the explainer's own model | view |
 | Release | `how.release` | Gives back what the explainer's pads hold, so what was underneath is seen to return | nothing: the explainer's own model | view |
 | Pick a walk | `how.walk` | Picks one of three walks: press a pad, record and replay, the autopilot yields | nothing: the explainer's own model | view |
-| Walk: Back, Next, Again | `how.walk.step` | Steps through the walk: 'Start', then 'Next', and 'Again' at the end. 'Back' goes one step back | nothing: the explainer's own model | view |
+| Walk: Next, Again | `how.walk.step` | Steps through the walk: 'Start', then 'Next', and 'Again' at the end, which starts over at Step 1 | nothing: the explainer's own model | view |
 
 ### How it works: in each situation
 
@@ -2494,7 +2495,7 @@ stateDiagram-v2
 | Replay on Show | ● | ● | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ● | ● | – |
 | Release | ● | ● | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ● | ● | – |
 | Pick a walk | ● | ● | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ● | ● | – |
-| Walk: Back, Next, Again | ● | ● | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ● | ● | – |
+| Walk: Next, Again | ● | ● | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ● | ● | – |
 
 ### How it works: where a cell is not the usual of its kind
 
@@ -2506,7 +2507,7 @@ stateDiagram-v2
 | Replay on Show | Learn mode | works | Not picked: an explainer is read, not played. It works as usual and Learn keeps waiting |
 | Release | Learn mode | works | Not picked: an explainer is read, not played. It works as usual and Learn keeps waiting |
 | Pick a walk | Learn mode | works | Not picked: an explainer is read, not played. It works as usual and Learn keeps waiting |
-| Walk: Back, Next, Again | Learn mode | works | Not picked: an explainer is read, not played. It works as usual and Learn keeps waiting |
+| Walk: Next, Again | Learn mode | works | Not picked: an explainer is read, not played. It works as usual and Learn keeps waiting |
 
 ### How it works: gestures
 
@@ -2518,7 +2519,7 @@ stateDiagram-v2
 | Replay on Show | Replays what was written. Pressed again: the replay stops. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
 | Release | Releases in the explainer. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
 | Pick a walk | Opens that walk at its first step. Fires on the way up | Nothing more | As one press: the choice is already made | Nothing. Sliding to another option picks nothing | Tab to the group, arrows move and pick | As a press. 44 px |
-| Walk: Back, Next, Again | Goes one step on, or back. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
+| Walk: Next, Again | Goes one step on. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
 
 ### How it works: feedback, undo, Learn, Function first
 
@@ -2530,7 +2531,7 @@ stateDiagram-v2
 | Replay on Show | At once: the screen owns this state | None | no. Nothing in the show file changes | no. An explainer is read, not played | **change**. In the mockup it plays on the same lights as the Console. The owner's decision 25: the explainers ship, and play on their own small model. They never touch the lights |
 | Release | At once: the screen owns this state | None | no. Nothing in the show file changes | no. An explainer is read, not played | **change**. In the mockup it plays on the same lights as the Console. The owner's decision 25: the explainers ship, and play on their own small model. They never touch the lights |
 | Pick a walk | At once: the screen owns this state | None | no. Nothing in the show file changes | no. An explainer is read, not played | **keep**. It changes only which walk shows |
-| Walk: Back, Next, Again | At once: the screen owns this state | None | no. Nothing in the show file changes | no. An explainer is read, not played | **keep**. It changes only which step shows |
+| Walk: Next, Again | At once: the screen owns this state | None | no. Nothing in the show file changes | no. An explainer is read, not played | **change**. The mockup has 'Back'. It goes: the walk is four steps, 'Again' starts it over. It changes only which step shows |
 
 ## Modules
 

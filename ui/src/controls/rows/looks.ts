@@ -413,7 +413,7 @@ export const LOOKS: Control[] = [
     part: "Sequence editor, use settings",
     from: ["looks/SequenceEditor/narrower", "looks/SequenceEditor/wider"],
     kit: "Field.steps",
-    does: "Makes the selected item a quarter beat narrower or wider. The width shows between the two buttons",
+    does: "Makes the selected item a quarter beat narrower or wider, from a quarter beat to 4095¾ beats, the widest the engine keeps. The width shows between the two buttons",
     sends: ["SetSequenceEntry"],
     gestures: button("Changes the width by a quarter beat"),
     first: change("'Narrower' is off with no reason at a quarter beat. It says 'A quarter beat is the least'"),

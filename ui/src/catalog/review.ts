@@ -36,6 +36,12 @@ export function comment(reviews: Reviews, id: string, text: string): Reviews {
 /** The file of the repository and this browser meet: a control reviewed in both keeps the browser's. */
 export const merge = (file: Reviews, browser: Reviews): Reviews => ({ ...file, ...browser });
 
+/** Another tab changed the store from `before` to `after`: only the reviews it changed come in, the rest of this tab stays. */
+export function arrived(now: Reviews, before: Reviews, after: Reviews): Reviews {
+  const changed = new Set([...Object.keys(before), ...Object.keys(after)].filter((id) => !same({ [id]: reviewOf(before, id) }, { [id]: reviewOf(after, id) })));
+  return [...changed].reduce((next, id) => put(next, id, reviewOf(after, id)), now);
+}
+
 export function same(a: Reviews, b: Reviews): boolean {
   const ids = Object.keys(a);
   return ids.length === Object.keys(b).length && ids.every((id) => id in b && a[id].rating === b[id].rating && a[id].comment === b[id].comment);

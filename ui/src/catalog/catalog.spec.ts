@@ -610,6 +610,52 @@ test("UX-12 a second tab rating another control keeps the first tab's rating", a
   await expect(b.locator(".c-rating-says")).toHaveText("3 of 5");
 });
 
+test("UX-26 with the feed the tempo source is words, not a button", async ({ page }) => {
+  await page.goto("/#/top.tempo.source");
+  await expect(frame(page, "state:from the feed").getByRole("button", { name: /from/ })).toHaveCount(0);
+  await expect(frame(page, "state:from the feed").locator(".k-status")).toContainText("from VirtualDJ");
+});
+
+test("UX-26 the tempo source pressed gives the beat back and turns to words", async ({ page }) => {
+  await page.goto("/#/top.tempo.source");
+  await frame(page, "alone").getByRole("button", { name: /from Tap/ }).click();
+  await expect(frame(page, "alone").getByRole("button", { name: /from/ })).toHaveCount(0);
+  await expect(frame(page, "alone").locator(".k-status")).toContainText("from VirtualDJ");
+});
+
+test("UX-12 a review in another tab shows in this one without a reload", async ({ context }) => {
+  const a = await context.newPage();
+  const b = await context.newPage();
+  await a.goto("/#/top.tap");
+  await b.goto("/#/console.fader");
+  await b.getByRole("button", { name: "2 of 5" }).click();
+  await expect(a.locator('[data-link="console.fader"] .c-rated')).toHaveText("2");
+});
+
+test("UX-12 a review only in the file stays when another tab rates, and a comment keeps its rating", async ({ context }) => {
+  const puts: string[] = [];
+  const file = JSON.stringify({ "top.tap": { rating: 4, comment: "from the file" } });
+  await context.route("**/reviews.json", (route) => {
+    if (route.request().method() !== "PUT") return route.fulfill({ status: 200, contentType: "application/json", body: file });
+    puts.push(route.request().postData() ?? "");
+    return route.fulfill({ status: 204 });
+  });
+  const a = await context.newPage();
+  const b = await context.newPage();
+  await a.goto("/#/top.tap");
+  await expect(a.locator(".c-rating-says")).toHaveText("4 of 5");
+  await b.goto("/#/console.fader");
+  await b.getByRole("button", { name: "2 of 5" }).click();
+  await expect(a.locator('[data-link="console.fader"] .c-rated')).toHaveText("2");
+  await expect(a.locator(".c-rating-says")).toHaveText("4 of 5");
+  await expect(a.locator(".c-comment textarea")).toHaveValue("from the file");
+  await a.locator(".c-comment textarea").press("End");
+  await a.locator(".c-comment textarea").pressSequentially(" ok");
+  await expect.poll(() => puts.at(-1)).toBe(JSON.stringify({ id: "top.tap", review: { rating: 4, comment: "from the file ok" } }));
+  await a.goto("/#/");
+  await expect(a.locator("textarea[data-export]")).toHaveValue(/from the file ok/);
+});
+
 test("UX-12 a review that is not written to the file says so", async ({ page }) => {
   await page.route("**/reviews.json", (route) => (route.request().method() === "PUT" ? route.fulfill({ status: 500 }) : route.continue()));
   await page.goto("/#/top.tap");
@@ -754,6 +800,7 @@ test("UX-33 the explainer pad stops on a second press", async ({ page }) => {
   await expect(pad).toHaveAttribute("aria-pressed", "true");
   await pad.click();
   await expect(pad).toHaveAttribute("aria-pressed", "false");
+  await expect(frame(page, "alone").locator(".c-sent-none")).toHaveText("Sends nothing: it changes the explainer's own model");
 });
 
 // [page, the target that must be 44 px both ways]
@@ -780,6 +827,20 @@ for (const [id, key, keys_, command] of keys) {
     await frame(page, key).locator(".c-stage").click({ position: { x: 4, y: 4 } });
     await page.keyboard.press(keys_);
     await expect(sent(page, key)).toContainText(command);
+  });
+}
+
+// [page, frame, the other control's key]
+const notTheirs = [
+  ["top.redo", "state:has a step", "ControlOrMeta+z"],
+  ["top.undo", "alone", "ControlOrMeta+Shift+z"],
+] as const;
+for (const [id, key, keys_] of notTheirs) {
+  test(`UX-20 ${keys_} in a frame of ${id} sends nothing`, async ({ page }) => {
+    await page.goto(`/#/${id}`);
+    await frame(page, key).locator(".c-stage").click({ position: { x: 4, y: 4 } });
+    await page.keyboard.press(keys_);
+    await expect(sent(page, key)).toHaveText("Nothing sent yet");
   });
 }
 

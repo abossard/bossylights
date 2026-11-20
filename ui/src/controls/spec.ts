@@ -7,6 +7,8 @@ import { works, off, gone, type Cell, type Gesture, type SituationId } from "./s
 /** The engine's limits, as `crates/engine-core/src/channel.rs` has them (`MAX_UNIVERSES`, `ADDRESSES`). A test reads them there. */
 export const UNIVERSES = 64;
 export const ADDRESSES = 512;
+/** The widest item of a sequence: the engine keeps its width as a u16 of sixteenths of a beat (`crates/engine-core/src/api.rs`, `SequenceItem`). A test reads it there. */
+export const WIDTH_SIXTEENTHS = 0xffff;
 /** Whole RGB pixels in all the engine's universes: 170 a universe. */
 export const PIXELS = UNIVERSES * Math.floor(ADDRESSES / 3);
 

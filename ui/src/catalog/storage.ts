@@ -26,6 +26,11 @@ export function storeReview(id: string, review: Review | undefined): boolean {
   }
 }
 
+/** What another tab's store event changed: the reviews before and after. Undefined: not the reviews. */
+export function storeChange(event: StorageEvent): readonly [Reviews, Reviews] | undefined {
+  return event.key === KEY ? [parse(event.oldValue), parse(event.newValue)] : undefined;
+}
+
 /** The reviews in the file of the repository. Undefined where no server keeps one: a built catalog. */
 export async function pullReviews(): Promise<Reviews | undefined> {
   try {

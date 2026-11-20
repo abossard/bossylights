@@ -178,7 +178,7 @@ export const STATE_LOOKS: Record<string, Record<string, Sample>> = {
   "top.blackout": { off: { on: false }, held: { on: true, label: "Blackout on", sub: "While held" }, latched: { on: true, label: "Blackout on" } },
   "top.redo": { "nothing to redo": { off: "Nothing to redo", sub: "" }, "has a step": {} },
   "top.learn": { off: { on: false }, pick: { on: true, sub: "Pick a control" }, wait: { on: true, sub: "Move a control on the hardware" } },
-  "top.tempo.source": { "from Tap": {}, "from the feed": { label: "from VirtualDJ", colour: "plain", off: "The feed drives the beat" } },
+  "top.tempo.source": { "from Tap": {}, "from the feed": { label: "from VirtualDJ", colour: "plain", words: true } },
   // It waits for LIVE only while it is ready: on and off say nothing of it.
   "console.autopilot.on": { on: { on: true, variant: "on", sub: "" }, off: { on: false, variant: "off", sub: "" } },
   "console.running.release": { "pad on": { variant: "" }, "pad off, still held": { on: false, variant: "dashed", sub: "Warm wash, pad off" } },

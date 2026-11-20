@@ -6,14 +6,15 @@ import { byFunction, linesOf, recipe } from "./catalog/compose.ts";
 import { framesOf, screensOf, search } from "./catalog/frames.ts";
 import { inSituation, inState, usual } from "./catalog/look.ts";
 import { place } from "./catalog/place.ts";
-import { asMarkdown, comment, kitKey, merge, parse, rate, reviewOf, same } from "./catalog/review.ts";
+import { arrived, asMarkdown, comment, kitKey, merge, parse, rate, reviewOf, same } from "./catalog/review.ts";
 import { fileText, withReview } from "./catalog/reviews-file.mjs";
 import { SAMPLES, SITUATION_STATE, STATE_LOOKS } from "./catalog/samples.ts";
 import { SHAPES } from "./catalog/shapes.ts";
+import { atLimit } from "./catalog/steps.ts";
 import { USES } from "./catalog/uses.ts";
 import { MACHINES } from "./controls/machines.ts";
 import { SITUATIONS } from "./controls/situations.ts";
-import { ADDRESSES, kitNames, PRIMITIVES, UNIVERSES } from "./controls/spec.ts";
+import { ADDRESSES, kitNames, PRIMITIVES, UNIVERSES, WIDTH_SIXTEENTHS } from "./controls/spec.ts";
 import { CONTROLS } from "./controls/table.ts";
 
 const byId = (id) => CONTROLS.find((c) => c.id === id);
@@ -164,10 +165,13 @@ const plays = [
   ["UX-19 the proposed address changes and sends nothing", "patch.add.address", "alone", [{ is: "step", by: -1 }], [], { sub: "32" }],
   ["UX-25 the autopilot turned on says no more that it waits", "console.autopilot.on", "live-on", [], [], { sub: "" }],
   ["UX-26 Use this style goes once it is used", "looks.autopilot.use-style", "alone", [{ is: "press" }, { is: "press" }], ["SetAutopilotStyle"], { gone: "While in use" }],
-  ["UX-26 the beat back from Tap names the feed", "top.tempo.source", "alone", [{ is: "press" }], ["ReleaseTempo"], { label: "from VirtualDJ", gone: "", at: "feed" }],
-  ["UX-33 the explainer pad stops on a second short press", "how.pad", "alone", [{ is: "down" }, { is: "up", long: false }, { is: "down" }, { is: "up", long: false }], ["StartLook", "EndFlash"], { variant: "idle", on: false }],
+  ["UX-26 the beat back from Tap names the feed", "top.tempo.source", "alone", [{ is: "press" }], ["ReleaseTempo"], { label: "from VirtualDJ", gone: "", at: "feed", words: true, off: "" }],
+  ["UX-26 with the feed the words are not pressed", "top.tempo.source", "state:from the feed", [{ is: "press" }], [], { label: "from VirtualDJ", words: true }],
+  ["UX-33 the explainer pad stops on a second short press", "how.pad", "alone", [{ is: "down" }, { is: "up", long: false }, { is: "down" }, { is: "up", long: false }], [], { variant: "idle", on: false }],
+  ["UX-33 the explainer pad flashes its own model and sends nothing", "how.pad", "alone", [{ is: "down" }, { is: "up", long: true }], [], { variant: "idle", on: false }],
   ["UX-33 the walk steps on and starts again", "how.walk.step", "alone", [{ is: "press" }], [], { label: "Next", sub: "Step 1 of 4: Press" }],
   ["UX-33 the walk ends with Again", "how.walk.step", "alone", [{ is: "press" }, { is: "press" }, { is: "press" }, { is: "press" }], [], { label: "Again", sub: "Step 4 of 4: Lights" }],
+  ["UX-33 Again starts the walk over at Step 1", "how.walk.step", "alone", [{ is: "press" }, { is: "press" }, { is: "press" }, { is: "press" }, { is: "press" }], [], { label: "Next", sub: "Step 1 of 4: Press" }],
   ["UX-33 the trace shows the steps it played", "modules.trace", "alone", [{ is: "press" }], [], { sub: "Played: Controller, Playback, Mixer, Output" }],
 ];
 for (const [what, id, key, gestures, sent, after] of plays) {
@@ -360,6 +364,21 @@ test("the limits of the fields are the engine's: crates/engine-core/src/channel.
   assert.deepEqual([UNIVERSES, ADDRESSES], [constant("MAX_UNIVERSES"), constant("ADDRESSES")]);
 });
 
+test("an item's width is the engine's: u16 sixteenths of a beat in crates/engine-core/src/api.rs", () => {
+  const rust = readFileSync(new URL("../../crates/engine-core/src/api.rs", import.meta.url), "utf8");
+  assert.match(rust, /Width is counted in sixteenths of a beat/);
+  assert.match(rust, /pub struct SequenceItem \{[^}]*pub width: u16,/);
+  assert.equal(WIDTH_SIXTEENTHS, 2 ** 16 - 1);
+});
+
+// The steppers at their upper limit: the last address the 7 channels of the sample light fit at, the widest item. [id, buttons, the look there]
+const highest = [
+  ["patch.details.address", ["Lower", "Higher"], { sub: String(ADDRESSES - 7 + 1), off: "Last address that fits", offOption: "Higher" }],
+  ["patch.add.address", ["Lower", "Higher"], { sub: String(ADDRESSES - 7 + 1), off: "Last address that fits", offOption: "Higher" }],
+  ["looks.seq.width", ["Narrower", "Wider"], { sub: "4095¾ beats", off: "4095¾ beats is the most", offOption: "Wider" }],
+];
+for (const [id, buttons, expected] of highest) test(`UX-19 ${id} at its upper limit`, () => assert.deepEqual(atLimit(id, 1, buttons), expected));
+
 // [what, steps, reviews after]
 const A = "top.tap";
 const reviews = [
@@ -399,6 +418,15 @@ for (const [what, file, browser, expected] of meetings) {
     assert.equal(same(merge(file, browser), file), JSON.stringify(expected) === JSON.stringify(file));
   });
 }
+
+// UX-12: another tab changed the store from one text to the next. Only what it changed comes in. [what, this tab, store before, store after, this tab after]
+const arrivals = [
+  ["a review only in the file stays", { a: R(4, "from the file") }, {}, { b: R(2) }, { a: R(4, "from the file"), b: R(2) }],
+  ["a changed review comes in", { a: R(4) }, { a: R(4) }, { a: R(5, "better") }, { a: R(5, "better") }],
+  ["a review taken out goes", { a: R(4), b: R(2) }, { a: R(4), b: R(2) }, { a: R(4) }, { a: R(4) }],
+  ["what the other tab left alone keeps this tab's", { a: R(3, "newer here") }, { a: R(1) }, { a: R(1), b: R(2) }, { a: R(3, "newer here"), b: R(2) }],
+];
+for (const [what, now, before, after, expected] of arrivals) test(`UX-12 another tab: ${what}`, () => assert.deepEqual(arrived(now, before, after), expected));
 
 // [what, the body put to the dev server, the text of the file]
 const puts = [
