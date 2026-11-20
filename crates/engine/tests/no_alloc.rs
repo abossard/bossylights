@@ -6,7 +6,8 @@
 //! kept ones by a change of the rules, mix it with the direct holds and hand a reader a
 //! snapshot on every frame. A Wave runs over two strip pixels. Linked sequences run, replan and end inside the
 //! counting window. The stepped clock takes full command bursts, replans 32 live roots
-//! near the visit limit and ends all 32 while retirement is stalled.
+//! near the visit limit and ends all 32 while retirement is stalled. It also reads
+//! output health through a device loss, return and replacement with all frees counted.
 //! The tick frees nothing: the old writers, runs, plans and a replaced device with its thread go to
 //! the free thread. A
 //! counting allocator sees every allocation in this process, except those of the front
@@ -100,6 +101,8 @@ fn place(n: u16) -> ChannelNumbers {
 }
 
 fn main() {
+    #[cfg(feature = "test-support")]
+    output_health();
     let universes = Universes::new(UNIVERSES).expect("4 universes");
     let (mut engine, mut sender) = Engine::start(universes).expect("the tick thread starts");
     let run = RunNumbers { first: 1, count: 1 };
@@ -591,6 +594,78 @@ fn main() {
     );
     #[cfg(feature = "test-support")]
     linked_ends();
+}
+
+/// With reclamation held, a free anywhere (including on either output thread) fails.
+#[cfg(feature = "test-support")]
+fn output_health() {
+    use engine::{Device, Levels, Outcome, OutputNumber, Status};
+    use engine_core::health::HealthSample;
+    use std::time::Duration;
+
+    struct UnplugOnOne;
+    impl Device for UnplugOnOne {
+        fn take(&mut self, frame: &[Levels]) -> Outcome {
+            if frame[0].0[0] == 1 {
+                Outcome::Failed
+            } else {
+                Outcome::Accepted
+            }
+        }
+    }
+
+    let (mut engine, mut sender, wakes) =
+        Engine::start_stepped(Universes::ONE, Box::new(outputs::open)).unwrap();
+    wakes.hold().unwrap();
+    engine.stall_reclamation(true);
+    let one = OutputNumber::try_from(1).unwrap();
+    let run = RunNumbers { first: 1, count: 1 }
+        .check(Universes::ONE)
+        .unwrap();
+    let channel = ChannelNumbers {
+        universe: 1,
+        address: 1,
+    };
+    let counts = || (counting::allocations(), counting::frees());
+    let mut sample = HealthSample::new(Duration::ZERO, 0, Status::NotFound);
+    for generation in 1..=2 {
+        // The front makes the lane and its boxes. Count from before the tick applies it.
+        sender
+            .attach(one, Box::new(UnplugOnOne), run, Rate::Sixty)
+            .unwrap();
+        let before = counts();
+        let mut initial_presses = 0;
+        for (value, outages) in [(0, 0), (1, 1), (0, 1)] {
+            sender.send(Command::SetChannel { channel, value }).unwrap();
+            mock::wait_until("the output did not take the new level", || {
+                engine.latest();
+                wakes.wake().unwrap();
+                let snapshot = engine.latest();
+                snapshot.applied() == sender.sent()
+                    && snapshot.state.outputs[one.slot()].is_some_and(|o| {
+                        if value == 1 {
+                            o.counters.failed >= 2
+                        } else {
+                            o.status == Status::Running
+                        }
+                    })
+            });
+            assert!(engine.latest().health_sample(one, &mut sample));
+            assert_eq!((sample.generation, sample.outages), (generation, outages));
+            let presses = sample.press.iter().sum::<u64>();
+            match (value, outages) {
+                (0, 0) => initial_presses = presses,
+                (1, _) => assert_eq!(presses, initial_presses),
+                _ => assert_eq!(presses, initial_presses + 2),
+            }
+        }
+        assert_eq!(
+            counts(),
+            before,
+            "allocation or free during output health service"
+        );
+    }
+    engine.stall_reclamation(false);
 }
 
 /// Queue two replacement revisions while every once-use crosses its end between wakes.

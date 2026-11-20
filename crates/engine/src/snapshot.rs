@@ -13,8 +13,10 @@
 
 use crate::{
     EngineCommand, Histogram, LATENCY_BUCKETS, LATENESS_BUCKETS, Levels, MAX_LIGHTS, MAX_OUTPUTS,
-    MAX_UNIVERSES, OutputNumber, Priority, State, Universes, bucket, percentile, update,
+    MAX_UNIVERSES, Outcome, OutputNumber, Priority, Rate, State, Status, Universes, bucket,
+    percentile, update,
 };
+use engine_core::health::{HealthSample, press_is_under_target};
 use engine_core::{ChannelSet, Claims, Entry, Held, Light, show};
 use std::thread;
 use std::time::Duration;
@@ -42,10 +44,8 @@ pub struct Snapshot {
     /// The direct holds per light, by light number: [`MAX_LIGHTS`] of them. The tick
     /// thread's own: no reader reads them, so [`Snapshot::copy_to`] leaves them.
     grabs: Box<[Held]>,
-    /// How late each output's device was handed its frames, since it was attached.
-    lateness: [Times<LATENESS_BUCKETS>; MAX_OUTPUTS],
-    /// Frames handed to each output's own thread, since it was attached.
-    handed: [u64; MAX_OUTPUTS],
+    /// Timing and counts for each output since its last attach.
+    output_health: [OutputHealth; MAX_OUTPUTS],
     /// The time from a send to the frame that carries it, per output that carries it.
     latency: Times<LATENCY_BUCKETS>,
     /// Commands applied, so far: the first this many the sender queued.
@@ -72,8 +72,7 @@ impl Snapshot {
             holds: [ChannelSet::NONE; MAX_UNIVERSES as usize],
             lights: vec![Light::DARK; usize::from(MAX_LIGHTS)].into_boxed_slice(),
             grabs: vec![Held::NONE; usize::from(MAX_LIGHTS)].into_boxed_slice(),
-            lateness: [Times::ZERO; MAX_OUTPUTS],
-            handed: [0; MAX_OUTPUTS],
+            output_health: [OutputHealth::ZERO; MAX_OUTPUTS],
             latency: Times::ZERO,
             applied: 0,
             revision: 0,
@@ -99,9 +98,37 @@ impl Snapshot {
         &self.lights
     }
 
+    /// Fills the cumulative measurements for this output at the snapshot's wake time.
+    /// Returns false if the slot has no output.
+    pub fn health_sample(&self, output: OutputNumber, sample: &mut HealthSample) -> bool {
+        let slot = output.slot();
+        let (Some(Some(device)), Some(health)) =
+            (self.state.outputs.get(slot), self.output_health.get(slot))
+        else {
+            return false;
+        };
+        *sample = HealthSample {
+            at: self.state.now,
+            generation: health.generation,
+            status: device.status,
+            lateness: health.lateness.counts,
+            lateness_worst: health.lateness.worst,
+            press: health.press.counts,
+            press_worst: health.press.worst,
+            press_under_target: health.press_under_target,
+            press_missing: health.press_missing,
+            outages: health.outages,
+            frames_handed: health.handed,
+            dropped: device.counters.dropped,
+            failed: device.counters.failed,
+            off_beat: device.counters.off_beat,
+        };
+        true
+    }
+
     /// How late this output's device was handed its frames. `None` before its first.
     pub fn lateness(&self, output: OutputNumber) -> Option<Lateness> {
-        let times = self.lateness.get(output.slot())?;
+        let times = &self.output_health.get(output.slot())?.lateness;
         Some(Lateness {
             p99: times.percentile(99)?,
             worst: times.worst,
@@ -112,7 +139,9 @@ impl Snapshot {
     /// too. What came of each is counted in its counters once its thread is done with it,
     /// a wake or so later: the frame this picture's levels went out in is this number.
     pub fn handed(&self, output: OutputNumber) -> u64 {
-        self.handed.get(output.slot()).copied().unwrap_or(0)
+        self.output_health
+            .get(output.slot())
+            .map_or(0, |h| h.handed)
     }
 
     /// The time from a send to the frame that carries it, for 95 of 100 commands:
@@ -145,8 +174,7 @@ impl Snapshot {
             holds,
             lights,
             grabs: _,
-            lateness,
-            handed,
+            output_health,
             latency,
             applied,
             revision,
@@ -158,8 +186,7 @@ impl Snapshot {
         if to.lights.len() == lights.len() {
             to.lights.copy_from_slice(lights);
         }
-        to.lateness = *lateness;
-        to.handed = *handed;
+        to.output_health.copy_from_slice(output_health);
         to.latency = *latency;
         to.applied = *applied;
         to.revision = *revision;
@@ -183,6 +210,28 @@ impl Snapshot {
         self.state = update(self.state, held, holds, &mut self.grabs, command);
     }
 
+    /// Counts an outage on the transition into reconnecting, using the core's status.
+    pub(crate) fn sent(&mut self, output: OutputNumber, outcome: Outcome, at: Duration) {
+        let slot = output.slot();
+        let status = |state: &State| state.outputs.get(slot)?.as_ref().map(|o| o.status);
+        let before = status(&self.state);
+        self.update(EngineCommand::Sent {
+            output,
+            outcome,
+            at,
+        });
+        if matches!(
+            (before, status(&self.state)),
+            (
+                Some(Status::Connecting | Status::Running),
+                Some(Status::Reconnecting { .. })
+            )
+        ) && let Some(health) = self.output_health.get_mut(slot)
+        {
+            health.outages = health.outages.wrapping_add(1);
+        }
+    }
+
     /// What each light shows now: its direct holds and the plays, `plan` giving each
     /// play's entries by slot.
     pub(crate) fn show<'a>(&mut self, plan: impl Fn(usize) -> &'a [Entry], claims: &mut [Claims]) {
@@ -198,25 +247,47 @@ impl Snapshot {
 
     /// A frame of `output` was handed over this late.
     pub(crate) fn late(&mut self, output: usize, time: Duration) {
-        if let Some(times) = self.lateness.get_mut(output) {
-            times.count(time);
+        if let Some(health) = self.output_health.get_mut(output) {
+            health.lateness.count(time);
         }
     }
 
     /// A frame went to `output`'s own thread.
     pub(crate) fn handed_one(&mut self, output: usize) {
-        if let Some(handed) = self.handed.get_mut(output) {
-            *handed = handed.wrapping_add(1);
+        if let Some(health) = self.output_health.get_mut(output) {
+            health.handed = health.handed.wrapping_add(1);
         }
     }
 
-    /// A new device at `output`: its lateness and frames start afresh.
+    /// An attach starts the next generation. A removal clears this slot's measurements.
     pub(crate) fn attached(&mut self, output: usize) {
-        if let Some(times) = self.lateness.get_mut(output) {
-            *times = Times::ZERO;
+        if let Some(health) = self.output_health.get_mut(output) {
+            let present = self.state.outputs.get(output).is_some_and(Option::is_some);
+            *health = OutputHealth {
+                generation: health.generation.wrapping_add(u64::from(present)),
+                ..OutputHealth::ZERO
+            };
         }
-        if let Some(handed) = self.handed.get_mut(output) {
-            *handed = 0;
+    }
+
+    pub(crate) fn generation(&self, output: usize) -> u64 {
+        self.output_health.get(output).map_or(0, |h| h.generation)
+    }
+
+    /// One command reached its first accepted frame at this latency.
+    pub(crate) fn pressed(&mut self, output: usize, latency: Duration, rate: Rate) {
+        if let Some(health) = self.output_health.get_mut(output) {
+            health.press.count(latency);
+            health.press_under_target = health
+                .press_under_target
+                .wrapping_add(u64::from(press_is_under_target(latency, rate)));
+        }
+    }
+
+    /// The ring had already overwritten these commands' send times.
+    pub(crate) fn press_missing(&mut self, output: usize, count: u64) {
+        if let Some(health) = self.output_health.get_mut(output) {
+            health.press_missing = health.press_missing.wrapping_add(count);
         }
     }
 
@@ -226,12 +297,43 @@ impl Snapshot {
     }
 }
 
+#[derive(Clone, Copy)]
+struct OutputHealth {
+    lateness: Times<LATENESS_BUCKETS>,
+    press: Times<LATENCY_BUCKETS>,
+    generation: u64,
+    handed: u64,
+    press_under_target: u64,
+    press_missing: u64,
+    outages: u64,
+}
+
+impl OutputHealth {
+    const ZERO: Self = Self {
+        lateness: Times::ZERO,
+        press: Times::ZERO,
+        generation: 0,
+        handed: 0,
+        press_under_target: 0,
+        press_missing: 0,
+        outages: 0,
+    };
+}
+
 /// Times counted in a histogram, and the latest one exactly: the histogram's last bucket
 /// holds everything later.
 #[derive(Clone, Copy)]
 struct Times<const N: usize> {
     counts: Histogram<N>,
     worst: Duration,
+}
+
+#[cfg(all(test, target_pointer_width = "64"))]
+#[test]
+fn snapshot_has_one_press_histogram_and_four_counts_per_output() {
+    const BEFORE: usize = 76_992; // Inline bytes with the existing lateness and global latency.
+    let added = MAX_OUTPUTS * (size_of::<Times<LATENCY_BUCKETS>>() + 4 * size_of::<u64>());
+    assert_eq!(size_of::<Snapshot>(), BEFORE + added);
 }
 
 impl<const N: usize> Times<N> {

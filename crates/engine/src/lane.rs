@@ -50,7 +50,7 @@ use std::time::Duration;
 
 /// Boxes per output: one being sent, one waiting, one the tick fills. A device that takes
 /// longer than a frame skips to the newest frame instead of sending stale ones.
-const BOXES: usize = 3;
+pub(crate) const BOXES: usize = 3;
 
 /// The name of every output's thread.
 const THREAD: &str = "output";
@@ -72,8 +72,16 @@ struct Frame {
     due: Duration,
     /// When the output's next frame is due.
     next: Duration,
-    /// Filled by the output's thread.
-    sent: Option<Sent>,
+    prefix: Prefix,
+    /// Outcome and handoff time, filled by the output's thread.
+    sent: Option<(Outcome, Duration)>,
+}
+
+/// The commands in a frame and the attachment they went to.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Prefix {
+    pub applied: u64,
+    pub generation: u64,
 }
 
 /// What came of a frame on the output's thread.
@@ -84,6 +92,7 @@ pub(crate) struct Sent {
     pub at: Duration,
     /// When it was due.
     pub due: Duration,
+    pub prefix: Prefix,
 }
 
 /// What came of handing a frame to the output's thread.
@@ -170,6 +179,7 @@ impl Lane {
                 len: 0,
                 due: Duration::ZERO,
                 next: Duration::ZERO,
+                prefix: Prefix::default(),
                 sent: None,
             })
         });
@@ -185,7 +195,13 @@ impl Lane {
     /// Hands `frame`, due at `due`, to the output's thread; the output's next frame is
     /// due at `next`. Never waits, never allocates: copies into a spare box and wakes the
     /// thread (`unpark`, wait-free).
-    pub(crate) fn hand(&mut self, frame: &[Levels], due: Duration, next: Duration) -> Hand {
+    pub(crate) fn hand(
+        &mut self,
+        frame: &[Levels],
+        due: Duration,
+        next: Duration,
+        prefix: Prefix,
+    ) -> Hand {
         let Some(mut free) = self.spare.iter_mut().find_map(Option::take) else {
             return Hand::Full;
         };
@@ -196,6 +212,7 @@ impl Lane {
         free.len = len;
         free.due = due;
         free.next = next;
+        free.prefix = prefix;
         free.sent = None;
         match self.frames.push(free) {
             Ok(()) => {
@@ -216,8 +233,13 @@ impl Lane {
     /// order they were sent. Their boxes are spare again.
     pub(crate) fn back(&mut self, mut each: impl FnMut(Sent)) {
         while let Ok(mut frame) = self.back.pop() {
-            if let Some(sent) = frame.sent.take() {
-                each(sent);
+            if let Some((outcome, at)) = frame.sent.take() {
+                each(Sent {
+                    outcome,
+                    at,
+                    due: frame.due,
+                    prefix: frame.prefix,
+                });
             }
             self.keep(frame);
         }
@@ -281,11 +303,7 @@ fn run(
 /// Sends a box back to the tick with what came of its frame. The queue has room for
 /// every box, so it is never full.
 fn back(done: &mut rtrb::Producer<Frame>, mut frame: Frame, outcome: Outcome, at: Duration) {
-    frame.sent = Some(Sent {
-        outcome,
-        at,
-        due: frame.due,
-    });
+    frame.sent = Some((outcome, at));
     let _ = done.push(frame);
 }
 
@@ -351,12 +369,12 @@ mod tests {
     }
 
     /// Until `n` frames came back, collects what came of them.
-    fn wait_back(lane: &mut Lane, n: usize) -> Vec<(Outcome, Duration)> {
+    fn wait_back(lane: &mut Lane, n: usize) -> Vec<(Outcome, Duration, Prefix)> {
         let mut came = vec![];
         let started = Instant::now();
         while came.len() < n {
             assert!(started.elapsed() < Duration::from_secs(10), "{came:?}");
-            lane.back(|sent| came.push((sent.outcome, sent.due)));
+            lane.back(|sent| came.push((sent.outcome, sent.due, sent.prefix)));
             thread::sleep(Duration::from_millis(1)); // poll
         }
         came
@@ -373,7 +391,12 @@ mod tests {
         };
         let mut lane = Lane::start(Box::new(gate), Universes::ONE, Clock::wall()).unwrap();
         // Every frame is due at once: the thread sends what it finds.
-        let hand = |lane: &mut Lane, first, due| lane.hand(&levels(first), ms(due), ms(0));
+        let prefix = |n| Prefix {
+            applied: 100 + n,
+            generation: 10 + n,
+        };
+        let hand =
+            |lane: &mut Lane, first, due| lane.hand(&levels(first), ms(due), ms(0), prefix(due));
         // Frame 1 is taken and held at the gate; then two wait and the boxes run out.
         assert_eq!(hand(&mut lane, 1, 1), Hand::Handed);
         let started = Instant::now();
@@ -397,13 +420,16 @@ mod tests {
         // 1 sent, 2 passed over for 3, 3 sent; a frame of zeros the device fails
         let came = wait_back(&mut lane, 3);
         let expected = [
-            (Outcome::Accepted, ms(1)),
-            (Outcome::Dropped, ms(2)),
-            (Outcome::Accepted, ms(3)),
+            (Outcome::Accepted, ms(1), prefix(1)),
+            (Outcome::Dropped, ms(2), prefix(2)),
+            (Outcome::Accepted, ms(3), prefix(3)),
         ];
         assert_eq!(came, expected);
         assert_eq!(hand(&mut lane, 0, 5), Hand::Handed, "boxes are spare again");
-        assert_eq!(wait_back(&mut lane, 1), [(Outcome::Failed, ms(5))]);
+        assert_eq!(
+            wait_back(&mut lane, 1),
+            [(Outcome::Failed, ms(5), prefix(5))]
+        );
         drop(lane);
         assert_eq!(
             taken.load(Ordering::Acquire),

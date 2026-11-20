@@ -718,6 +718,7 @@ impl Engine {
             hand,
             out: vec![Levels::ZERO; count],
             carried: Carried::new(),
+            staged: Box::new([None; (lane::BOXES + 1) * MAX_OUTPUTS]),
             clock: clock.clone(),
             trace,
             #[cfg(feature = "test-support")]
@@ -1673,14 +1674,24 @@ struct Ticker {
     out: Vec<Levels>,
     /// When the commands were sent, until each output carried them.
     carried: Carried,
+    /// Results waiting until all due outputs have been served. Room for every lane
+    /// box plus one immediate result per output.
+    staged: Box<[Option<Accepted>; (lane::BOXES + 1) * MAX_OUTPUTS]>,
     clock: Clock,
     trace: Trace,
     #[cfg(feature = "test-support")]
     timings: Option<snapshot::timing::TimingWriter>,
 }
 
-/// Commands an output's frame may still have to carry. Older ones are not counted.
+/// Recent command stamps kept for measuring press time. Older stamps count as missing.
 const CARRY: usize = 4 * QUEUE;
+
+#[derive(Clone, Copy)]
+struct Accepted {
+    output: OutputNumber,
+    prefix: lane::Prefix,
+    at: Duration,
+}
 
 /// When the last [`CARRY`] applied commands were sent, and how many each output's
 /// frames carried so far: so each output counts the time from a send to its own next
@@ -1691,6 +1702,8 @@ struct Carried {
     applied: u64,
     /// Per output: the commands applied before its last frame, or before it was attached.
     carried: [u64; MAX_OUTPUTS],
+    /// Prefix of each output's last accepted frame in this attachment.
+    last_accepted: [u64; MAX_OUTPUTS],
 }
 
 impl Carried {
@@ -1699,6 +1712,7 @@ impl Carried {
             sent: [Duration::ZERO; CARRY],
             applied: 0,
             carried: [0; MAX_OUTPUTS],
+            last_accepted: [0; MAX_OUTPUTS],
         }
     }
 
@@ -1710,11 +1724,39 @@ impl Carried {
         self.applied = self.applied.wrapping_add(1);
     }
 
-    /// A new device at `output`: it carries what is applied from now on.
-    fn attached(&mut self, output: usize) {
-        if let Some(carried) = self.carried.get_mut(output) {
+    /// A new attachment starts its press history here. The scorecard follows the
+    /// device itself, so its handoff history continues when we keep the lane.
+    fn attached(&mut self, output: usize, keeps_lane: bool) {
+        if let Some(prefix) = self.last_accepted.get_mut(output) {
+            *prefix = self.applied;
+        }
+        if !keeps_lane && let Some(carried) = self.carried.get_mut(output) {
             *carried = self.applied;
         }
+    }
+
+    /// Count through this frame's prefix at the time its device took it. Commands
+    /// applied after the frame can already have overwritten some of its stamps.
+    fn accepted(&mut self, frame: Accepted, now: &mut Snapshot) {
+        let slot = frame.output.slot();
+        let (Some(previous), Some(Some(output))) = (
+            self.last_accepted.get_mut(slot),
+            now.state.outputs.get(slot),
+        ) else {
+            return;
+        };
+        let rate = output.rate;
+        let through = frame.prefix.applied;
+        let pending = through.wrapping_sub(*previous);
+        let newer = self.applied.wrapping_sub(through);
+        let retained = pending.min((CARRY as u64).saturating_sub(newer));
+        now.press_missing(slot, pending - retained);
+        for distance in (1..=retained).rev() {
+            if let Some(sent) = self.sent.get(ring(through.wrapping_sub(distance))) {
+                now.pressed(slot, frame.at.saturating_sub(*sent), rate);
+            }
+        }
+        *previous = through;
     }
 
     /// `output` handed over a frame at `handed`: each command applied since its last
@@ -1832,6 +1874,11 @@ impl Ticker {
                 let (handed, now) = (self.clock.now(), &mut self.now);
                 self.carried
                     .handed(number.slot(), handed, |time| now.carried(time));
+            }
+            // Each lane returns frames in order. Across its accepted prefixes this
+            // wake, at most CARRY surviving send times can be visited.
+            for frame in self.staged.iter_mut().map_while(Option::take) {
+                self.carried.accepted(frame, &mut self.now);
             }
             self.shared
                 .applied
@@ -1974,9 +2021,7 @@ impl Ticker {
             return;
         };
         let keeps = matches!(command, EngineCommand::Attach { .. }) && device.is_none();
-        if !keeps {
-            self.carried.attached(output.slot());
-        }
+        self.carried.attached(output.slot(), keeps);
         let old = if keeps {
             None
         } else {
@@ -2013,8 +2058,12 @@ impl Ticker {
             _ => at,
         };
         let frame = output.universes.of(&self.out);
+        let prefix = lane::Prefix {
+            applied: self.now.applied(),
+            generation: self.now.generation(slot),
+        };
         let dropped = match self.devices.get_mut(slot) {
-            Some(Some(lane)) => match lane.hand(frame, output.due, next) {
+            Some(Some(lane)) => match lane.hand(frame, output.due, next, prefix) {
                 lane::Hand::Handed => {
                     self.now.handed_one(slot);
                     None
@@ -2035,11 +2084,7 @@ impl Ticker {
                 });
             }
             self.now.late(slot, at.saturating_sub(output.due));
-            self.apply(EngineCommand::Sent {
-                output: number,
-                outcome,
-                at,
-            });
+            self.now.sent(number, outcome, at);
         }
     }
 
@@ -2048,12 +2093,14 @@ impl Ticker {
     fn back(&mut self) {
         let Self {
             devices,
+            staged,
             now,
             trace,
             #[cfg(feature = "test-support")]
             timings,
             ..
         } = self;
+        let mut spare = staged.iter_mut();
         for (lane, number) in devices.iter_mut().zip(1..) {
             let (Some(lane), Ok(output)) = (lane, OutputNumber::try_from(number)) else {
                 continue;
@@ -2069,12 +2116,22 @@ impl Ticker {
                         outcome: sent.outcome,
                     });
                 }
+                // Reconfiguration can keep the lane with an old frame still in flight.
+                // Its box and timing trace return normally. Its counts belong to the old slot generation.
+                if sent.prefix.generation != now.generation(output.slot()) {
+                    return;
+                }
                 now.late(output.slot(), sent.at.saturating_sub(sent.due));
-                now.update(EngineCommand::Sent {
-                    output,
-                    outcome: sent.outcome,
-                    at: sent.at,
-                });
+                now.sent(output, sent.outcome, sent.at);
+                if sent.outcome == Outcome::Accepted
+                    && let Some(place) = spare.next()
+                {
+                    *place = Some(Accepted {
+                        output,
+                        prefix: sent.prefix,
+                        at: sent.at,
+                    });
+                }
             });
         }
     }
@@ -2098,6 +2155,358 @@ impl Ticker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "test-support")]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "test inputs and stepped wakes must succeed"
+    )]
+    mod health {
+        use super::*;
+        use engine_core::health::{HealthSample, press_target};
+
+        // The outcome is selected by the DMX byte that actually reaches the device.
+        struct ByLevel;
+
+        impl Device for ByLevel {
+            fn take(&mut self, frame: &[Levels]) -> Outcome {
+                match frame.first().and_then(|levels| levels.0.first()) {
+                    Some(253) => Outcome::Dropped,
+                    Some(254) => Outcome::Failed,
+                    _ => Outcome::Accepted,
+                }
+            }
+        }
+
+        struct Desk {
+            wakes: Wakes,
+            engine: Engine,
+            sender: Sender,
+            start: Duration,
+        }
+
+        impl Desk {
+            fn new() -> Self {
+                let (engine, sender, wakes) =
+                    Engine::start_stepped(Universes::ONE, Box::new(outputs::open)).unwrap();
+                wakes.hold().unwrap();
+                let start = wakes.wake().unwrap();
+                Self {
+                    wakes,
+                    engine,
+                    sender,
+                    start,
+                }
+            }
+
+            fn attach(&mut self, number: u8, rate: Rate) {
+                let run = RunNumbers { first: 1, count: 1 }
+                    .check(Universes::ONE)
+                    .unwrap();
+                self.sender
+                    .attach(number.try_into().unwrap(), Box::new(ByLevel), run, rate)
+                    .unwrap();
+            }
+
+            fn press(&mut self, level: u8) {
+                self.sender
+                    .send(Command::SetChannel {
+                        channel: ChannelNumbers {
+                            universe: 1,
+                            address: 1,
+                        },
+                        value: level,
+                    })
+                    .unwrap();
+            }
+
+            // Keep the simulated time still until the tick has received every result.
+            fn frames(&mut self, at: Duration, count: usize) {
+                let started = Instant::now();
+                let mut came = 0;
+                while came < count {
+                    assert!(
+                        started.elapsed() < Duration::from_secs(10),
+                        "{came} of {count} frames came back"
+                    );
+                    self.wakes.wake_at(at).unwrap();
+                    came += self
+                        .wakes
+                        .events()
+                        .iter()
+                        .filter(|e| matches!(e, Event::Came { .. }))
+                        .count();
+                }
+                assert_eq!(came, count);
+            }
+
+            fn sample(&mut self, at: Duration, number: u8) -> HealthSample {
+                self.engine.latest(); // ask for the next wake
+                self.wakes.wake_at(at).unwrap();
+                let mut sample = HealthSample::new(Duration::MAX, u64::MAX, Status::NotFound);
+                assert!(
+                    self.engine
+                        .latest()
+                        .health_sample(number.try_into().unwrap(), &mut sample)
+                );
+                sample
+            }
+        }
+
+        #[test]
+        fn an_accepted_frame_counts_just_its_prefix_on_its_output() {
+            let mut desk = Desk::new();
+            let start = desk.start;
+            desk.attach(1, Rate::Thirty);
+            desk.attach(2, Rate::Sixty);
+            desk.frames(start, 2);
+            let slow = desk.sample(start, 1);
+            let fast = desk.sample(start, 2);
+
+            let at = start + Rate::Sixty.period();
+            let latency = Duration::from_millis(3);
+            desk.wakes.set_time(at - latency);
+            desk.press(91);
+            desk.wakes.wake_at(at).unwrap(); // the frame carrying 91 is now in the lane
+            desk.press(17); // applied before that frame's result is collected
+            desk.frames(at, 1);
+            for (number, mut expected, added) in [(1, slow, 0), (2, fast, 1)] {
+                *expected
+                    .press
+                    .get_mut(bucket::<LATENCY_BUCKETS>(latency))
+                    .unwrap() += added;
+                let sample = desk.sample(at, number);
+                assert_eq!(sample.press, expected.press, "output {number}");
+                assert_eq!(sample.press_worst, latency * added as u32);
+                assert_eq!(
+                    sample.press_under_target,
+                    expected.press_under_target + added
+                );
+            }
+        }
+
+        #[test]
+        fn dropped_and_failed_frames_leave_the_press_for_the_next_acceptance() {
+            let rate = Rate::Sixty;
+            for (level, dropped, failed) in [(253, 1, 0), (254, 0, 1)] {
+                let mut desk = Desk::new();
+                let start = desk.start;
+                desk.attach(1, rate);
+                desk.frames(start, 1);
+                let mut expected = desk.sample(start, 1).press;
+
+                let due = start + rate.period();
+                let sent = due - Duration::from_millis(3);
+                desk.wakes.set_time(sent);
+                desk.press(level);
+                desk.frames(due, 1);
+                let sample = desk.sample(due, 1);
+                assert_eq!(sample.press, expected);
+                assert_eq!((sample.dropped, sample.failed), (dropped, failed));
+
+                let next = due + rate.period();
+                desk.wakes.set_time(next);
+                desk.press(42);
+                desk.frames(next, 1);
+                for time in [next - sent, Duration::ZERO] {
+                    *expected.get_mut(bucket::<LATENCY_BUCKETS>(time)).unwrap() += 1;
+                }
+                let sample = desk.sample(next, 1);
+                assert_eq!(sample.press, expected, "level {level}");
+                assert_eq!(sample.press_worst, next - sent);
+            }
+        }
+
+        #[test]
+        fn exact_press_target_and_existing_frame_counters_reach_the_snapshot() {
+            for rate in [Rate::Thirty, Rate::FortyFour, Rate::Sixty] {
+                let mut desk = Desk::new();
+                let start = desk.start;
+                desk.attach(1, rate);
+                desk.frames(start, 1);
+                let target = press_target(rate);
+                let late = Duration::from_millis(7);
+                let at = start + rate.period() + late;
+                let ns = Duration::from_nanos(1);
+                let mut expected = HealthSample::new(at, 1, Status::Running);
+                for latency in [target + ns, target, target - ns] {
+                    desk.wakes.set_time(at - latency);
+                    desk.press(90);
+                    *expected
+                        .press
+                        .get_mut(bucket::<LATENCY_BUCKETS>(latency))
+                        .unwrap() += 1;
+                }
+                desk.frames(at, 1);
+                *expected.press.first_mut().unwrap() = 1; // the attach, accepted immediately
+                expected.press_under_target = 2; // the attach and target minus one nanosecond
+                expected.press_worst = target + ns;
+                expected.frames_handed = 2;
+                expected.off_beat = 1;
+                expected.lateness_worst = late;
+                for latency in [Duration::ZERO, late] {
+                    *expected
+                        .lateness
+                        .get_mut(bucket::<LATENESS_BUCKETS>(latency))
+                        .unwrap() += 1;
+                }
+                assert_eq!(desk.sample(at, 1), expected, "{rate:?}");
+            }
+        }
+
+        #[test]
+        fn only_entries_into_reconnecting_count_as_outages() {
+            let mut desk = Desk::new();
+            let mut at = desk.start;
+            let rate = Rate::Sixty;
+            desk.attach(1, rate);
+            for (level, status, outages) in [
+                (0, Status::Connecting, 0),
+                (254, Status::Reconnecting { failures: 1 }, 1),
+                (254, Status::Reconnecting { failures: 2 }, 1),
+                (91, Status::Running, 1),
+                (254, Status::Reconnecting { failures: 1 }, 2),
+                (254, Status::Reconnecting { failures: 2 }, 2),
+                (91, Status::Running, 2),
+            ] {
+                desk.wakes.set_time(at);
+                desk.press(level);
+                desk.frames(at, 1);
+                let sample = desk.sample(at, 1);
+                assert_eq!((sample.status, sample.outages), (status, outages));
+                at += rate.period();
+            }
+        }
+
+        #[test]
+        fn a_frame_returned_after_reconfigure_adds_no_press_or_outage() {
+            let rate = Rate::Sixty;
+            for old_level in [91, 254] {
+                let mut desk = Desk::new();
+                let start = desk.start;
+                desk.attach(1, rate);
+                desk.frames(start, 1);
+                desk.press(254);
+                let failed = start + rate.period();
+                desk.frames(failed, 1); // an outage in the old generation
+                desk.press(old_level);
+                let old = failed + rate.period();
+                desk.wakes.wake_at(old).unwrap(); // still in flight, or waiting in the return queue
+                desk.press(42); // after the old frame's prefix, before re-attach
+                // The command prepared by SetOutput when the same kind keeps its lane.
+                let base = desk.sender.base();
+                let keep = Prepared {
+                    project: base.project,
+                    base,
+                    change: Change::Send(EngineCommand::Attach {
+                        output: 1.try_into().unwrap(),
+                        universes: RunNumbers { first: 1, count: 1 }
+                            .check(Universes::ONE)
+                            .unwrap(),
+                        rate,
+                    }),
+                };
+                desk.sender.admit(keep).unwrap();
+                desk.frames(old, 1);
+                let sample = desk.sample(old, 1);
+                assert_eq!(sample.generation, 2);
+                assert_eq!(sample.status, Status::NotFound);
+                assert_eq!((sample.lateness.iter().sum::<u64>(), sample.failed), (0, 0));
+                assert_eq!(sample.press.iter().sum::<u64>(), 0);
+                assert_eq!(sample.press_worst, Duration::ZERO);
+                assert_eq!(
+                    (
+                        sample.press_under_target,
+                        sample.press_missing,
+                        sample.outages
+                    ),
+                    (0, 0, 0)
+                );
+
+                let next = old + rate.period();
+                desk.frames(next, 1);
+                let sample = desk.sample(next, 1);
+                assert_eq!(sample.press.iter().sum::<u64>(), 1, "only the re-attach");
+                assert_eq!(sample.press_worst, rate.period());
+                assert_eq!(sample.press_under_target, 1);
+            }
+        }
+
+        #[test]
+        fn overwritten_presses_count_as_missing_once_and_reset_on_attach() {
+            // Hold the frame carrying 91 while later commands overwrite its prefix.
+            struct Hold(Arc<AtomicBool>);
+            impl Device for Hold {
+                fn take(&mut self, frame: &[Levels]) -> Outcome {
+                    if frame.first().and_then(|u| u.0.first()) == Some(&91) {
+                        let started = Instant::now();
+                        while !self.0.load(Ordering::Acquire) {
+                            if started.elapsed() > Duration::from_secs(10) {
+                                return Outcome::Failed;
+                            }
+                            thread::yield_now();
+                        }
+                    }
+                    Outcome::Accepted
+                }
+            }
+            let mut desk = Desk::new();
+            let start = desk.start;
+            let rate = Rate::Sixty;
+            let release = Arc::new(AtomicBool::new(false));
+            desk.sender
+                .attach(
+                    1.try_into().unwrap(),
+                    Box::new(Hold(Arc::clone(&release))),
+                    RunNumbers { first: 1, count: 1 }
+                        .check(Universes::ONE)
+                        .unwrap(),
+                    rate,
+                )
+                .unwrap();
+            desk.frames(start, 1);
+            desk.press(91);
+            let held = start + rate.period();
+            desk.wakes.wake_at(held).unwrap();
+            for press in 1..=CARRY + 3 {
+                desk.press(42);
+                if press % QUEUE == 0 {
+                    desk.wakes.wake_at(held).unwrap();
+                }
+            }
+            desk.wakes.wake_at(held).unwrap();
+            release.store(true, Ordering::Release);
+            desk.frames(held, 1);
+            let early = desk.sample(held, 1);
+            assert_eq!(early.press_missing, 1, "only 91 was in the accepted frame");
+            assert_eq!(
+                early.press.iter().sum::<u64>(),
+                1,
+                "only the attach survived"
+            );
+            let at = held + rate.period();
+            desk.frames(at, 1);
+            let next = at + rate.period();
+            desk.frames(next, 1); // the same prefix a second time
+            let sample = desk.sample(next, 1);
+            assert_eq!(sample.press_missing, 4);
+            assert_eq!(
+                sample.press.get(bucket::<LATENCY_BUCKETS>(at - held)),
+                Some(&(CARRY as u64))
+            );
+            assert_eq!(sample.press_under_target, 1 + CARRY as u64);
+            desk.sender
+                .send(Command::RemoveOutput {
+                    output: 1.try_into().unwrap(),
+                })
+                .unwrap();
+            desk.attach(1, rate);
+            let replacement = desk.sample(next, 1);
+            assert_eq!(replacement.generation, 2, "only attaches advance the slot");
+            assert_eq!(replacement.press_missing, 0);
+            assert_eq!(replacement.press_worst, Duration::ZERO);
+        }
+    }
 
     #[cfg(feature = "test-support")]
     #[test]
@@ -2131,7 +2540,7 @@ mod tests {
 
         let (clock, trace, wakes) = wake::stepped();
         let (writer, mut timings) = snapshot::timing::TimingWriter::new(clock.clone());
-        let (_engine, mut sender) = Engine::start_on(
+        let (mut engine, mut sender) = Engine::start_on(
             Universes::ONE,
             Box::new(outputs::open),
             clock,
@@ -2200,7 +2609,16 @@ mod tests {
         let poll = due + rate.period();
         wakes.wake_at(poll).unwrap();
         heard(17); // frame two's result has been returned before this take
+        engine.latest();
         wakes.wake_at(poll).unwrap();
+        let mut health = engine_core::health::HealthSample::new(poll, 0, Status::NotFound);
+        assert!(engine.latest().health_sample(output, &mut health));
+        let latency = handed - admitted;
+        assert_eq!(
+            health.press.get(bucket::<LATENCY_BUCKETS>(latency)),
+            Some(&1)
+        );
+        assert_eq!(health.press_worst, latency);
 
         let (mut commands, mut due_frames, mut finished) = (vec![], vec![], vec![]);
         while let Some(event) = timings.pop().unwrap() {
@@ -2267,7 +2685,7 @@ mod tests {
             let mut counted = vec![];
             for step in &steps {
                 match *step {
-                    Attach(output) => carried.attached(output),
+                    Attach(output) => carried.attached(output, false),
                     Sent(at) => carried.applied(ms(at)),
                     Handed(output, at) => carried.handed(output, ms(at), |t| counted.push(t)),
                 }
