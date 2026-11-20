@@ -116,7 +116,7 @@ A patch that fails 2 or 3 goes back with the failing output, not fixed by Opus.
 
 ## Context and hand-over
 
-The orchestrator is Opus 5.5 at high effort. At about 500k tokens of context it hands over to a fresh Opus High session: hand-over comment on the `Orchestrator state` issue (#147), then the new session reads the body and the last 3 comments, and `latest` for runs still to verify. Long peer runs go on in the background meanwhile; the new orchestrator verifies what they leave.
+The orchestrator is Opus 5.5 at medium effort. At about 500k tokens of context it hands over to a fresh Opus High session: hand-over comment on the `Orchestrator state` issue (#147), then the new session reads the body and the last 3 comments, and `latest` for runs still to verify. Long peer runs go on in the background meanwhile; the new orchestrator verifies what they leave.
 
 ## Measure it and improve it (orchestrator job)
 
