@@ -49,3 +49,5 @@ One row per run of Codex or Copilot, pasted by the orchestrator after verifying 
 | 2026-11-20 | codex | spec-193 | spec (research mode) | sol, ultra | 821 | 33 (0) | 3.76M / 3.62M / 32.2k | n/a | reviewed by Opus (POST AFTER FIXES), v2 posted on #193, tickets #195 to #197 |
 | 2026-11-20 | codex | review-195 | review | sol, ultra | 329 | 15 (2) | 1.71M / 1.63M / 11.0k | n/a | 5 surviving mutants and a u64 rank overflow, each with a red test; fixed in 1c86c12 |
 | 2026-11-20 | copilot | review-195 | review | sol, max | 409 | 13 (3) | 1.30M / 1.21M / 19.1k | n/a | a same-time read kept the older sample (real bug), a status mutant, two overflows; fixed in 1c86c12 except a press count past 2^64 |
+| 2026-11-20 | codex | review-196 | review | sol, ultra | 426 | 39 (3) | 3.98M / 3.88M / 11.7k | n/a | a reconfigure regression (status, counters, lateness lost), a 12 KB tick stack frame, two surviving mutants; each with a red test; fix round briefed |
+| 2026-11-20 | copilot | review-196 | review | sol, max | 845 | 48 (3) | 3.82M / 3.69M / 35.1k | n/a | the same reconfigure regression and stack growth, a frames_handed mutant; Opus had graded the regression as intended |
