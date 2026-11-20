@@ -69,7 +69,7 @@ Workers share one checkout of `main`. The design keeps them apart: a slice that 
 | Hotspots get one owner at a time | `engine-core` `Command` and `api`, `scripts/layers.mjs`, `engine-server/src/lib.rs`. When two slices need one, they run one after the other, or the first splits it so each owns a part |
 | Plan slices along seams | before running two slices in parallel, list the files each will touch. An overlap means sequence them or cut the seam first |
 | Stage only your own | `git diff --cached --stat`, `git commit -m ... -- <paths>`, `git apply --cached` for your hunks in a file with others' edits. Before a push, `git log origin/main..` shows only your commits |
-| No worktrees (owner, 2026-11-20) | all work happens in the one checkout on `main`, the orchestrator included: apply a patch there, commit only your own paths (`git commit -m ... -- <paths>`), `git pull --rebase` right before the push, `git log origin/main..` shows only your commits. `npm run verify -- <commit>` checks a commit in a temporary copy, which is not a worktree |
+| No worktrees (owner, 2026-11-20) | all work happens in the one checkout on `main`, the orchestrator included: apply a patch there, commit only your own paths (`git commit -m ... -- <paths>`), `git fetch` and `git merge --ff-only origin/main` right before you commit (it works beside others' uncommitted files; never stash or reset their work), commit, push at once; `git log origin/main..` shows only your commits. `npm run verify -- <commit>` checks a commit in a temporary copy, which is not a worktree |
 
 | Stays with the owner | |
 |---|---|
