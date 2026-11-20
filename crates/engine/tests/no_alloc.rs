@@ -614,14 +614,16 @@ fn output_health() {
         }
     }
 
-    let (mut engine, mut sender, wakes) =
-        Engine::start_stepped(Universes::ONE, Box::new(outputs::open)).unwrap();
+    let universes = Universes::new(2).unwrap();
+    let (mut engine, mut sender, wakes) = Engine::start_stepped(
+        universes,
+        Box::new(|_| Ok(Box::new(UnplugOnOne) as Box<dyn Device>)),
+    )
+    .unwrap();
     wakes.hold().unwrap();
     engine.stall_reclamation(true);
     let one = OutputNumber::try_from(1).unwrap();
-    let run = RunNumbers { first: 1, count: 1 }
-        .check(Universes::ONE)
-        .unwrap();
+    let run = RunNumbers { first: 1, count: 1 }.check(universes).unwrap();
     let channel = ChannelNumbers {
         universe: 1,
         address: 1,
@@ -665,6 +667,43 @@ fn output_health() {
             "allocation or free during output health service"
         );
     }
+
+    // A reconfigure that keeps the lane, with a frame of the old generation in flight.
+    let two = OutputNumber::try_from(2).unwrap();
+    let set_two = |first| Command::SetOutput {
+        output: two,
+        kind: engine_core::TEST_KIND,
+        universes: RunNumbers { first, count: 1 },
+        rate: Some(Rate::Sixty),
+    };
+    counting::uncounted(|| sender.send(set_two(1))).unwrap();
+    let runs = |engine: &mut Engine, sender: &Sender, generation, presses| {
+        let mut sample = HealthSample::new(Duration::ZERO, 0, Status::NotFound);
+        mock::wait_until("output 2 did not run", || {
+            wakes.wake().unwrap();
+            let snapshot = engine.latest();
+            snapshot.applied() == sender.sent()
+                && snapshot.health_sample(two, &mut sample)
+                && (sample.generation, sample.status) == (generation, Status::Running)
+                && sample.press.iter().sum::<u64>() == presses
+        });
+    };
+    runs(&mut engine, &sender, 1, 0);
+    let before = counts();
+    wakes.wake().unwrap(); // hands a frame of generation 1
+    assert!(
+        send(&mut sender, set_two(2), &[]),
+        "output 2 moves, same device"
+    );
+    sender
+        .send(Command::SetChannel { channel, value: 0 })
+        .unwrap();
+    runs(&mut engine, &sender, 2, 1);
+    assert_eq!(
+        counts(),
+        before,
+        "allocation or free during a reconfigure that keeps the lane"
+    );
     engine.stall_reclamation(false);
 }
 

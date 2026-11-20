@@ -210,8 +210,15 @@ impl Snapshot {
         self.state = update(self.state, held, holds, &mut self.grabs, command);
     }
 
-    /// Counts an outage on the transition into reconnecting, using the core's status.
-    pub(crate) fn sent(&mut self, output: OutputNumber, outcome: Outcome, at: Duration) {
+    /// What came of a frame of the attach `generation`. Counts an outage on the transition
+    /// into reconnecting, using the core's status, only for the output's current generation.
+    pub(crate) fn sent(
+        &mut self,
+        output: OutputNumber,
+        outcome: Outcome,
+        at: Duration,
+        generation: u64,
+    ) {
         let slot = output.slot();
         let status = |state: &State| state.outputs.get(slot)?.as_ref().map(|o| o.status);
         let before = status(&self.state);
@@ -220,13 +227,15 @@ impl Snapshot {
             outcome,
             at,
         });
-        if matches!(
-            (before, status(&self.state)),
-            (
-                Some(Status::Connecting | Status::Running),
-                Some(Status::Reconnecting { .. })
+        if generation == self.generation(slot)
+            && matches!(
+                (before, status(&self.state)),
+                (
+                    Some(Status::Connecting | Status::Running),
+                    Some(Status::Reconnecting { .. })
+                )
             )
-        ) && let Some(health) = self.output_health.get_mut(slot)
+            && let Some(health) = self.output_health.get_mut(slot)
         {
             health.outages = health.outages.wrapping_add(1);
         }
@@ -263,10 +272,11 @@ impl Snapshot {
     pub(crate) fn attached(&mut self, output: usize) {
         if let Some(health) = self.output_health.get_mut(output) {
             let present = self.state.outputs.get(output).is_some_and(Option::is_some);
-            *health = OutputHealth {
-                generation: health.generation.wrapping_add(u64::from(present)),
-                ..OutputHealth::ZERO
-            };
+            let generation = health.generation.wrapping_add(u64::from(present));
+            // Assigned whole, then the generation: `OutputHealth { generation, ..ZERO }`
+            // builds a 12 KiB temporary on the tick's stack in a debug build.
+            *health = OutputHealth::ZERO;
+            health.generation = generation;
         }
     }
 
@@ -334,6 +344,28 @@ fn snapshot_has_one_press_histogram_and_four_counts_per_output() {
     const BEFORE: usize = 76_992; // Inline bytes with the existing lateness and global latency.
     let added = MAX_OUTPUTS * (size_of::<Times<LATENCY_BUCKETS>>() + 4 * size_of::<u64>());
     assert_eq!(size_of::<Snapshot>(), BEFORE + added);
+}
+
+#[cfg(test)]
+#[test]
+#[expect(clippy::unwrap_used, reason = "the test's output and run are valid")]
+fn only_a_frame_of_the_current_generation_counts_an_outage() {
+    for (generation, outages) in [(1, 1), (0, 0)] {
+        let output = OutputNumber::try_from(1).unwrap();
+        let mut now = Snapshot::new(Universes::ONE, Priority::RealTime);
+        now.update(EngineCommand::Attach {
+            output,
+            universes: crate::RunNumbers { first: 1, count: 1 }
+                .check(Universes::ONE)
+                .unwrap(),
+            rate: Rate::Sixty,
+        });
+        now.attached(output.slot());
+        now.sent(output, Outcome::Accepted, Duration::ZERO, 1);
+        now.sent(output, Outcome::Failed, Duration::ZERO, generation);
+        let health = now.output_health.first().unwrap();
+        assert_eq!((health.generation, health.outages), (1, outages));
+    }
 }
 
 impl<const N: usize> Times<N> {

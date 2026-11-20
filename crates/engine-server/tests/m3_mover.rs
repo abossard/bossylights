@@ -114,7 +114,7 @@ impl Handed {
                         self.dropped += usize::from(outcome == Outcome::Dropped);
                         self.came.push((due, outcome));
                     }
-                    Event::Handed { .. } | Event::Came { .. } => {}
+                    Event::Handed { .. } | Event::Came { .. } | Event::Counted { .. } => {}
                 }
             }
             if heard.lock().unwrap().len() + self.dropped >= self.dues.len() {

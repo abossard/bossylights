@@ -71,6 +71,7 @@ impl Seen {
                 Event::Came {
                     output, outcome, ..
                 } => self.came[output.slot()].push(outcome),
+                Event::Counted { .. } => {}
             }
         }
     }

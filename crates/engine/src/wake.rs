@@ -130,6 +130,16 @@ impl Trace {
         });
     }
 
+    /// The presses of `output`'s accepted frame were counted.
+    #[cfg_attr(
+        not(feature = "test-support"),
+        expect(unused_variables, reason = "only a test reads the trace")
+    )]
+    pub(crate) fn counted(&mut self, output: OutputNumber) {
+        #[cfg(feature = "test-support")]
+        self.write(Event::Counted { output });
+    }
+
     /// Wait-free, never allocates: a full trace loses the event.
     #[cfg(feature = "test-support")]
     fn write(&mut self, event: Event) {
@@ -175,6 +185,9 @@ mod stepped {
             outcome: Outcome,
             due: Duration,
         },
+        /// The presses of `output`'s accepted frame were counted, after the wake's
+        /// hand-overs.
+        Counted { output: OutputNumber },
     }
 
     /// What the test lets the tick do.

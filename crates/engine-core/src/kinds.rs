@@ -63,8 +63,9 @@ pub const EXAMPLE: OutputKind = OutputKind::Ddp {
     color: Color::Rgb,
 };
 
-/// Another kind, for tests that need two.
-#[cfg(test)]
+/// Another kind, for tests that need two, and for tests outside `engine-core`
+/// (`TEST_KIND`), which name none.
+#[cfg(any(test, feature = "test-support"))]
 pub const OTHER: OutputKind = OutputKind::DmxUsbPro {
     adapter: Adapter::FIRST,
 };

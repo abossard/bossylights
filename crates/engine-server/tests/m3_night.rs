@@ -198,6 +198,7 @@ impl Desk {
                     assert!(!std::mem::replace(&mut handed[output.slot()], true));
                 }
                 Event::Came { outcome, .. } => assert_eq!(outcome, Outcome::Accepted),
+                Event::Counted { .. } => {}
             }
         }
         // The scheduler coalesces deadlines within its one-millisecond spin window.

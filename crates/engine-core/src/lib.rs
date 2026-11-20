@@ -44,6 +44,8 @@ pub use channel::{
     ADDRESSES, Channel, ChannelLevel, ChannelNumbers, ChannelSet, Levels, MAX_UNIVERSES, Universes,
     changes,
 };
+#[cfg(feature = "test-support")]
+pub use kinds::OTHER as TEST_KIND;
 pub use kinds::{Adapter, Color, OutputKind};
 pub use library::{
     ChannelFunction, Failure, FixtureKind, Library, Match, ModeChannels, ModeSize, NamedChannel,

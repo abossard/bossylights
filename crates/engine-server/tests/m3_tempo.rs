@@ -159,7 +159,7 @@ impl Desk {
                     self.dropped += 1;
                     dropped.push(due);
                 }
-                Event::Came { .. } => {}
+                Event::Came { .. } | Event::Counted { .. } => {}
             }
         }
         (due_now, dropped)
