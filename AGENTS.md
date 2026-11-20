@@ -47,6 +47,12 @@ Rust engine, web UI in a Tauri shell, Apache-2.0. Status: skeleton (engine count
 - Apache-2.0 only: no GPL or AGPL code or dependencies. Ideas from BlinderKitten, Chataigne and Mizer are fine, their code is not.
 - Plain words in the default view: looks, pads. Desk words: Playback, Patch, Show file, Looks, Tempo. A song has one show.
 - All who-wins rules live in one place (one table in the Mixer, one panel in the app). No other code decides between two values for the same light. See `docs/design/who-wins.md`.
+- The engine is a channel manager. It knows channels, their metadata and types, and compound types in the API (X/Y, RGB, CMYK, RGBW, …), never a "light". 1 byte of value per channel; coarse and fine are two channels that move as one 16-bit value. Fixtures are data: no fixture shape is assumed anywhere. Owner decisions: #239.
+- Outputs are protocol adapters over one channel space: DMX USB, Art-Net and sACN as 512-slot universes, DDP as one stream to an IP address.
+- Every control comes from fixture metadata: a colour picker where channels form a colour, an X/Y pad for pan and tilt, named ranges as buttons, faders otherwise; never a raw number only.
+- Nothing mocked, demo or half-working is reachable in the app. It grows by complete pieces, each working end to end on the real engine.
+- No Test output that drives every channel: Identify only. Haze, strobe, sound and macro channels never move unless a look or a hand sets them.
+- Machine load is normal: never hold, delay or stop work because of it.
 
 ## How to write: visual first, few words
 
