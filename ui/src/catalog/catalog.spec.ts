@@ -350,36 +350,66 @@ for (const id of ["top.workspaces", "console.speed", "inout.tempo.feed", "looks.
     expect(new Set([start, once, twice]).size).toBe(3);
     await expect(frame(page, "alone").locator('.k-pick-opt[tabindex="0"]')).toBeFocused();
   });
+  test(`UX-08 a pick in ${id} keeps the option elements: nothing is drawn anew`, async ({ page }) => {
+    await page.goto(`/#/${id}`);
+    const options = frame(page, "alone").locator(".k-pick-opt");
+    await options.evaluateAll((nodes) => nodes.forEach((n) => n.setAttribute("data-kept", "")));
+    await frame(page, "alone").locator('.k-pick-opt[tabindex="0"]').focus();
+    await page.keyboard.press("ArrowRight");
+    await expect(frame(page, "alone").locator(".k-pick-opt:not([data-kept])")).toHaveCount(0);
+    await expect(options).not.toHaveCount(0);
+  });
 }
 
-// [situation, armed or writing]
+// [frame, armed or writing]: a song plays or not, whatever the lamp went through
 const recording = [
   ["live-on", "armed"],
   ["lock", "armed"],
   ["no-song", "armed"],
+  ["state:armed", "armed"],
   ["recording", "writing"],
+  ["state:on", "writing"],
 ] as const;
 for (const [key, is] of recording) {
-  test(`UX-09 the Recording lamp is red only while it writes: ${key}`, async ({ page }) => {
-    await page.goto("/#/top.indicator.recording");
-    const button = frame(page, key).getByRole("button");
-    await expect(button).toHaveAttribute("aria-pressed", "true");
-    if (is === "armed") {
-      await expect(button.locator(".k-lamp")).not.toHaveAttribute("data-colour", "danger");
-      await expect(button).toContainText("Armed");
-    } else await expect(button.locator(".k-lamp")).toHaveAttribute("data-colour", "danger");
-  });
+  for (const presses of [0, 2]) {
+    test(`UX-09 the Recording lamp is red only while it writes: ${key}, ${presses} presses`, async ({ page }) => {
+      await page.goto("/#/top.indicator.recording");
+      const button = frame(page, key).getByRole("button");
+      for (let i = 0; i < presses; i++) await button.click();
+      await expect(button).toHaveAttribute("aria-pressed", "true");
+      if (is === "armed") {
+        await expect(button.locator(".k-lamp")).not.toHaveAttribute("data-colour", "danger");
+        await expect(button).toContainText("Armed");
+      } else await expect(button.locator(".k-lamp")).toHaveAttribute("data-colour", "danger");
+    });
+  }
 }
 
 test("UX-09 the Now strip follows the situation: its lanes and the two decks", async ({ page }) => {
   await page.goto("/#/top.now-strip");
   const says = async (key: string) => (await frame(page, key).locator(".c-stage").innerText()).replace(/\s+/g, " ");
-  const texts = { usual: await says("alone"), song: await says("song"), autopilot: await says("autopilot"), empty: await says("empty"), noSong: await says("no-song") };
+  const texts = { usual: await says("alone"), song: await says("song"), autopilot: await says("autopilot"), empty: await says("empty") };
   expect(new Set(Object.values(texts)).size).toBe(Object.keys(texts).length);
-  expect(texts.song).toMatch(/1\s?Playing/);
   expect(texts.autopilot).not.toMatch(/Autopilot\s?nothing/);
-  expect(texts.noSong).toMatch(/1\s?Stopped/);
 });
+
+// [frame, a song plays]: only a frame with a song has a deck that plays and a Show lane that runs
+const nowFrames = [
+  ...["alone", "live-off", "live-on", "lock", "autopilot", "holding", "no-engine", "empty", "edit-surface", "learn", "no-song", "output-lost"].map((key) => [key, false] as const),
+  ["song", true],
+  ["recording", true],
+] as const;
+for (const [key, plays] of nowFrames) {
+  test(`UX-09 the Now strip in ${key}: ${plays ? "a deck plays" : "no deck plays"}`, async ({ page }) => {
+    await page.goto("/#/top.now-strip");
+    const text = (await frame(page, key).locator(".c-stage").innerText()).replace(/\s+/g, " ");
+    if (plays) expect(text).toMatch(/1 ?Playing/);
+    else {
+      expect(text).not.toMatch(/Playing/);
+      expect(text).toMatch(/Show ?nothing/);
+    }
+  });
+}
 
 // [control, frame, the reason shown on the control]
 const refusals = [
@@ -395,19 +425,32 @@ for (const [id, key, reason] of refusals) {
   });
 }
 
+/** What a field of the panel's draft shows as sent: it changes the draft, Add the panel sends the panel. */
+const PANEL = "Sends nothing: it changes the draft of the panel";
+
 // [control, typed, how it is left, sent, the value it keeps, the reason]
 const typed = [
   ["inout.osc.port", "Banana", "Enter", "Nothing sent yet", "9000", "A port is a number from 1 to 65535"],
   ["inout.osc.port", "", "Enter", "Nothing sent yet", "9000", ""],
   ["inout.osc.port", "9001", "Tab", "SetOsc 9001", "9001", ""],
   ["inout.osc.port", "9001", "Enter", "SetOsc 9001", "9001", ""],
-  ["inout.out.universes", "Banana", "Enter", "Nothing sent yet", "2 to 9", "One universe, as 1, or a range, as 2 to 9"],
-  ["inout.out.universes", "9 to 2", "Tab", "Nothing sent yet", "2 to 9", "One universe, as 1, or a range, as 2 to 9"],
+  ["inout.out.universes", "Banana", "Enter", "Nothing sent yet", "2 to 9", "One universe from 1 to 32768, as 1, or a range, as 2 to 9"],
+  ["inout.out.universes", "9 to 2", "Tab", "Nothing sent yet", "2 to 9", "One universe from 1 to 32768, as 1, or a range, as 2 to 9"],
   ["inout.out.universes", "3", "Tab", "SetOutput 3", "3", ""],
   ["inout.mapping.message", "Banana", "Enter", "Nothing sent yet", "Note 36", "A note, as Note 36, or a controller, as CC 48"],
   ["inout.mapping.message", "CC 48", "Tab", "UpdateMapping CC 48", "CC 48", ""],
   ["inout.mapping.message", "", "Tab", "Nothing sent yet", "Note 36", ""],
   ["looks.name", "", "Enter", "Nothing sent yet", "Warm wash", ""],
+  ["inout.osc.port", "007", "Enter", "SetOsc 7", "7", ""],
+  ["inout.out.universes", "99999999", "Enter", "Nothing sent yet", "2 to 9", "One universe from 1 to 32768, as 1, or a range, as 2 to 9"],
+  ["inout.out.universes", "2 to 40000", "Tab", "Nothing sent yet", "2 to 9", "One universe from 1 to 32768, as 1, or a range, as 2 to 9"],
+  ["patch.panel.size", "Banana", "Enter", PANEL, "16 x 16", "Columns x rows, as 16 x 16, each from 1 to 1024"],
+  ["patch.panel.size", "0", "Enter", PANEL, "16 x 16", "Columns x rows, as 16 x 16, each from 1 to 1024"],
+  ["patch.panel.size", "-3", "Enter", PANEL, "16 x 16", "Columns x rows, as 16 x 16, each from 1 to 1024"],
+  ["patch.panel.size", "Banana", "Tab", PANEL, "16 x 16", "Columns x rows, as 16 x 16, each from 1 to 1024"],
+  ["patch.panel.size", "32 x 8", "Enter", PANEL, "32 x 8", ""],
+  ["patch.panel.start", "40000", "Enter", PANEL, "2", "A universe is a number from 1 to 32768"],
+  ["patch.panel.start", "Banana", "Tab", PANEL, "2", "A universe is a number from 1 to 32768"],
 ] as const;
 for (const [id, text, leave, command, keeps, reason] of typed) {
   test(`UX-31 ${id}: "${text}" and ${leave}`, async ({ page }) => {

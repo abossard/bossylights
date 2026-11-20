@@ -68,18 +68,20 @@ export function act(control: Control, look: Look, gesture: Act): Result {
   if (look.gone || (look.off && !look.offOption)) return nothing;
   // Learn waits: the press picks the control and does not fire it.
   if (look.learn) return gesture.is === "press" || gesture.is === "down" ? { look, sent: [{ name: "StartLearn", value: control.id }] } : nothing;
-  const plain = plainAct(control, look, gesture);
+  const result = plainAct(control, look, gesture);
+  // Whether a song plays is a fact of the frame: no gesture changes it.
+  const plain = { ...result, look: { ...result.look, song: look.song } };
   const use = USES[control.id];
   const kind = gestureOf(gesture);
   const events = use && kind ? use.on[kind] : undefined;
   // A control with a machine that reports down and up: what its machine does not list does nothing.
   if (use && !events && (gesture.is === "down" || gesture.is === "up")) return nothing;
   // The gesture changes the look, the machine keeps its own place.
-  return use && events ? machineAct(control, { ...plain.look, at: look.at }, use, events) : plain;
+  return use && events ? machineAct(control, { ...plain.look, at: look.at }, use, events, look.sub) : plain;
 }
 
-/** A control with a machine: the events run through it, the machine names what is sent. */
-function machineAct(control: Control, look: Look, use: Use, events: readonly string[]): Result {
+/** A control with a machine: the events run through it, the machine names what is sent. `was`: where a placed thing started. */
+function machineAct(control: Control, look: Look, use: Use, events: readonly string[], was: string): Result {
   const machine = MACHINES[use.machine] as Machine<string, string>;
   const first = control.sends[0];
   const sent: Sent[] = [];
@@ -89,14 +91,15 @@ function machineAct(control: Control, look: Look, use: Use, events: readonly str
     const next = step(machine, from, event);
     at = next.to;
     for (const name of next.sends ?? []) sent.push({ name, value: name === "Blackout" ? `on: ${at !== "off"}` : "" });
-    // A lamp sends its own command. A drop sends the command of what was dragged, once.
+    // A lamp sends its own command. A drop sends the command of what was dragged, once. A placed thing dropped where it started sends nothing.
     if (use.machine === "indicator" && event === "press" && first) sent.push({ name: first, value: `on: ${at === "ready" || at === "on"}` });
-    if (use.machine === "drag" && from === "dragging" && event === "up" && first) sent.push({ name: first, value: placed(control.id) ? look.sub : "where it landed" });
+    const stayed = placed(control.id) && look.sub === was;
+    if (use.machine === "drag" && from === "dragging" && event === "up" && first && !stayed) sent.push({ name: first, value: placed(control.id) ? look.sub : "where it landed" });
   }
-  const shows = use.shows?.[at];
+  const shows = (look.song ? undefined : use.noSong?.[at]) ?? use.shows?.[at];
   // Not listed: the look stays. Empty: back to plain, with what the gesture itself changed.
   const next = shows === undefined ? look : shows === "" ? { ...look, variant: "" } : inState(control, shows);
-  return { look: { ...next, at }, sent };
+  return { look: { ...next, at, song: look.song }, sent };
 }
 
 /** A press on these picks the thing: it stays marked. */

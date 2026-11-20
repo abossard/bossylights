@@ -35,9 +35,11 @@ export interface Look {
   at: string;
   /** Learn waits: a press picks it and does not fire it. */
   learn: boolean;
+  /** A song plays: a fact of the frame, not of the control. A gesture never changes it. */
+  song: boolean;
 }
 
-const PLAIN: Look = { label: "", sub: "", colour: "plain", on: false, off: "", offOption: "", gone: "", value: 62, value2: 40, options: [], picked: "", variant: "", at: "", learn: false };
+const PLAIN: Look = { label: "", sub: "", colour: "plain", on: false, off: "", offOption: "", gone: "", value: 62, value2: 40, options: [], picked: "", variant: "", at: "", learn: false, song: false };
 
 /** The usual look of a control: nothing special is true. */
 export function usual(control: Control): Look {
@@ -129,10 +131,13 @@ function atFor(control: Control, state: string): string | undefined {
   return Object.entries(shows).find(([, label]) => label === state)?.[0];
 }
 
+/** The situations in which a song plays. In the usual state none does. */
+const SONG_PLAYS: ReadonlySet<SituationId> = new Set(["song", "recording"]);
+
 /** The look of a control in one situation: the cell of the row decides if it is there and if it can be pressed. */
 export function inSituation(control: Control, situation: SituationId): Look {
   const cell = control.cells[situation];
-  const look = inState(control, SITUATION_STATE[control.id]?.[situation] ?? "");
+  const look = { ...inState(control, SITUATION_STATE[control.id]?.[situation] ?? ""), song: SONG_PLAYS.has(situation) };
   if (cell.is === "gone") return { ...look, gone: cell.says };
   if (cell.is === "off") return { ...look, off: cell.says, offOption: "" };
   const picked = situation === "learn" && control.learn.yes && cell.says.startsWith("It is picked");

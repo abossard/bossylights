@@ -20,7 +20,7 @@ export interface TextProps extends Shared {
   placeholder?: string;
   /** Why a text does not fit: a calculation, undefined when it fits. A refused text is never sent and the old value stays. */
   refuse?: (text: string) => string | undefined;
-  /** `enter or leave`: leaving the field saves too, as Enter does. A text that is refused then puts the old one back. */
+  /** `enter or leave`: leaving the field saves too, as Enter does. Leaving with a text that is refused puts the old one back, either way. */
   saves?: "enter" | "enter or leave";
   onText: (text: string) => void;
 }
@@ -76,9 +76,14 @@ function Text(props: TextProps) {
       setRefused(undefined);
     }
   };
+  // Leaving saves where it says so. Elsewhere a text that does not fit is refused on leaving too: it is never kept unsaid.
   const leave = (e: FocusEvent & { currentTarget: HTMLInputElement }) => {
-    if (props.kind === "search" || props.saves !== "enter or leave") return;
-    save(e.currentTarget);
+    if (props.kind === "search") return;
+    if (props.saves === "enter or leave") save(e.currentTarget);
+    else {
+      const text = e.currentTarget.value.trim();
+      setRefused(text === "" || text === props.value ? undefined : props.refuse?.(text));
+    }
     if (refused() !== undefined) e.currentTarget.value = props.value;
   };
   return (

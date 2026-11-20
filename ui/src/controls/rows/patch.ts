@@ -328,7 +328,7 @@ export const PATCH: Control[] = [
     kit: "Field.text",
     does: "How many pixels wide and high. The line under the form says how many universes that needs",
     ui: "the draft of the panel",
-    gestures: field("a number, 1 or more", "Enter adds the panel"),
+    gestures: field("columns x rows, as 16 x 16, each from 1 to 1024", "Enter adds the panel"),
     learn: NOT_A_BUTTON,
   }),
   panel({
@@ -368,7 +368,7 @@ export const PATCH: Control[] = [
     kit: "Field.text",
     does: "The first universe of the panel. The first free one is proposed",
     ui: "the draft of the panel",
-    gestures: field("a number, 1 or more", "Enter adds the panel"),
+    gestures: field("a number from 1 to 32768", "Enter adds the panel"),
     learn: NOT_A_BUTTON,
   }),
   control({

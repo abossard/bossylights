@@ -13,6 +13,8 @@ export interface Use {
   at?: string;
   /** The name of the row's state each machine state shows as. Empty: the usual look. Not listed: the look stays. */
   shows?: Record<string, string>;
+  /** Where it shows otherwise while no song plays: `shows` for those states, in a frame with no song. */
+  noSong?: Record<string, string>;
 }
 
 const lamp = (ready: string): Use => ({ machine: "indicator", on: { press: ["press"] }, shows: { ready, on: "on", off: "off", offLive: "off" } });
@@ -36,7 +38,8 @@ const adding = (at: string, on: Use["on"], shows?: Record<string, string>): Use 
 
 export const USES: Record<string, Use> = {
   "top.indicator.dj": INDICATOR,
-  "top.indicator.recording": INDICATOR,
+  // On with no song it is armed: it writes only while a song plays.
+  "top.indicator.recording": { ...INDICATOR, noSong: { on: "armed" } },
   "top.indicator.autopilot": INDICATOR,
   "top.indicator.lock": INDICATOR,
   "console.autopilot.on": lamp("waits for LIVE"),

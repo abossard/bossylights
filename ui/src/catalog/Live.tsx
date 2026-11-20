@@ -9,7 +9,7 @@ import type { Look } from "./look.ts";
 import { gobos } from "./drawings.tsx";
 import { dragged as stepsOf, placed, resizes } from "./place.ts";
 import { NOW } from "./samples.ts";
-import { SHAPES } from "./shapes.ts";
+import { SHAPES, tidy } from "./shapes.ts";
 import { USES } from "./uses.ts";
 
 /** A press that comes up within this is short. Longer, it was a hold (the pad machine). */
@@ -124,7 +124,7 @@ export function Live(props: { control: Control; look: Look; act: (act: Act) => v
       return <Picker kind="list" label={l().label} options={options()} picked={l().picked} {...off()} onPick={pick} />;
     case "Field.text":
     case "Field.search":
-      return <Field kind={c.kit === "Field.search" ? "search" : "text"} label={l().label} value={l().picked} saves={saves} {...some("refuse", SHAPES[c.id])} {...off()} onText={(text) => props.act({ is: "text", text })} />;
+      return <Field kind={c.kit === "Field.search" ? "search" : "text"} label={l().label} value={l().picked} saves={saves} {...some("refuse", SHAPES[c.id])} {...off()} onText={(text) => props.act({ is: "text", text: SHAPES[c.id] ? tidy(text) : text })} />;
     case "Field.steps":
       return (
         <Field

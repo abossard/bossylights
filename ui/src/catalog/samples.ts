@@ -157,7 +157,8 @@ export const SAMPLES: Record<string, Sample> = {
 /** Looks of states that are written down, where the rules of `look.ts` would guess. */
 export const STATE_LOOKS: Record<string, Record<string, Sample>> = {
   // On while LIVE is on, red only while it writes into a song.
-  "top.indicator.recording": { armed: { on: true, colour: "plain", sub: "Armed", at: "on" } },
+  // `song`: what the frame says, kept through every press. A lamp that is on with no song is armed.
+  "top.indicator.recording": { armed: { on: true, colour: "plain", sub: "Armed", at: "on", song: false }, on: { on: true, variant: "on", song: true } },
   // Its lanes and decks, by `NOW`.
   "top.now-strip": {
     "something runs": { on: true, variant: "" },
@@ -228,15 +229,17 @@ export interface Now {
   decks: readonly [Deck, Deck];
 }
 
-const NIGHT_DRIVE = "Night drive, Kaito";
-const SUNRISE = "Sunrise, Mira";
 const STOPPED: Deck = { state: "Stopped", song: "" };
+const CUED: Deck = { state: "Cued", song: "Sunrise, Mira" };
+
+/** The usual state has no song: no deck plays and the Show lane is empty. Every other is the usual plus one fact. */
+const USUAL_NOW: Now = { manual: "Warm wash", show: "", autopilot: "", decks: [STOPPED, CUED] };
 
 /** The Now strip by the variant of its look. */
 export const NOW: Record<string, Now> = {
-  "": { manual: "Warm wash", show: "Chase L-R", autopilot: "", decks: [{ state: "Playing", song: NIGHT_DRIVE }, { state: "Cued", song: SUNRISE }] },
+  "": USUAL_NOW,
   nothing: { manual: "", show: "", autopilot: "", decks: [STOPPED, STOPPED] },
-  song: { manual: "", show: "Drop", autopilot: "", decks: [{ state: "Playing", song: NIGHT_DRIVE }, STOPPED] },
-  autopilot: { manual: "", show: "", autopilot: "Slow sweep", decks: [{ state: "Playing", song: NIGHT_DRIVE }, STOPPED] },
-  "no song": { manual: "Warm wash", show: "", autopilot: "", decks: [STOPPED, { state: "Cued", song: SUNRISE }] },
+  song: { ...USUAL_NOW, show: "Drop", decks: [{ state: "Playing", song: "Night drive, Kaito" }, CUED] },
+  autopilot: { ...USUAL_NOW, autopilot: "Slow sweep" },
+  "no song": { ...USUAL_NOW, decks: [STOPPED, STOPPED] },
 };
