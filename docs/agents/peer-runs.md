@@ -67,3 +67,4 @@ One row per run of Codex or Copilot, pasted by the orchestrator after verifying 
 | 2026-11-20 | codex | build-197e | build | astra, ultra | 683 | 82 (11) | 7.17M / 7.05M / 16.9k | yes (5c46032) | Opus found one more variant (first read on the endpoint); a Claude worker fixed the class with one rule (6d0a0ae) |
 | 2026-11-20 | codex | review-197f | review | sol, ultra | 196 | 24 (1) | 1.77M / 1.67M / 5.5k | n/a | no new defects |
 | 2026-11-20 | copilot | review-197f | review | sol, max | 294 | 13 (0) | 1.17M / 1.09M / 9.8k | n/a | no new defects |
+| 2026-11-20 | codex | spec-216 | spec | astra, ultra | 1186 | 65 (0) | 6.23M / 6.04M / 43.1k | n/a (spec) | dense and over-built; Claude replaced it with one nearest-beat rule; the Opus checker found 18 gaps, all fixed |
