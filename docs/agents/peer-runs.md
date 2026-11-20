@@ -58,3 +58,12 @@ One row per run of Codex or Copilot, pasted by the orchestrator after verifying 
 | 2026-11-20 | codex | build-196c | build | astra, ultra | 795 | 99 (6) | 5.72M / 5.62M / 16.5k | yes (as 1016b7f on a newer head) | Opus 12 breaks, 10 red; attach no longer a press, ordering and generation tests |
 | 2026-11-20 | codex | review-197 | review | sol, ultra | 646 | 62 (3) | 6.92M / 6.78M / 21.2k | n/a | status judged at the read not the grid endpoint (false RunningLate), event order, a loss leaving Healthy, a test client taking Health as a reply, two weak tests |
 | 2026-11-20 | copilot | review-197 | review | sol, max | 823 | 21 (4) | 3.25M / 3.11M / 28.5k | n/a | the same endpoint-status bug, loss leaving Healthy, test client and pacing gap; size probe 16,026 B in budget |
+| 2026-11-20 | codex | build-197b | build | astra, ultra | 773 | 79 (4) | 9.45M / 9.31M / 17.9k | yes (87939d9) | Opus re-planted all, red; the next second look found a repeat-loss false warning |
+| 2026-11-20 | codex | review-197c | review | sol, ultra | 455 | 37 (0) | 5.42M / 5.30M / 14.4k | n/a | repeat-loss false RunningLate, stale-snapshot pacing, two weak tests |
+| 2026-11-20 | copilot | review-197c | review | sol, max | 696 | 30 (4) | 2.76M / 2.63M / 28.3k | n/a | the same repeat-loss bug, an overflow test that could not fail |
+| 2026-11-20 | codex | build-197d | build | astra, ultra | 897 | 93 (9) | 8.22M / 8.09M / 28.2k | yes (d9364cd) | Opus: one equivalent gap; the next look found the loss-and-return variant |
+| 2026-11-20 | codex | review-197d | review | sol, ultra | 552 | 45 (4) | 4.89M / 4.69M / 11.9k | n/a | loss and return between reads keeps a bad vote, first Health after a stale Picture early |
+| 2026-11-20 | copilot | review-197d | review | sol, max | 537 | 17 (2) | 2.01M / 1.88M / 24.6k | n/a | the same two |
+| 2026-11-20 | codex | build-197e | build | astra, ultra | 683 | 82 (11) | 7.17M / 7.05M / 16.9k | yes (5c46032) | Opus found one more variant (first read on the endpoint); a Claude worker fixed the class with one rule (6d0a0ae) |
+| 2026-11-20 | codex | review-197f | review | sol, ultra | 196 | 24 (1) | 1.77M / 1.67M / 5.5k | n/a | no new defects |
+| 2026-11-20 | copilot | review-197f | review | sol, max | 294 | 13 (0) | 1.17M / 1.09M / 9.8k | n/a | no new defects |
