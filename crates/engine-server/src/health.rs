@@ -242,13 +242,39 @@ impl Tracker {
         step: CoverageStep,
         sample: &HealthSample,
     ) -> Option<(Duration, health::HealthEvent)> {
+        let reached = match step {
+            CoverageStep::SameGridPoint { end } | CoverageStep::Window { end } => Some(end),
+            CoverageStep::Measuring { end } => end,
+            CoverageStep::BetweenGridPoints | CoverageStep::ClockDiscontinuity { .. } => None,
+        };
+        let judged = self.judge(step, sample);
+        // A rise in the outage count seen by the read that reaches an endpoint (on it,
+        // across it, or again at it) may lie at or before that endpoint: a loss and
+        // return between reads. Its verdict cannot confirm a later warning.
+        let lost = self
+            .previous
+            .is_some_and(|previous| previous.outages != sample.outages);
+        if let Some(point) = self
+            .grid
+            .back_mut()
+            .filter(|point| lost && Some(point.end) == reached)
+        {
+            point.verdict = Verdict::Insufficient;
+        }
+        judged
+    }
+
+    fn judge(
+        &mut self,
+        step: CoverageStep,
+        sample: &HealthSample,
+    ) -> Option<(Duration, health::HealthEvent)> {
         use Verdict::Insufficient;
         let end = match step {
             CoverageStep::BetweenGridPoints => return None,
             CoverageStep::SameGridPoint { end } => {
                 if let Some(point) = self.grid.back_mut().filter(|point| point.end == end) {
-                    // The outage counter also catches a loss and return between reads.
-                    if !available(sample.status) || sample.outages != point.sample.outages {
+                    if !available(sample.status) {
                         point.verdict = Insufficient;
                     }
                     point.sample = *sample;
@@ -567,6 +593,57 @@ mod tests {
                 observe(&mut reader, Some(&read));
             }
             assert_eq!(row(&reader).state, expected, "{status:?} at 4 s");
+        }
+    }
+
+    #[test]
+    fn a_rise_in_outages_seen_on_reaching_an_endpoint_cannot_confirm_a_later_warning() {
+        let late = OutputHealthState::Late {
+            reason: LateReason::HandoffLateness,
+        };
+        let measuring = OutputHealthState::Measuring;
+        // Reads every 250 ms up to 8 s, with `at_4s` in place of the read at 4 s.
+        // From read number `lost_from` on, the output was lost and is back:
+        // Running, outages 1.
+        for (case, at_4s, lost_from, expected) in [
+            ("no loss", &[4_000][..], None, late),
+            (
+                "first read on the endpoint",
+                &[4_000][..],
+                Some(16),
+                measuring,
+            ),
+            (
+                "repeat read on the endpoint",
+                &[4_000, 4_000][..],
+                Some(17),
+                measuring,
+            ),
+            (
+                "read crossing the endpoint",
+                &[4_100][..],
+                Some(16),
+                measuring,
+            ),
+            (
+                "on the 6 s grid point, mid-window",
+                &[4_000][..],
+                Some(24),
+                late,
+            ),
+        ] {
+            let times = (0..16)
+                .map(|i| i * 250)
+                .chain(at_4s.iter().copied())
+                .chain((17..=32).map(|i| i * 250));
+            let mut reader = Reader::new();
+            for (index, ms) in times.enumerate() {
+                let mut read = sample(ms, ms / 125);
+                read.outages = u64::from(lost_from.is_some_and(|from| index >= from));
+                observe(&mut reader, Some(&read));
+            }
+            assert_eq!(window(&reader).0, 8_000, "{case}");
+            assert_eq!(row(&reader).state, expected, "{case}");
         }
     }
 
