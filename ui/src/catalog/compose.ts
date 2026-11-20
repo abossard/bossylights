@@ -47,6 +47,8 @@ const INSIDE: Partial<Record<Kit, readonly string[]>> = {
 export function linesOf(control: Control): string[] {
   const looks = [usual(control), ...control.states.map((state) => inState(control, state))];
   const lines = new Set(looks.flatMap((look) => [look.label, look.sub]).filter(Boolean));
+  // A lamp's reason takes the place of its state word, so a lamp holds the width of its reasons too (#194).
+  if (FIXED[control.id]?.mark === "lamp") for (const cell of Object.values(control.cells)) if (cell.is === "off") lines.add(cell.says);
   return lines.size > 1 ? [...lines] : [];
 }
 

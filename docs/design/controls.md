@@ -534,7 +534,7 @@ stateDiagram-v2
 | --- | --- |
 | ready | A mute ring and 'Ready': starts with LIVE |
 | on | A solid paper lamp and 'On': in effect now. Recording is red |
-| off | An empty lamp, the name struck through: turned off |
+| off | A dashed ring, the name struck through: turned off |
 | offLive | The same look as off, while LIVE is on |
 
 | Event | Caused by |
@@ -951,10 +951,10 @@ stateDiagram-v2
 | Control | On screen | On a mapped controller | Undo | Learn | Function first |
 | --- | --- | --- | --- | --- | --- |
 | LIVE switch | Paper slab 'LIVE on', knob right, or outline 'LIVE off', knob left, when the engine reports it | The mapped control is lit while LIVE is on | no. Press it again | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
-| DJ link indicator | The lamp changes when the engine reports it: solid paper and 'On', a mute ring and 'Ready', empty with the name struck through when off | The mapped control shows on or off | no. Press it again | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
-| Recording indicator | The lamp changes when the engine reports it: solid paper and 'On', a mute ring and 'Ready', empty with the name struck through when off | The mapped control shows on or off | no. Press it again | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
-| Autopilot indicator | The lamp changes when the engine reports it: solid paper and 'On', a mute ring and 'Ready', empty with the name struck through when off | The mapped control shows on or off | no. Press it again | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
-| Lock indicator | The lamp changes when the engine reports it: solid paper and 'On', a mute ring and 'Ready', empty with the name struck through when off | The mapped control shows on or off | no. Press it again | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
+| DJ link indicator | The lamp changes when the engine reports it: solid paper and 'On', a mute ring and 'Ready', a dashed ring with the name struck through when off | The mapped control shows on or off | no. Press it again | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
+| Recording indicator | The lamp changes when the engine reports it: solid paper and 'On', a mute ring and 'Ready', a dashed ring with the name struck through when off | The mapped control shows on or off | no. Press it again | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
+| Autopilot indicator | The lamp changes when the engine reports it: solid paper and 'On', a mute ring and 'Ready', a dashed ring with the name struck through when off | The mapped control shows on or off | no. Press it again | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
+| Lock indicator | The lamp changes when the engine reports it: solid paper and 'On', a mute ring and 'Ready', a dashed ring with the name struck through when off | The mapped control shows on or off | no. Press it again | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
 | Trouble chip | It appears with the trouble and goes with it. Red outline, red lamp | None | no. Nothing in the show file changes | no. It is a notice, there only while something is wrong | **change**. Today it shows only when no light is connected. It also has to say 'Output lost' and 'Engine not connected': mid-show these have no mark outside In/Out |
 | Tap | The beat dots restart on the tap, at once. The tempo changes after the second tap, and the words beside it turn to 'from Tap' | The mapped pad blinks on the beat | no. Playing is not a change to the show file. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **keep**. Asked for in review 1: always visible beside the tempo |
 | Tempo source | The words turn to the name of the feed and are plain again, when the engine reports it | The mapped control is lit while taps hold the beat | no. Tap again | yes. A button or a value: one mapping | **keep**. The owner's decision 23: taps hold until you press the words 'from Tap'. The way back is where the eye already is, not on In/Out |

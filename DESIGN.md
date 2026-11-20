@@ -241,10 +241,10 @@ Four indicators beside it (DJ link, Recording, Autopilot, Lock), each a lamp, it
 |---|---|---|---|---|
 | On, in effect now | Solid paper | On | 15.16:1 | "Lock: On" |
 | Ready, starts with LIVE | Outline, a mute ring | Ready | 9.14:1 | "Lock: Ready, starts with LIVE" |
-| Turned off | Empty, name struck through | none | 9.14:1 | "Lock: off" |
-| Recording, while it writes | Solid red | On | | "Recording: On" |
+| Turned off | A dashed mute ring, name struck through | none | 9.14:1 | "Lock: Off" |
+| Recording, while it writes | Solid red | On | 5.21:1 | "Recording: On" |
 
-A word of the row's own (Recording's "Armed") or the reason it is off ("Engine not connected") takes the place of the state word. The lamp keeps the width of its widest word, so nothing beside it moves.
+A word of the row's own (Recording's "Armed") or the reason it is off ("Engine not connected") takes the place of the state word, on screen and in what the screen reader hears ("Lock: Engine not connected"). The lamp keeps the width of its widest word and of every reason, so nothing beside it moves.
 
 With no lights connected a red-outlined chip says so and opens In/Out.
 

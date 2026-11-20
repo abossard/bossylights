@@ -32,7 +32,7 @@ export type Signal = Colour | "mute" | "ok" | "warn";
 /**
  * | state | means                              | look                                   |
  * |-------|------------------------------------|----------------------------------------|
- * | off   | not in effect                      | outline. A lamp is empty, its name struck |
+ * | off   | not in effect                      | outline. A lamp is a dashed ring, its name struck |
  * | ready | will be in effect when LIVE goes on | outline. A lamp is a mute ring, "Ready" |
  * | on    | in effect now                      | filled in its colour. A lamp is solid, "On" |
  */
@@ -45,13 +45,13 @@ export interface LampLook {
   says: string;
 }
 
-const LAMPS: Record<ToggleState, LampLook> = {
-  off: { fill: "dashed", word: "", says: "off" },
-  ready: { fill: "outline", word: "Ready", says: "Ready, starts with LIVE" },
-  on: { fill: "solid", word: "On", says: "On" },
-};
+const LAMPS: Readonly<Record<ToggleState, Readonly<LampLook>>> = Object.freeze({
+  off: Object.freeze({ fill: "dashed", word: "", says: "Off" }),
+  ready: Object.freeze({ fill: "outline", word: "Ready", says: "Ready, starts with LIVE" }),
+  on: Object.freeze({ fill: "solid", word: "On", says: "On" }),
+});
 
-export const lampOf = (state: ToggleState): LampLook => LAMPS[state];
+export const lampOf = (state: ToggleState): Readonly<LampLook> => LAMPS[state];
 
 /**
  * How a thing stands in its place. Item and Block share it.

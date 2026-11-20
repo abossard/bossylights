@@ -84,10 +84,11 @@ export function Button(props: ButtonProps) {
   };
   /** A lamp says its state in a word under the name. A reason or a word of its own takes its place. */
   const word = () => (mark() === "lamp" ? lampOf(state() ?? "off").word || undefined : undefined);
+  /** What a screen reader hears says what is shown: the reason or a word of its own in place of the state word. */
   const heard = () => {
     if (props.says !== undefined) return props.says;
     const t = toggle();
-    if (t && (t.mark === "lamp" || t.state === "ready")) return `${t.label}: ${lampOf(t.state).says}`;
+    if (t && (t.mark === "lamp" || t.state === "ready")) return `${t.label}: ${props.off ?? props.sub ?? lampOf(t.state).says}`;
     return props.glyph === undefined ? undefined : props.label;
   };
 

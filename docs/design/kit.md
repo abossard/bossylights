@@ -136,10 +136,10 @@ Fixed props are the ones that never change for the control. Its words, its state
 | Control | Name | Where | Colour | Fixed props | Carries |
 | --- | --- | --- | --- | --- | --- |
 | LIVE switch | `top.live` | Top bar | plain | mark: knob, size: large, holds: 2 lines |  |
-| DJ link indicator | `top.indicator.dj` | Top bar | plain | mark: lamp, quiet, lamp: ok |  |
-| Recording indicator | `top.indicator.recording` | Top bar | danger | mark: lamp, quiet, holds: 2 lines |  |
-| Autopilot indicator | `top.indicator.autopilot` | Top bar | autopilot | mark: lamp |  |
-| Lock indicator | `top.indicator.lock` | Top bar | plain | mark: lamp, quiet |  |
+| DJ link indicator | `top.indicator.dj` | Top bar | plain | mark: lamp, quiet, lamp: ok, holds: 2 lines |  |
+| Recording indicator | `top.indicator.recording` | Top bar | danger | mark: lamp, quiet, holds: 3 lines |  |
+| Autopilot indicator | `top.indicator.autopilot` | Top bar | autopilot | mark: lamp, holds: 2 lines |  |
+| Lock indicator | `top.indicator.lock` | Top bar | plain | mark: lamp, quiet, holds: 2 lines |  |
 | Learn | `top.learn` | Top bar | plain | held: short press and hold, holds: 3 lines |  |
 | Show file | `top.show` | Top bar | plain | holds: 2 lines |  |
 | Fold Running | `console.running.fold` | Console | plain | mark: chevron, quiet |  |

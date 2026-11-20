@@ -82,7 +82,7 @@ test("unbroken: a hyphen that does not break", () => assert.equal(unbroken("Chas
 
 // [toggle state, the lamp's shape, the word under the name, what a screen reader hears after the name]
 const lamps = [
-  ["off", "dashed", "", "off"],
+  ["off", "dashed", "", "Off"],
   ["ready", "outline", "Ready", "Ready, starts with LIVE"],
   ["on", "solid", "On", "On"],
 ];
@@ -90,6 +90,10 @@ for (const [state, fill, word, says] of lamps) {
   test(`lampOf: ${state}`, () => {
     assert.deepEqual(lampOf(state), { fill, word, says });
     assert.ok(says.startsWith(word), "the name starts with the word it shows");
+  });
+  test(`lampOf: a caller cannot change the next ${state} lamp`, () => {
+    assert.equal(Reflect.set(lampOf(state), "fill", "changed"), false);
+    assert.equal(lampOf(state).fill, fill);
   });
 }
 
