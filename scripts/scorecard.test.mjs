@@ -140,3 +140,41 @@ const surfaceCases = [
 for (const [files, expected] of surfaceCases) {
   test(`surface of ${files.length} files`, () => assert.equal(crateSurface(files), expected));
 }
+
+test("the performance scorecard keeps each output, rejects missing samples and uses strict timing targets", async () => {
+  const { performanceRows, performanceTable, missedReferenceTarget } = await import("./scorecard.mjs");
+  const run = (output, hz, p99, p95, drops = 0) => ({ output, hz, p99, p95, drops });
+  const result = (outputs, pressSamples = 267) => JSON.stringify({ seconds: 60, events: 400, pressSamples, outputs });
+  const good = [run(1, 44, 999999, 27727271), run(2, 60, 999999, 21666665, 3)];
+  const limits = good.map((row, i) => ({ ...row, p99: i ? 999999 : 1000000, p95: i ? 21666666 : 0 }));
+  for (const [output, count, expected] of [
+    [good, 2, [true, true]], [limits, 2, [false, false]], [good.slice(0, 1), 2, null],
+    [[good[0], good[0]], 2, null], [[good[0], { ...good[1], p95: null }], 2, null],
+    [[good[0], { ...good[1], hz: 44 }], 2, null],
+  ]) {
+    if (expected === null) assert.throws(() => performanceRows(result(output), count, 60));
+    else assert.deepEqual(performanceRows(result(output), count, 60).outputs.map((row) => row.pass), expected);
+  }
+  const rows = performanceRows(result(good), 2, 60);
+  assert.match(performanceTable([["M3", rows]]), /M3 \| 2 \| 60 \| 999.999 \| 21666.665 \| 3 \| pass/);
+  assert.throws(() => performanceRows(result(good), 2, 5));
+  assert.throws(() => performanceTable([["M2", rows], ["M3", { ...rows, events: 399 }]]));
+  assert.throws(() => performanceTable([["M2", rows], ["M3", { ...rows, pressSamples: 266 }]]));
+  for (const missing of [0, 401, null]) {
+    assert.throws(() => performanceRows(result(good, missing), 2, 60));
+  }
+  assert.throws(() => performanceRows(JSON.stringify({ seconds: 60, events: 0, outputs: good }), 2, 60));
+  assert.match(performanceTable([]), /Not measured on CI/);
+  const smoke = performanceTable([["M3 at limits", { ...rows, seconds: 5 }]]);
+  assert.match(smoke, /Each run took 5 s/);
+  assert.match(smoke, /60 s reference run checks the caps/);
+  assert.match(smoke, /267 Manual presses and releases per output/);
+  assert.match(smoke, /10,922 RGB pixels, 32 roots, 65,536 reserved visits and 16 outputs/);
+  const missed = performanceRows(result(limits), 2, 60);
+  for (const [runs, fails] of [
+    [[], false],
+    [[["M2", rows], ["M3", rows]], false],
+    [[["M2", rows], ["M3", missed]], true],
+    [[["M3 at limits", { ...missed, seconds: 5 }]], false],
+  ]) assert.equal(missedReferenceTarget(runs), fails);
+});

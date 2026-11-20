@@ -358,3 +358,91 @@ impl Reader {
         }
     }
 }
+
+#[cfg(feature = "test-support")]
+pub(crate) mod timing {
+    use crate::{Clock, Outcome, OutputNumber};
+    use std::io;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Duration;
+
+    /// Events for the scorecard in the engine's monotonic epoch. A returned frame names
+    /// its output and deadline, so a later wake cannot charge it for newer commands.
+    #[derive(Clone, Copy, Debug)]
+    pub enum Timing {
+        /// The tick applied this FIFO entry, stamped at admission.
+        Applied { number: u64, at: Duration },
+        /// The frame for this deadline contains exactly this many applied entries.
+        Due {
+            output: OutputNumber,
+            due: Duration,
+            applied: u64,
+        },
+        /// The device was handed this frame (or it was dropped) at this time.
+        Finished {
+            output: OutputNumber,
+            due: Duration,
+            at: Duration,
+            outcome: Outcome,
+        },
+    }
+
+    /// The scorecard's reader. Overflow invalidates a measurement, even across a final drop.
+    pub struct Timings {
+        clock: Clock,
+        events: rtrb::Consumer<Timing>,
+        lost: Arc<AtomicBool>,
+    }
+
+    impl Timings {
+        /// Now in the epoch of the events.
+        pub fn now(&self) -> Duration {
+            self.clock.now()
+        }
+
+        /// Discard the setup traffic before starting a measurement.
+        pub fn discard(&mut self) {
+            while self.events.pop().is_ok() {}
+            self.lost.store(false, Ordering::Release);
+        }
+
+        /// Take the next event, failing the run if the bounded stream overflowed.
+        pub fn pop(&mut self) -> io::Result<Option<Timing>> {
+            if self.lost.load(Ordering::Acquire) {
+                return Err(io::Error::other("scorecard timing reader fell behind"));
+            }
+            Ok(self.events.pop().ok())
+        }
+    }
+
+    /// Optional wait-free tap for measurements on the wall clock. Absent in product builds.
+    pub(crate) struct TimingWriter {
+        events: rtrb::Producer<Timing>,
+        lost: Arc<AtomicBool>,
+    }
+
+    impl TimingWriter {
+        pub(crate) fn new(clock: Clock) -> (Self, Timings) {
+            let (events, reader) = rtrb::RingBuffer::new(8192);
+            let lost = Arc::new(AtomicBool::new(false));
+            (
+                Self {
+                    events,
+                    lost: lost.clone(),
+                },
+                Timings {
+                    events: reader,
+                    lost,
+                    clock,
+                },
+            )
+        }
+
+        pub(crate) fn write(&mut self, event: Timing) {
+            if self.events.push(event).is_err() {
+                self.lost.store(true, Ordering::Release);
+            }
+        }
+    }
+}

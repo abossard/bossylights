@@ -1,11 +1,18 @@
 // Prints the scorecard as Markdown. With GITHUB_STEP_SUMMARY set, also writes it there.
-// Runs the engine for 60 seconds with two outputs to measure lateness per output, 30 seconds at the
-// limits the API allows (16 outputs of 64 universes), then 10 seconds to time sends.
+// Keep the original engine timings and compare three 60 s performances on this machine.
+// npm run scorecard -- --seconds 5 runs the same workloads as a short smoke check.
 import { execFileSync } from "node:child_process";
 import { appendFileSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
+import { arch, cpus, release, type } from "node:os";
 import { CRATES } from "./layers.mjs";
-import { codeLines, crateSource, crateSurface, escapeHatches, measurement, scorecard, withoutTests } from "./scorecard.mjs";
+import { codeLines, crateSource, crateSurface, escapeHatches, measurement, missedReferenceTarget, performanceRows, performanceTable, scorecard, withoutTests } from "./scorecard.mjs";
+
+const args = process.argv.slice(2);
+const seconds = args.length === 0 ? undefined : Number(args[1]);
+if (args.length > 0 && (args.length !== 2 || args[0] !== "--seconds" || !Number.isSafeInteger(seconds) || seconds < 1)) {
+  throw new Error("usage: npm run scorecard -- [--seconds positive-integer]");
+}
 
 const entries = (dir, extension) =>
   readdirSync(dir, { recursive: true, withFileTypes: true })
@@ -18,7 +25,7 @@ const files = (dir, extension) => entries(dir, extension).map((entry) => entry.s
 const read = (dir, extension) => files(dir, extension).join("\n");
 
 const packages = JSON.parse(
-  execFileSync("cargo", ["metadata", "-q", "--format-version", "1", "--no-deps", "--locked"], {
+  execFileSync("cargo", ["metadata", "--offline", "-q", "--format-version", "1", "--no-deps", "--locked"], {
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
   }),
@@ -37,7 +44,7 @@ const everything = [
 
 // A measurement that fails fails the script. "Not measured" is only for CI.
 const example = (name, ...args) =>
-  execFileSync("cargo", ["run", "-q", "--release", "-p", "engine-server", "--example", name, "--", ...args], {
+  execFileSync("cargo", ["run", "--offline", "-j", "4", "-q", "--release", "-p", "engine-server", "--example", name, "--", ...args], {
     encoding: "utf8",
   });
 
@@ -46,17 +53,25 @@ const lateness = (...args) => {
   return { p99, worst, offBeat };
 };
 
-const sendToFrame = () => measurement(example("send_to_frame"), 1)[0];
-
 // CI judges what is sent, never how fast: on a runner the timing is left out.
 const measured = process.env.CI === undefined;
-const markdown = scorecard(
+const durationArg = seconds === undefined ? [] : [String(seconds)];
+const summary = scorecard(
   crates,
   escapeHatches(everything),
-  measured ? lateness() : undefined,
-  measured ? sendToFrame() : undefined,
-  measured ? lateness("limits") : undefined,
+  measured ? lateness("normal", ...durationArg) : undefined,
+  measured ? measurement(example("send_to_frame", "baseline", ...durationArg), 1)[0] : undefined,
+  measured ? lateness("limits", ...durationArg) : undefined,
   measured ? "not measured" : "not measured on CI",
+  seconds,
 );
+const duration = seconds ?? 60;
+const rigs = [["M2", "m2", 2], ["M3", "m3", 2], ["M3 at limits", "worst", 16]];
+const runs = measured ? rigs.map(([name, mode, outputs]) => [
+  name, performanceRows(example("send_to_frame", mode, String(duration)), outputs, duration),
+]) : [];
+const host = measured ? `\nMeasured on ${type()} ${release()}, ${arch()}, ${cpus()[0]?.model ?? "unknown CPU"}.\n` : "";
+const markdown = `${summary}\n${performanceTable(runs)}${host}`;
 console.log(markdown);
 if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, markdown);
+if (missedReferenceTarget(runs)) process.exitCode = 1;

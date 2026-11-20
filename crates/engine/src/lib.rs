@@ -66,6 +66,8 @@ use rig::{PatchEffect, Whole};
 pub use outputs::Device;
 mod lane;
 use lane::Lane;
+#[cfg(feature = "test-support")]
+pub use snapshot::timing::{Timing, Timings};
 use snapshot::{Hand, Reader};
 pub use snapshot::{Lateness, Snapshot};
 mod wake;
@@ -605,7 +607,7 @@ struct Shared {
     /// Tail of the most recently completed frame. Prefix work can then be reused.
     applied: AtomicU64,
     /// A test holds the free thread: what goes back is not freed while set.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     stalled: AtomicBool,
 }
 
@@ -618,7 +620,14 @@ impl Engine {
 
     /// [`Engine::start`], with `open` making the devices `SetOutput` asks for.
     pub fn start_with(universes: Universes, open: Open) -> io::Result<(Self, Sender)> {
-        Self::start_on(universes, open, Clock::wall(), Trace::none())
+        Self::start_on(
+            universes,
+            open,
+            Clock::wall(),
+            Trace::none(),
+            #[cfg(feature = "test-support")]
+            None,
+        )
     }
 
     /// [`Engine::start_with`] on a clock the test steps ([`Wakes`]), which also reads
@@ -626,8 +635,29 @@ impl Engine {
     #[cfg(feature = "test-support")]
     pub fn start_stepped(universes: Universes, open: Open) -> io::Result<(Self, Sender, Wakes)> {
         let (clock, trace, wakes) = wake::stepped();
-        let (engine, sender) = Self::start_on(universes, open, clock, trace)?;
+        let (engine, sender) = Self::start_on(universes, open, clock, trace, None)?;
         Ok((engine, sender, wakes))
+    }
+
+    /// Pauses off-tick retirement for a capacity test. Live output continues.
+    #[cfg(feature = "test-support")]
+    pub fn stall_reclamation(&self, stalled: bool) {
+        self.shared.stalled.store(stalled, Ordering::Release);
+    }
+
+    /// Runs the wall-clock engine and real outputs, with a wait-free timing stream.
+    #[cfg(feature = "test-support")]
+    pub fn start_measured(universes: Universes) -> io::Result<(Self, Sender, Timings)> {
+        let clock = Clock::wall();
+        let (writer, reader) = snapshot::timing::TimingWriter::new(clock.clone());
+        let (engine, sender) = Self::start_on(
+            universes,
+            Box::new(outputs::open),
+            clock,
+            Trace::none(),
+            Some(writer),
+        )?;
+        Ok((engine, sender, reader))
     }
 
     fn start_on(
@@ -635,6 +665,7 @@ impl Engine {
         open: Open,
         clock: Clock,
         trace: Trace,
+        #[cfg(feature = "test-support")] timings: Option<snapshot::timing::TimingWriter>,
     ) -> io::Result<(Self, Sender)> {
         let count = usize::from(universes.count());
         let shared = Arc::new(Shared {
@@ -646,7 +677,7 @@ impl Engine {
             ended: [const { AtomicU32::new(0) }; PLAYS],
             kept: [const { AtomicU64::new(0) }; PLAYS],
             applied: AtomicU64::new(0),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             stalled: AtomicBool::new(false),
         });
         let (hand, queues) = snapshot::hand_over();
@@ -689,6 +720,8 @@ impl Engine {
             carried: Carried::new(),
             clock: clock.clone(),
             trace,
+            #[cfg(feature = "test-support")]
+            timings,
         };
         let (tick, priority) = rt_thread::spawn("tick", move |priority| ticker.run(priority))?;
         let sender = Sender {
@@ -1579,11 +1612,11 @@ fn on_their_way(shared: &Shared, retired: u64) -> u64 {
 /// and sockets, on a steady beat or when the sender wakes it. Until the engine stops.
 fn free(mut retired: rtrb::Consumer<Retired>, shared: &Shared) {
     loop {
-        #[cfg(test)]
-        while shared.stalled.load(Ordering::Acquire) && !shared.stop.load(Ordering::Relaxed) {
-            thread::park_timeout(Duration::from_millis(1));
-        }
         while let Ok(back) = retired.pop() {
+            #[cfg(any(test, feature = "test-support"))]
+            while shared.stalled.load(Ordering::Acquire) && !shared.stop.load(Ordering::Relaxed) {
+                thread::park_timeout(Duration::from_millis(1));
+            }
             let device = matches!(back, Retired::Device(_));
             let bytes = if let Retired::Plan(plan) = &back {
                 plan.bytes() as u64
@@ -1642,6 +1675,8 @@ struct Ticker {
     carried: Carried,
     clock: Clock,
     trace: Trace,
+    #[cfg(feature = "test-support")]
+    timings: Option<snapshot::timing::TimingWriter>,
 }
 
 /// Commands an output's frame may still have to carry. Older ones are not counted.
@@ -1741,6 +1776,13 @@ impl Ticker {
                 self.swap(sent.command, sent.brings);
                 self.carried.applied(sent.at);
                 self.now.applied_one();
+                #[cfg(feature = "test-support")]
+                if let Some(timings) = &mut self.timings {
+                    timings.write(Timing::Applied {
+                        number: self.now.applied(),
+                        at: sent.at,
+                    });
+                }
             }
             self.settle(now);
             let clock = &self.now.state.clock;
@@ -1958,6 +2000,14 @@ impl Ticker {
         let at = self.clock.now();
         self.apply(EngineCommand::Handed { output: number, at });
         self.trace.handed(number, output.due, at);
+        #[cfg(feature = "test-support")]
+        if let Some(timings) = &mut self.timings {
+            timings.write(Timing::Due {
+                output: number,
+                due: output.due,
+                applied: self.now.applied(),
+            });
+        }
         let next = match self.now.state.outputs.get(slot) {
             Some(Some(handed)) => handed.due,
             _ => at,
@@ -1975,6 +2025,15 @@ impl Ticker {
         };
         if let Some(outcome) = dropped {
             self.trace.came(number, outcome, output.due);
+            #[cfg(feature = "test-support")]
+            if let Some(timings) = &mut self.timings {
+                timings.write(Timing::Finished {
+                    output: number,
+                    due: output.due,
+                    at,
+                    outcome,
+                });
+            }
             self.now.late(slot, at.saturating_sub(output.due));
             self.apply(EngineCommand::Sent {
                 output: number,
@@ -1991,6 +2050,8 @@ impl Ticker {
             devices,
             now,
             trace,
+            #[cfg(feature = "test-support")]
+            timings,
             ..
         } = self;
         for (lane, number) in devices.iter_mut().zip(1..) {
@@ -1999,6 +2060,15 @@ impl Ticker {
             };
             lane.back(|sent| {
                 trace.came(output, sent.outcome, sent.due);
+                #[cfg(feature = "test-support")]
+                if let Some(writer) = timings {
+                    writer.write(Timing::Finished {
+                        output,
+                        due: sent.due,
+                        at: sent.at,
+                        outcome: sent.outcome,
+                    });
+                }
                 now.late(output.slot(), sent.at.saturating_sub(sent.due));
                 now.update(EngineCommand::Sent {
                     output,
@@ -2028,6 +2098,143 @@ impl Ticker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "test-support")]
+    #[test]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "a missing frame or command fails this test"
+    )]
+    fn scorecard_stamps_the_admission_and_the_device_handoff() {
+        struct Gated {
+            // Each frame carries a different first byte. Hold its take until
+            // the driver permits it to finish, including during a later wake.
+            byte: Arc<AtomicU64>,
+            permits: Arc<AtomicU64>,
+            calls: u64,
+        }
+        impl Device for Gated {
+            fn take(&mut self, frame: &[Levels]) -> Outcome {
+                self.calls += 1;
+                let level = frame.first().and_then(|u| u.0.first()).copied().unwrap();
+                self.byte.store(u64::from(level), Ordering::Release);
+                let started = Instant::now();
+                while self.permits.load(Ordering::Acquire) < self.calls {
+                    if started.elapsed() > Duration::from_secs(10) {
+                        return Outcome::Failed;
+                    }
+                    thread::yield_now();
+                }
+                Outcome::Accepted
+            }
+        }
+
+        let (clock, trace, wakes) = wake::stepped();
+        let (writer, mut timings) = snapshot::timing::TimingWriter::new(clock.clone());
+        let (_engine, mut sender) = Engine::start_on(
+            Universes::ONE,
+            Box::new(outputs::open),
+            clock,
+            trace,
+            Some(writer),
+        )
+        .unwrap();
+        wakes.hold().unwrap();
+        let byte = Arc::new(AtomicU64::new(u64::MAX));
+        let permits = Arc::new(AtomicU64::new(0));
+        let heard = |value| {
+            let started = Instant::now();
+            while byte.load(Ordering::Acquire) != value {
+                assert!(
+                    started.elapsed() < Duration::from_secs(10),
+                    "device never saw {value}"
+                );
+                thread::yield_now();
+            }
+        };
+        let device = Gated {
+            byte: byte.clone(),
+            permits: permits.clone(),
+            calls: 0,
+        };
+        let output = OutputNumber::try_from(1).unwrap();
+        let run = RunNumbers { first: 1, count: 1 }
+            .check(Universes::ONE)
+            .unwrap();
+        let rate = Rate::Sixty;
+        let first = timings.now() + Duration::from_secs(1);
+        wakes.set_time(first);
+        sender.attach(output, Box::new(device), run, rate).unwrap();
+        wakes.wake_at(first).unwrap();
+        heard(0);
+        let due = first + rate.period();
+        let send = |sender: &mut Sender, value| {
+            sender
+                .send(Command::SetChannel {
+                    channel: ChannelNumbers {
+                        universe: 1,
+                        address: 1,
+                    },
+                    value,
+                })
+                .unwrap()
+        };
+
+        let admitted = first + Duration::from_millis(3);
+        wakes.set_time(admitted);
+        send(&mut sender, 91);
+        assert_eq!(wakes.cut().unwrap(), due);
+        let after_cut = due + Duration::from_millis(1);
+        wakes.set_time(after_cut);
+        send(&mut sender, 17);
+        wakes.finish().unwrap();
+
+        // Frame two waits behind the first device call. Its own device
+        // handoff, completion and the next tick poll each have a distinct stamp.
+        let handed = due + Duration::from_millis(5);
+        wakes.set_time(handed);
+        permits.store(1, Ordering::Release);
+        heard(91);
+        wakes.set_time(due + Duration::from_millis(8));
+        permits.store(u64::MAX, Ordering::Release);
+        let poll = due + rate.period();
+        wakes.wake_at(poll).unwrap();
+        heard(17); // frame two's result has been returned before this take
+        wakes.wake_at(poll).unwrap();
+
+        let (mut commands, mut due_frames, mut finished) = (vec![], vec![], vec![]);
+        while let Some(event) = timings.pop().unwrap() {
+            match event {
+                Timing::Applied { number, at } => commands.push((number, at)),
+                Timing::Due {
+                    output,
+                    due,
+                    applied,
+                } => due_frames.push((output, due, applied)),
+                Timing::Finished {
+                    output,
+                    due,
+                    at,
+                    outcome,
+                } if due < poll => {
+                    finished.push((output, due, at, outcome));
+                }
+                Timing::Finished { .. } => {}
+            }
+        }
+        assert_eq!(commands, [(1, first), (2, admitted), (3, after_cut)]);
+        assert_eq!(
+            due_frames,
+            [(output, first, 1), (output, due, 2), (output, poll, 3)]
+        );
+        assert_eq!(
+            finished,
+            [
+                (output, first, first, Outcome::Accepted),
+                (output, due, handed, Outcome::Accepted),
+            ]
+        );
+    }
 
     #[test]
     fn each_output_counts_a_command_when_its_own_frame_carries_it() {

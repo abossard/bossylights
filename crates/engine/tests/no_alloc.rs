@@ -5,7 +5,8 @@
 //! update, end (kept or let go) and release a direct hold on one run and on two, clear the
 //! kept ones by a change of the rules, mix it with the direct holds and hand a reader a
 //! snapshot on every frame. A Wave runs over two strip pixels. Linked sequences run, replan and end inside the
-//! counting window. With the stepped clock all 32 once-uses finish between wakes.
+//! counting window. The stepped clock takes full command bursts, replans 32 live roots
+//! near the visit limit and ends all 32 while retirement is stalled.
 //! The tick frees nothing: the old writers, runs, plans and a replaced device with its thread go to
 //! the free thread. A
 //! counting allocator sees every allocation in this process, except those of the front
@@ -603,11 +604,12 @@ fn linked_ends() {
         Engine::start_stepped(Universes::new(1).unwrap(), Box::new(outputs::open)).unwrap();
     wakes.hold().unwrap();
     let name = text("once");
-    let leaf = |intensity| Command::PutStep {
+    let strip = Target::Fixture { fixture: 1 };
+    let leaf = |intensity, target| Command::PutStep {
         look: 0,
         name,
         step: Step {
-            target: Target::Light { light: 1 },
+            target,
             values: Light {
                 intensity: Some(intensity),
                 ..Light::DARK
@@ -633,7 +635,7 @@ fn linked_ends() {
     sender
         .send(Command::PatchStrip {
             name,
-            pixels: Pixels::try_from(1).unwrap(),
+            pixels: Pixels::try_from(93).unwrap(),
             color: Color::Rgb,
             at: ChannelNumbers {
                 universe: 1,
@@ -641,7 +643,7 @@ fn linked_ends() {
             },
         })
         .unwrap();
-    sender.send(leaf(0)).unwrap();
+    sender.send(leaf(0, strip)).unwrap();
     let sequence = Sequence::new(&[SequenceItem::default()]).unwrap();
     for look in 1..=PLAYS as u16 {
         sender
@@ -656,42 +658,107 @@ fn linked_ends() {
     let old = Arc::downgrade(&sender.looks().plan(1).unwrap());
     let prime = start(&mut sender, 0, Rank::Manual);
     sender.send(Command::ReleaseHold { play: prime }).unwrap();
-    sender.send(leaf(1)).unwrap();
+    sender.send(leaf(1, strip)).unwrap();
     let mut at = wakes.wake().unwrap();
     mock::wait_until("the priming plan was never reclaimed", || {
         old.strong_count() == 0
     });
 
+    // Each one-item root reserves two samples of eleven visits per pixel.
+    // This is the largest common strip all 32 of these sequences can play.
+    let root_work = looks::play_work(sender.looks().plan(1).unwrap().work());
+    assert!(root_work * PLAYS <= looks::WORK_LIMIT);
+    assert!(root_work * PLAYS + (root_work / 93) * PLAYS > looks::WORK_LIMIT);
     let counters = || (counting::allocations(), counting::tick_frees());
     let before = counters();
     let mut previous = [prime; PLAYS];
     let mut value = 1;
-    for rank in [Rank::Manual, Rank::Show] {
+    for (rank, release_first) in [
+        (Rank::Manual, false),
+        (Rank::Show, true),
+        (Rank::Show, false),
+    ] {
         let ids: [PlayId; PLAYS] = std::array::from_fn(|slot| start(&mut sender, slot, rank));
+        engine.latest();
         wakes.wake_at(at).unwrap();
+        let playing = &engine.latest().state.plays;
+        assert_eq!(playing.iter().count(), PLAYS);
+        assert!(
+            playing
+                .iter()
+                .all(|p| p.state == PlayState::Playing && ids.contains(&p.play))
+        );
         if rank == Rank::Show {
             for (fresh, old) in ids.iter().zip(previous) {
                 assert_eq!(fresh.slot, old.slot);
                 assert_ne!(fresh.generation, old.generation);
             }
         }
+        let sent = sender.sent();
+        let extra_root = Command::StartLook {
+            look: 0,
+            rank,
+            when: When::Now,
+        };
+        assert!(matches!(
+            begin(&mut sender, extra_root, &[]),
+            Err(Refusal::PlayFull)
+        ));
+        let too_large = Command::SetIntensity {
+            target: strip,
+            intensity: u16::MAX,
+        };
+        assert!(matches!(
+            begin(&mut sender, too_large, &[]),
+            Err(Refusal::WorkLimit)
+        ));
+        assert_eq!(sender.sent(), sent);
+        // Stall retirement on the last pass, before its swaps and all 32 ends.
+        let stall = rank == Rank::Show && !release_first;
+        if stall {
+            engine.stall_reclamation(true);
+            assert!(send(&mut sender, leaf(value + 3, strip), &[]));
+            engine.latest();
+            wakes.wake_at(at).unwrap();
+            let live = engine.latest();
+            assert_eq!(live.state.plays.iter().count(), PLAYS);
+            assert!(
+                live.lights()[..93]
+                    .iter()
+                    .all(|light| light.intensity == Some(value + 3)),
+                "the replacement lights every pixel while the 32 plays are still running"
+            );
+        }
+        let sent = sender.sent();
         at += Duration::from_secs(2);
         wakes.set_time(at);
         for next in [value + 1, value + 2] {
-            assert!(send(&mut sender, leaf(next), &[]));
+            assert!(send(&mut sender, leaf(next, strip), &[]));
         }
         // Let the front forget one Show generation before the queued swaps arrive.
         // Only the tick now owns its superseded middle plan.
-        if rank == Rank::Show {
+        if release_first {
             assert!(send(
                 &mut sender,
                 Command::ReleaseHold { play: ids[0] },
                 &[]
             ));
         }
+        // The two revisions queue one swap per root. Fill the remaining FIFO
+        // exactly; a refused blackout must not replace the last accepted one.
+        for _ in (sender.sent() - sent) as usize..engine::QUEUE {
+            assert!(send(&mut sender, Command::Blackout { on: false }, &[]));
+        }
+        let full = sender.sent();
+        assert!(matches!(
+            begin(&mut sender, Command::Blackout { on: true }, &[]),
+            Err(Refusal::QueueFull)
+        ));
+        assert_eq!(sender.sent(), full);
         engine.latest();
         wakes.wake_at(at).unwrap();
         let snapshot = engine.latest();
+        assert_eq!(snapshot.applied(), full);
         if rank == Rank::Manual {
             assert_eq!(snapshot.state.plays.iter().count(), PLAYS);
             assert!(
@@ -701,18 +768,35 @@ fn linked_ends() {
                     .iter()
                     .all(|p| p.state == PlayState::Kept)
             );
-            assert_eq!(snapshot.lights()[0].intensity, Some(value));
+            assert!(
+                snapshot.lights()[..93]
+                    .iter()
+                    .all(|l| l.intensity == Some(value))
+            );
             for play in ids {
                 assert!(send(&mut sender, Command::ReleaseHold { play }, &[]));
             }
         } else {
             assert_eq!(snapshot.state.plays.iter().count(), 0);
-            assert_eq!(snapshot.lights()[0].intensity, None);
+            assert!(
+                snapshot.lights()[..93]
+                    .iter()
+                    .all(|l| l.intensity.is_none())
+            );
+        }
+        if stall {
+            engine.stall_reclamation(false);
         }
         previous = ids;
         value += 2;
     }
-    // The 31 naturally revealed generations and the released one all have room again.
+    // Shrink the plans to one pixel before testing the independent retirement
+    // slot limit. All generations that ended must be reusable.
+    assert!(send(
+        &mut sender,
+        leaf(value, Target::Light { light: 1 }),
+        &[]
+    ));
     for (slot, old) in previous.iter().enumerate() {
         let fresh = start(&mut sender, slot, Rank::Show);
         assert_eq!(fresh.slot, old.slot);

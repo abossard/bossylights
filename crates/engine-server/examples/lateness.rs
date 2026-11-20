@@ -2,7 +2,7 @@
 //! a second in turn. Prints, in microseconds, the worst p99 lateness of the outputs, the
 //! worst lateness of the outputs, then the intervals off by more than 2 ms on all of them
 //! together. Each output's numbers go to stderr. A reader takes a snapshot on every frame,
-//! as the server does. The scorecard reads it.
+//! as the server does. The scorecard reads it. An optional second argument overrides the run length in seconds.
 //!
 //! | Run | Outputs, universes each | For | Command |
 //! |---|---|---|---|
@@ -72,8 +72,9 @@ const PIXELS: Setup = Setup {
 };
 
 fn main() -> ExitCode {
-    let setup = match std::env::args().nth(1).as_deref() {
-        None => NORMAL,
+    let mut args = std::env::args().skip(1);
+    let mut setup = match args.next().as_deref() {
+        None | Some("normal") => NORMAL,
         Some("limits") => LIMITS,
         Some("lights") => LIGHTS,
         Some("pixels") => PIXELS,
@@ -84,6 +85,17 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    if let Some(seconds) = args.next() {
+        let Some(seconds) = seconds.parse::<std::num::NonZeroU64>().ok() else {
+            eprintln!("lateness: expected a positive number of seconds");
+            return ExitCode::FAILURE;
+        };
+        setup.run = Duration::from_secs(seconds.get());
+    }
+    if args.next().is_some() {
+        eprintln!("usage: lateness [normal|limits|lights|pixels] [seconds]");
+        return ExitCode::FAILURE;
+    }
     match run(&setup) {
         Ok(line) => {
             println!("{line}");
