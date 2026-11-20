@@ -26,6 +26,7 @@ flowchart LR
 
   FRAME(["Frame<br/>what every light does<br/>at a moment in time"])
   RIG["Rig<br/>lights to DMX"]
+  CH["Channels<br/>raw holds, Blackout,<br/>8 bytes each"]
   OUT["Output"]
 
   YOU --> LIVE
@@ -36,7 +37,7 @@ flowchart LR
   LIVE --> FRAME
   SHOW --> FRAME
   AUTO --> FRAME
-  FRAME --> RIG --> OUT
+  FRAME --> RIG --> CH --> OUT
 ```
 
 Every frame is computed fresh from what plays, with manual over show over autopilot, and everything that happens is a command.

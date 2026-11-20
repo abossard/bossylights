@@ -199,6 +199,9 @@ fn main() {
             address: 1 + u16::from(value),
         };
         let _ = sender.send(Command::SetChannel { channel, value });
+        if value % 3 == 0 {
+            let _ = sender.send(Command::ReleaseChannel { channel });
+        }
         let _ = sender.send(Command::Blackout { on: value % 2 == 0 });
         let light = u16::from(value) * 2;
         let colour = Command::SetColour {

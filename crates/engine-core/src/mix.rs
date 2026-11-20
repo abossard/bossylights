@@ -7,6 +7,9 @@
 //! | 2 | a raw channel held on the DMX screen | the light that writes that channel, until released |
 //! | 3 | a held value of a light | its default |
 //!
+//! Rows 1 and 2 are decided channel by channel in one pass, [`channels`]: a raw hold, then
+//! Blackout as a modifier every channel follows. Row 3 is [`mix`], where two writers meet.
+//!
 //! Two lights never reach one channel (decision 48): the patch refuses two fixtures on
 //! one channel, and the Rig makes a channel two heads name the fixture's own, one writer.
 //! Who wins between lights is decided per light property, before the Rig.
@@ -31,6 +34,9 @@
 //! | kept, rules change to remove it | `UntilStop` for Manual, `Reveal` for the others | nothing |
 
 use crate::LightChange;
+use crate::channel::{
+    ADDRESSES, ChannelSet, Channels, Flags, Follows, Levels, MODIFIERS, SourceTag,
+};
 use crate::playback::{Entry, PlayState, Plays, Rank};
 use crate::property::{Light, Property};
 use serde::{Deserialize, Serialize};
@@ -320,7 +326,8 @@ pub fn show<'a>(
     }
 }
 
-/// What wants a channel this frame, and how strongly.
+/// What the resolver writes on a channel this frame, and how strongly. The base the
+/// channel pass ([`channels`]) starts from, until plays offer per channel.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Want {
     /// What the definition gives a channel no light value writes (a shutter held open),
@@ -329,85 +336,126 @@ pub enum Want {
     /// The held values of a light, through its writer. A part not held is `Default`: its
     /// writer writes the channel's default from the definition.
     Light(u8),
-    /// A raw channel held on the DMX screen.
-    Raw(u8),
-    /// Blackout: 0.
-    Blackout,
 }
 
 impl Want {
-    /// The byte that goes out.
+    /// The byte it writes.
     pub const fn level(self) -> u8 {
         match self {
-            Self::Default(level) | Self::Light(level) | Self::Raw(level) => level,
-            Self::Blackout => 0,
+            Self::Default(level) | Self::Light(level) => level,
         }
     }
 }
 
-/// The winner of `first` and `then`, which came after it. The table of who wins, one
-/// arm per row.
+/// The winner of `first` and `then`, which came after it, where two writers name one
+/// channel: row 3 of the table.
 pub const fn mix(first: Want, then: Want) -> Want {
-    use Want::{Blackout, Default, Light, Raw};
+    use Want::{Default, Light};
     match (first, then) {
-        // 1: blackout wins over everything
-        (Blackout, Default(_) | Light(_) | Raw(_) | Blackout)
-        | (Default(_) | Light(_) | Raw(_), Blackout) => Blackout,
-        // 2: a raw channel held wins over the light that writes that channel
-        (Default(_) | Light(_), Raw(level)) | (Raw(level), Default(_) | Light(_)) => Raw(level),
         // 3: a held value of a light wins over its default
         (Default(_), Light(level)) | (Light(level), Default(_)) => Light(level),
         // the same rank: the later wins. Two lights never meet here (decision 48)
-        (Default(_), Default(_)) | (Light(_), Light(_)) | (Raw(_), Raw(_)) => then,
+        (Default(_), Default(_)) | (Light(_), Light(_)) => then,
     }
+}
+
+/// Every channel back to its rest, nobody's: where a frame starts.
+pub(crate) fn rest(channels: &mut Channels) {
+    let Channels {
+        value,
+        rest,
+        source,
+        ..
+    } = channels;
+    for (row, rest) in value.iter_mut().zip(rest.chunks_exact(ADDRESSES)) {
+        row.0.copy_from_slice(rest);
+    }
+    source.fill(SourceTag::REST);
+}
+
+/// The one pass that decides each channel, once the resolver wrote the lights' bytes into
+/// `channels` (`lit`: where a light value won). Rows 1 and 2 of the table, per channel:
+/// a raw hold (`raw` at `holds`) replaces the byte, also with 0; then each follower moves
+/// toward its dark byte by the `levels` of the modifiers it follows ([`follow`]). Blackout
+/// is the modifier every channel follows.
+pub(crate) fn channels(
+    channels: &mut Channels,
+    lit: &[ChannelSet],
+    (raw, holds): (&[Levels], &[ChannelSet]),
+    levels: [u8; MODIFIERS],
+) {
+    let Channels {
+        value,
+        dark,
+        flags,
+        follows,
+        source,
+        ..
+    } = channels;
+    let rules = dark
+        .chunks_exact(ADDRESSES)
+        .zip(flags.chunks_exact(ADDRESSES))
+        .zip(follows.chunks_exact(ADDRESSES));
+    let rows = value.iter_mut().zip(source.chunks_exact_mut(ADDRESSES));
+    for (universe, ((value, source), ((dark, flags), follows))) in rows.zip(rules).enumerate() {
+        let lit = lit.get(universe).unwrap_or(&ChannelSet::NONE);
+        let held = raw.get(universe).zip(holds.get(universe));
+        let channel = value.0.iter_mut().zip(source.iter_mut());
+        let rule = dark.iter().zip(flags).zip(follows);
+        for (address, ((value, source), ((dark, flags), follows))) in channel.zip(rule).enumerate()
+        {
+            if lit.has(address) {
+                *source = SourceTag::LIGHTS;
+            }
+            if let Some((raw, holds)) = held
+                && holds.has(address)
+            {
+                *value = raw.0.get(address).copied().unwrap_or_default();
+                *source = SourceTag::RAW;
+            }
+            if *follows != Follows::NONE {
+                *value = follow(*value, *dark, *flags, *follows, levels);
+            }
+        }
+    }
+}
+
+/// A follower's byte: `value` moved toward `dark` by the `levels` of the modifiers it
+/// `follows`, `dark + (value - dark) x m1 x ... x mn / 255^n` with one rounding at the end,
+/// half away from `dark`. A channel that jumps goes all the way or not at all: `dark`
+/// when a level it follows is 0, else `value`.
+pub(crate) fn follow(
+    value: u8,
+    dark: u8,
+    flags: Flags,
+    follows: Follows,
+    levels: [u8; MODIFIERS],
+) -> u8 {
+    let (mut product, mut whole) = (1_i128, 1_i128);
+    for (slot, level) in levels.iter().enumerate() {
+        if follows.0 & (1 << slot) != 0 {
+            product *= i128::from(*level);
+            whole *= 255;
+        }
+    }
+    if !flags.fades() {
+        return if product == 0 { dark } else { value };
+    }
+    let distance = (i128::from(value) - i128::from(dark)) * product;
+    let moved = (2 * distance.abs() + whole) / (2 * whole);
+    u8::try_from(i128::from(dark) + distance.signum() * moved).unwrap_or(dark)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use Want::{Blackout, Default, Light, Raw};
+    use crate::channel::{BLACKOUT, ChannelNumbers, Universes};
+    use Want::{Default, Light};
 
     #[test]
     fn who_wins_row_by_row() {
         // (row, first, then, winner, level out)
         let cases = [
-            (
-                "1 blackout over a raw channel",
-                Raw(9),
-                Blackout,
-                Blackout,
-                0,
-            ),
-            (
-                "1 blackout over a raw channel",
-                Blackout,
-                Raw(9),
-                Blackout,
-                0,
-            ),
-            ("1 blackout over a light", Light(255), Blackout, Blackout, 0),
-            ("1 blackout over a light", Blackout, Light(255), Blackout, 0),
-            (
-                "1 blackout over a default",
-                Default(255),
-                Blackout,
-                Blackout,
-                0,
-            ),
-            (
-                "1 blackout over a default",
-                Blackout,
-                Default(255),
-                Blackout,
-                0,
-            ),
-            ("1 blackout and blackout", Blackout, Blackout, Blackout, 0),
-            ("2 raw over a light", Light(255), Raw(9), Raw(9), 9),
-            ("2 raw over a light", Raw(9), Light(255), Raw(9), 9),
-            ("2 raw at 0 over a light", Light(255), Raw(0), Raw(0), 0),
-            ("2 raw over a default", Default(255), Raw(9), Raw(9), 9),
-            ("2 raw over a default", Raw(9), Default(255), Raw(9), 9),
-            ("2 raw over nothing", Default(0), Raw(9), Raw(9), 9),
             (
                 "3 a light over its default",
                 Default(255),
@@ -423,10 +471,299 @@ mod tests {
                 7,
             ),
             ("3 a light over nothing", Default(0), Light(7), Light(7), 7),
+            ("the later default", Default(1), Default(2), Default(2), 2),
         ];
         for (row, first, then, winner, level) in cases {
             assert_eq!(mix(first, then), winner, "{row}: {first:?} then {then:?}");
             assert_eq!(mix(first, then).level(), level, "{row}");
+        }
+    }
+
+    /// The modifier levels with Blackout on or off, the others full.
+    fn blackout(on: bool) -> [u8; MODIFIERS] {
+        let mut levels = [u8::MAX; MODIFIERS];
+        levels[BLACKOUT] = if on { 0 } else { u8::MAX };
+        levels
+    }
+
+    #[test]
+    fn rows_1_and_2_decide_each_channel() {
+        // (row, what the resolver wrote, raw hold, blackout, byte out, source)
+        let cases = [
+            ("nothing", None, None, false, 0, SourceTag::REST),
+            (
+                "a default",
+                Some(Default(200)),
+                None,
+                false,
+                200,
+                SourceTag::REST,
+            ),
+            (
+                "a light",
+                Some(Light(255)),
+                None,
+                false,
+                255,
+                SourceTag::LIGHTS,
+            ),
+            (
+                "2 raw over a light",
+                Some(Light(255)),
+                Some(9),
+                false,
+                9,
+                SourceTag::RAW,
+            ),
+            (
+                "2 raw at 0 over a light",
+                Some(Light(255)),
+                Some(0),
+                false,
+                0,
+                SourceTag::RAW,
+            ),
+            (
+                "2 raw over a default",
+                Some(Default(255)),
+                Some(9),
+                false,
+                9,
+                SourceTag::RAW,
+            ),
+            (
+                "2 raw over nothing",
+                None,
+                Some(9),
+                false,
+                9,
+                SourceTag::RAW,
+            ),
+            (
+                "1 blackout over a raw hold",
+                None,
+                Some(9),
+                true,
+                0,
+                SourceTag::RAW,
+            ),
+            (
+                "1 blackout over a light",
+                Some(Light(255)),
+                None,
+                true,
+                0,
+                SourceTag::LIGHTS,
+            ),
+            (
+                "1 blackout over a default",
+                Some(Default(255)),
+                None,
+                true,
+                0,
+                SourceTag::REST,
+            ),
+            (
+                "1 blackout over nothing",
+                None,
+                None,
+                true,
+                0,
+                SourceTag::REST,
+            ),
+        ];
+        let at = ChannelNumbers {
+            universe: 1,
+            address: 7,
+        }
+        .check(Universes::ONE)
+        .unwrap();
+        let beside = ChannelNumbers {
+            universe: 1,
+            address: 8,
+        }
+        .check(Universes::ONE)
+        .unwrap();
+        for (row, wrote, hold, dark, out, source) in cases {
+            let mut all = Box::new(Channels::NEW);
+            all.value[0].0[8] = 3; // whatever the frame before left
+            rest(&mut all);
+            let mut lit = [ChannelSet::NONE];
+            if let Some(want) = wrote {
+                all.value[0].0[6] = want.level();
+                at.mark(&mut lit, matches!(want, Light(_)));
+            }
+            let (mut raw, mut holds) = ([Levels::ZERO], [ChannelSet::NONE]);
+            if let Some(level) = hold {
+                raw[0].0[6] = level;
+                at.mark(&mut holds, true);
+            }
+            channels(&mut all, &lit, (&raw, &holds), blackout(dark));
+            assert_eq!(
+                (all.values()[0].0[6], all.source(at)),
+                (out, source),
+                "{row}"
+            );
+            assert_eq!(
+                (all.values()[0].0[7], all.source(beside)),
+                (0, SourceTag::REST)
+            );
+        }
+    }
+
+    #[test]
+    fn a_follower_moves_toward_dark_by_its_levels() {
+        let (fade, jump) = (Flags::FADE, Flags::NONE);
+        let blackout_bit = Follows::BLACKOUT;
+        let (master, group) = (Follows(1), Follows(1 << 2));
+        let master_and_group = Follows(1 | 1 << 2);
+        let with = |slots: &[(usize, u8)]| {
+            let mut levels = [u8::MAX; MODIFIERS];
+            for (slot, level) in slots {
+                levels[*slot] = *level;
+            }
+            levels
+        };
+        // (case, value, dark, flags, follows, levels, out)
+        let cases = [
+            (
+                "jump, blackout on",
+                200,
+                0,
+                jump,
+                blackout_bit,
+                blackout(true),
+                0,
+            ),
+            (
+                "jump, blackout off",
+                200,
+                0,
+                jump,
+                blackout_bit,
+                blackout(false),
+                200,
+            ),
+            (
+                "fade, blackout on",
+                200,
+                0,
+                fade,
+                blackout_bit,
+                blackout(true),
+                0,
+            ),
+            (
+                "fade, blackout off",
+                200,
+                0,
+                fade,
+                blackout_bit,
+                blackout(false),
+                200,
+            ),
+            (
+                "reverse dimmer dark",
+                10,
+                255,
+                fade,
+                blackout_bit,
+                blackout(true),
+                255,
+            ),
+            (
+                "master at half",
+                200,
+                0,
+                fade,
+                master,
+                with(&[(0, 128)]),
+                100,
+            ),
+            (
+                "half rounds away from dark",
+                1,
+                0,
+                fade,
+                master,
+                with(&[(0, 128)]),
+                1,
+            ),
+            (
+                "under half rounds to dark",
+                1,
+                0,
+                fade,
+                master,
+                with(&[(0, 127)]),
+                0,
+            ),
+            (
+                "toward a dark of 255",
+                0,
+                255,
+                fade,
+                master,
+                with(&[(0, 128)]),
+                127,
+            ),
+            (
+                "jump at 1 stays",
+                200,
+                0,
+                jump,
+                master,
+                with(&[(0, 1)]),
+                200,
+            ),
+            (
+                "one rounding for two",
+                255,
+                0,
+                fade,
+                master_and_group,
+                with(&[(0, 128), (2, 128)]),
+                64,
+            ),
+            (
+                "a slot not followed",
+                200,
+                0,
+                fade,
+                group,
+                with(&[(0, 0), (1, 0)]),
+                200,
+            ),
+            (
+                "follows nothing",
+                200,
+                0,
+                fade,
+                Follows::NONE,
+                [0; MODIFIERS],
+                200,
+            ),
+            (
+                "all eight full",
+                255,
+                0,
+                fade,
+                Follows(0xff),
+                [255; MODIFIERS],
+                255,
+            ),
+            (
+                "all eight at 254",
+                255,
+                0,
+                fade,
+                Follows(0xff),
+                [254; MODIFIERS],
+                247,
+            ),
+        ];
+        for (case, value, dark, flags, follows, levels, out) in cases {
+            assert_eq!(follow(value, dark, flags, follows, levels), out, "{case}");
         }
     }
 }

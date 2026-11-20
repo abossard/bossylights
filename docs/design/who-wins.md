@@ -65,7 +65,29 @@ flowchart LR
 |---|---|
 | Two fixtures on one channel | refused at patch, move and show file open (`Overlaps`) |
 | A channel two heads of one fixture name | a property of the fixture itself (a master dimmer, a strobe): one writer |
-| A raw channel held, blackout | win over the light's byte: the Mixer's only channel rows |
+| A raw channel held, blackout | decided per channel, after the light's byte (below) |
+
+## Per channel: the one pass
+
+Since #247 (channel model T1) every channel has 8 bytes (`engine-core/src/channel.rs`) and one pass decides each one (`mix::channels`). The old resolver still writes the lights' bytes first.
+
+```mermaid
+flowchart LR
+  R["Rest<br/>every channel"] --> L["Lights' bytes<br/>through the writers"] --> H["Raw hold<br/>replaces the byte,<br/>also with 0"] --> M["Modifiers<br/>followers move<br/>toward dark"] --> O["Frame"]
+```
+
+| Step | Byte | Source tag |
+|---|---|---|
+| nothing writes | rest (0) | `0` rest |
+| a writer's default (open shutter) | the default | `0` rest |
+| a held light value | the light's byte | `2` lights |
+| a raw hold | the held byte | `1` raw |
+| a follower | `dark + (byte - dark) x m1 x ... x mn / 255^n`, one rounding. A jump channel: `dark` at any level 0 | unchanged |
+
+| Modifier slot | Level | Followers today |
+|---|---|---|
+| 0 Master | 255 (no command yet) | none |
+| 1 Blackout | 0 while on, 255 while off | every channel, dark 0 |
 
 ## One place
 

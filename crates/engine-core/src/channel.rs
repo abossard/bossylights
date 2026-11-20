@@ -50,6 +50,103 @@ impl Channel {
             .0
             .get_mut(usize::from(self.address))
     }
+
+    /// Where this channel is in the one channel space, counted from 0.
+    pub(crate) const fn index(self) -> usize {
+        self.universe as usize * ADDRESSES + self.address as usize
+    }
+}
+
+/// The channels of the one space: every universe the engine can have.
+pub const CHANNELS: usize = MAX_UNIVERSES as usize * ADDRESSES;
+
+/// Modifier slots: how much shows, one level each. 0 Master (full until `SetMaster`
+/// comes), 1 Blackout, 2 to 7 free.
+pub const MODIFIERS: usize = 8;
+/// The Blackout slot: 0 while Blackout is on, 255 while off.
+pub const BLACKOUT: usize = 1;
+
+/// Who set a channel's value this frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SourceTag(u16);
+
+impl SourceTag {
+    /// Nobody: the channel shows its rest, or a default the writers give it.
+    pub const REST: Self = Self(0);
+    /// A raw hold from the DMX screen.
+    pub const RAW: Self = Self(1);
+    /// The held values of the lights, through their writers. The first entry of the
+    /// source table, the only one until plays and grabs offer per channel.
+    pub const LIGHTS: Self = Self(2);
+}
+
+/// Which modifier slots a channel follows, one bit per slot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Follows(pub(crate) u8);
+
+impl Follows {
+    pub const NONE: Self = Self(0);
+    /// Every channel follows Blackout, until the patch sets rules per channel.
+    pub const BLACKOUT: Self = Self(1 << BLACKOUT);
+}
+
+/// How a channel moves: bit 0 fades (else jumps), bit 1 highest wins (else latest),
+/// bit 2 is one byte of a 16-bit pair. Bits 3 to 7 are zero.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Flags(pub(crate) u8);
+
+impl Flags {
+    /// Jumps, latest wins, no pair.
+    pub const NONE: Self = Self(0);
+    pub const FADE: Self = Self(1);
+
+    pub(crate) const fn fades(self) -> bool {
+        self.0 & Self::FADE.0 != 0
+    }
+}
+
+/// Every channel of the space, 8 bytes each, as a struct of arrays: a pass touches only
+/// the arrays it needs. Made once, before the tick starts; the frame writes `value` and
+/// `source`, the patch the others (owner decision q1, `docs/design/channel-model.md`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Channels {
+    /// The byte that goes out. Kept as rows of a universe while outputs take rows.
+    pub(crate) value: [Levels; MAX_UNIVERSES as usize],
+    /// What shows when nothing plays.
+    pub(crate) rest: [u8; CHANNELS],
+    /// Where a follower goes when its modifiers are at 0.
+    pub(crate) dark: [u8; CHANNELS],
+    pub(crate) flags: [Flags; CHANNELS],
+    pub(crate) follows: [Follows; CHANNELS],
+    pub(crate) source: [SourceTag; CHANNELS],
+    /// Zero: room for the next rule.
+    reserved: [u8; CHANNELS],
+}
+
+impl Channels {
+    /// At rest 0, dark 0, jumping, following Blackout, nobody's.
+    pub const NEW: Self = Self {
+        value: [Levels::ZERO; MAX_UNIVERSES as usize],
+        rest: [0; CHANNELS],
+        dark: [0; CHANNELS],
+        flags: [Flags::NONE; CHANNELS],
+        follows: [Follows::BLACKOUT; CHANNELS],
+        source: [SourceTag::REST; CHANNELS],
+        reserved: [0; CHANNELS],
+    };
+
+    /// The bytes that go out, universe by universe.
+    pub fn values(&self) -> &[Levels] {
+        &self.value
+    }
+
+    /// Who set `at` this frame.
+    pub fn source(&self, at: Channel) -> SourceTag {
+        self.source
+            .get(at.index())
+            .copied()
+            .unwrap_or(SourceTag::REST)
+    }
 }
 
 /// A channel as a client sends it, counted from 1. Not checked yet.
@@ -227,6 +324,42 @@ mod tests {
         channel(2, 1).mark(&mut one, true);
         assert_eq!(one, [ChannelSet::NONE]);
         assert!(!channel(2, 1).marked(&one));
+    }
+
+    #[test]
+    fn a_channel_takes_8_bytes() {
+        assert_eq!(CHANNELS, 32_768);
+        assert_eq!(size_of::<Channels>(), 8 * CHANNELS);
+        // (array, bytes per channel)
+        let one = Channels::NEW;
+        let cases = [
+            ("value", size_of_val(&one.value)),
+            ("rest", size_of_val(&one.rest)),
+            ("dark", size_of_val(&one.dark)),
+            ("flags", size_of_val(&one.flags)),
+            ("follows", size_of_val(&one.follows)),
+            ("source", size_of_val(&one.source) / 2),
+            ("reserved", size_of_val(&one.reserved)),
+        ];
+        for (array, bytes) in cases {
+            assert_eq!(bytes, CHANNELS, "{array}");
+        }
+    }
+
+    #[test]
+    fn a_channel_has_one_place_in_the_space() {
+        let all = Universes::new(MAX_UNIVERSES).unwrap();
+        // (universe, address, index)
+        let cases = [
+            (1, 1, 0),
+            (1, 512, 511),
+            (2, 1, 512),
+            (64, 512, CHANNELS - 1),
+        ];
+        for (universe, address, index) in cases {
+            let channel = ChannelNumbers { universe, address }.check(all).unwrap();
+            assert_eq!(channel.index(), index, "{universe}/{address}");
+        }
     }
 
     #[test]

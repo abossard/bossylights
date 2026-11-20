@@ -57,7 +57,7 @@ use grabs::Grabs;
 mod snapshot;
 
 use engine_core::{
-    Claims, End, Entry, LightChange, LightRun, Lights, LookCommand, PLAYS, ProjectEffect,
+    Channels, Claims, End, Entry, LightChange, LightRun, Lights, LookCommand, PLAYS, ProjectEffect,
     ProjectEvent, Writer, stops, unkept,
 };
 use looks::Plan;
@@ -670,7 +670,6 @@ impl Engine {
         trace: Trace,
         #[cfg(feature = "test-support")] timings: Option<snapshot::timing::TimingWriter>,
     ) -> io::Result<(Self, Sender)> {
-        let count = usize::from(universes.count());
         let shared = Arc::new(Shared {
             stop: AtomicBool::new(false),
             freed: AtomicU64::new(0),
@@ -721,7 +720,7 @@ impl Engine {
             // `run` puts in the priority, once the thread has it.
             now: Box::new(Snapshot::new(universes, Priority::RealTime)),
             hand,
-            out: vec![Levels::ZERO; count],
+            channels: Box::new(Channels::NEW),
             carried: Box::new(Carried::new()),
             staged: Box::new([None; (lane::BOXES + 1) * MAX_OUTPUTS]),
             clock: clock.clone(),
@@ -1675,8 +1674,8 @@ struct Ticker {
     /// The state, the held levels and what was counted: what readers get a copy of.
     now: Box<Snapshot>,
     hand: Hand,
-    /// The frame that goes out.
-    out: Vec<Levels>,
+    /// Every channel, 8 bytes each: the frame that goes out and who set each byte.
+    channels: Box<Channels>,
     /// When the commands were sent, until each output carried them.
     carried: Box<Carried>,
     /// Results waiting until all due outputs have been served. Room for every lane
@@ -1893,7 +1892,7 @@ impl Ticker {
                 self.now.holds(),
                 self.now.lights(),
                 &self.writers,
-                &mut self.out,
+                &mut self.channels,
             );
             self.back();
             let mut serve = [None; MAX_OUTPUTS];
@@ -2089,7 +2088,7 @@ impl Ticker {
             Some(Some(handed)) => handed.due,
             _ => at,
         };
-        let frame = output.universes.of(&self.out);
+        let frame = output.universes.of(self.channels.values());
         let prefix = lane::Prefix {
             presses: self.carried.presses.total,
             generation: self.now.generation(slot),

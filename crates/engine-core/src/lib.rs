@@ -27,7 +27,6 @@ mod mix;
 pub use mix::{
     Brightness, Claims, End, GrabId, Held, ManualEnd, MixRules, OtherEnd, show, stops, unkept, wins,
 };
-use mix::{Want, mix};
 mod output;
 mod patch;
 mod playback;
@@ -43,9 +42,10 @@ pub use api::{
     SequenceItem, Speed, Swatches, Use, WaveTarget,
 };
 pub use channel::{
-    ADDRESSES, Channel, ChannelLevel, ChannelNumbers, ChannelSet, Levels, MAX_UNIVERSES, Universes,
-    changes,
+    ADDRESSES, CHANNELS, Channel, ChannelLevel, ChannelNumbers, ChannelSet, Channels, Levels,
+    MAX_UNIVERSES, SourceTag, Universes, changes,
 };
+use channel::{BLACKOUT, MODIFIERS};
 #[cfg(feature = "test-support")]
 pub use kinds::OTHER as TEST_KIND;
 pub use kinds::{Adapter, Color, OutputKind};
@@ -673,38 +673,34 @@ fn retempo(state: State) -> State {
     State { plays, ..state }
 }
 
-/// The levels that go out now, written into `out`, a buffer the caller owns. It
-/// resolves and mixes, nothing else: what the `writers` make of the `lights`, the raw
-/// channels held (`universes` at `holds`), the blackout. `mix` decides each channel. No
-/// level depends on time yet: the first that does takes the time as an argument.
+/// The bytes that go out now, written into `channels`, which the caller owns. Every
+/// channel starts at its rest; the resolver writes what the `writers` make of the
+/// `lights`; then one pass decides each channel: the raw channels held (`universes` at
+/// `holds`) replace their bytes, and every follower moves by its modifiers, Blackout
+/// among them. No level depends on time yet: the first that does takes the time as an
+/// argument.
 pub fn frame(
     state: &State,
     universes: &[Levels],
     holds: &[ChannelSet],
     lights: &[Light],
     writers: &[Writer],
-    out: &mut [Levels],
+    channels: &mut Channels,
 ) {
     let mut lit = [ChannelSet::NONE; MAX_UNIVERSES as usize];
-    out.fill(Levels::ZERO);
-    resolve::write(lights, writers, out, &mut lit);
-    let raw = universes.iter().zip(holds);
-    for ((out, lit), (held, holds)) in out.iter_mut().zip(&lit).zip(raw) {
-        for (address, (out, held)) in out.0.iter_mut().zip(held.0).enumerate() {
-            let mut want = if lit.has(address) {
-                Want::Light(*out)
-            } else {
-                Want::Default(*out)
-            };
-            if holds.has(address) {
-                want = mix(want, Want::Raw(held));
-            }
-            if state.blackout {
-                want = mix(want, Want::Blackout);
-            }
-            *out = want.level();
-        }
+    mix::rest(channels);
+    resolve::write(lights, writers, &mut channels.value, &mut lit);
+    mix::channels(channels, &lit, (universes, holds), modifiers(state));
+}
+
+/// The level of each modifier slot this frame: Master full until `SetMaster` comes,
+/// Blackout 0 while on.
+fn modifiers(state: &State) -> [u8; MODIFIERS] {
+    let mut levels = [u8::MAX; MODIFIERS];
+    if let Some(blackout) = levels.get_mut(BLACKOUT) {
+        *blackout = if state.blackout { 0 } else { u8::MAX };
     }
+    levels
 }
 
 /// How many frames late the tick may fall before it gives up catching up.
@@ -1607,9 +1603,104 @@ mod tests {
         ];
         for (row, state, raw_held, writers, expected) in cases {
             let (universes, holds) = raw(raw_held);
-            let mut out = held(&[(1, 9, 9)]); // whatever was there before
-            frame(&state, &universes, &holds, &red, writers, &mut out);
-            assert_eq!(out, expected, "{row}");
+            let mut channels = Box::new(Channels::NEW);
+            channels.value[0].0[8] = 9; // whatever was there before
+            frame(&state, &universes, &holds, &red, writers, &mut channels);
+            assert_eq!(channels.values()[..2], expected, "{row}");
+            assert!(
+                channels.values()[2..].iter().all(|u| *u == Levels::ZERO),
+                "{row}"
+            );
+        }
+    }
+
+    #[test]
+    fn frame_says_who_set_each_channel_and_a_release_gives_it_back() {
+        let all = Lights::new(1).unwrap();
+        let light = LightNumber::new(0, all).unwrap();
+        // a dimmer at 1, a shutter open at 200 at 2
+        let writers = [
+            Writer::Takes {
+                light,
+                take: Take::INTENSITY,
+                at: Place::Byte(channel(1, 1)),
+                unheld: 0,
+            },
+            Writer::Fixed {
+                at: channel(1, 2),
+                value: 200,
+            },
+        ];
+        let lit = [Light {
+            intensity: Some(0xffff),
+            ..Light::DARK
+        }];
+        let set = |universe, address, value| EngineCommand::SetChannel {
+            channel: channel(universe, address),
+            value,
+        };
+        let release = |universe, address| EngineCommand::ReleaseChannel {
+            channel: channel(universe, address),
+        };
+        let blackout = |on| EngineCommand::Blackout { on };
+        use SourceTag as S;
+        // (row, commands, channels 1/1, 1/2 and 2/512: byte and source)
+        type Seen = [(u8, SourceTag); 3];
+        let cases: [(&str, Vec<EngineCommand>, Seen); 7] = [
+            (
+                "nothing held",
+                vec![],
+                [(255, S::LIGHTS), (200, S::REST), (0, S::REST)],
+            ),
+            (
+                "raw 91 over the light",
+                vec![set(1, 1, 91)],
+                [(91, S::RAW), (200, S::REST), (0, S::REST)],
+            ),
+            (
+                "raw 91 released",
+                vec![set(1, 1, 91), release(1, 1)],
+                [(255, S::LIGHTS), (200, S::REST), (0, S::REST)],
+            ),
+            (
+                "raw on the last channel",
+                vec![set(2, 512, 91)],
+                [(255, S::LIGHTS), (200, S::REST), (91, S::RAW)],
+            ),
+            (
+                "blackout over raw and light",
+                vec![set(2, 512, 91), blackout(true)],
+                [(0, S::LIGHTS), (0, S::REST), (0, S::RAW)],
+            ),
+            (
+                "blackout off, the hold comes back",
+                vec![set(2, 512, 91), blackout(true), blackout(false)],
+                [(255, S::LIGHTS), (200, S::REST), (91, S::RAW)],
+            ),
+            (
+                "every raw channel released",
+                vec![
+                    set(1, 1, 91),
+                    set(2, 512, 91),
+                    EngineCommand::ReleaseChannels,
+                ],
+                [(255, S::LIGHTS), (200, S::REST), (0, S::REST)],
+            ),
+        ];
+        for (row, commands, expected) in cases {
+            let (mut universes, mut holds) = raw(&[]);
+            let mut state = CALM;
+            for command in commands {
+                state = update(state, &mut universes, &mut holds, &mut [], command);
+            }
+            let mut channels = Box::new(Channels::NEW);
+            frame(&state, &universes, &holds, &lit, &writers, &mut channels);
+            let seen = [(1, 1), (1, 2), (2, 512)].map(|(universe, address)| {
+                let at = channel(universe, address);
+                let byte = channels.values()[usize::from(universe - 1)].0[usize::from(address - 1)];
+                (byte, channels.source(at))
+            });
+            assert_eq!(seen, expected, "{row}");
         }
     }
 
