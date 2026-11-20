@@ -46,3 +46,4 @@ One row per run of Codex or Copilot, pasted by the orchestrator after verifying 
 | Pilot 2 took 501 s against 274 s because it could run all 10 `show` tests | more checking is slower and worth it: the patch passed all suites first time on a newer head |
 | Copilot declined a review prompt as a possible cybersecurity risk | phrase reviews as correctness and robustness, not as what a client can cause | recorded 2026-11-20 |
 | A small task (12 changed lines) cost 2.9M input tokens, 97 percent cached | peers are for the hard tasks; do not send them one-file fixes |
+| 2026-11-20 | codex | spec-193 | spec (research mode) | sol, ultra | 821 | 33 (0) | 3.76M / 3.62M / 32.2k | n/a | reviewed by Opus (POST AFTER FIXES), v2 posted on #193, tickets #195 to #197 |
