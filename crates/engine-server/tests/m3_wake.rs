@@ -2,8 +2,9 @@
 //! one wake at a time (`engine/src/wake.rs`). Raw level 91 is sent through `/api` before
 //! a wake's cutoff, or after it while the tick is held there. Each due hand-over, what came
 //! of it, every DDP frame and every complete message of a fake DMX USB Pro are recorded
-//! in order: each output's first hand-over at or after the wake that admitted 91 carries
-//! it, and no earlier one does.
+//! in order. Each output is handed every slot of its schedule (its first due, then a
+//! period apart, none skipped); its first slot at or after the wake that admitted 91 is
+//! the first frame that carries it, and the outcome of every slot up to it is back.
 //!
 //! ```text
 //! before: send 91 --> wake T (cutoff: 91 taken)        --> frames at T and later carry 91
@@ -13,7 +14,7 @@
 mod common;
 
 use common::{Heard, Socket, command, connect, open, send, serve};
-use engine::{Engine, Event, Outcome, Universes, Wakes};
+use engine::{Engine, Event, Outcome, Rate, Universes, Wakes};
 use serde_json::{Value, json};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -34,14 +35,28 @@ enum Side {
     After,
 }
 
+/// A due hand-over: when its frame was due, and the wake that handed it over.
+#[derive(Clone, Copy, Debug)]
+struct Handed {
+    due: Duration,
+    at: Duration,
+}
+
+/// What came of the frame due at `due`, and how many hand-overs its output had by then.
+#[derive(Clone, Copy, Debug)]
+struct Came {
+    due: Duration,
+    outcome: Outcome,
+    handed: usize,
+}
+
 /// What the test saw, in order, per output (DDP, DMX).
 struct Seen {
     udp: UdpSocket,
     heard: Heard,
-    /// The wake of each due hand-over.
-    handed: [Vec<Duration>; OUTPUTS],
-    /// What came of each frame, in the order it came back.
-    came: [Vec<Outcome>; OUTPUTS],
+    handed: [Vec<Handed>; OUTPUTS],
+    /// In the order it came back.
+    came: [Vec<Came>; OUTPUTS],
     /// Channel 1 of each DDP frame.
     ddp: Vec<u8>,
 }
@@ -67,13 +82,36 @@ impl Seen {
     fn take(&mut self, wakes: &mut Wakes) {
         for event in wakes.events() {
             match event {
-                Event::Handed { output, at, .. } => self.handed[output.slot()].push(at),
+                Event::Handed { output, due, at } => {
+                    self.handed[output.slot()].push(Handed { due, at });
+                }
                 Event::Came {
-                    output, outcome, ..
-                } => self.came[output.slot()].push(outcome),
+                    output,
+                    outcome,
+                    due,
+                } => {
+                    let handed = self.handed[output.slot()].len();
+                    self.came[output.slot()].push(Came {
+                        due,
+                        outcome,
+                        handed,
+                    });
+                }
                 Event::Counted { .. } => {}
             }
         }
+    }
+
+    /// What came of each frame of output `n` due by `until`, in order, once all are back.
+    fn outcomes(&self, n: usize, until: Duration) -> Option<Vec<Outcome>> {
+        self.handed[n]
+            .iter()
+            .filter(|handed| handed.due <= until)
+            .map(|handed| {
+                let came = self.came[n].iter().find(|came| came.due == handed.due);
+                came.map(|came| came.outcome)
+            })
+            .collect()
     }
 
     /// Waits until every frame handed over so far is on the wire: each output drained.
@@ -145,6 +183,12 @@ async fn start(
     (socket, wakes)
 }
 
+fn period(rate: &str) -> Duration {
+    serde_json::from_value::<Rate>(json!(rate))
+        .unwrap()
+        .period()
+}
+
 fn level_91() -> Value {
     json!({"SetChannel": {"channel": {"universe": 1, "address": 1}, "value": LEVEL}})
 }
@@ -172,39 +216,65 @@ async fn first_frame(side: Side, ddp: &str, dmx: &str) {
             seen.take(&mut wakes);
             seen.drain().await;
             assert!(
-                seen.handed.iter().flatten().any(|at| *at == cut),
+                seen.handed.iter().flatten().any(|handed| handed.at == cut),
                 "{case}: the wake held at its cutoff served no output"
             );
             seen.wake(&mut wakes).await
         }
     };
-    // until each output was handed a frame in or after that wake, and what came of it is back
-    let mut eligible = [None; OUTPUTS];
-    while eligible
-        .iter()
-        .zip(&seen.came)
-        .any(|(first, came)| first.is_none_or(|first| came.len() <= first))
-    {
+    // Each output's first slot carrying 91, from its schedule: its first due, a period
+    // apart. A slot due before the admitting wake had a wake of its own; one due in it,
+    // or within the spin after it, goes out in it.
+    let periods = [ddp, dmx].map(period);
+    let first: [Duration; OUTPUTS] = std::array::from_fn(|n| {
+        let start = seen.handed[n][0].due;
+        let k = (admitted - start)
+            .as_nanos()
+            .div_ceil(periods[n].as_nanos());
+        start + periods[n] * u32::try_from(k).unwrap()
+    });
+    // until each output was handed that slot, and what came of every slot up to it is back
+    let started = Instant::now();
+    while (0..OUTPUTS).any(|n| {
+        seen.handed[n].last().is_none_or(|last| last.due < first[n])
+            || seen.outcomes(n, first[n]).is_none()
+    }) {
         seen.wake(&mut wakes).await;
-        for (first, handed) in eligible.iter_mut().zip(&seen.handed) {
-            *first = handed.iter().position(|at| *at >= admitted);
-        }
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "{case}: first slots {first:?}, handed {:?}, came {:?}",
+            seen.handed,
+            seen.came
+        );
     }
     let wire = seen.wire();
-    for (n, ((handed, came), on_wire)) in seen.handed.iter().zip(&seen.came).zip(&wire).enumerate()
-    {
+    for (n, on_wire) in wire.iter().enumerate() {
         let output = n + 1;
+        let (handed, came) = (&seen.handed[n], &seen.came[n]);
+        let dues: Vec<Duration> = handed.iter().map(|handed| handed.due).collect();
+        let schedule: Vec<Duration> = (0..u32::try_from(dues.len()).unwrap())
+            .map(|k| dues[0] + periods[n] * k)
+            .collect();
+        assert_eq!(dues, schedule, "{case}, output {output}: a slot skipped");
+        assert_eq!(
+            seen.outcomes(n, first[n]),
+            Some(vec![
+                Outcome::Accepted;
+                handed.iter().filter(|h| h.due <= first[n]).count()
+            ]),
+            "{case}, output {output}: came {came:?}"
+        );
         assert!(
-            came.iter().all(|outcome| *outcome == Outcome::Accepted),
+            came.iter().all(|came| came.outcome == Outcome::Accepted),
             "{case}, output {output}: {came:?}"
         );
         let expected: Vec<u8> = handed
             .iter()
-            .map(|at| if *at >= admitted { LEVEL } else { 0 })
+            .map(|handed| if handed.due >= first[n] { LEVEL } else { 0 })
             .collect();
         assert_eq!(
             on_wire, &expected,
-            "{case}, output {output}: admitted in the wake at {admitted:?}, handed over at {handed:?}"
+            "{case}, output {output}: admitted in the wake at {admitted:?}, handed over {handed:?}"
         );
     }
     send(&mut socket, &json!("Stop")).await;
@@ -226,7 +296,7 @@ async fn raw_91_before_or_after_the_cutoff_is_in_each_outputs_first_frame_after_
 }
 
 /// Nobody reads the fake adapter's port: its queue fills up and the frame it cannot take
-/// is `Dropped`, counted on the picture. The DDP output beside it takes every frame.
+/// is `Dropped` (not one passed over by its output's thread), counted on the picture. The DDP output beside it takes every frame.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_full_adapter_queue_drops_the_frame_and_the_output_beside_it_takes_every_one() {
     let stop = Arc::new(AtomicBool::new(false));
@@ -234,22 +304,52 @@ async fn a_full_adapter_queue_drops_the_frame_and_the_output_beside_it_takes_eve
     let (mut socket, mut wakes) = start(None, &stop, &udp, "60", "44").await;
     let mut seen = Seen::new(udp, Heard::default());
     let started = Instant::now();
-    while !seen.came[1].contains(&Outcome::Dropped) {
+    let dropped = loop {
         block_in_place(|| wakes.wake()).unwrap();
         seen.take(&mut wakes);
+        if let Some(at) = seen.came[1]
+            .iter()
+            .position(|came| came.outcome == Outcome::Dropped)
+        {
+            break at;
+        }
         thread::sleep(Duration::from_millis(2)); // poll: the output's thread takes the frame
         assert!(
             started.elapsed() < Duration::from_secs(10),
             "the adapter took every frame: {:?}",
             seen.came[1]
         );
-    }
+    };
+    // The adapter took frames until its queue was full, then dropped the newest at once:
+    // no newer frame was handed over before it came back, so none was passed over.
+    let drop = seen.came[1][dropped];
+    let (handed, came) = (&seen.handed[1][..drop.handed], &seen.came[1][..dropped]);
+    assert_eq!(
+        handed.last().map(|handed| handed.due),
+        Some(drop.due),
+        "passed over: handed {handed:?}, came {:?}",
+        seen.came[1]
+    );
     assert!(
-        seen.came[0]
-            .iter()
-            .all(|outcome| *outcome == Outcome::Accepted),
-        "{:?}",
-        seen.came[0]
+        !came.is_empty() && came.iter().all(|came| came.outcome == Outcome::Accepted),
+        "{came:?}"
+    );
+    // the DDP output took every frame handed over by then, each outcome back
+    let until = seen.handed[0].last().unwrap().due;
+    let started = Instant::now();
+    while seen.outcomes(0, until).is_none() {
+        block_in_place(|| wakes.wake()).unwrap();
+        seen.take(&mut wakes);
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "{:?}",
+            seen.came[0]
+        );
+    }
+    let ddp = seen.outcomes(0, until).unwrap();
+    assert!(
+        !ddp.is_empty() && ddp.iter().all(|outcome| *outcome == Outcome::Accepted),
+        "{ddp:?}"
     );
     // the picture counts it
     block_in_place(|| wakes.run());
