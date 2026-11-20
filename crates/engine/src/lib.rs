@@ -1725,7 +1725,8 @@ impl Stamps {
 struct Carried {
     /// The scorecard times every applied command up to the lane handoff.
     commands: Stamps,
-    /// Device-acceptance timing uses one stamp per non-attach command.
+    /// Device-acceptance timing uses one stamp per command that changes what lights
+    /// show: every command but `Attach` and `RemoveOutput`, which only manage outputs.
     presses: Stamps,
     /// Per output: the commands applied before its last frame, or before it was attached.
     carried: [u64; MAX_OUTPUTS],
@@ -1746,7 +1747,10 @@ impl Carried {
     /// A command sent at `at` was applied.
     fn applied(&mut self, command: &EngineCommand, at: Duration) {
         self.commands.push(at);
-        if !matches!(command, EngineCommand::Attach { .. }) {
+        if !matches!(
+            command,
+            EngineCommand::Attach { .. } | EngineCommand::RemoveOutput { .. }
+        ) {
             self.presses.push(at);
         }
     }
@@ -2349,6 +2353,30 @@ mod tests {
                     "output {output}"
                 );
             }
+        }
+
+        #[test]
+        fn removing_another_output_does_not_count_as_a_press() {
+            let mut desk = Desk::new();
+            let rate = Rate::Sixty;
+            let start = desk.start;
+            desk.attach(1, rate);
+            desk.attach(2, rate);
+            desk.frames(start, 2);
+
+            let due = start + rate.period();
+            desk.wakes.set_time(due - Duration::from_millis(3));
+            desk.sender
+                .send(Command::RemoveOutput {
+                    output: 2.try_into().unwrap(),
+                })
+                .unwrap();
+            desk.frames(due, 1);
+            let sample = desk.sample(due, 1);
+            assert_eq!(
+                (sample.press.iter().sum::<u64>(), sample.press_under_target),
+                (0, 0)
+            );
         }
 
         #[test]
@@ -3084,15 +3112,18 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::unwrap_used, reason = "a test that cannot set itself up fails")]
     fn each_output_counts_a_command_when_its_own_frame_carries_it() {
         let ms = Duration::from_millis;
         #[derive(Clone, Copy, Debug)]
         enum Step {
             Attach(usize),
+            /// The `Attach` command sent at this time is applied, then the output's lane is fresh.
+            Attached(u8, u64),
             Sent(u64),
             Handed(usize, u64),
         }
-        use Step::{Attach, Handed, Sent};
+        use Step::{Attach, Attached, Handed, Sent};
         // (steps, times counted in ms)
         let cases = [
             (vec![Attach(0), Sent(10), Handed(0, 12)], vec![2]),
@@ -3108,13 +3139,36 @@ mod tests {
                 vec![4],
             ), // once
             (vec![Sent(1), Attach(0), Handed(0, 5)], vec![]), // sent before its device
+            // every command counts on a running output, a fresh one nothing from before it
+            (
+                vec![
+                    Attached(0, 0),
+                    Sent(10),
+                    Attached(1, 11),
+                    Handed(1, 12),
+                    Handed(0, 13),
+                ],
+                vec![3, 2],
+            ),
         ];
+        let run = RunNumbers { first: 1, count: 1 }
+            .check(Universes::ONE)
+            .unwrap();
         for (steps, expected) in cases {
             let mut carried = Carried::new();
             let mut counted = vec![];
             for step in &steps {
                 match *step {
                     Attach(output) => carried.attached(output, false),
+                    Attached(slot, at) => {
+                        let attach = EngineCommand::Attach {
+                            output: OutputNumber::try_from(slot + 1).unwrap(),
+                            universes: run,
+                            rate: Rate::Sixty,
+                        };
+                        carried.applied(&attach, ms(at));
+                        carried.attached(usize::from(slot), false);
+                    }
                     Sent(at) => carried.applied(&EngineCommand::Tap, ms(at)),
                     Handed(output, at) => carried.handed(output, ms(at), |t| counted.push(t)),
                 }
@@ -3123,6 +3177,85 @@ mod tests {
                 counted,
                 expected.into_iter().map(ms).collect::<Vec<_>>(),
                 "{steps:?}"
+            );
+        }
+    }
+
+    #[test]
+    #[expect(clippy::unwrap_used, reason = "a test that cannot set itself up fails")]
+    fn a_command_is_a_press_unless_it_only_manages_outputs() {
+        let output = OutputNumber::try_from(1).unwrap();
+        let universes = RunNumbers { first: 1, count: 1 }
+            .check(Universes::ONE)
+            .unwrap();
+        let channel = ChannelNumbers {
+            universe: 1,
+            address: 1,
+        }
+        .check(Universes::ONE)
+        .unwrap();
+        let lights = engine_core::LightNumber::new(0, LIGHTS)
+            .and_then(|first| LightRun::new(first, 1, LIGHTS))
+            .unwrap();
+        let change = LightChange::Grab {
+            value: Value::Intensity(1),
+            grab: GrabId { generation: 1 },
+        };
+        let play = PlayId::new(0, 1).unwrap();
+        // (command, presses it adds)
+        let cases = [
+            (EngineCommand::SetChannel { channel, value: 1 }, 1),
+            (EngineCommand::ReleaseChannel { channel }, 1),
+            (EngineCommand::ReleaseChannels, 1),
+            (EngineCommand::ReleaseAll, 1),
+            (EngineCommand::Blackout { on: true }, 1),
+            (EngineCommand::Writers, 1),
+            (EngineCommand::Lights { lights, change }, 1),
+            (EngineCommand::Darken { lights }, 1),
+            (EngineCommand::Runs { change }, 1),
+            (
+                EngineCommand::Start {
+                    play,
+                    look: 0,
+                    rank: Rank::Manual,
+                    when: When::default(),
+                },
+                1,
+            ),
+            (EngineCommand::Keep { play }, 1),
+            (
+                EngineCommand::Rules {
+                    rules: MixRules::default(),
+                },
+                1,
+            ),
+            (EngineCommand::Plan { play }, 1),
+            (EngineCommand::Release { play }, 1),
+            (EngineCommand::Tap, 1),
+            (EngineCommand::ReleaseTempo, 1),
+            (
+                EngineCommand::Feed {
+                    bpm: Bpm::new(120).unwrap(),
+                },
+                1,
+            ),
+            (
+                EngineCommand::Attach {
+                    output,
+                    universes,
+                    rate: Rate::Sixty,
+                },
+                0,
+            ),
+            (EngineCommand::RemoveOutput { output }, 0),
+        ];
+        for (command, presses) in cases {
+            let mut carried = Carried::new();
+            carried.applied(&command, Duration::ZERO);
+            assert_eq!(
+                (carried.commands.total, carried.presses.total),
+                (1, presses),
+                "{command:?}"
             );
         }
     }
