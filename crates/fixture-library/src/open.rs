@@ -51,27 +51,47 @@ impl Channel {
 }
 
 fn lets_light_out(range: &Range) -> bool {
-    !matches!(range.does, Some(Does::Closed | Does::Strobe(_))) && !dark(&range.label)
+    !matches!(range.does, Some(Does::Closed | Does::Strobe(_))) && !range.says_dark()
 }
 
-fn dark(label: &str) -> bool {
-    let label = String::from(label).to_ascii_lowercase();
-    let words: Vec<&str> = label
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|w| !w.is_empty())
-        .collect();
-    let says = |word: &str| words.contains(&word);
-    let off = words.windows(2).any(|pair| match pair {
-        [before, "off"] => matches!(
-            *before,
-            "lamp" | "lamps" | "led" | "leds" | "light" | "lights" | "laser"
-        ),
-        [before, after] => *before == "black" && *after == "out",
-        _ => false,
-    });
-    !says("open")
-        && (off
-            || ["blackout", "close", "closed", "dark"]
-                .into_iter()
-                .any(says))
+/// The words of a range label that say no light comes out.
+const DARK: [&str; 4] = ["blackout", "close", "closed", "dark"];
+/// The words of a range label that name what makes the light.
+const EMITTERS: [&str; 7] = ["lamp", "lamps", "led", "leds", "light", "lights", "laser"];
+
+impl Range {
+    /// The label's words in lower case: runs of letters and digits, split at all else.
+    #[must_use]
+    pub fn words(&self) -> Vec<String> {
+        self.label
+            .to_ascii_lowercase()
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|w| !w.is_empty())
+            .map(String::from)
+            .collect()
+    }
+
+    /// The label says no light comes out: blackout, black out, close, closed, dark, or an
+    /// emitter (lamp, LED, light, laser) off, and it does not say open. A bare "off" is a
+    /// strobe that is off: light.
+    #[must_use]
+    pub fn says_dark(&self) -> bool {
+        let words = self.words();
+        let says = |word: &str| words.iter().any(|w| w == word);
+        let off = words.windows(2).any(|pair| match pair {
+            [before, after] if after == "off" => EMITTERS.contains(&before.as_str()),
+            [before, after] => before == "black" && after == "out",
+            _ => false,
+        });
+        !says("open") && (off || DARK.into_iter().any(says))
+    }
+
+    /// The label names black, a blackout or the LEDs ("All LEDs off"): it is about the
+    /// light going dark, not about a colour macro being off.
+    #[must_use]
+    pub fn names_black_or_leds(&self) -> bool {
+        self.words()
+            .iter()
+            .any(|w| matches!(w.as_str(), "black" | "blackout" | "led" | "leds"))
+    }
 }

@@ -130,7 +130,7 @@ fn bytes_that_are_not_text_are_an_error_not_a_panic() {
 }
 
 const BARE: &str = "<?xml version=\"1.0\"?>\n<!DOCTYPE FixtureDefinition>\n";
-const BODY: &str = "<FixtureDefinition xmlns=\"http://www.qlcplus.org/FixtureDefinition\"><Manufacturer>A</Manufacturer><Model>M</Model><Type>Dimmer</Type></FixtureDefinition>";
+const BODY: &str = "<FixtureDefinition xmlns=\"http://www.qlcplus.org/FixtureDefinition\"><Manufacturer>A</Manufacturer><Model>M</Model><Type>Dimmer</Type><Channel Name=\"C\" Preset=\"IntensityDimmer\"/><Mode Name=\"M\"><Channel Number=\"0\">C</Channel></Mode></FixtureDefinition>";
 
 // name, the file, the line it must name, a word of what is wrong. A definition may not declare entities or be huge: nothing is expanded.
 #[test]

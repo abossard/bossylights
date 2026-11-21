@@ -12,7 +12,7 @@ use engine_core::{
     ChannelFunction, Failure, FixtureKind, Library, MATCHES, Match, ModeChannels, ModeSize,
     NamedChannel, Refusal, Reply, Text,
 };
-use fixture_library::{Fixture, Function, Kind, MOST_BYTES, Problem, parse, search};
+use fixture_library::{Fixture, Function, Kind, MOST_BYTES, Problem, Refused, parse, search};
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{self, Read};
@@ -147,24 +147,47 @@ fn shelve(
     let mut shelved: HashMap<(String, String), String> = HashMap::new();
     for (path, bytes) in files {
         let file = name(&path);
-        let read = (bytes.map_err(|error| (None, error.to_string())))
+        // A refused mode is one row, whether or not the file's other modes are read.
+        let rows = |refused: &[Refused]| -> Vec<Failed> {
+            (refused.iter())
+                .map(|r| Failed {
+                    file: file.clone(),
+                    line: Some(r.line),
+                    problem: format!("mode \"{}\": {}", r.mode, r.problem),
+                })
+                .collect()
+        };
+        let one = |line, problem| {
+            vec![Failed {
+                file: file.clone(),
+                line,
+                problem,
+            }]
+        };
+        let read = (bytes.map_err(|error| one(None, error.to_string())))
             .and_then(|bytes| {
-                parse(&file, &bytes).map_err(|error| (error.line, error.problem.to_string()))
+                parse(&file, &bytes).map_err(|error| {
+                    if let Problem::NoModeKept(modes) = &error.problem {
+                        rows(modes)
+                    } else {
+                        one(error.line, error.problem.to_string())
+                    }
+                })
             })
             .and_then(|fixture| match unaskable(&fixture, &shelved) {
-                Some(problem) => Err((None, problem)),
+                Some(problem) => Err([one(None, problem), rows(&fixture.refused)]
+                    .into_iter()
+                    .flatten()
+                    .collect()),
                 None => Ok(fixture),
             });
         match read {
             Ok(fixture) => {
+                failures.extend(rows(&fixture.refused));
                 shelved.insert((fixture.maker.clone(), fixture.model.clone()), file);
                 fixtures.push(fixture);
             }
-            Err((line, problem)) => failures.push(Failed {
-                file,
-                line,
-                problem,
-            }),
+            Err(rows) => failures.extend(rows),
         }
     }
     failures.sort_by(|a, b| a.file.cmp(&b.file));

@@ -38,6 +38,13 @@ impl Channel {
             group => Function::Other(group.into()),
         }
     }
+
+    /// A dimmer preset that runs fog, not light: on Smoke and Hazer, see `role`.
+    #[must_use]
+    pub fn is_fog_dimmer(&self) -> bool {
+        self.declared.pairing_family().as_deref() == Some("IntensityDimmer")
+            && matches!(self.role(), Function::Other(_))
+    }
 }
 
 impl Declared {
@@ -45,6 +52,41 @@ impl Declared {
     #[must_use]
     pub fn preset_stem(&self) -> Option<&str> {
         self.preset.as_deref().map(preset_stem)
+    }
+
+    /// The control a fine byte's preset names, to find its coarse: the preset without its
+    /// `Fine`, the way it runs (`SlowFast`, ...) and `Master`, with QLC+'s X and Y axis
+    /// aliases taken as pan and tilt. Not the `Function`: an X axis does not point a beam
+    /// (`role` says Other), yet its fine joins it as a pan fine joins pan.
+    #[must_use]
+    pub fn pairing_family(&self) -> Option<String> {
+        let stem = self.preset_stem()?;
+        let stem = [
+            "SlowFast", "FastSlow", "SmallBig", "BigSmall", "NearFar", "FarNear", "MinToMax",
+            "MaxToMin",
+        ]
+        .into_iter()
+        .find_map(|way| stem.strip_suffix(way))
+        .unwrap_or(stem);
+        Some(
+            stem.replace("Master", "")
+                .replace("PositionXAxis", "PositionPan")
+                .replace("PositionYAxis", "PositionTilt"),
+        )
+    }
+
+    /// The QLC+ group of the channel: its `<Group>`, else the group its preset belongs to.
+    #[must_use]
+    pub fn pairing_group(&self) -> Option<&str> {
+        self.group
+            .as_deref()
+            .or_else(|| self.preset_stem().and_then(preset_group))
+    }
+
+    /// A preset for the index (position) of a wheel, not its slots.
+    #[must_use]
+    pub fn is_index_preset(&self) -> bool {
+        self.preset_stem().is_some_and(|s| s.ends_with("Index"))
     }
 
     /// The emitted or subtractive colour, from `<Colour>` first, then the Intensity preset.
@@ -58,6 +100,28 @@ impl Declared {
 
 fn preset_stem(preset: &str) -> &str {
     preset.strip_suffix("Fine").unwrap_or(preset)
+}
+
+/// The QLC+ group of a preset, for a channel without an explicit group.
+fn preset_group(stem: &str) -> Option<&'static str> {
+    match stem {
+        "PositionXAxis" => Some("Pan"),
+        "PositionYAxis" => Some("Tilt"),
+        "NoFunction" => Some("Nothing"),
+        _ => [
+            ("Intensity", "Intensity"),
+            ("PositionPan", "Pan"),
+            ("PositionTilt", "Tilt"),
+            ("Speed", "Speed"),
+            ("Color", "Colour"),
+            ("Gobo", "Gobo"),
+            ("Shutter", "Shutter"),
+            ("Beam", "Beam"),
+            ("Prism", "Prism"),
+        ]
+        .into_iter()
+        .find_map(|(prefix, group)| stem.starts_with(prefix).then_some(group)),
+    }
 }
 
 fn preset_colour(stem: &str) -> Option<Function> {

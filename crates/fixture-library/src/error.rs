@@ -1,5 +1,6 @@
 use crate::model::Layout;
 use alloc::string::String;
+use alloc::vec::Vec;
 use core::fmt;
 
 /// A definition that could not be read: which file, where in it, and what is wrong.
@@ -34,6 +35,32 @@ pub enum Problem {
         min: u8,
         max: u8,
     },
+    /// A head names a channel the mode does not have. `head` counts the mode's heads from
+    /// 0, in the file's order; `channels` is how many the mode has.
+    HeadPastEnd {
+        head: usize,
+        channel: u16,
+        channels: usize,
+    },
+    /// An `ActsOn` names a channel the mode does not have.
+    ActsOnPastEnd {
+        channel: u16,
+        channels: usize,
+    },
+    /// The file has no `<Mode>`.
+    NoMode,
+    /// Every mode of the file is refused: each one, in the file's order. Never empty.
+    NoModeKept(Vec<Refused>),
+}
+
+/// A mode that cannot be used: which, where in the file, and why. The file's other
+/// modes are read without it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Refused {
+    pub mode: String,
+    /// The line in the file, counted from 1.
+    pub line: u32,
+    pub problem: Problem,
 }
 
 impl fmt::Display for Error {
@@ -68,7 +95,35 @@ impl fmt::Display for Problem {
             Self::BackwardsRange { min, max } => {
                 write!(f, "the range {min} to {max} runs backwards")
             }
+            Self::HeadPastEnd {
+                head,
+                channel,
+                channels,
+            } => write!(
+                f,
+                "head {head} names channel {channel}, the mode has {channels}"
+            ),
+            Self::ActsOnPastEnd { channel, channels } => {
+                write!(f, "ActsOn names channel {channel}, the mode has {channels}")
+            }
+            Self::NoMode => write!(f, "the file has no <Mode>"),
+            Self::NoModeKept(refused) => {
+                write!(f, "no mode can be used")?;
+                refused
+                    .iter()
+                    .try_for_each(|refused| write!(f, "; {refused}"))
+            }
         }
+    }
+}
+
+impl fmt::Display for Refused {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "mode \"{}\": line {}: {}",
+            self.mode, self.line, self.problem
+        )
     }
 }
 
@@ -84,13 +139,6 @@ pub struct Warning {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LeftOut {
-    /// A head that names a channel the mode does not have. `head` counts the mode's heads
-    /// from 0, in the file's order; `channels` is how many the mode has.
-    Head {
-        head: usize,
-        channel: u16,
-        channels: usize,
-    },
     /// A layout without exactly one cell for each head the mode keeps.
     Layout { layout: Layout, heads: usize },
 }
@@ -99,14 +147,6 @@ impl fmt::Display for Warning {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "mode \"{}\": line {}: ", self.mode, self.line)?;
         match self.left_out {
-            LeftOut::Head {
-                head,
-                channel,
-                channels,
-            } => write!(
-                f,
-                "head {head} names channel {channel}, the mode has {channels}: the head is left out"
-            ),
             LeftOut::Layout { layout, heads } => write!(
                 f,
                 "the layout is {} by {}, the mode has {heads} heads: the layout is left out",

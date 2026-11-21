@@ -646,6 +646,7 @@ fn search_allows_typos_by_word_length_and_ranks_prefixes_above_them() {
         model: model.into(),
         kind: Kind::Other,
         modes: vec![],
+        refused: vec![],
         warnings: vec![],
     };
     // (query, [(maker, model)], the "maker model" found, best first)
@@ -693,4 +694,35 @@ fn search_allows_typos_by_word_length_and_ranks_prefixes_above_them() {
             .collect();
         assert_eq!(found, expected, "{query:?} in {fixtures:?}");
     }
+}
+
+#[test]
+fn a_mode_whose_head_runs_past_it_is_refused_and_the_others_read() {
+    use fixture_library::{Problem, Refused};
+    let fixture = read("Eurolite-LED-IP-PIX-Strobe-Frost.qxf");
+    let modes: Vec<_> = fixture.modes.iter().map(|m| m.name.as_str()).collect();
+    // In the file: "32 Channel" numbers its channels 0 to 31, its last head names 30, 31, 32.
+    assert_eq!(
+        (modes, fixture.refused),
+        (
+            vec![
+                "35 Channel",
+                "33 Channel",
+                "26 Channel",
+                "25 Channel",
+                "19 Channel",
+                "11 Channel",
+                "7 Channel"
+            ],
+            vec![Refused {
+                mode: "32 Channel".into(),
+                line: 475,
+                problem: Problem::HeadPastEnd {
+                    head: 11,
+                    channel: 32,
+                    channels: 32,
+                },
+            }]
+        )
+    );
 }

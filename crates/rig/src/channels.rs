@@ -434,8 +434,8 @@ enum Wheel {
 }
 
 impl Wheel {
-    fn of(channel: &Channel, stem: Option<&str>) -> Self {
-        let index = stem.is_some_and(|s| s.ends_with("Index"))
+    fn of(channel: &Channel) -> Self {
+        let index = channel.declared.is_index_preset()
             || channel
                 .ranges
                 .iter()
@@ -471,11 +471,6 @@ impl Wheel {
 impl<'a> PairChannel<'a> {
     fn new(channel: &'a Channel) -> Self {
         let declared = &channel.declared;
-        let stem = declared.preset_stem();
-        let family = stem.map(preset_family);
-        // The fixture library gives a fog dimmer preset the role Other.
-        let fog = family.as_deref() == Some("IntensityDimmer")
-            && matches!(channel.role(), Function::Other(_));
         let ranges = if channel.is_plain() {
             Vec::new()
         } else {
@@ -488,16 +483,13 @@ impl<'a> PairChannel<'a> {
         Self {
             byte: channel.byte,
             colour: declared.emitter_colour(),
-            fog,
+            fog: channel.is_fog_dimmer(),
             acts_on: declared.acts_on,
-            preset: stem,
-            family,
-            group: declared
-                .group
-                .as_deref()
-                .or_else(|| stem.and_then(preset_group)),
+            preset: declared.preset_stem(),
+            family: declared.pairing_family(),
+            group: declared.pairing_group(),
             ranges,
-            wheel: Wheel::of(channel, stem),
+            wheel: Wheel::of(channel),
             heads: Vec::new(),
         }
     }
@@ -621,42 +613,6 @@ enum PresetMatch {
 fn before<T>(channels: &[T], i: usize) -> Option<(usize, &T)> {
     let i = i.checked_sub(1)?;
     Some((i, channels.get(i)?))
-}
-
-/// The control named by the preset, independent of travel and QLC+'s aliases.
-fn preset_family(stem: &str) -> String {
-    let stem = [
-        "SlowFast", "FastSlow", "SmallBig", "BigSmall", "NearFar", "FarNear", "MinToMax",
-        "MaxToMin",
-    ]
-    .into_iter()
-    .find_map(|way| stem.strip_suffix(way))
-    .unwrap_or(stem);
-    stem.replace("Master", "")
-        .replace("PositionXAxis", "PositionPan")
-        .replace("PositionYAxis", "PositionTilt")
-}
-
-/// QLC+ group of a preset on a channel without an explicit group.
-fn preset_group(stem: &str) -> Option<&'static str> {
-    match stem {
-        "PositionXAxis" => Some("Pan"),
-        "PositionYAxis" => Some("Tilt"),
-        "NoFunction" => Some("Nothing"),
-        _ => [
-            ("Intensity", "Intensity"),
-            ("PositionPan", "Pan"),
-            ("PositionTilt", "Tilt"),
-            ("Speed", "Speed"),
-            ("Color", "Colour"),
-            ("Gobo", "Gobo"),
-            ("Shutter", "Shutter"),
-            ("Beam", "Beam"),
-            ("Prism", "Prism"),
-        ]
-        .into_iter()
-        .find_map(|(prefix, group)| stem.starts_with(prefix).then_some(group)),
-    }
 }
 
 /// Coarse index to fine index. Only a fine that claims a coarse removes it from later choices.

@@ -21,3 +21,4 @@ the Apache License 2.0 (`COPYING` in the repository root, copied here as
 | `Lanta-Fireball-P64s.qxf` | Lanta | a name with a longer word than the query, for search |
 | `American-DJ-Ultra-Bar-6.qxf` | American_DJ | a name one typo from the query, for search |
 | `Shehds-LED-Spot-100W.qxf` | Shehds | a spot: strobe in hertz, rotation, prism, gobo pictures and shake, directions, pan and tilt in degrees. Commit `80856c2ce20794709ef7f8f0c784a3105c99f327` |
+| `Eurolite-LED-IP-PIX-Strobe-Frost.qxf` | Eurolite | a mode whose last head names a channel past the mode ("32 Channel", line 475): that mode is refused, the others read. Commit `01377699e1ac80d0cb65f4d48c653a96cb0c5cde` |

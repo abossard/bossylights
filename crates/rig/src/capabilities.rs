@@ -392,21 +392,18 @@ fn turns_the_macro_off(range: &Range) -> bool {
         &["not", "functional"],
         &["inactive"],
     ];
-    const DARK: [&str; 4] = ["black", "blackout", "led", "leds"];
     const SLOTS: [&str; 3] = ["color", "colour", "macro"];
-    let label = range.label.to_ascii_lowercase();
-    let words: Vec<&str> = label
-        .split(|c: char| !c.is_ascii_alphanumeric())
-        .filter(|word| !word.is_empty())
-        .collect();
+    let words = range.words();
     let says = |phrase: &[&str]| words.windows(phrase.len()).any(|seen| seen == phrase);
     let names_a_slot = words.windows(2).any(|pair| match pair {
-        [word, number] => SLOTS.contains(word) && number.bytes().all(|b| b.is_ascii_digit()),
+        [word, number] => {
+            SLOTS.contains(&word.as_str()) && number.bytes().all(|b| b.is_ascii_digit())
+        }
         _ => false,
     });
     range.min == 0
-        && !label.contains('/')
-        && !words.iter().any(|word| DARK.contains(word))
+        && !range.label.contains('/')
+        && !range.names_black_or_leds()
         && !names_a_slot
         && OFF.iter().any(|phrase| says(phrase))
 }

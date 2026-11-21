@@ -109,6 +109,113 @@ async fn ask(socket: &mut Socket, request: &Value) -> Value {
     }
 }
 
+/// The replies to patching each of `modes` (by name, at addresses 1, 2, ...) from files
+/// `mixed.qxf`, then `twin.qxf`, each of maker Example and model Mixed, whose modes are
+/// `files`, then the Failures.
+async fn patch_each(case: usize, files: &[String], modes: &[&str]) -> (Vec<Value>, Value) {
+    let folder =
+        Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("mixed-{}-{case}", process::id()));
+    fs::create_dir_all(&folder).unwrap();
+    for (name, xml) in ["mixed.qxf", "twin.qxf"].into_iter().zip(files) {
+        fs::write(
+            folder.join(name),
+            format!(
+                "<FixtureDefinition>\n <Manufacturer>Example</Manufacturer><Model>Mixed</Model><Type>Color Changer</Type>\n <Channel Name=\"Red\" Preset=\"IntensityRed\"/>{xml}\n</FixtureDefinition>"
+            ),
+        )
+        .unwrap();
+    }
+    let (_running, mut socket) = engine(&["--fixtures", folder.to_str().unwrap()]).await;
+    read(&mut socket).await;
+    fs::remove_dir_all(folder).unwrap();
+    let mut replies = Vec::new();
+    for (mode, address) in modes.iter().zip(1..) {
+        let patch = json!({"Send": {"command": {"Patch": {
+            "name": mode, "maker": "Example", "model": "Mixed", "mode": mode,
+            "at": {"universe": 1, "address": address}
+        }}}});
+        replies.push(ask(&mut socket, &patch).await);
+    }
+    let failures = ask(&mut socket, &json!("Failures")).await;
+    (replies, failures["Failures"]["failures"].clone())
+}
+
+/// The files' modes, the modes patched, each reply, the Failures rows (file, line, problem).
+type MixedCase<'a> = (
+    Vec<String>,
+    Vec<&'a str>,
+    Vec<Value>,
+    Vec<(&'a str, Option<u32>, &'a str)>,
+);
+
+// the files' modes, the modes patched, each reply, the Failures rows
+#[tokio::test]
+async fn a_refused_mode_is_listed_and_the_files_other_modes_patch() {
+    let mode = |name: &str, head: &str| {
+        format!(
+            "\n <Mode Name=\"{name}\"><Channel Number=\"0\">Red</Channel><Head><Channel>{head}</Channel></Head></Mode>"
+        )
+    };
+    let good = "\n <Mode Name=\"Good\"><Channel Number=\"0\">Red</Channel></Mode>";
+    let patched = json!({"Patched": {"fixture": 1}});
+    let refused = |reason: &str| json!({"Refused": {"reason": reason}});
+    let past = "mode \"Broken\": head 0 names channel 1, the mode has 1";
+    let cases: [MixedCase; 5] = [
+        (
+            vec![format!("{}{good}", mode("Broken", "1"))],
+            vec!["Broken", "Good"],
+            vec![refused("NoSuchMode"), patched.clone()],
+            vec![("mixed.qxf", Some(4), past)],
+        ),
+        (
+            vec![format!("{}{good}", mode("Broken", "bad"))],
+            vec!["Broken", "Good"],
+            vec![refused("NoSuchMode"), patched.clone()],
+            vec![(
+                "mixed.qxf",
+                Some(4),
+                "mode \"Broken\": Head channel=\"bad\" is not a number in range",
+            )],
+        ),
+        (
+            vec![format!("{}{}", mode("Broken", "1"), mode("Also", "1"))],
+            vec!["Broken"],
+            vec![refused("NoSuchFixture")],
+            vec![
+                ("mixed.qxf", Some(4), past),
+                (
+                    "mixed.qxf",
+                    Some(5),
+                    "mode \"Also\": head 0 names channel 1, the mode has 1",
+                ),
+            ],
+        ),
+        (
+            vec![String::new()],
+            vec!["Good"],
+            vec![refused("NoSuchFixture")],
+            vec![("mixed.qxf", Some(1), "the file has no <Mode>")],
+        ),
+        // a second file of the same maker and model stays off the shelf, its refused mode listed
+        (
+            vec![good.to_string(), format!("{good}{}", mode("Broken", "1"))],
+            vec!["Good", "Broken"],
+            vec![patched, refused("NoSuchMode")],
+            vec![
+                ("twin.qxf", None, "the same maker and model as mixed.qxf"),
+                ("twin.qxf", Some(5), past),
+            ],
+        ),
+    ];
+    for (case, (files, modes, replies, rows)) in cases.into_iter().enumerate() {
+        let rows: Vec<Value> = (rows.into_iter())
+            .map(|(file, line, problem)| json!({"file": file, "line": line, "problem": problem}))
+            .collect();
+        let answer = patch_each(case, &files, &modes).await;
+        assert_eq!(answer, (replies, Value::from(rows)), "{files:?}");
+    }
+}
+
 #[tokio::test]
 async fn the_state_shows_how_far_the_library_is_read() {
     let folder = folder();
@@ -121,7 +228,7 @@ async fn the_state_shows_how_far_the_library_is_read() {
         ),
         (
             vec!["--fixtures", folder.to_str().unwrap()],
-            json!({"Read": {"read": 10, "failed": 1}}),
+            json!({"Read": {"read": 11, "failed": 2}}),
         ),
     ];
     for (args, expected) in cases {
@@ -157,11 +264,18 @@ async fn the_library_answers_search_fixture_and_failures() {
             {"name": "White", "function": "White"},
         ],
     });
-    let failure = json!({
-        "file": "Broken/broken.qxf",
-        "line": 1,
-        "problem": "not valid xml: the root node was opened but never closed",
-    });
+    let failures = json!([
+        {
+            "file": "Broken/broken.qxf",
+            "line": 1,
+            "problem": "not valid xml: the root node was opened but never closed",
+        },
+        {
+            "file": "Eurolite-LED-IP-PIX-Strobe-Frost.qxf",
+            "line": 475,
+            "problem": "mode \"32 Channel\": head 11 names channel 32, the mode has 32",
+        },
+    ]);
     // (request, where in the answer, expected)
     let cases: [(Value, &str, Value); 6] = [
         (
@@ -184,11 +298,11 @@ async fn the_library_answers_search_fixture_and_failures() {
             "",
             json!({"Refused": {"reason": "NoSuchFixture"}}),
         ),
-        (json!("Failures"), "/Failures/failures", json!([failure])),
+        (json!("Failures"), "/Failures/failures", failures),
         (
             json!("Query"),
             "/Picture/library",
-            json!({"Read": {"read": 10, "failed": 1}}),
+            json!({"Read": {"read": 11, "failed": 2}}),
         ),
     ];
     for (request, pointer, expected) in cases {

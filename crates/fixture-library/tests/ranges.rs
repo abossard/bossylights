@@ -377,3 +377,34 @@ fn a_channel_is_closed_at_the_first_range_marked_closed() {
         assert_eq!(only_channel(&channel).closed(), closed, "{name}");
     }
 }
+
+// a label from QLC+ files, whether it says no light comes out, whether it names black or the LEDs
+#[test]
+fn a_label_says_dark_or_names_black_by_its_words() {
+    let cases = [
+        ("Dark", true, false),
+        ("Closed", true, false),
+        ("Shutter closed", true, false),
+        ("Blackout", true, true),
+        ("Black out", true, true),
+        ("Lamp off", true, false),
+        ("Laser off", true, false),
+        ("All LEDs off", true, true),
+        ("LEDs off (blackout)", true, true),
+        ("Black", false, true),
+        ("Strobe off", false, false),
+        ("Shutter open", false, false),
+        ("Open", false, false),
+    ];
+    for (label, dark, black) in cases {
+        let channel = only_channel(&format!(
+            r#"<Channel Name="C"><Group Byte="0">Shutter</Group><Capability Min="0" Max="255">{label}</Capability></Channel>"#
+        ));
+        let range = &channel.ranges[0];
+        assert_eq!(
+            (range.says_dark(), range.names_black_or_leds()),
+            (dark, black),
+            "{label}"
+        );
+    }
+}

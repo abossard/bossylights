@@ -1,7 +1,7 @@
 //! Bytes of a QLC+ `.qxf` file to a `Fixture`. All of the XML walking lives here.
 
 use crate::capability::{self, Said};
-use crate::error::{Error, LeftOut, Problem, Warning};
+use crate::error::{Error, LeftOut, Problem, Refused, Warning};
 use crate::function::{colour_of, direction_of, function_of};
 use crate::model::{Byte, Channel, Declared, Degrees, Dimming, Fixture, Kind, Layout, Mode, Range};
 use alloc::collections::BTreeMap;
@@ -92,15 +92,38 @@ fn read<'a>(document: &'a Document<'a>) -> Result<Fixture, Failure<'a>> {
         .filter(|n| n.has_tag_name("Channel"))
         .map(channel)
         .collect::<Result<Vec<_>, _>>()?;
-    let (mut modes, mut warnings) = (Vec::new(), Vec::new());
-    for node in root.children().filter(|n| n.has_tag_name("Mode")) {
-        modes.push(mode(node, root, &channels, &kind, &mut warnings)?);
+    // Each mode is read on its own: one that cannot be used is refused, the others stay.
+    let (mut modes, mut refused, mut warnings) = (Vec::new(), Vec::new(), Vec::new());
+    let mut first_refused = None;
+    let nodes: Vec<_> = root.children().filter(|n| n.has_tag_name("Mode")).collect();
+    for &node in &nodes {
+        match mode(node, root, &channels, &kind) {
+            Ok((mode, said)) => {
+                modes.push(mode);
+                warnings.extend(said);
+            }
+            Err((at, problem)) => {
+                first_refused.get_or_insert(at);
+                refused.push(Refused {
+                    mode: node.attribute("Name").unwrap_or_default().to_string(),
+                    line: line_of(at),
+                    problem,
+                });
+            }
+        }
+    }
+    if nodes.is_empty() {
+        return Err((root, Problem::NoMode));
+    }
+    if modes.is_empty() {
+        return Err((first_refused.unwrap_or(root), Problem::NoModeKept(refused)));
     }
     Ok(Fixture {
         maker,
         model,
         kind,
         modes,
+        refused,
         warnings,
     })
 }
@@ -225,15 +248,15 @@ fn range<'a>(node: Node<'a, 'a>) -> Result<Range, Failure<'a>> {
     })
 }
 
-/// A mode: its channels by number, its pixels (`Head`s) and its layout. What does not fit
-/// is left out and said in `warnings`.
+/// A mode: its channels by number, its pixels (`Head`s) and its layout, and the warnings
+/// on what was left out. A problem anywhere in it refuses the whole mode.
 fn mode<'a>(
     node: Node<'a, 'a>,
     root: Node<'a, 'a>,
     defined: &[Channel],
     kind: &Kind,
-    warnings: &mut Vec<Warning>,
-) -> Result<Mode, Failure<'a>> {
+) -> Result<(Mode, Vec<Warning>), Failure<'a>> {
+    let mut warnings = Vec::new();
     let name = node.attribute("Name").unwrap_or_default().to_string();
     let mut by_number = BTreeMap::new();
     for entry in node.children().filter(|n| n.has_tag_name("Channel")) {
@@ -245,10 +268,11 @@ fn mode<'a>(
             .find(|c| c.name == wanted)
             .or_else(|| defined.iter().find(|c| c.name.trim() == wanted.trim()))
             .ok_or_else(|| (entry, Problem::UnknownChannel(wanted.trim().to_string())))?;
-        let acts_on = entry
-            .attribute("ActsOn")
-            .and_then(|s| s.trim().parse().ok());
-        if by_number.insert(number, (found, acts_on)).is_some() {
+        let acts_on: Option<u16> = match entry.attribute("ActsOn") {
+            Some(_) => Some(self::number(entry, "ActsOn")?),
+            None => None,
+        };
+        if by_number.insert(number, (found, acts_on, entry)).is_some() {
             return Err((entry, Problem::DuplicateNumber(number)));
         }
     }
@@ -270,9 +294,20 @@ fn mode<'a>(
             .unwrap_or(node);
         return Err((entry, Problem::SkippedNumber(number)));
     }
+    let count = by_number.len();
+    if let Some((_, (_, Some(channel), entry))) = by_number
+        .iter()
+        .find(|(_, (_, acts_on, _))| acts_on.is_some_and(|on| usize::from(on) >= count))
+    {
+        let past = Problem::ActsOnPastEnd {
+            channel: *channel,
+            channels: count,
+        };
+        return Err((*entry, past));
+    }
     let mut channels: Vec<_> = by_number
         .into_values()
-        .map(|(definition, acts_on)| {
+        .map(|(definition, acts_on, _)| {
             let mut channel = definition.clone();
             channel.declared.acts_on = acts_on;
             channel
@@ -294,20 +329,18 @@ fn mode<'a>(
             .filter(|n| n.has_tag_name("Channel"))
             .map(|n| head_channel(n).map(|number| (n, number)))
             .collect::<Result<Vec<_>, _>>()?;
-        match numbers
+        if let Some((n, channel)) = numbers
             .iter()
             .find(|(_, number)| usize::from(*number) >= channels.len())
         {
-            Some((n, channel)) => warnings.push(warn(
-                *n,
-                LeftOut::Head {
-                    head,
-                    channel: *channel,
-                    channels: channels.len(),
-                },
-            )),
-            None => pixels.push(numbers.into_iter().map(|(_, number)| number).collect()),
+            let past = Problem::HeadPastEnd {
+                head,
+                channel: *channel,
+                channels: channels.len(),
+            };
+            return Err((*n, past));
         }
+        pixels.push(numbers.into_iter().map(|(_, number)| number).collect());
     }
     set_dimming(kind, &mut channels, &pixels);
     let found = layout_in(node).or_else(|| {
@@ -334,13 +367,17 @@ fn mode<'a>(
         Some((layout, _)) => Some(layout),
         None => None,
     };
-    Ok(Mode {
-        name,
-        channels,
-        pixels,
-        layout,
-        degrees: degrees_of(node, root)?,
-    })
+    let degrees = degrees_of(node, root)?;
+    Ok((
+        Mode {
+            name,
+            channels,
+            pixels,
+            layout,
+            degrees,
+        },
+        warnings,
+    ))
 }
 
 /// On fog fixtures a plain dimmer controls light when its head declares an emitter.

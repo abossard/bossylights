@@ -65,6 +65,36 @@ fn fine(preset: &str) -> fixture_library::Channel {
     declared(Some(&format!("{preset}Fine")), None, Byte::Fine)
 }
 
+#[test]
+fn a_broken_acts_on_does_not_guess_a_pair_from_adjacency() {
+    let cases = [
+        ("", true),
+        (r#"ActsOn="0""#, true),
+        (r#"ActsOn="9""#, false),
+        (r#"ActsOn="not a channel number""#, false),
+    ];
+    let actual: Vec<_> = cases
+        .iter()
+        .map(|&(attribute, _)| {
+            let xml = format!(
+                r#"<FixtureDefinition><Manufacturer>A</Manufacturer><Model>M</Model><Type>Other</Type>
+                   <Channel Name="C"><Group Byte="0">Pan</Group></Channel>
+                   <Channel Name="F"><Group Byte="1">Pan</Group></Channel>
+                   <Mode Name="M">
+                     <Channel Number="0">C</Channel><Channel Number="1" {attribute}>F</Channel>
+                   </Mode></FixtureDefinition>"#
+            );
+            let paired = fixture_library::parse("pair.qxf", xml.as_bytes()).is_ok_and(|fixture| {
+                let mode = fixture.modes.first().expect("one usable mode");
+                let rigged = lower(mode, 0, SPACE).unwrap();
+                !rigged.pairs.is_empty()
+            });
+            (attribute, paired)
+        })
+        .collect();
+    assert_eq!(actual, cases);
+}
+
 fn reverse_dimmer() -> fixture_library::Channel {
     fixture_library::Channel {
         direction: Some(Direction::Down),

@@ -57,44 +57,6 @@ fn what_does_not_fit_is_left_out_with_a_warning() {
             vec![],
         ),
         (
-            "a head names a channel past the end: that head goes",
-            definition(3, &[&[0, 1], &[1, 3]], "", ""),
-            vec![vec![0, 1]],
-            None,
-            vec![warning(
-                8,
-                LeftOut::Head {
-                    head: 1,
-                    channel: 3,
-                    channels: 3,
-                },
-            )],
-        ),
-        (
-            "two heads past the end",
-            definition(1, &[&[1], &[0], &[2]], "", ""),
-            vec![vec![0]],
-            None,
-            vec![
-                warning(
-                    5,
-                    LeftOut::Head {
-                        head: 0,
-                        channel: 1,
-                        channels: 1,
-                    },
-                ),
-                warning(
-                    7,
-                    LeftOut::Head {
-                        head: 2,
-                        channel: 2,
-                        channels: 1,
-                    },
-                ),
-            ],
-        ),
-        (
             "the mode's layout has a cell too many",
             definition(2, &[&[0], &[1]], &layout(3, 1), ""),
             vec![vec![0], vec![1]],
@@ -121,20 +83,6 @@ fn what_does_not_fit_is_left_out_with_a_warning() {
             )],
         ),
         (
-            "a head left out, then the layout counts the heads kept",
-            definition(2, &[&[0], &[1], &[2]], &layout(2, 1), ""),
-            vec![vec![0], vec![1]],
-            Some(grid(2, 1)),
-            vec![warning(
-                8,
-                LeftOut::Head {
-                    head: 2,
-                    channel: 2,
-                    channels: 2,
-                },
-            )],
-        ),
-        (
             "no heads: the layout is not checked",
             definition(1, &[], "", &layout(1, 1)),
             vec![],
@@ -154,29 +102,16 @@ fn what_does_not_fit_is_left_out_with_a_warning() {
 // a warning, what it says
 #[test]
 fn a_warning_says_the_mode_the_line_and_why() {
-    let cases = [
-        (
-            warning(
-                279,
-                LeftOut::Head {
-                    head: 10,
-                    channel: 32,
-                    channels: 32,
-                },
-            ),
-            "mode \"M\": line 279: head 10 names channel 32, the mode has 32: the head is left out",
+    let cases = [(
+        warning(
+            12,
+            LeftOut::Layout {
+                layout: grid(10, 4),
+                heads: 10,
+            },
         ),
-        (
-            warning(
-                12,
-                LeftOut::Layout {
-                    layout: grid(10, 4),
-                    heads: 10,
-                },
-            ),
-            "mode \"M\": line 12: the layout is 10 by 4, the mode has 10 heads: the layout is left out",
-        ),
-    ];
+        "mode \"M\": line 12: the layout is 10 by 4, the mode has 10 heads: the layout is left out",
+    )];
     for (warning, said) in cases {
         assert_eq!(warning.to_string(), said);
     }

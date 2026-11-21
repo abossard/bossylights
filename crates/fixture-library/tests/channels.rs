@@ -6,7 +6,7 @@ use Function::{
     Green, Hue, Indigo, Iris, Lightness, Lime, Magenta, NoFunction, Other, Pan, Prism, Red,
     Saturation, Shutter, Speed, Strobe, Tilt, Uv, Value, White, Yellow, Zoom,
 };
-use fixture_library::{Byte, Channel, Direction, Function, parse};
+use fixture_library::{Byte, Channel, Direction, Function, Problem, parse};
 
 fn definition(channel: &str, kind: &str) -> Vec<u8> {
     let name = channel
@@ -442,15 +442,28 @@ fn dimmer_roles_come_from_the_channels_in_each_mode() {
     }
 }
 
+// ActsOn as written, what the mode reads: the channel it names, or why the mode is refused
 #[test]
-fn only_channel_numbers_are_read_as_acts_on() {
+fn an_acts_on_names_a_channel_of_its_mode_or_the_mode_is_refused() {
+    let unreadable = |text: &str| {
+        Err(Problem::BadNumber {
+            what: "ActsOn",
+            text: text.into(),
+        })
+    };
     for (target, expected) in [
-        (" 0 ", Some(0)),
-        ("65535", Some(u16::MAX)),
-        ("65536", None),
-        ("-1", None),
-        ("Pump", None),
-        ("", None),
+        (" 0 ", Ok(Some(0))),
+        (
+            "65535",
+            Err(Problem::ActsOnPastEnd {
+                channel: u16::MAX,
+                channels: 1,
+            }),
+        ),
+        ("65536", unreadable("65536")),
+        ("-1", unreadable("-1")),
+        ("Pump", unreadable("Pump")),
+        ("", unreadable("")),
     ] {
         let xml = format!(
             r#"<FixtureDefinition><Manufacturer>A</Manufacturer><Model>M</Model><Type>Other</Type>
@@ -458,11 +471,16 @@ fn only_channel_numbers_are_read_as_acts_on() {
             <Mode Name="One"><Channel Number="0" ActsOn="{target}">Level</Channel></Mode>
             </FixtureDefinition>"#
         );
-        let fixture = parse("number.qxf", xml.as_bytes()).unwrap();
-        assert_eq!(
-            fixture.modes[0].channels[0].declared.acts_on, expected,
-            "{target}"
-        );
+        let read = match parse("number.qxf", xml.as_bytes()) {
+            Ok(fixture) => Ok(fixture.modes[0].channels[0].declared.acts_on),
+            Err(error) => {
+                let Problem::NoModeKept(refused) = error.problem else {
+                    panic!("{target}: {error}");
+                };
+                Err(refused[0].problem.clone())
+            }
+        };
+        assert_eq!(read, expected, "{target}");
     }
 }
 

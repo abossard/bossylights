@@ -1163,13 +1163,13 @@ fn a_fine_never_joins_a_coarse_of_another_preset() {
 fn acts_on_decides_before_any_other_evidence() {
     // (ActsOn of fine 1, ActsOn of fine 2, the pairs as (coarse, fine))
     type Case<'a> = (&'a str, &'a str, &'a [(u32, u32)]);
-    let cases: [Case; 4] = [
+    // An ActsOn past the mode refuses the mode: fixture-library's `modes` test.
+    let cases: [Case; 3] = [
         ("", "", &[(0, 1)]),
         // fine 2 names the dimmer, so the fine right after it stays apart
         ("", r#" ActsOn="0""#, &[(0, 2)]),
         // a fine that names a channel it may not take stays apart, even with a coarse at hand
         (r#" ActsOn="2""#, "", &[]),
-        (r#" ActsOn="7""#, "", &[]),
     ];
     let mut wrong = Vec::new();
     for (first, second, expected) in cases {

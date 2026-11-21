@@ -154,8 +154,8 @@ A target is `{"Fixture": {"fixture": 1}}` (all its lights), `{"Light": {"light":
 |---|---|
 | Start | `npm run engine -- --fixtures <folder>`: every `.qxf` under the folder, read on a thread of its own while the engine runs |
 | Where definitions come from | [QLC+](https://github.com/mcallegari/qlcplus), `resources/fixtures/`, Apache-2.0. Not shipped with the app yet: point `--fixtures` at a QLC+ checkout |
-| State | `library` in `Picture` and `Changed`: `NoFolder`, `Reading`, `Read { read, failed }`, `CannotOpen` |
-| Requests | `Search { text }`: best matches, each mode with its channel count. `Fixture { maker, model }`: each mode's channels by name and function. `Failures`: each file that could not be read, its line and why. A broken file never stops the engine |
+| State | `library` in `Picture` and `Changed`: `NoFolder`, `Reading`, `Read { read, failed }`, `CannotOpen`. `read` counts files on the shelf; `failed` counts rows of `Failures`: a file, or one refused mode |
+| Requests | `Search { text }`: best matches, each mode with its channel count. `Fixture { maker, model }`: each mode's channels by name and function. `Failures`: each file that could not be read, and each refused mode (`mode "…": why`), its line and why. A mode with a problem inside it is refused and the file's other modes are read (owner decision Q18); a file with no mode left is not read. A broken file never stops the engine |
 
 ## Show file
 

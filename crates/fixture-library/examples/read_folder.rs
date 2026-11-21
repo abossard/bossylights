@@ -35,6 +35,7 @@ fn main() {
     }
     paths.sort();
     let (mut read, mut failures, mut warnings) = (Vec::new(), Vec::new(), Vec::new());
+    let mut refused = Vec::new();
     for path in &paths {
         let name = path
             .strip_prefix(&folder)
@@ -44,6 +45,7 @@ fn main() {
         match fs::read(path) {
             Ok(bytes) => match parse(&name, &bytes) {
                 Ok(fixture) => {
+                    refused.extend(fixture.refused.iter().map(|r| format!("{name}: {r}")));
                     warnings.extend(fixture.warnings.iter().map(|w| format!("{name}: {w}")));
                     read.push(fixture);
                 }
@@ -68,6 +70,13 @@ fn main() {
         for (problem, count) in why {
             println!("{count:>5}  {problem}");
         }
+    }
+    println!(
+        "\n{} modes refused, the file's other modes read",
+        refused.len()
+    );
+    for mode in &refused {
+        println!("{mode}");
     }
     println!("\n{} warnings: left out, the rest read", warnings.len());
     for warning in &warnings {

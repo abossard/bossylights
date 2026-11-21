@@ -1,4 +1,4 @@
-use crate::error::Warning;
+use crate::error::{Refused, Warning};
 use alloc::string::String;
 use alloc::vec::Vec;
 use serde::{Deserialize, Serialize};
@@ -9,7 +9,10 @@ pub struct Fixture {
     pub maker: String,
     pub model: String,
     pub kind: Kind,
+    /// The modes that can be used. Never empty: a file with none is an error.
     pub modes: Vec<Mode>,
+    /// The modes that cannot be used, each with why, in the file's order.
+    pub refused: Vec<Refused>,
     /// What was left out so the rest could be read. Empty for a definition without faults.
     pub warnings: Vec<Warning>,
 }

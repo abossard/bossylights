@@ -46,7 +46,7 @@ mod open;
 mod read;
 mod search;
 
-pub use error::{Error, LeftOut, Problem, Warning};
+pub use error::{Error, LeftOut, Problem, Refused, Warning};
 pub use model::{
     Byte, Channel, Degrees, Direction, Does, Fixture, Function, Hertz, Kind, Layout, Mode, Pace,
     Range, Rgb, Turn,
