@@ -201,7 +201,9 @@ fn every_rate_hears_the_same_beats() {
         (48_000, 20 * MS, true),
     ];
     for &(rate, first, all_equal) in cases {
-        let events = feed(rate, 1, &clicks(rate, &steady(), 10_000), &[512]);
+        // blocks of 441 frames start on a whole nanosecond at each of these rates,
+        // so every block's own stamp is exact and the rates compare event for event
+        let events = feed(rate, 1, &clicks(rate, &steady(), 10_000), &[441]);
         assert_eq!(onsets(&events), onsets(&reference), "{rate} Hz");
         assert_eq!(beats(&events), beats(&reference), "{rate} Hz");
         assert_eq!(readings(&events)[0].0, first, "{rate} Hz");
@@ -425,8 +427,13 @@ fn a_gap_restarts_the_tracker() {
     ];
     for (arrival, gap) in cases {
         let (events, before) = with_arrival(arrival);
-        if !gap {
-            assert_eq!(events, reference, "{arrival:?}: the sample clock is kept");
+        if let (false, Arrival::Stamped(shift)) = (gap, arrival) {
+            assert_eq!(signal_changes(&events), signal_changes(&reference), "{arrival:?}: not a gap");
+            let follows: Vec<(u64, u8)> = onsets(&reference)
+                .into_iter()
+                .map(|(at, confidence)| if at < 5000 * MS { (at, confidence) } else { (at.checked_add_signed(shift).unwrap(), confidence) })
+                .collect();
+            assert_eq!(onsets(&events), follows, "{arrival:?}: times follow the block's own stamp");
             continue;
         }
         let after = &events[before..];

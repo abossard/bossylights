@@ -32,7 +32,7 @@ impl Gaps {
         let Some(median) = self.median_candidate() else {
             return Estimate::default();
         };
-        let inlier = |gap: &u64| is_candidate(gap) && within_five_percent(*gap, median);
+        let inlier = |gap: &u64| within_five_percent(*gap, median);
         let gaps = self.newest_first.iter().flatten();
         let kept = gaps.clone().count() as u64;
         let inliers = gaps.copied().filter(inlier);
@@ -41,7 +41,7 @@ impl Gaps {
             beats: inliers.count() as u64,
         };
         let mut confidence = (100 * tempo.beats / kept.max(4)) as u8;
-        if tempo.beats < 6 && reference.is_some_and(|last| near_half_or_double(median, last)) {
+        if tempo.beats < 6 && reference.is_some_and(|last| near_half_or_double(tempo, last)) {
             confidence = confidence.min(59);
         }
         Estimate {
@@ -60,8 +60,10 @@ fn within_five_percent(value: u64, target: u64) -> bool {
     value.abs_diff(target) <= target / 20
 }
 
-fn near_half_or_double(median: u64, reference: Tempo) -> bool {
-    // Compare whole spans so a fractional beat is never rounded.
-    let span = median * reference.beats;
-    within_five_percent(span, 2 * reference.span) || within_five_percent(2 * span, reference.span)
+fn near_half_or_double(candidate: Tempo, reference: Tempo) -> bool {
+    // Scale both periods to the same denominator to keep fractional beats exact.
+    let candidate_span = candidate.span * reference.beats;
+    let reference_span = reference.span * candidate.beats;
+    within_five_percent(candidate_span, 2 * reference_span)
+        || within_five_percent(2 * candidate_span, reference_span)
 }

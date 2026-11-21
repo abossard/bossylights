@@ -8,19 +8,24 @@ const MAX_STAMP_ERROR: u128 = 20_000_000;
 /// Follows one input. Block boundaries may fall anywhere within a hop.
 pub struct Tracker {
     format: Format,
-    anchor: Option<u64>,
-    next_frame: u64,
+    previous_block: Option<BlockTimes>,
     hop: Hop,
     history: HopHistory,
+    second_hop: bool,
     signal: Signal,
     onsets: Onsets,
+}
+
+struct BlockTimes {
+    first: u64,
+    end: u128,
 }
 
 #[derive(Default)]
 struct Hop {
     frames: u32,
     energy_sum: f64,
-    first_loud_frame: Option<u64>,
+    first_loud_at: Option<u64>,
 }
 
 #[derive(Default)]
@@ -36,13 +41,13 @@ impl HopHistory {
         self.len = (self.len + 1).min(self.newest_first.len());
     }
 
-    fn lower_median(&self) -> f64 {
+    fn median(&self) -> f64 {
         let mut sorted = self.newest_first;
         let hops = sorted.get_mut(..self.len).unwrap_or_default();
         hops.sort_unstable_by(f64::total_cmp);
         hops.get(hops.len().saturating_sub(1) / 2)
-            .copied()
-            .unwrap_or(0.0)
+            .zip(hops.get(hops.len() / 2))
+            .map_or(0.0, |(lower, upper)| (lower + upper) / 2.0)
     }
 }
 
@@ -59,10 +64,10 @@ impl Tracker {
     pub fn new(format: Format) -> Self {
         Self {
             format,
-            anchor: None,
-            next_frame: 0,
+            previous_block: None,
             hop: Hop::default(),
             history: HopHistory::default(),
+            second_hop: false,
             signal: Signal::None,
             onsets: Onsets::default(),
         }
@@ -85,7 +90,12 @@ impl Tracker {
         out: &mut Vec<Event>,
     ) -> Result<(), PartialFrame> {
         match samples {
-            Samples::F32(block) => self.push_frames(first, block, f64::from, out),
+            Samples::F32(block) => self.push_frames(
+                first,
+                block,
+                |x| if x.is_finite() { f64::from(x) } else { 0.0 },
+                out,
+            ),
             Samples::I16(block) => self.push_frames(first, block, |x| f64::from(x) / 32_768.0, out),
             Samples::U16(block) => {
                 self.push_frames(first, block, |x| (f64::from(x) - 32_768.0) / 32_768.0, out)
@@ -110,60 +120,61 @@ impl Tracker {
         }
 
         let rate = self.format.rate;
-        if let Some(anchor) = self.anchor
-            && frame_time(anchor, self.next_frame, rate).abs_diff(u128::from(first))
-                > MAX_STAMP_ERROR
+        if let Some(previous) = &self.previous_block
+            && (first < previous.first
+                || previous.end.abs_diff(u128::from(first)) > MAX_STAMP_ERROR)
         {
             self.gap();
         }
-        let anchor = *self.anchor.get_or_insert(first);
+        self.previous_block = Some(BlockTimes {
+            first,
+            end: frame_time(first, frames.len(), rate),
+        });
+        // Preserve the full prediction above. Clamp only when reporting on the u64 clock.
+        let time_of = |index| u64::try_from(frame_time(first, index, rate)).unwrap_or(u64::MAX);
         let hop_size = (rate + 50) / 100;
-        for frame in frames {
+        for (index, frame) in frames.enumerate() {
             let energy = frame.iter().map(|&x| value(x).powi(2)).sum::<f64>() / f64::from(channels);
-            if energy >= MIN_ENERGY {
-                self.hop.first_loud_frame.get_or_insert(self.next_frame);
+            if energy > MIN_ENERGY {
+                self.hop.first_loud_at.get_or_insert_with(|| time_of(index));
             }
             self.hop.energy_sum += energy;
             self.hop.frames += 1;
-            self.next_frame += 1;
             if self.hop.frames == hop_size {
-                self.finish_hop(anchor, out);
+                self.finish_hop(time_of(index + 1), out);
             }
         }
         Ok(())
     }
 
-    fn finish_hop(&mut self, anchor: u64, out: &mut Vec<Event>) {
+    fn finish_hop(&mut self, end: u64, out: &mut Vec<Event>) {
         let hop = std::mem::take(&mut self.hop);
         let energy = hop.energy_sum / f64::from(hop.frames);
         let previous = self.history.newest_first[0];
-        // Clamp only when reporting on the u64 clock. Gap detection uses the full prediction.
-        let time_of =
-            |frame| u64::try_from(frame_time(anchor, frame, self.format.rate)).unwrap_or(u64::MAX);
-        let end = time_of(self.next_frame);
         let onset = hop
-            .first_loud_frame
+            .first_loud_at
             .filter(|_| {
                 energy >= MIN_ENERGY
-                    && energy - previous >= MIN_ENERGY.max(2.0 * self.history.lower_median())
+                    && energy - previous >= MIN_ENERGY.max(2.0 * self.history.median())
             })
-            .map(time_of)
             .filter(|&at| {
                 self.onsets
                     .last
-                    .is_none_or(|last| at - last >= MIN_ONSET_GAP)
+                    .is_none_or(|last| at.saturating_sub(last) >= MIN_ONSET_GAP)
             });
-        if let Some(at) = onset {
-            self.hear_onset(at, out);
-        } else if let Some(last) = self.onsets.last {
+        if let Some(last) = self.onsets.last {
+            // The silence ends at the onset itself, which can precede the hop's end.
             self.signal = self.signal.next(Step::Quiet {
-                since_onset: end - last,
+                since_onset: onset.unwrap_or(end).saturating_sub(last),
             });
             if self.signal == Signal::Lost {
                 self.onsets = Onsets::default();
             }
         }
-        if self.next_frame.is_multiple_of(2 * u64::from(hop.frames)) {
+        if let Some(at) = onset {
+            self.hear_onset(at, out);
+        }
+        if self.second_hop {
             let level = (100.0 * energy.max(previous).sqrt()).round().min(100.0) as u8;
             out.push(Event::Reading {
                 at: end,
@@ -173,6 +184,7 @@ impl Tracker {
                 tempo: self.onsets.estimate.tempo,
             });
         }
+        self.second_hop = !self.second_hop;
         self.history.push(energy);
     }
 
@@ -197,6 +209,6 @@ impl Tracker {
     }
 }
 
-fn frame_time(anchor: u64, frame: u64, rate: u32) -> u128 {
-    u128::from(anchor) + u128::from(frame) * 1_000_000_000 / u128::from(rate)
+fn frame_time(first: u64, index: usize, rate: u32) -> u128 {
+    u128::from(first) + index as u128 * 1_000_000_000 / u128::from(rate)
 }
