@@ -3,8 +3,8 @@
 //! move, and a change of the outputs. On a refusal nothing changes.
 
 use engine::{
-    ChannelNumbers, Color, Command, Device, Engine, Levels, Outcome, OutputKind, OutputNumber,
-    Rate, Refusal, RunNumbers, Sender, Universes,
+    ChannelNumbers, Color, Command, Device, Engine, Outcome, OutputKind, OutputNumber, Rate,
+    Refusal, RunNumbers, Sender, Universes,
 };
 use engine_core::Pixels;
 use std::net::{SocketAddr, UdpSocket};
@@ -13,7 +13,7 @@ use std::net::{SocketAddr, UdpSocket};
 struct Taker;
 
 impl Device for Taker {
-    fn take(&mut self, _: &[Levels]) -> Outcome {
+    fn take(&mut self, _: &[u8]) -> Outcome {
         Outcome::Accepted
     }
 }

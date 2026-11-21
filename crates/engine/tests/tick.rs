@@ -1,6 +1,6 @@
 mod mock;
 
-use engine::{Device, Engine, Levels, Outcome, OutputNumber, Rate, RunNumbers, Status, Universes};
+use engine::{Device, Engine, Outcome, OutputNumber, Rate, RunNumbers, Status, Universes};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::thread;
@@ -70,7 +70,7 @@ impl Scripted {
 }
 
 impl Device for Scripted {
-    fn take(&mut self, _: &[Levels]) -> Outcome {
+    fn take(&mut self, _: &[u8]) -> Outcome {
         loop {
             match self.does() {
                 Does::Takes => return Outcome::Accepted,

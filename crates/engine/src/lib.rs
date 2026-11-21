@@ -38,7 +38,8 @@ pub use engine_core::{
     ADDRESSES, API_VERSION, Adapter, BEAT, BestEffort, ChannelLevel, ChannelNumbers, Color,
     Command, Counters, Grouped, Levels, MAX_OUTPUTS, MAX_UNIVERSES, Member, MemberList, Members,
     Outcome, Output, OutputKind, OutputNumber, Patched, Priority, Project, ProjectOutput, Rate,
-    Refusal, Reply, Request, Run, RunNumbers, State, Status, Target, Text, Universes, changes,
+    Refusal, Reply, Request, RouteFault, Run, RunNumbers, Span, State, Status, Target, Text,
+    Universes, changes,
 };
 pub use engine_core::{
     AuthoredStep, Bpm, Brightness, GrabId, Light, ManualEnd, MixRules, OtherEnd, Palette, Pattern,
@@ -66,6 +67,7 @@ use rig::{PatchEffect, Whole};
 pub use outputs::Device;
 mod lane;
 use lane::Lane;
+pub use lane::Route;
 #[cfg(feature = "test-support")]
 pub use snapshot::timing::{Timing, Timings};
 use snapshot::{Hand, Reader};
@@ -161,7 +163,7 @@ pub struct Engine {
 pub struct Sender {
     /// `None` while an [`Opening`] has it: one device opens at a time.
     open: Option<Open>,
-    commands: rtrb::Producer<Sent>,
+    commands: CommandQueue,
     project: Project,
     /// The fixtures, their lights and writers. Shared with readers as it is: a change
     /// makes a new one.
@@ -191,7 +193,7 @@ pub struct Sender {
     shared: Arc<Shared>,
     free: Thread,
     clock: Clock,
-    /// The engine's universes: an output's frame boxes hold every one.
+    /// Bounds for devices brought through the attachment door.
     universes: Universes,
 }
 
@@ -216,6 +218,10 @@ pub struct Opening {
     free: Thread,
     /// The devices sent away before this one opens: a port they hold must be free.
     devices: u64,
+    route: Route,
+    clock: Clock,
+    /// A restart receives the original device from the free thread.
+    returning: Option<rtrb::Consumer<Box<dyn Device>>>,
 }
 
 /// What came of an [`Opening`]. It brings the `open` back.
@@ -225,7 +231,7 @@ pub struct Opened {
     kind: OutputKind,
     universes: Run,
     rate: Rate,
-    device: io::Result<Box<dyn Device>>,
+    lane: io::Result<Box<Lane>>,
 }
 
 /// A command, when it was sent, and what it brings.
@@ -235,11 +241,38 @@ struct Sent {
     brings: Brings,
 }
 
+/// While a restart owns the old device, keep one FIFO place for either its new
+/// lane or its removal. Single commands and multi-command edits share this limit.
+struct CommandQueue {
+    fifo: rtrb::Producer<Sent>,
+    reserved: bool,
+}
+
+impl CommandQueue {
+    fn slots(&self) -> usize {
+        self.fifo.slots().saturating_sub(usize::from(self.reserved))
+    }
+
+    fn write_chunk_uninit(
+        &mut self,
+        n: usize,
+    ) -> Result<rtrb::chunks::WriteChunkUninit<'_, Sent>, Refusal> {
+        if n > self.slots() {
+            return Err(Refusal::QueueFull);
+        }
+        self.fifo
+            .write_chunk_uninit(n)
+            .map_err(|_| Refusal::QueueFull)
+    }
+}
+
 /// What a command brings the tick thread, made before it is sent.
 enum Brings {
     Nothing,
     /// An opened device on its own thread, for `Attach`.
     Device(Box<Lane>),
+    /// Take the lane out of service and return its device through this slot.
+    HandBack(rtrb::Producer<Box<dyn Device>>),
     /// The writers of the patch, for `Writers`.
     Writers(Vec<Writer>),
     /// Some runs of a group in place, for `Runs`: nothing goes back.
@@ -379,26 +412,37 @@ impl Base {
     /// is where `Patch` looks up its fixture. Nothing is queued until it is admitted.
     pub fn prepare(&self, command: Command, library: &[Fixture]) -> Result<Prepared, Refusal> {
         let (project, effect) = self.project.update(ProjectEvent::Client(command))?;
-        if let Some(
-            ProjectEffect::Keep {
-                kind, universes, ..
+        // Check an output edit against the run it will actually install. The
+        // pending project stays conservative for other clients' patch edits.
+        let checked = match effect {
+            Some(
+                ProjectEffect::Open {
+                    output,
+                    kind,
+                    universes,
+                    ..
+                }
+                | ProjectEffect::Restart {
+                    output,
+                    kind,
+                    universes,
+                    ..
+                },
+            ) => {
+                outputs::limits(kind).check(universes)?;
+                Some(project.update(ProjectEvent::Opened { output, kind })?.0)
             }
-            | ProjectEffect::Open {
+            Some(ProjectEffect::Keep {
                 kind, universes, ..
-            },
-        ) = effect
-        {
-            outputs::limits(kind).check(universes)?;
-        }
-        // No patch where a fixture loses a channel: a change of the outputs that would
-        // leave one is refused.
-        if let Some(
-            ProjectEffect::Keep { .. }
-            | ProjectEffect::Open { .. }
-            | ProjectEffect::Send(EngineCommand::RemoveOutput { .. }),
-        ) = effect
-            && let Some((fixture, _)) = self.patch.unstreamed(&project)
-        {
+            }) => {
+                outputs::limits(kind).check(universes)?;
+                Some(project)
+            }
+            Some(ProjectEffect::Send(EngineCommand::RemoveOutput { .. })) => Some(project),
+            Some(ProjectEffect::Send(_) | ProjectEffect::Look(_) | ProjectEffect::Patch(_))
+            | None => None,
+        };
+        if let Some((fixture, _)) = checked.and_then(|p| self.patch.unstreamed(&p)) {
             return Err(Refusal::StreamsFixture { fixture });
         }
         let change = match effect {
@@ -459,12 +503,20 @@ impl Base {
                 universes,
                 rate: rate.unwrap_or(outputs::default_rate(kind)),
             }),
-            Some(ProjectEffect::Open {
-                output,
-                kind,
-                universes,
-                rate,
-            }) => Change::Open {
+            Some(
+                ProjectEffect::Open {
+                    output,
+                    kind,
+                    universes,
+                    rate,
+                }
+                | ProjectEffect::Restart {
+                    output,
+                    kind,
+                    universes,
+                    rate,
+                },
+            ) => Change::Open {
                 output,
                 kind,
                 universes,
@@ -731,7 +783,10 @@ impl Engine {
         let (tick, priority) = rt_thread::spawn("tick", move |priority| ticker.run(priority))?;
         let sender = Sender {
             open: Some(open),
-            commands,
+            commands: CommandQueue {
+                fifo: commands,
+                reserved: false,
+            },
             project: Project::new(universes),
             patch: Arc::new(Patch::new(
                 universes,
@@ -844,16 +899,42 @@ impl Sender {
                 kind,
                 universes,
                 rate,
-            } => Begun::Opening(Opening {
-                output,
-                kind,
-                universes,
-                rate,
-                open: self.open.take().ok_or(Refusal::Opening)?,
-                shared: Arc::clone(&self.shared),
-                free: self.free.clone(),
-                devices: self.devices,
-            }),
+            } => {
+                if self.open.is_none() {
+                    return Err(Refusal::Opening);
+                }
+                let route = Route::of_run(universes, outputs::limits(kind))
+                    .map_err(|_| Refusal::CannotOpen)?;
+                let returning = if project.restarting(output) {
+                    self.room(2, 1)?;
+                    let (slot, device) = rtrb::RingBuffer::new(1);
+                    self.push(
+                        EngineCommand::Attach {
+                            output,
+                            universes,
+                            rate,
+                        },
+                        Brings::HandBack(slot),
+                    )?;
+                    self.commands.reserved = true;
+                    Some(device)
+                } else {
+                    None
+                };
+                Begun::Opening(Opening {
+                    output,
+                    kind,
+                    universes,
+                    rate,
+                    open: self.open.take().ok_or(Refusal::Opening)?,
+                    shared: Arc::clone(&self.shared),
+                    free: self.free.clone(),
+                    devices: self.devices,
+                    clock: self.clock.clone(),
+                    route,
+                    returning,
+                })
+            }
             Change::Patch {
                 patch,
                 effects,
@@ -1338,33 +1419,34 @@ impl Sender {
             kind,
             universes,
             rate,
-            device,
+            lane,
         } = opened;
         self.open = Some(open);
-        let attach = EngineCommand::Attach {
-            output,
-            universes,
-            rate,
-        };
-        let sent = device
-            .and_then(|device| {
-                Lane::start(device, self.universes, self.clock.clone()).map(Box::new)
-            })
-            .map_err(|_| Refusal::CannotOpen)
-            .and_then(|lane| self.push(attach, Brings::Device(lane)));
+        self.commands.reserved = false;
+        let sent = lane.map_err(|_| Refusal::CannotOpen).and_then(|lane| {
+            self.push(
+                EngineCommand::Attach {
+                    output,
+                    universes,
+                    rate,
+                },
+                Brings::Device(lane),
+            )
+        });
         let event = match sent {
             Ok(()) => ProjectEvent::Opened { output, kind },
             Err(_) => ProjectEvent::OpenFailed { output },
         };
-        if let Ok((project, _)) = self.project.update(event) {
-            self.project = project;
+        let (project, effect) = self.project.update(event)?;
+        if let Some(ProjectEffect::Send(remove)) = effect {
+            // The restart reserved this place when it handed its device back.
+            self.push(remove, Brings::Nothing)?;
         }
+        self.project = project;
         sent
     }
 
-    /// Puts an opened device on the tick thread as `output`, in place of the one there:
-    /// a test's own device, whose kind the project does not know. Its counters start at
-    /// zero. `CannotOpen` when the system gives the device no thread.
+    /// Attaches a test device which takes every channel in the wire run.
     pub fn attach(
         &mut self,
         output: OutputNumber,
@@ -1372,21 +1454,63 @@ impl Sender {
         universes: Run,
         rate: Rate,
     ) -> Result<(), Refusal> {
-        let (project, _) = self
-            .project
-            .update(ProjectEvent::Attached { output, universes })?;
+        let route =
+            Route::of_run(universes, outputs::Limits::RAW).map_err(|_| Refusal::CannotOpen)?;
+        self.attach_device(
+            output,
+            device,
+            route,
+            rate,
+            ProjectEvent::Attached { output, universes },
+        )
+    }
+
+    /// Attaches a device with its validated route. The project shows the route bounds.
+    pub fn attach_route(
+        &mut self,
+        output: OutputNumber,
+        device: Box<dyn Device>,
+        route: Route,
+        rate: Rate,
+    ) -> Result<(), Refusal> {
+        let bounds = route.bounds();
+        self.attach_device(
+            output,
+            device,
+            route,
+            rate,
+            ProjectEvent::Routed { output, bounds },
+        )
+    }
+
+    fn attach_device(
+        &mut self,
+        output: OutputNumber,
+        device: Box<dyn Device>,
+        route: Route,
+        rate: Rate,
+        event: ProjectEvent,
+    ) -> Result<(), Refusal> {
+        let universes = route.bounds();
+        RunNumbers {
+            first: universes.first(),
+            count: universes.count(),
+        }
+        .check(self.universes)?;
+        let (project, _) = self.project.update(event)?;
         if let Some((fixture, _)) = self.patch.unstreamed(&project) {
             return Err(Refusal::StreamsFixture { fixture });
         }
-        let command = EngineCommand::Attach {
-            output,
-            universes,
-            rate,
-        };
-        let lane = Lane::start(device, self.universes, self.clock.clone())
-            .map(Box::new)
-            .map_err(|_| Refusal::CannotOpen)?;
-        self.push(command, Brings::Device(lane))?;
+        let lane =
+            Lane::start(device, route, self.clock.clone()).map_err(|_| Refusal::CannotOpen)?;
+        self.push(
+            EngineCommand::Attach {
+                output,
+                universes,
+                rate,
+            },
+            Brings::Device(Box::new(lane)),
+        )?;
         self.project = project;
         Ok(())
     }
@@ -1440,9 +1564,10 @@ impl Sender {
     fn push(&mut self, command: EngineCommand, brings: Brings) -> Result<(), Refusal> {
         // The output this command changes, and whether the device there goes back.
         let (changes, sends_back) = match command {
-            EngineCommand::Attach { output, .. } => {
-                (Some(output), matches!(brings, Brings::Device(_)))
-            }
+            EngineCommand::Attach { output, .. } => (
+                Some(output),
+                matches!(brings, Brings::Device(_) | Brings::HandBack(_)),
+            ),
             EngineCommand::RemoveOutput { output } => (Some(output), true),
             EngineCommand::Tick { .. }
             | EngineCommand::Handed { .. }
@@ -1471,8 +1596,10 @@ impl Sender {
         // its start on, so a release takes no more of the queue back: it needs only a
         // place in the command queue. (ReleaseAll and Rules: their plays go back through
         // `forget`, kept the same way.)
-        let device =
-            sends_back && changes.is_some_and(|output| self.project.output(output).is_some());
+        let device = sends_back
+            && changes.is_some_and(|output| {
+                self.project.output(output).is_some() && !self.project.restarting(output)
+            });
         let back = if let EngineCommand::Start { play, .. } = command {
             self.plays.get(play.slot()).is_some_and(Option::is_some)
         } else {
@@ -1487,14 +1614,12 @@ impl Sender {
         // one more box on its way back or held by the tick thread: all but a release
         let adds = back && !matches!(command, EngineCommand::Release { .. })
             || matches!(command, EngineCommand::Start { .. });
-        let held = self.plays.iter().flatten().count() as u64;
-        if adds && on_their_way(&self.shared, self.retired) + held >= RETIRED as u64 {
-            self.free.unpark();
+        if let Err(reason) = self.room(1, usize::from(adds)) {
             free_elsewhere(brings);
-            return Err(Refusal::QueueFull);
+            return Err(reason);
         }
         let at = self.clock.now();
-        if let Err(rtrb::PushError::Full(refused)) = self.commands.push(Sent {
+        if let Err(rtrb::PushError::Full(refused)) = self.commands.fifo.push(Sent {
             command,
             at,
             brings,
@@ -1588,17 +1713,23 @@ impl Opening {
             thread::sleep(Duration::from_millis(1));
         }
         // A panic in `open` is a failed open: the `open` comes back either way.
-        let kind = self.kind;
-        let open = &mut self.open;
-        let device = panic::catch_unwind(AssertUnwindSafe(|| open(kind)))
-            .unwrap_or_else(|_| Err(io::Error::other("opening the device panicked")));
+        let lane = panic::catch_unwind(AssertUnwindSafe(|| {
+            // A restart whose device did not come back in time opens a fresh one, so the
+            // output keeps streaming what the patch relies on.
+            let device = match self.returning.and_then(|mut slot| slot.pop().ok()) {
+                Some(device) => device,
+                None => (self.open)(self.kind)?,
+            };
+            Lane::start(device, self.route, self.clock).map(Box::new)
+        }))
+        .unwrap_or_else(|_| Err(io::Error::other("opening the output panicked")));
         Opened {
             open: self.open,
             output: self.output,
             kind: self.kind,
             universes: self.universes,
             rate: self.rate,
-            device,
+            lane,
         }
     }
 }
@@ -2015,7 +2146,7 @@ impl Ticker {
             }
             return;
         }
-        let (device, writers) = match brings {
+        let device = match brings {
             Brings::Plan(version) => {
                 let slot = version.play.slot();
                 if self
@@ -2032,9 +2163,34 @@ impl Ticker {
                 }
                 return;
             }
-            Brings::Nothing => (None, None),
-            Brings::Device(device) => (Some(device), None),
-            Brings::Writers(writers) => (None, Some(writers)),
+            Brings::Device(device) => Some(device),
+            Brings::HandBack(slot) => {
+                if let EngineCommand::Attach { output, .. } = command
+                    && let Some(Some(lane)) = self.devices.get_mut(output.slot())
+                {
+                    lane.hand_back(slot);
+                }
+                None
+            }
+            Brings::Nothing => {
+                if let EngineCommand::Attach {
+                    output, universes, ..
+                } = command
+                {
+                    if let Some(Some(lane)) = self.devices.get_mut(output.slot()) {
+                        lane.shift(universes.span(std::num::NonZeroU16::MIN).start);
+                    }
+                    self.carried.attached(output.slot(), true);
+                    self.now.attached(output.slot());
+                    return;
+                }
+                None
+            }
+            Brings::Writers(writers) => {
+                let old = std::mem::replace(&mut self.writers, writers);
+                let _ = self.retired.push(Retired::Writers(old));
+                return;
+            }
             Brings::Runs(runs) => {
                 if let EngineCommand::Runs { change } = command {
                     for run in runs.into_iter().flatten() {
@@ -2044,12 +2200,6 @@ impl Ticker {
                 return;
             }
         };
-        if let (EngineCommand::Writers, Some(writers)) = (command, writers) {
-            let old = std::mem::replace(&mut self.writers, writers);
-            // The queue has room for every box a wake can retire (see `start`).
-            let _ = self.retired.push(Retired::Writers(old));
-            return;
-        }
         let (EngineCommand::Attach { output, .. } | EngineCommand::RemoveOutput { output }) =
             command
         else {
@@ -2058,21 +2208,15 @@ impl Ticker {
         let Some(slot) = self.devices.get_mut(output.slot()) else {
             return;
         };
-        let keeps = matches!(command, EngineCommand::Attach { .. }) && device.is_none();
-        self.carried.attached(output.slot(), keeps);
-        let old = if keeps {
-            None
-        } else {
-            std::mem::replace(slot, device)
-        };
-        if let Some(old) = old {
+        self.carried.attached(output.slot(), false);
+        if let Some(old) = std::mem::replace(slot, device) {
             // The queue has room for every device a wake can retire (see `start`).
             let _ = self.retired.push(Retired::Device(old));
         }
         self.now.attached(output.slot());
     }
 
-    /// Hands a due output its run of universes, and when its next is due, on to its own
+    /// Gathers a due output's route, and when its next is due, on to its own
     /// thread. What comes of it is counted when its thread hands the box back ([`Ticker::back`]). With no spare
     /// box, the device is still on older frames: this one is dropped and counted now.
     fn serve(&mut self, number: OutputNumber) {
@@ -2095,7 +2239,7 @@ impl Ticker {
             Some(Some(handed)) => handed.due,
             _ => at,
         };
-        let frame = output.universes.of(self.channels.values());
+        let frame = self.channels.values();
         let prefix = lane::Prefix {
             presses: self.carried.presses.total,
             generation: self.now.generation(slot),
@@ -2112,7 +2256,7 @@ impl Ticker {
                 }
                 lane::Hand::Full => Some(Outcome::Dropped),
             },
-            _ => Some(Outcome::Failed),
+            _ => Some(Outcome::Dropped), // the device is returning for a restart
         };
         if let Some(outcome) = dropped {
             self.trace.came(number, outcome, output.due);
@@ -2206,11 +2350,11 @@ mod tests {
         use engine_core::health::{HealthSample, press_target};
 
         // The outcome is selected by the DMX byte that actually reaches the device.
-        struct ByLevel;
+        pub(super) struct ByLevel;
 
         impl Device for ByLevel {
-            fn take(&mut self, frame: &[Levels]) -> Outcome {
-                match frame.first().and_then(|levels| levels.0.first()) {
+            fn take(&mut self, frame: &[u8]) -> Outcome {
+                match frame.first() {
                     Some(253) => Outcome::Dropped,
                     Some(254) => Outcome::Failed,
                     _ => Outcome::Accepted,
@@ -2389,8 +2533,8 @@ mod tests {
         fn attaching_another_output_is_not_a_press() {
             struct AcceptLevel(u8);
             impl Device for AcceptLevel {
-                fn take(&mut self, frame: &[Levels]) -> Outcome {
-                    if frame.first().and_then(|levels| levels.0.first()) == Some(&self.0) {
+                fn take(&mut self, frame: &[u8]) -> Outcome {
+                    if frame.first() == Some(&self.0) {
                         Outcome::Accepted
                     } else {
                         Outcome::Failed
@@ -2554,8 +2698,8 @@ mod tests {
             }
 
             impl Device for HoldFirst {
-                fn take(&mut self, frame: &[Levels]) -> Outcome {
-                    if frame.first().and_then(|levels| levels.0.first()) == Some(&91) {
+                fn take(&mut self, frame: &[u8]) -> Outcome {
+                    if frame.first() == Some(&91) {
                         self.entered.store(true, Ordering::Release);
                         let began = Instant::now();
                         while !self.release.load(Ordering::Acquire) {
@@ -2686,8 +2830,8 @@ mod tests {
             // Hold the frame carrying 91 while later commands overwrite its prefix.
             struct Hold(Arc<AtomicBool>);
             impl Device for Hold {
-                fn take(&mut self, frame: &[Levels]) -> Outcome {
-                    if frame.first().and_then(|u| u.0.first()) == Some(&91) {
+                fn take(&mut self, frame: &[u8]) -> Outcome {
+                    if frame.first() == Some(&91) {
                         let started = Instant::now();
                         while !self.0.load(Ordering::Acquire) {
                             if started.elapsed() > Duration::from_secs(10) {
@@ -2757,7 +2901,7 @@ mod tests {
             // Counts the frames its device took.
             struct Took(Arc<std::sync::atomic::AtomicUsize>);
             impl Device for Took {
-                fn take(&mut self, _: &[Levels]) -> Outcome {
+                fn take(&mut self, _: &[u8]) -> Outcome {
                     self.0.fetch_add(1, Ordering::Release);
                     Outcome::Accepted
                 }
@@ -2828,8 +2972,8 @@ mod tests {
             struct Hold(Arc<AtomicBool>);
 
             impl Device for Hold {
-                fn take(&mut self, frame: &[Levels]) -> Outcome {
-                    if frame.first().and_then(|u| u.0.first()) == Some(&91) {
+                fn take(&mut self, frame: &[u8]) -> Outcome {
+                    if frame.first() == Some(&91) {
                         let started = Instant::now();
                         while !self.0.load(Ordering::Acquire) {
                             if started.elapsed() > Duration::from_secs(10) {
@@ -2986,9 +3130,9 @@ mod tests {
             calls: u64,
         }
         impl Device for Gated {
-            fn take(&mut self, frame: &[Levels]) -> Outcome {
+            fn take(&mut self, frame: &[u8]) -> Outcome {
                 self.calls += 1;
-                let level = frame.first().and_then(|u| u.0.first()).copied().unwrap();
+                let level = frame.first().copied().unwrap();
                 self.byte.store(u64::from(level), Ordering::Release);
                 let started = Instant::now();
                 while self.permits.load(Ordering::Acquire) < self.calls {
@@ -3300,9 +3444,8 @@ mod tests {
     struct Hears(Arc<Heard>);
 
     impl Device for Hears {
-        fn take(&mut self, frame: &[Levels]) -> Outcome {
-            let levels = frame.iter().flat_map(|universe| universe.0.iter());
-            for (cell, level) in self.0.levels.iter().zip(levels) {
+        fn take(&mut self, frame: &[u8]) -> Outcome {
+            for (cell, level) in self.0.levels.iter().zip(frame) {
                 cell.store(*level, Ordering::Relaxed);
             }
             self.0.frames.fetch_add(1, Ordering::Release);
@@ -3759,6 +3902,106 @@ mod tests {
         wakes.run();
     }
 
+    #[cfg(feature = "test-support")]
+    #[test]
+    #[expect(clippy::unwrap_used, clippy::panic, reason = "test setup must succeed")]
+    fn a_restart_whose_device_does_not_come_back_opens_a_fresh_one_or_removes_the_output() {
+        // (the fresh open succeeds, what finish answers, the restarted run is shown)
+        let cases = [(true, Ok(()), true), (false, Err(Refusal::CannotOpen), false)];
+        for (fresh, answer, shown) in cases {
+            let universes = Universes::new(3).unwrap();
+            let opens = Arc::new(AtomicU32::new(0));
+            let open: Open = Box::new({
+                let opens = Arc::clone(&opens);
+                move |_| {
+                    // the second open is the fresh one of the restart
+                    if opens.fetch_add(1, Ordering::Relaxed) == 1 && !fresh {
+                        return Err(io::Error::other("no device"));
+                    }
+                    Ok(Box::new(health::ByLevel))
+                }
+            });
+            let (mut engine, mut sender, wakes) = Engine::start_stepped(universes, open).unwrap();
+            wakes.hold().unwrap();
+            let output = OutputNumber::try_from(1).unwrap();
+            let set = |count| Command::SetOutput {
+                output,
+                kind: engine_core::TEST_STREAM_KIND,
+                universes: RunNumbers { first: 1, count },
+                rate: None,
+            };
+            sender.send(set(2)).unwrap();
+            // This fixture uses the only output spanning both universes.
+            sender
+                .send(Command::PatchStrip {
+                    name: Text::new("Strip").unwrap(),
+                    pixels: engine_core::Pixels::try_from(2).unwrap(),
+                    color: Color::Rgb,
+                    at: ChannelNumbers {
+                        universe: 1,
+                        address: 512,
+                    },
+                })
+                .unwrap();
+            wakes.wake().unwrap();
+
+            // Keep the tick paused until the hand-back has timed out. Other clients
+            // may use every unreserved FIFO place while the worker is waiting.
+            let Ok(Begun::Opening(restart)) = sender.begin(set(3), &[]) else {
+                panic!("changing the route length must retire the current lane");
+            };
+            while sender.send(Command::Blackout { on: false }).is_ok() {}
+            assert_eq!(sender.finish(restart.open()), answer, "fresh {fresh}");
+            let run = RunNumbers { first: 1, count: 3 }.check(universes).unwrap();
+            let kind = engine_core::TEST_STREAM_KIND;
+            let expected = shown.then_some(ProjectOutput::Kind {
+                kind,
+                universes: run,
+            });
+            assert_eq!(sender.project().output(output), expected, "fresh {fresh}");
+            engine.latest();
+            wakes.wake().unwrap();
+            let snapshot = engine.latest();
+            assert_eq!(snapshot.applied(), sender.sent());
+            let state = snapshot.state.outputs.get(output.slot()).copied().flatten();
+            assert_eq!(state.map(|o| o.universes), shown.then_some(run));
+            assert_eq!(sender.devices, 1, "only the old lane went back");
+            if !fresh {
+                sender.send(set(2)).unwrap(); // the stream of the fixture again
+            }
+            assert_eq!(sender.patch().unstreamed(&sender.project()), None);
+            let started = Instant::now();
+            while sender.devices != sender.shared.devices_freed.load(Ordering::Acquire) {
+                assert!(
+                    started.elapsed() < Duration::from_secs(10),
+                    "the old lane was never freed, fresh {fresh}"
+                );
+                sender.free.unpark();
+                thread::sleep(Duration::from_millis(1)); // poll
+            }
+            assert_eq!(opens.load(Ordering::Relaxed), if fresh { 2 } else { 3 });
+            let started = Instant::now();
+            loop {
+                wakes.wake().unwrap();
+                if engine
+                    .latest()
+                    .state
+                    .outputs
+                    .get(output.slot())
+                    .copied()
+                    .flatten()
+                    .is_some_and(|o| o.status == Status::Running)
+                {
+                    break;
+                }
+                assert!(
+                    started.elapsed() < Duration::from_secs(10),
+                    "the output never ran, fresh {fresh}"
+                );
+            }
+        }
+    }
+
     /// A device that takes its time to close: until the test lets it.
     #[cfg(feature = "test-support")]
     struct Closing {
@@ -3768,7 +4011,7 @@ mod tests {
 
     #[cfg(feature = "test-support")]
     impl Device for Closing {
-        fn take(&mut self, _frame: &[Levels]) -> Outcome {
+        fn take(&mut self, _frame: &[u8]) -> Outcome {
             Outcome::Accepted
         }
     }

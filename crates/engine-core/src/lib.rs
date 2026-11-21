@@ -46,15 +46,16 @@ pub use channel::{
     MAX_UNIVERSES, SourceTag, Universes, changes,
 };
 use channel::{BLACKOUT, MODIFIERS};
-#[cfg(feature = "test-support")]
-pub use kinds::OTHER as TEST_KIND;
 pub use kinds::{Adapter, Color, OutputKind};
+#[cfg(feature = "test-support")]
+pub use kinds::{EXAMPLE as TEST_STREAM_KIND, OTHER as TEST_KIND};
 pub use library::{
     ChannelFunction, Failure, FixtureKind, Library, Match, ModeChannels, ModeSize, NamedChannel,
     Text,
 };
 pub use output::{
-    Counters, MAX_OUTPUTS, OFF_BEAT, Outcome, Output, OutputNumber, Rate, Run, RunNumbers, Status,
+    Counters, MAX_OUTPUTS, OFF_BEAT, Outcome, Output, OutputNumber, ROUTE_MOST, Rate, RouteFault,
+    Run, RunNumbers, SPANS_MOST, Span, Status, bounds, gather, route_length,
 };
 pub use patch::{
     Grouped, Layout, Member, MemberList, Members, PatchCommand, Patched, Pixels, Target,

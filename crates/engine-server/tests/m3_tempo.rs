@@ -11,7 +11,7 @@
 mod common;
 
 use common::{Heard, Socket, answer, command, connect, open, send};
-use engine::{Device, Engine, Event, Levels, Open, Outcome, Universes, Wakes};
+use engine::{Device, Engine, Event, Open, Outcome, Universes, Wakes};
 use serde_json::{Value, json};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -47,7 +47,7 @@ struct EveryOther {
 }
 
 impl Device for EveryOther {
-    fn take(&mut self, frame: &[Levels]) -> Outcome {
+    fn take(&mut self, frame: &[u8]) -> Outcome {
         self.handed += 1;
         if self.handed.is_multiple_of(2) {
             Outcome::Dropped

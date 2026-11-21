@@ -56,8 +56,8 @@ pub enum Color {
     Rgbw,
 }
 
-/// A kind for tests elsewhere in `engine-core`, which name none.
-#[cfg(test)]
+/// A kind with a stream of whole pixels for tests in crates that name no kind.
+#[cfg(any(test, feature = "test-support"))]
 pub const EXAMPLE: OutputKind = OutputKind::Ddp {
     address: core::net::SocketAddrV4::new(core::net::Ipv4Addr::LOCALHOST, 4048),
     color: Color::Rgb,

@@ -13,7 +13,7 @@
 mod common;
 
 use common::{Heard, Socket, command, connect, send, serve};
-use engine::{Adapter, Device, Engine, Event, Levels, Open, Outcome, OutputKind, Universes, Wakes};
+use engine::{Adapter, Device, Engine, Event, Open, Outcome, OutputKind, Universes, Wakes};
 use futures_util::StreamExt;
 use outputs::dmx_usb_pro::DmxUsbPro;
 use serde_json::{Value, json};
@@ -50,7 +50,7 @@ struct Flaky {
 }
 
 impl Device for Flaky {
-    fn take(&mut self, frame: &[Levels]) -> Outcome {
+    fn take(&mut self, frame: &[u8]) -> Outcome {
         let fails = self.devices.fail.load(Ordering::SeqCst)
             || self.devices.fail_only.load(Ordering::SeqCst) == self.slot + 1;
         let outcome = if fails {

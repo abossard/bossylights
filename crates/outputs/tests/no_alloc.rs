@@ -11,7 +11,7 @@
 mod counting;
 
 use outputs::dmx_usb_pro::{DmxUsbPro, never_wait};
-use outputs::{Color, Device, Levels, Outcome, OutputKind};
+use outputs::{Color, Device, Outcome, OutputKind};
 use serialport::TTYPort;
 use std::net::{SocketAddr, UdpSocket};
 use std::thread;
@@ -22,7 +22,7 @@ fn main() {
     let SocketAddr::V4(address) = receiver.local_addr().unwrap() else {
         panic!("IPv4");
     };
-    let frame = [Levels([7; 512]), Levels([9; 512])];
+    let frame = [[7; 512], [9; 512]].concat();
     // A fake serial port: the other end stays open and unread.
     let (end, port) = TTYPort::pair().unwrap();
     never_wait(&port).unwrap();

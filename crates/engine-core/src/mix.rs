@@ -657,6 +657,71 @@ mod tests {
     }
 
     #[test]
+    fn blackout_reaches_every_channel_of_the_space() {
+        let space = Universes::new(crate::MAX_UNIVERSES).unwrap();
+        let (raw, mut holds) = (
+            [Levels([255; ADDRESSES]); crate::MAX_UNIVERSES as usize],
+            [ChannelSet::NONE; crate::MAX_UNIVERSES as usize],
+        );
+        for universe in 1..=crate::MAX_UNIVERSES {
+            for address in 1..=ADDRESSES as u16 {
+                let channel = ChannelNumbers { universe, address }.check(space).unwrap();
+                channel.mark(&mut holds, true);
+            }
+        }
+        // (blackout, the byte of every channel)
+        let cases = [(false, 255), (true, 0)];
+        for (dark, out) in cases {
+            let mut all = Box::new(Channels::NEW);
+            rest(&mut all);
+            let lit = [ChannelSet::NONE; crate::MAX_UNIVERSES as usize];
+            channels(&mut all, &lit, (&raw, &holds), blackout(dark));
+            let missed = all
+                .values()
+                .iter()
+                .flat_map(|row| row.0.iter())
+                .position(|byte| *byte != out);
+            assert_eq!(missed, None, "blackout {dark}: the first channel not at {out}");
+        }
+    }
+
+    #[test]
+    fn a_released_hold_gives_the_channel_back_to_rest_in_the_next_frame() {
+        let at = ChannelNumbers {
+            universe: 1,
+            address: 7,
+        }
+        .check(Universes::ONE)
+        .unwrap();
+        let mut all = Box::new(Channels::NEW);
+        all.rest[6] = 40;
+        // (frame, raw hold, byte out, source)
+        let frames = [
+            ("held", Some(9), 9, SourceTag::RAW),
+            ("released", None, 40, SourceTag::REST),
+        ];
+        for (frame, hold, out, source) in frames {
+            rest(&mut all);
+            let (mut raw, mut holds) = ([Levels::ZERO], [ChannelSet::NONE]);
+            if let Some(level) = hold {
+                raw[0].0[6] = level;
+                at.mark(&mut holds, true);
+            }
+            channels(
+                &mut all,
+                &[ChannelSet::NONE],
+                (&raw, &holds),
+                blackout(false),
+            );
+            assert_eq!(
+                (all.values()[0].0[6], all.source(at)),
+                (out, source),
+                "{frame}"
+            );
+        }
+    }
+
+    #[test]
     fn a_follower_moves_toward_dark_by_its_levels() {
         let (fade, jump) = (Flags::FADE, Flags::NONE);
         let blackout_bit = Follows::BLACKOUT;

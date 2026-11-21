@@ -1,10 +1,10 @@
 //! Each output sends on a thread of its own, so the tick is never late behind a send
-//! (#174). The tick copies the frame into a spare box and hands it over; the output's
+//! (#174). The tick gathers the route into a spare box and hands it over; the output's
 //! thread sends the newest box and hands every box back with what came of it.
 //!
 //! ```text
 //! tick thread                                output's thread, real-time, one per output
-//!   copy the frame into a spare box --frames--> the newest: device.take
+//!   gather route into a spare box   --frames--> the newest: device.take
 //!                                               older ones: passed over, Dropped
 //!   spare again, what came of it <-----back---- the box, with its outcome and time
 //! ```
@@ -41,7 +41,9 @@
 //! its queue and the clock. The thread only does what `step` says.
 
 use crate::wake::Clock;
-use crate::{Device, Levels, Outcome, Universes};
+use crate::{Device, Levels, Outcome, Run};
+use engine_core::{RouteFault, Span, bounds, gather};
+use outputs::Limits;
 use std::io;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -62,12 +64,41 @@ const LOOK: Duration = Duration::from_micros(200);
 /// look, so it is quick to run when the frame comes.
 const LEAD: Duration = Duration::from_millis(3);
 
+/// The checked channel spans that form one output's byte stream.
+#[derive(Debug)]
+pub struct Route {
+    spans: Box<[Span]>,
+    length: u32,
+    bounds: Run,
+}
+
+impl Route {
+    /// Checks the assembled stream against the device's limits before owning its spans.
+    pub fn new(limits: Limits, spans: &[Span]) -> Result<Self, RouteFault> {
+        let length = limits.route(spans)?;
+        let bounds = bounds(spans).ok_or(RouteFault::PastChannels)?;
+        Ok(Self {
+            spans: spans.into(),
+            length,
+            bounds,
+        })
+    }
+
+    /// API v11 supplies one run. Its last partial pixel is omitted.
+    pub fn of_run(run: Run, limits: Limits) -> Result<Self, RouteFault> {
+        Self::new(limits, &[run.span(limits.whole)])
+    }
+
+    /// The first through last universes the route touches, as API v11 reports them.
+    pub fn bounds(&self) -> Run {
+        self.bounds
+    }
+}
+
 /// A frame on its way to an output's device and back.
 struct Frame {
-    /// Made for every universe of the engine: a run of any length fits.
-    levels: Box<[Levels]>,
-    /// The universes of `levels` this frame has.
-    len: usize,
+    /// Holds exactly the bytes this route gathers.
+    bytes: Box<[u8]>,
     /// When it was due, since the engine started.
     due: Duration,
     /// When the output's next frame is due.
@@ -140,26 +171,23 @@ struct Shared {
     ready: AtomicBool,
 }
 
-/// The tick's end of an output's thread. Made and dropped off the tick thread: dropping
-/// it stops the thread and frees the device there.
+/// The tick's end of an output's thread. Dropping it off the tick thread stops the
+/// output thread and returns the device for a restart, or frees it.
 pub(crate) struct Lane {
+    spans: Box<[Span]>,
     frames: rtrb::Producer<Frame>,
     back: rtrb::Consumer<Frame>,
     spare: [Option<Frame>; BOXES],
     shared: Arc<Shared>,
     thread: Option<JoinHandle<Box<dyn Device>>>,
+    hand_back: Option<rtrb::Producer<Box<dyn Device>>>,
 }
 
 impl Lane {
-    /// Starts `device`'s own thread with real-time priority, and boxes for every universe
-    /// of the engine. Off the tick thread: it allocates and starts a thread. Returns once
+    /// Starts `device`'s own thread with real-time priority and boxes sized to the route.
+    /// Off the tick thread: it allocates and starts a thread. Returns once
     /// the thread is in its loop. Fails only when the system refuses a thread.
-    pub(crate) fn start(
-        device: Box<dyn Device>,
-        universes: Universes,
-        clock: Clock,
-    ) -> io::Result<Self> {
-        let count = usize::from(universes.count());
+    pub(crate) fn start(device: Box<dyn Device>, route: Route, clock: Clock) -> io::Result<Self> {
         let (frames, waiting) = rtrb::RingBuffer::new(BOXES);
         let (done, back) = rtrb::RingBuffer::new(BOXES);
         let shared = Arc::new(Shared {
@@ -175,8 +203,7 @@ impl Lane {
         }
         let spare = std::array::from_fn(|_| {
             Some(Frame {
-                levels: vec![Levels::ZERO; count].into_boxed_slice(),
-                len: 0,
+                bytes: vec![0; route.length as usize].into_boxed_slice(),
                 due: Duration::ZERO,
                 next: Duration::ZERO,
                 prefix: Prefix::default(),
@@ -184,12 +211,26 @@ impl Lane {
             })
         });
         Ok(Self {
+            spans: route.spans,
             frames,
             back,
             spare,
             shared,
             thread: Some(thread),
+            hand_back: None,
         })
+    }
+
+    /// Keep a v11 lane with its original byte length at a new first channel.
+    pub(crate) fn shift(&mut self, start: u32) {
+        if let [span] = self.spans.as_mut() {
+            span.start = start;
+        }
+    }
+
+    /// The free thread gives the device back after its output thread has stopped.
+    pub(crate) fn hand_back(&mut self, slot: rtrb::Producer<Box<dyn Device>>) {
+        self.hand_back = Some(slot);
     }
 
     /// Hands `frame`, due at `due`, to the output's thread; the output's next frame is
@@ -205,11 +246,7 @@ impl Lane {
         let Some(mut free) = self.spare.iter_mut().find_map(Option::take) else {
             return Hand::Full;
         };
-        let len = frame.len().min(free.levels.len());
-        if let (Some(to), Some(from)) = (free.levels.get_mut(..len), frame.get(..len)) {
-            to.copy_from_slice(from);
-        }
-        free.len = len;
+        gather(frame, &self.spans, &mut free.bytes);
         free.due = due;
         free.next = next;
         free.prefix = prefix;
@@ -254,13 +291,18 @@ impl Lane {
 }
 
 impl Drop for Lane {
-    /// Stops the thread once its send is done, and frees the device here. Never on the
-    /// tick thread: the engine retires a lane to its free thread.
+    /// Stops the thread once its send is done. A restart takes the device back here,
+    /// on the free thread.
     fn drop(&mut self) {
         self.shared.stop.store(true, Ordering::Release);
         if let Some(thread) = self.thread.take() {
             thread.thread().unpark();
-            drop(thread.join());
+            if let Ok(device) = thread.join()
+                && let Some(slot) = &mut self.hand_back
+            {
+                // The restart reserved this one-place queue for this device alone.
+                let _ = slot.push(device);
+            }
         }
     }
 }
@@ -292,7 +334,7 @@ fn run(
                 if let Ok(frame) = waiting.pop() {
                     next = frame.next;
                     let at = clock.now();
-                    let outcome = device.take(frame.levels.get(..frame.len).unwrap_or_default());
+                    let outcome = device.take(&frame.bytes);
                     back(&mut done, frame, outcome, at);
                 }
             }
@@ -350,12 +392,12 @@ mod tests {
     }
 
     impl Device for Gate {
-        fn take(&mut self, frame: &[Levels]) -> Outcome {
+        fn take(&mut self, stream: &[u8]) -> Outcome {
             while !self.open.load(Ordering::Acquire) {
                 thread::sleep(Duration::from_millis(1)); // poll
             }
             self.taken.fetch_add(1, Ordering::Release);
-            match frame.first().map(|universe| universe.0[0]) {
+            match stream.first() {
                 Some(0) => Outcome::Failed,
                 _ => Outcome::Accepted,
             }
@@ -389,7 +431,8 @@ mod tests {
             open: Arc::clone(&open),
             taken: Arc::clone(&taken),
         };
-        let mut lane = Lane::start(Box::new(gate), Universes::ONE, Clock::wall()).unwrap();
+        let route = Route::new(Limits::RAW, &[Span { start: 0, len: 1 }]).unwrap();
+        let mut lane = Lane::start(Box::new(gate), route, Clock::wall()).unwrap();
         // Every frame is due at once: the thread sends what it finds.
         let prefix = |n| Prefix {
             presses: 100 + n,

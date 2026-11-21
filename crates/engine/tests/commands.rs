@@ -223,7 +223,7 @@ fn after_the_last_output_is_removed_a_command_still_lands_and_the_engine_stops()
 struct SlowToFree(Arc<AtomicBool>);
 
 impl engine::Device for SlowToFree {
-    fn take(&mut self, _frame: &[Levels]) -> engine::Outcome {
+    fn take(&mut self, _frame: &[u8]) -> engine::Outcome {
         engine::Outcome::Accepted
     }
 }

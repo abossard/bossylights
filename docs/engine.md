@@ -6,10 +6,12 @@ The reference behind the [README](../README.md): how a command reaches the light
 
 ```mermaid
 flowchart LR
-  C["client<br/>Command"] --> SE["Sender, the engine front<br/>Project::update checks it,<br/>SetOutput: outputs::open, then attach"]
-  SE -- "command + device" --> Q["command queue (rtrb)<br/>never locks"]
+  C["client<br/>Command"] --> SE["Sender, the engine front<br/>Project::update checks it"]
+  SE -- "open or restart" --> B["blocking pool<br/>open or reuse device, start lane"]
+  B -- "lane" --> SE
+  SE -- "command + lane" --> Q["command queue (rtrb)<br/>never locks"]
   Q --> U["tick thread<br/>update, frame"]
-  U -- "take, never waits" --> O["outputs"]
+  U -- "gather route into spare box" --> O["output thread<br/>device.take(&amp;[u8])"]
   U -- "old device" --> R["return queue (rtrb)"] --> FR["free thread<br/>frees it, closes its port"]
 ```
 
@@ -23,18 +25,24 @@ flowchart LR
 - Two boxes go round. The tick thread never waits, never fails a push, never frees a box (`crates/engine/src/snapshot.rs`).
 - No box asked for: no picture sent.
 
-The engine knows "an output": a run of universes, a rate, a state, counters, and a `Device` that takes a frame without waiting. Kinds, devices and bytes live only in `crates/outputs`; `engine-core` only lists the kinds a client may ask for, as data (`kinds.rs`).
+An output's route lists channel spans in stream order. The tick gathers those spans into a spare box sized to their joined length. The output thread passes its bytes to `Device::take(&[u8])`.
 
-How an output gets on and off the tick thread:
+| Route | Bytes on the link |
+|---|---|
+| DDP | Spans join end to end. Four 320-byte RGBW rows in four universes become one 1,280-byte packet. Longer streams split every 1,440 bytes, with PUSH on the last packet. |
+| DMX USB Pro | One span of up to 512 channels. The adapter sends a zero start code, the span's bytes, and zeros through slot 512. |
+| API v11 | `SetOutput.universes` becomes one span, rounded down to a whole pixel for DDP. The project and state show the first through last universe. |
 
 | Step | Where | What |
 |---|---|---|
-| 1 | `Base::prepare`, then `Sender::admit` | `prepare`: `Project::update` checks the client `Command` against a `Base` (the project, patch and looks, taken from `Sender::base`) and says what follows: an `EngineCommand` for the tick thread, keep the device, or open one. Only this makes an `EngineCommand`. The server prepares an edit (`engine::edits`: the patch, the groups, the looks) on the blocking pool, without the `Sender`: a patch measuring its show file or a look compiling holds up no other client. A press is prepared and admitted under the `Sender` at once, no thread hop before the next frame. Once `Stop` is taken (under the `Sender`), a command is answered `Stopping` and changes nothing: every accepted edit is in the last save. `admit`, under the `Sender`: `Stale` when another change replaced the base (the server prepares again, three times at most), else the plays, a slot and room in the queue are checked and the command queued. `Sender::begin` does both |
-| 1b | `Opening::open`, then `Sender::finish` | `outputs::open(kind)` makes a `Box<dyn Device>` (for DDP: a socket bound, connected, non-blocking). The server runs it on the blocking pool, without the `Sender`: other clients are answered meanwhile. One device opens at a time; until it is open, `SetOutput` and `RemoveOutput` answer `Opening`. Once open, the project holds the output's kind |
-| 2 | `Sender::attach` | the one door for every device, also a test's own: sends `Attach` with the device |
-| 3 | tick thread | puts it in the output's slot; the old device goes to the return queue |
-| 4 | tick thread | when the output is due: `take(frame)` sends or drops, never waits |
-| 5 | free thread | `RemoveOutput` or a replaced output: the old device is freed within a beat of its own (its port closed), and `SetOutput` waits for that before it opens. `SetOutput` for the kind the output already has keeps its device: only the run and the rate change |
+| 1 | `Base::prepare`, then `Sender::admit` | `prepare`: `Project::update` checks the client `Command` against a `Base` (the project, patch and looks, taken from `Sender::base`) and says what follows: an `EngineCommand` for the tick thread, keep the device, restart its lane, or open one. Only this makes an `EngineCommand`. The server prepares an edit (`engine::edits`: the patch, the groups, the looks) on the blocking pool, without the `Sender`: a patch measuring its show file or a look compiling holds up no other client. A press is prepared and admitted under the `Sender` at once, no thread hop before the next frame. Once `Stop` is taken (under the `Sender`), a command is answered `Stopping` and changes nothing: every accepted edit is in the last save. `admit`, under the `Sender`: `Stale` when another change replaced the base (the server prepares again, three times at most), else the plays, a slot and room in the queue are checked and the command queued. `Sender::begin` does both |
+| 1b | `Opening::open` | The blocking pool opens the device and starts its lane. For a restart it takes the existing device from the free thread and starts a lane with boxes of the new length. Other clients can send commands meanwhile. |
+| 2 | `Sender::finish` | Queues `Attach` with the lane. A restart that fails twice (see below) removes the output and answers `CannotOpen`. Tests supply a device through `Sender::attach` for a run or `Sender::attach_route` for explicit spans. |
+| 3 | tick thread | Puts the new lane in the output's slot. For the same kind and stream length, it keeps the lane and shifts its span to the new first channel. |
+| 4 | tick and output threads | When the output is due, the tick gathers its route and hands the box to its lane. The output thread sends or drops. Frames due during a restart count as dropped. |
+| 5 | free thread | Stops the retired lane and closes its device on removal or replacement. For a restart, it hands the device back to the pending open. |
+
+A pending open or restart refuses another `SetOutput` or `RemoveOutput` on that output with `Opening`. A restart whose device does not come back within a second opens a fresh one. Only when that open or the lane fails too is the output removed: a fixture across universes that only it streamed is then unstreamed until a covering run opens again.
 
 ## API
 
@@ -65,7 +73,7 @@ The list is `ORIGINS` in `crates/engine-server/src/lib.rs`. No pairing or token 
 | `ReleaseChannels` | lets every held raw channel go |
 | `ReleaseAll` | lets every Manual play, every direct hold (`SetIntensity`, `SetColour`) and every raw channel go. Show, Autopilot and blackout stay (API 4: in API 3 it let only the raw channels go) |
 | `Blackout` (on) | every channel goes out at zero while on, over everything; the held values stay |
-| `SetOutput` (output 1 to 16, kind, universes, rate) | adds or replaces an output. Kind `{"Ddp": {"address": "ip:port", "color": "Rgb" or "Rgbw"}}` or `{"DmxUsbPro": {"adapter": 1}}` (the first ENTTEC DMX USB Pro by USB identity, in the order of their USB serial numbers, when the output first finds one; an adapter not there yet is no error, the output is NotFound until it is plugged in; from then on the output finds that same adapter by its serial, so a lost adapter never comes back as another). Adapters count from 1: 0 is `NotACommand`. Universes `{"first": 1, "count": 3}`, sent as one stream of channels. A DMX USB Pro takes one universe: more is refused with `{"TooManyUniverses": {"most": 1}}`. DDP RGB sends whole pixels: 510 of each universe's 512 channels. Rate `"30"`, `"44"`, `"60"` or `null`: 60 for DDP, 44 for the DMX USB Pro |
+| `SetOutput` (output 1 to 16, kind, universes, rate) | adds or replaces an output. Kind `{"Ddp": {"address": "ip:port", "color": "Rgb" or "Rgbw"}}` or `{"DmxUsbPro": {"adapter": 1}}` (the first ENTTEC DMX USB Pro by USB identity, in the order of their USB serial numbers, when the output first finds one; an adapter not there yet is no error, the output is NotFound until it is plugged in; from then on the output finds that same adapter by its serial, so a lost adapter never comes back as another). Adapters count from 1: 0 is `NotACommand`. Universes `{"first": 1, "count": 3}`, sent as one stream of channels. A DMX USB Pro takes one universe: more is refused with `{"TooManyUniverses": {"most": 1}}`. DDP RGB rounds the joined run down to whole pixels (510 bytes for one universe, 1,023 for two). Rate `"30"`, `"44"`, `"60"` or `null`: 60 for DDP, 44 for the DMX USB Pro |
 | `RemoveOutput` (output) | removes it. Refused with `{"StreamsFixture": {"fixture": 1}}` when a fixture over more than one universe would be left with no output that streams them all; so is a `SetOutput` that changes the run |
 
 Looks and who wins (`docs/design/looks-slice-3.md`, the Mixer's table in `engine-core/src/mix.rs`): per property of each light, Manual over Show over Autopilot, then the latest start. A direct hold is Manual. The picture's `state.plays` lists each play with its `rank`, `state` (`{"Waiting": {"beat": 12}}`, `Playing` or `Kept`) and `start` (the clock's `elapsed` at its start), `state.rules` the settings the frame applies, `state.clock` the beat clock at the frame: `bpm`, `feed`, `source` (`Feed`, `OneTap` or `Tapped`), `beat` (the grid: a whole number is a beat, a multiple of 4 a bar) and `elapsed` (beats since the engine started; a play's own beat is `elapsed` less its `start`).

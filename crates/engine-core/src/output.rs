@@ -11,9 +11,117 @@
 //! A kind that gets no answer from its device accepts what it sent: for it, Running means
 //! the frames were sent.
 
-use crate::{Levels, Refusal, Universes};
+use crate::{ADDRESSES, CHANNELS, Levels, Refusal, Universes};
+use core::num::NonZeroU16;
 use core::time::Duration;
 use serde::{Deserialize, Serialize};
+
+/// One contiguous part of a route in the channel space, counted from zero.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Span {
+    pub start: u32,
+    pub len: u32,
+}
+
+/// The most channels and spans an output can join in one frame.
+pub const ROUTE_MOST: u32 = 65_536;
+pub const SPANS_MOST: usize = 1_024;
+
+/// Why a route cannot be handed to a device.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RouteFault {
+    NoSpans,
+    EmptySpan,
+    PastChannels,
+    TooManySpans { most: usize },
+    TooLong { most: u32 },
+    NotWhole { whole: NonZeroU16 },
+}
+
+/// Checks each source span and the size of the assembled stream. A whole pixel can
+/// straddle a span boundary.
+pub fn route_length(
+    spans: &[Span],
+    most_spans: usize,
+    most_channels: u32,
+    whole: NonZeroU16,
+) -> Result<u32, RouteFault> {
+    let most_spans = most_spans.min(SPANS_MOST);
+    let most_channels = most_channels.min(ROUTE_MOST);
+    if spans.is_empty() {
+        return Err(RouteFault::NoSpans);
+    }
+    if spans.len() > most_spans {
+        return Err(RouteFault::TooManySpans { most: most_spans });
+    }
+    let mut length = 0_u32;
+    for span in spans {
+        if span.len == 0 {
+            return Err(RouteFault::EmptySpan);
+        }
+        if span
+            .start
+            .checked_add(span.len)
+            .is_none_or(|end| end > CHANNELS as u32)
+        {
+            return Err(RouteFault::PastChannels);
+        }
+        length = length
+            .checked_add(span.len)
+            .filter(|&n| n <= most_channels)
+            .ok_or(RouteFault::TooLong {
+                most: most_channels,
+            })?;
+    }
+    if !length.is_multiple_of(u32::from(whole.get())) {
+        return Err(RouteFault::NotWhole { whole });
+    }
+    Ok(length)
+}
+
+/// Joins the spans into a lane's frame, copying a universe slice at a time.
+pub fn gather(frame: &[Levels], spans: &[Span], mut out: &mut [u8]) {
+    for span in spans {
+        let mut at = span.start as usize;
+        let mut left = span.len as usize;
+        while left > 0 && !out.is_empty() {
+            let Some(from) = frame
+                .get(at / ADDRESSES)
+                .and_then(|row| row.0.get(at % ADDRESSES..))
+            else {
+                return;
+            };
+            let n = left.min(from.len()).min(out.len());
+            let (to, rest) = out.split_at_mut(n);
+            if let Some(from) = from.get(..n) {
+                to.copy_from_slice(from);
+            }
+            at += n;
+            left -= n;
+            out = rest;
+        }
+    }
+}
+
+/// The first through last universes touched by these spans. Empty or out-of-range
+/// spans have no bounds.
+pub fn bounds(spans: &[Span]) -> Option<Run> {
+    let mut first = spans.first()?.start;
+    let mut last = first;
+    for span in spans {
+        first = first.min(span.start);
+        last = last.max(span.start.checked_add(span.len.checked_sub(1)?)?);
+    }
+    if last >= CHANNELS as u32 {
+        return None;
+    }
+    let first = (first / ADDRESSES as u32) as u16;
+    let last = (last / ADDRESSES as u32) as u16;
+    Some(Run {
+        first: first + 1,
+        count: last - first + 1,
+    })
+}
 
 /// The most outputs an engine has at once.
 pub const MAX_OUTPUTS: usize = 16;
@@ -114,6 +222,15 @@ impl Run {
     /// How many universes.
     pub const fn count(self) -> u16 {
         self.count
+    }
+
+    /// The wire run as a channel span, ending at the last whole unit.
+    pub const fn span(self, whole: NonZeroU16) -> Span {
+        let len = self.count as u32 * ADDRESSES as u32;
+        Span {
+            start: (self.first as u32 - 1) * ADDRESSES as u32,
+            len: len - len % whole.get() as u32,
+        }
     }
 
     /// Whether universes `first` to `last` (counted from 1) are all in this run.
@@ -260,6 +377,101 @@ impl Output {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_joined_route_fits_the_device_and_the_channel_space() {
+        use RouteFault::*;
+        use core::num::NonZeroU16;
+        let span = |start, len| Span { start, len };
+        let one = NonZeroU16::MIN;
+        let rgbw = NonZeroU16::new(4).unwrap();
+        let channels = crate::CHANNELS as u32;
+        let caps = (SPANS_MOST, ROUTE_MOST, one);
+        let larger = (usize::MAX, u32::MAX, one);
+        let slots = (1, 512, one);
+        let pixels = (SPANS_MOST, ROUTE_MOST, rgbw);
+        let repeated = |n| vec![span(0, 1); n];
+        let cases = [
+            (vec![], caps, Err(NoSpans)),
+            (vec![span(0, 1), span(1, 0)], caps, Err(EmptySpan)),
+            (vec![span(channels - 1, 1)], caps, Ok(1)),
+            (vec![span(channels - 1, 2)], caps, Err(PastChannels)),
+            (vec![span(1, u32::MAX)], caps, Err(PastChannels)),
+            (repeated(1_024), caps, Ok(1_024)),
+            (repeated(1_025), caps, Err(TooManySpans { most: 1_024 })),
+            (vec![span(0, 32_768); 2], caps, Ok(65_536)),
+            (
+                vec![span(0, 32_768), span(0, 32_768), span(0, 1)],
+                caps,
+                Err(TooLong { most: 65_536 }),
+            ),
+            (repeated(1_025), larger, Err(TooManySpans { most: 1_024 })),
+            (
+                vec![span(0, 32_768), span(0, 32_768), span(0, 1)],
+                larger,
+                Err(TooLong { most: 65_536 }),
+            ),
+            (vec![span(0, 319)], pixels, Err(NotWhole { whole: rgbw })),
+            (vec![span(0, 320)], pixels, Ok(320)),
+            (vec![span(0, 256); 2], slots, Err(TooManySpans { most: 1 })),
+            (vec![span(0, 513)], slots, Err(TooLong { most: 512 })),
+            (vec![span(0, 512)], slots, Ok(512)),
+        ];
+        for (spans, (most_spans, most_channels, whole), expected) in cases {
+            assert_eq!(
+                route_length(&spans, most_spans, most_channels, whole),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn gather_joins_each_span_in_order_and_bounds_cover_them_all() {
+        let frame: Vec<Levels> = (0..3)
+            .map(|u| {
+                Levels(core::array::from_fn(|n| {
+                    ((u * crate::ADDRESSES + n) % 251) as u8
+                }))
+            })
+            .collect();
+        let span = |start, len| Span { start, len };
+        let cases = [
+            (vec![span(18, 3)], vec![18, 19, 20], 1, 1),
+            (vec![span(511, 3)], vec![9, 10, 11], 1, 2),
+            (vec![span(1024, 1), span(0, 2)], vec![20, 0, 1], 1, 3),
+            (
+                vec![span(512, 3), span(515, 2)],
+                vec![10, 11, 12, 13, 14],
+                2,
+                1,
+            ),
+            (vec![span(10, 2), span(100, 1)], vec![10, 11, 100], 1, 1),
+            (vec![span(512, 512)], frame[1].0.to_vec(), 2, 1),
+        ];
+        for (spans, expected, first, count) in cases {
+            let mut out = vec![255; expected.len()];
+            gather(&frame, &spans, &mut out);
+            assert_eq!(out, expected, "{spans:?}");
+            assert_eq!(bounds(&spans), Some(Run { first, count }), "{spans:?}");
+        }
+    }
+
+    #[test]
+    fn a_wire_run_becomes_one_span_cut_to_whole_units() {
+        let four = Universes::new(4).unwrap();
+        let cases = [
+            (1, 1, 3, 0, 510),
+            (1, 1, 4, 0, 512),
+            (2, 3, 3, 512, 1536),
+            (2, 1, 1, 512, 512),
+        ];
+        for (first, count, whole, start, len) in cases {
+            let run = RunNumbers { first, count }.check(four).unwrap();
+            let span = run.span(core::num::NonZeroU16::new(whole).unwrap());
+            assert_eq!(span, Span { start, len });
+            assert_eq!(bounds(&[span]), Some(run));
+        }
+    }
 
     const R: fn(u16) -> Status = |failures| Status::Reconnecting { failures };
 

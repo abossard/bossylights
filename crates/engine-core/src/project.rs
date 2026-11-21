@@ -10,8 +10,11 @@
 //! One output, as the project sees it:
 //!
 //! ```text
-//! None --SetOutput--> opening --Opened--> Kind --SetOutput, same kind--> Kind (device kept)
-//!                            --OpenFailed--> as before
+//! None or other kind --SetOutput--> Opening --Opened--> Kind
+//!                                         --OpenFailed--> as before
+//! same kind, same length --SetOutput--> Kind (lane kept)
+//! same kind, new length  --SetOutput--> Restarting --Opened--> Kind (device kept)
+//!                                                 --OpenFailed--> None
 //! any --RemoveOutput--> None        any --Attached--> Attached (a device brought by a test)
 //! ```
 
@@ -32,11 +35,38 @@ pub struct Project {
     #[serde(skip)]
     #[cfg_attr(test, ts(skip))]
     universes: Universes,
-    /// The kind and run of each output whose device is being opened. They take no
-    /// `SetOutput` or `RemoveOutput` until it is open or failed.
+    /// Off-wire state for each output, including its pending device change.
     #[serde(skip)]
     #[cfg_attr(test, ts(skip))]
-    opening: [Option<(OutputKind, Run)>; MAX_OUTPUTS],
+    setup: [Setup; MAX_OUTPUTS],
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Setup {
+    /// An attached route's bounds are display data. Only a run can satisfy a patch check.
+    routed: bool,
+    pending: Option<Opening>,
+}
+
+impl Setup {
+    /// A routed attachment can have holes; a restarting device has left its old lane.
+    fn has_run(self) -> bool {
+        !self.routed && !matches!(self.pending, Some(Opening::Restart(_, _)))
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Opening {
+    Open(OutputKind, Run),
+    Restart(OutputKind, Run),
+}
+
+impl Opening {
+    fn next(self) -> (OutputKind, Run) {
+        match self {
+            Self::Open(kind, run) | Self::Restart(kind, run) => (kind, run),
+        }
+    }
 }
 
 /// What an output sends to.
@@ -66,6 +96,11 @@ pub enum ProjectEvent {
     OpenFailed {
         output: OutputNumber,
     },
+    /// A device with its own route. Only its bounds are visible on the wire.
+    Routed {
+        output: OutputNumber,
+        bounds: Run,
+    },
     /// A device a test brought takes the place of `output`.
     Attached {
         output: OutputNumber,
@@ -94,6 +129,13 @@ pub enum ProjectEffect {
         universes: Run,
         rate: Option<Rate>,
     },
+    /// Take the device back, start its new lane, then report `Opened` or `OpenFailed`.
+    Restart {
+        output: OutputNumber,
+        kind: OutputKind,
+        universes: Run,
+        rate: Option<Rate>,
+    },
     /// Open a device of `kind`, off the tick thread and off the API, then attach it and
     /// tell the project `Opened`, or `OpenFailed`.
     Open {
@@ -110,7 +152,10 @@ impl Project {
         Self {
             outputs: [None; MAX_OUTPUTS],
             universes,
-            opening: [None; MAX_OUTPUTS],
+            setup: [Setup {
+                routed: false,
+                pending: None,
+            }; MAX_OUTPUTS],
         }
     }
 
@@ -140,28 +185,47 @@ impl Project {
                 } => {
                     let universes = run.check(universes)?;
                     self.idle(output)?;
-                    if matches!(self.output(output), Some(ProjectOutput::Kind { kind: was, .. }) if was == kind)
-                    {
-                        let keep = ProjectEffect::Keep {
-                            output,
-                            kind,
-                            universes,
-                            rate,
-                        };
-                        let project = self.with(output, |slot, _| {
-                            *slot = Some(ProjectOutput::Kind { kind, universes });
-                        });
-                        return Ok((project, Some(keep)));
-                    }
-                    let open = ProjectEffect::Open {
-                        output,
-                        kind,
-                        universes,
-                        rate,
+                    let (pending, effect) = match self.output(output) {
+                        Some(ProjectOutput::Kind {
+                            kind: was,
+                            universes: run,
+                        }) if was == kind => {
+                            if run.count() == universes.count() {
+                                let project = self.with(output, |slot, _| {
+                                    *slot = Some(ProjectOutput::Kind { kind, universes });
+                                });
+                                return Ok((
+                                    project,
+                                    Some(ProjectEffect::Keep {
+                                        output,
+                                        kind,
+                                        universes,
+                                        rate,
+                                    }),
+                                ));
+                            }
+                            (
+                                Opening::Restart(kind, universes),
+                                ProjectEffect::Restart {
+                                    output,
+                                    kind,
+                                    universes,
+                                    rate,
+                                },
+                            )
+                        }
+                        _ => (
+                            Opening::Open(kind, universes),
+                            ProjectEffect::Open {
+                                output,
+                                kind,
+                                universes,
+                                rate,
+                            },
+                        ),
                     };
-                    let project =
-                        self.with(output, |_, opening| *opening = Some((kind, universes)));
-                    Ok((project, Some(open)))
+                    let project = self.with(output, |_, setup| setup.pending = Some(pending));
+                    Ok((project, Some(effect)))
                 }
                 Command::Patch {
                     name,
@@ -287,7 +351,10 @@ impl Project {
                 Command::SetMixRules { rules } => look_effect(LookCommand::SetMixRules { rules }),
                 Command::RemoveOutput { output } => {
                     self.idle(output)?;
-                    let project = self.with(output, |slot, _| *slot = None);
+                    let project = self.with(output, |slot, setup| {
+                        *slot = None;
+                        *setup = Setup::default();
+                    });
                     Ok((
                         project,
                         Some(ProjectEffect::Send(EngineCommand::RemoveOutput { output })),
@@ -295,21 +362,35 @@ impl Project {
                 }
             },
             ProjectEvent::Opened { output, kind } => {
-                let project = self.with(output, |slot, opening| {
-                    if let Some((_, universes)) = opening.take() {
+                let project = self.with(output, |slot, setup| {
+                    if let Some(pending) = setup.pending.take() {
+                        let (_, universes) = pending.next();
                         *slot = Some(ProjectOutput::Kind { kind, universes });
+                        setup.routed = false;
                     }
                 });
                 Ok((project, None))
             }
             ProjectEvent::OpenFailed { output } => {
-                Ok((self.with(output, |_, opening| *opening = None), None))
+                let mut effect = None;
+                let project = self.with(output, |slot, setup| {
+                    if let Some(Opening::Restart(_, _)) = setup.pending.take() {
+                        *slot = None;
+                        effect = Some(ProjectEffect::Send(EngineCommand::RemoveOutput { output }));
+                    }
+                });
+                Ok((project, effect))
             }
-            ProjectEvent::Attached { output, universes } => {
+            ProjectEvent::Attached { output, universes }
+            | ProjectEvent::Routed {
+                output,
+                bounds: universes,
+            } => {
                 self.idle(output)?;
                 Ok((
-                    self.with(output, |slot, _| {
+                    self.with(output, |slot, setup| {
                         *slot = Some(ProjectOutput::Attached { universes });
+                        setup.routed = matches!(event, ProjectEvent::Routed { .. });
                     }),
                     None,
                 ))
@@ -323,46 +404,65 @@ impl Project {
     }
 
     /// Whether one output streams every universe from `first` to `last` as one run. An
-    /// output being opened counts only when both its run and the one it opens with do:
-    /// either may be its run once the device is open or failed.
+    /// output changing kind must cover it before and after opening. A restarting
+    /// lane can fail and leave no output, so it cannot support a new patch.
     pub fn streams(&self, first: u16, last: u16) -> bool {
-        self.outputs
-            .iter()
-            .zip(&self.opening)
-            .any(|(output, opening)| {
-                let run = match output {
-                    Some(
-                        ProjectOutput::Kind { universes, .. }
-                        | ProjectOutput::Attached { universes },
-                    ) => *universes,
-                    None => return false,
-                };
-                run.covers(first, last) && opening.is_none_or(|(_, next)| next.covers(first, last))
-            })
+        self.outputs.iter().zip(&self.setup).any(|(output, setup)| {
+            if !setup.has_run() {
+                return false;
+            }
+            let run = match output {
+                Some(
+                    ProjectOutput::Kind { universes, .. } | ProjectOutput::Attached { universes },
+                ) => *universes,
+                None => return false,
+            };
+            run.covers(first, last)
+                && setup
+                    .pending
+                    .is_none_or(|pending| pending.next().1.covers(first, last))
+        })
     }
 
     /// What each output sends: its number as a client counts it, its kind and its run. The
     /// kind is `None` for a device a test brought, which sends every channel. An output
-    /// being opened is here twice, as it is and as it opens: either may be what it sends
-    /// once the device is open or failed.
+    /// changing kind appears with its current and requested runs. A restart sends
+    /// only its requested run once its new lane is ready.
     pub fn sends(&self) -> impl Iterator<Item = (u8, Option<OutputKind>, Run)> + '_ {
         (1_u8..)
-            .zip(self.outputs.iter().zip(&self.opening))
-            .flat_map(|(number, (output, opening))| {
-                let now = output.map(|output| match output {
-                    ProjectOutput::Kind { kind, universes } => (number, Some(kind), universes),
-                    ProjectOutput::Attached { universes } => (number, None, universes),
-                });
-                let next = opening.map(|(kind, universes)| (number, Some(kind), universes));
+            .zip(self.outputs.iter().zip(&self.setup))
+            .flat_map(|(number, (output, setup))| {
+                let now = output
+                    .filter(|_| setup.has_run())
+                    .map(|output| match output {
+                        ProjectOutput::Kind { kind, universes } => (number, Some(kind), universes),
+                        ProjectOutput::Attached { universes } => (number, None, universes),
+                    });
+                let next = setup
+                    .pending
+                    .map(Opening::next)
+                    .map(|(kind, universes)| (number, Some(kind), universes));
                 now.into_iter().chain(next)
             })
     }
 
+    /// The lane of this output is returning its device for a restart.
+    pub fn restarting(&self, output: OutputNumber) -> bool {
+        self.setup
+            .get(output.slot())
+            .is_some_and(|setup| matches!(setup.pending, Some(Opening::Restart(_, _))))
+    }
+
     /// `Opening` while the device of `output` is being opened.
     fn idle(&self, output: OutputNumber) -> Result<(), Refusal> {
-        match self.opening.get(output.slot()) {
-            Some(Some(_)) => Err(Refusal::Opening),
-            Some(None) | None => Ok(()),
+        if self
+            .setup
+            .get(output.slot())
+            .is_some_and(|setup| setup.pending.is_some())
+        {
+            Err(Refusal::Opening)
+        } else {
+            Ok(())
         }
     }
 
@@ -370,13 +470,11 @@ impl Project {
     fn with(
         mut self,
         output: OutputNumber,
-        change: impl FnOnce(&mut Option<ProjectOutput>, &mut Option<(OutputKind, Run)>),
+        change: impl FnOnce(&mut Option<ProjectOutput>, &mut Setup),
     ) -> Self {
         let slot = output.slot();
-        if let (Some(kind), Some(opening)) =
-            (self.outputs.get_mut(slot), self.opening.get_mut(slot))
-        {
-            change(kind, opening);
+        if let (Some(kind), Some(setup)) = (self.outputs.get_mut(slot), self.setup.get_mut(slot)) {
+            change(kind, setup);
         }
         self
     }
@@ -654,6 +752,120 @@ mod tests {
     }
 
     #[test]
+    fn changing_the_route_length_restarts_with_the_same_device() {
+        let output = output(4);
+        let kind = kinds::EXAMPLE;
+        let four = Universes::new(4).unwrap();
+        let before = RunNumbers { first: 1, count: 2 };
+        let set = |universes| {
+            ProjectEvent::Client(Command::SetOutput {
+                output,
+                kind,
+                universes,
+                rate: None,
+            })
+        };
+        let opened = ProjectEvent::Opened { output, kind };
+        let ready = Project::new(four)
+            .update(set(before))
+            .unwrap()
+            .0
+            .update(opened)
+            .unwrap()
+            .0;
+        let after = RunNumbers { first: 2, count: 2 };
+        let next = after.check(four).unwrap();
+        let (kept, effect) = ready.update(set(after)).unwrap();
+        assert_eq!(
+            effect,
+            Some(ProjectEffect::Keep {
+                output,
+                kind,
+                universes: next,
+                rate: None
+            })
+        );
+        assert!(kept.streams(2, 3));
+
+        let longer = RunNumbers { first: 1, count: 3 };
+        let next = longer.check(four).unwrap();
+        let (waiting, effect) = ready.update(set(longer)).unwrap();
+        assert_eq!(
+            effect,
+            Some(ProjectEffect::Restart {
+                output,
+                kind,
+                universes: next,
+                rate: None
+            })
+        );
+        assert!(waiting.restarting(output));
+        assert!(!waiting.streams(1, 3));
+        assert_eq!(
+            waiting.sends().collect::<Vec<_>>(),
+            vec![(4, Some(kind), next)]
+        );
+        let remove = ProjectEvent::Client(Command::RemoveOutput { output });
+        for event in [set(before), remove] {
+            assert_eq!(waiting.update(event), Err(Refusal::Opening));
+        }
+        let cases = [
+            (
+                opened,
+                Some(ProjectOutput::Kind {
+                    kind,
+                    universes: next,
+                }),
+                None,
+            ),
+            (
+                ProjectEvent::OpenFailed { output },
+                None,
+                Some(ProjectEffect::Send(EngineCommand::RemoveOutput { output })),
+            ),
+        ];
+        for (event, slot, expected) in cases {
+            let (done, effect) = waiting.update(event).unwrap();
+            assert_eq!(done.output(output), slot);
+            assert_eq!(done.streams(1, 3), slot.is_some());
+            assert_eq!(effect, expected);
+            assert!(!done.restarting(output));
+            assert!(done.update(set(before)).is_ok());
+        }
+    }
+
+    #[test]
+    fn routed_bounds_show_on_the_wire_but_only_runs_count_for_patch_checks() {
+        let four = Universes::new(4).unwrap();
+        let bounds = RunNumbers { first: 1, count: 4 }.check(four).unwrap();
+        let attached = |n| ProjectEvent::Attached {
+            output: output(n),
+            universes: bounds,
+        };
+        let routed = |n| ProjectEvent::Routed {
+            output: output(n),
+            bounds,
+        };
+        let removed = |n| ProjectEvent::Client(Command::RemoveOutput { output: output(n) });
+        let slot = Some(ProjectOutput::Attached { universes: bounds });
+        let cases = [
+            (vec![routed(1)], slot, vec![]),
+            (vec![attached(1), routed(1)], slot, vec![]),
+            (vec![routed(1), attached(2)], slot, vec![(2, None, bounds)]),
+            (vec![routed(1), attached(1)], slot, vec![(1, None, bounds)]),
+            (vec![routed(1), removed(1)], None, vec![]),
+        ];
+        for (events, shown, sends) in cases {
+            let project = events
+                .into_iter()
+                .fold(Project::new(four), |p, e| p.update(e).unwrap().0);
+            assert_eq!(project.output(output(1)), shown);
+            assert_eq!(project.streams(1, 4), !sends.is_empty());
+            assert_eq!(project.sends().collect::<Vec<_>>(), sends);
+        }
+    }
+
+    #[test]
     fn each_output_sends_its_kind_and_run_and_while_it_opens_the_next_too() {
         use ProjectEvent::{Attached, Client, OpenFailed, Opened};
         let four = Universes::new(4).unwrap();
@@ -747,7 +959,7 @@ mod tests {
             ),
             // the same kind keeps its device: the new run counts at once
             (
-                vec![set(1, kind, 1, 1), opened(1, kind), set(1, kind, 1, 2)],
+                vec![set(1, kind, 2, 2), opened(1, kind), set(1, kind, 1, 2)],
                 1,
                 2,
                 true,

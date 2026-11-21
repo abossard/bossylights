@@ -5,7 +5,7 @@
     reason = "the test sends frames at the output's rate; it is not the output thread"
 )]
 
-use outputs::{Adapter, Color, Device, Levels, Outcome, OutputKind, Rate};
+use outputs::{Adapter, Color, Device, Outcome, OutputKind, Rate};
 use std::net::{SocketAddr, UdpSocket};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -22,10 +22,8 @@ fn receiver() -> (UdpSocket, std::net::SocketAddrV4) {
 }
 
 /// Universes whose channel `n` (counted from 0 across the run) holds `n % 251`.
-fn counting(universes: usize) -> Vec<Levels> {
-    (0..universes)
-        .map(|u| Levels(std::array::from_fn(|a| ((u * 512 + a) % 251) as u8)))
-        .collect()
+fn counting(universes: usize) -> Vec<u8> {
+    (0..universes * 512).map(|n| (n % 251) as u8).collect()
 }
 
 #[test]
@@ -95,7 +93,7 @@ fn each_kind_has_its_default_rate() {
 }
 
 /// One frame, then a wait of one period: the output's own rate.
-fn at_its_rate(device: &mut Box<dyn Device>, frame: &[Levels]) -> Outcome {
+fn at_its_rate(device: &mut Box<dyn Device>, frame: &[u8]) -> Outcome {
     let outcome = device.take(frame);
     thread::sleep(Rate::Sixty.period()); // poll: frames go out at the output's rate
     outcome
@@ -110,7 +108,7 @@ fn a_ddp_output_nobody_listens_to_is_steadily_failed_and_runs_again_when_one_lis
         color: Color::Rgb,
     })
     .unwrap();
-    let frame = [Levels([7; 512])];
+    let frame = [7; 512];
     // Two seconds. The host answers the first packet with a refusal, reported on a later
     // send; from then on the output is failed, frame after frame.
     let outcomes: Vec<_> = (0..120).map(|_| at_its_rate(&mut device, &frame)).collect();

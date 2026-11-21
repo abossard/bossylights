@@ -11,7 +11,7 @@ mod common;
 
 use common::{Fake, NEVER, read_message};
 use outputs::dmx_usb_pro::{DmxUsbPro, Find, MESSAGE, never_wait};
-use outputs::{Device, Levels, Outcome};
+use outputs::{Device, Outcome};
 use serialport::TTYPort;
 use std::io::Read;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -20,7 +20,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 /// Takes the frame once the link is free: a busy link drops it, so try again until it is accepted.
-fn take_when_free(device: &mut DmxUsbPro, frame: &[Levels]) {
+fn take_when_free(device: &mut DmxUsbPro, frame: &[u8]) {
     let started = Instant::now();
     while device.take(frame) != Outcome::Accepted {
         assert!(
@@ -38,13 +38,10 @@ fn every_frame_is_one_send_dmx_message() {
     let mut end = fake.next_end();
     // (frame, channel 1, channel 512)
     let cases = [
-        (vec![Levels([0; 512])], 0, 0),
-        (
-            vec![Levels(std::array::from_fn(|n| (n % 256) as u8))],
-            0,
-            255,
-        ),
-        (vec![Levels([200; 512]), Levels([1; 512])], 200, 200),
+        (vec![0; 512], 0, 0),
+        ((0..512).map(|n| (n % 256) as u8).collect(), 0, 255),
+        ([[200; 512], [1; 512]].concat(), 200, 200),
+        (vec![7, 8, 9], 7, 0),
     ];
     for (frame, first, last) in cases {
         take_when_free(&mut device, &frame);
@@ -55,6 +52,9 @@ fn every_frame_is_one_send_dmx_message() {
             "header, start code 0"
         );
         assert_eq!((message[5], message[5 + 511]), (first, last));
+        let (used, padding) = message[5..5 + 512].split_at(frame.len().min(512));
+        assert_eq!(used, &frame[..used.len()]);
+        assert!(padding.iter().all(|&slot| slot == 0));
         assert_eq!(message[MESSAGE - 1], 0xE7, "end of message");
     }
 }
@@ -63,7 +63,7 @@ fn every_frame_is_one_send_dmx_message() {
 fn an_unplugged_port_fails_until_the_port_thread_opens_a_new_one() {
     let (find, mut fake) = Fake::new(true);
     let mut device = DmxUsbPro::open(find).unwrap();
-    let frame = [Levels([42; 512])];
+    let frame = [42; 512];
     take_when_free(&mut device, &frame);
 
     drop(fake.next_end()); // unplugged
@@ -114,7 +114,7 @@ fn a_port_that_takes_no_bytes_is_lost_then_found_again() {
         let reading = Arc::clone(&reading);
         thread::spawn(move || {
             let mut device = device;
-            let frame = [Levels([1; 512])];
+            let frame = [1; 512];
             let mut seen: Vec<Outcome> = vec![];
             while !(seen.contains(&Outcome::Failed) && seen.last() == Some(&Outcome::Accepted)) {
                 let outcome = device.take(&frame);
@@ -156,7 +156,7 @@ fn take_until_stuck(device: &mut DmxUsbPro) -> Vec<u8> {
     let (mut accepted, mut dropped, started) = (vec![], 0, Instant::now());
     for level in 1..=u8::MAX {
         assert!(started.elapsed() < NEVER, "never full"); // guard
-        match device.take(&[Levels([level; 512])]) {
+        match device.take(&[level; 512]) {
             Outcome::Accepted => {
                 accepted.push(level);
                 dropped = 0;
@@ -185,7 +185,7 @@ fn a_loss_throws_away_no_accepted_frame_they_go_out_first_on_the_new_port_in_ord
     let (mut failed, started) = (false, Instant::now());
     loop {
         assert!(started.elapsed() < NEVER, "never back"); // guard
-        match device.take(&[Levels([0; 512])]) {
+        match device.take(&[0; 512]) {
             Outcome::Accepted if failed => break,
             Outcome::Failed => failed = true,
             Outcome::Accepted | Outcome::Dropped => {}
@@ -207,7 +207,7 @@ fn a_stop_in_the_middle_of_a_message_finishes_it() {
     let (mut dropped, started) = (0, Instant::now());
     while dropped < 20 {
         assert!(started.elapsed() < Duration::from_secs(10), "never full");
-        dropped = match device.take(&[Levels([7; 512])]) {
+        dropped = match device.take(&[7; 512]) {
             Outcome::Dropped => dropped + 1,
             Outcome::Accepted | Outcome::Failed => 0,
         };

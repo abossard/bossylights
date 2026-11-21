@@ -8,8 +8,8 @@ mod common;
 
 use common::Fake;
 use engine::{
-    Adapter, ChannelNumbers, Command, Device, Engine, Levels, Open, Outcome, OutputKind,
-    OutputNumber, Rate, Refusal, RunNumbers, Sender, Status, Universes,
+    Adapter, ChannelNumbers, Command, Device, Engine, Open, Outcome, OutputKind, OutputNumber,
+    Rate, Refusal, RunNumbers, Sender, Status, Universes,
 };
 use outputs::dmx_usb_pro::{DmxUsbPro, Find, MESSAGE, never_wait};
 use serialport::{SerialPort, TTYPort};
@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 struct Nowhere;
 
 impl Device for Nowhere {
-    fn take(&mut self, _frame: &[Levels]) -> Outcome {
+    fn take(&mut self, _frame: &[u8]) -> Outcome {
         Outcome::Accepted
     }
 }

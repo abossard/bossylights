@@ -1,4 +1,4 @@
-//! DDP over UDP, as WLED reads it. A frame's run of universes is one stream of channels;
+//! DDP over UDP, as WLED reads it. A frame is one stream of channel bytes;
 //! it goes out in packets of at most [`MAX_DATA`] bytes, the push flag on the last one.
 //!
 //! | Byte | Header field |
@@ -10,8 +10,7 @@
 //! | 4 to 7 | offset of this packet's data in the frame, bytes, big endian |
 //! | 8 to 9 | length of this packet's data, bytes, big endian |
 
-use crate::{Color, Device, Levels, Outcome};
-use engine_core::ADDRESSES;
+use crate::{Color, Device, Outcome};
 use std::io::{self, ErrorKind};
 use std::net::{Ipv4Addr, SocketAddrV4, UdpSocket};
 use std::num::NonZeroU16;
@@ -264,9 +263,9 @@ impl Ddp {
     }
 
     /// Sends the frame as packets; stops at the first that fails.
-    fn send(&mut self, frame: &[Levels]) -> Event {
+    fn send(&mut self, stream: &[u8]) -> Event {
         self.sequence = next_sequence(self.sequence);
-        let total = data_length(frame.len() * ADDRESSES, self.color);
+        let total = data_length(stream.len(), self.color);
         for (offset, length, last) in packets(total) {
             let (header, data) = self.packet.split_at_mut(HEADER);
             header.copy_from_slice(&self::header(
@@ -276,11 +275,13 @@ impl Ddp {
                 length,
                 last,
             ));
-            let Some(data) = data.get_mut(..length) else {
-                // cannot happen: length is at most MAX_DATA
+            let (Some(data), Some(bytes)) =
+                (data.get_mut(..length), stream.get(offset..offset + length))
+            else {
+                // Each packet fits the buffer and is within the whole-pixel stream.
                 return Event::Failed(Fault::SocketBroken);
             };
-            channels(frame, offset, data);
+            data.copy_from_slice(bytes);
             let Some(packet) = self.packet.get(..HEADER + length) else {
                 return Event::Failed(Fault::SocketBroken);
             };
@@ -308,9 +309,9 @@ impl Device for Ddp {
     /// Sends the frame as packets. A busy link drops the rest of the frame. A device that
     /// refused stays failed until `CLEAN` frames went out without a refusal. Running means
     /// frames were sent: DDP has no answer from the device.
-    fn take(&mut self, frame: &[Levels]) -> Outcome {
+    fn take(&mut self, stream: &[u8]) -> Outcome {
         self.renew();
-        let event = self.send(frame);
+        let event = self.send(stream);
         let (health, ask) = next(self.health, event);
         self.health = health;
         if ask == Ask::NewSocket {
@@ -362,27 +363,6 @@ fn header(sequence: u8, color: Color, offset: usize, length: usize, last: bool) 
     let [l0, l1] = u16::try_from(length).unwrap_or(u16::MAX).to_be_bytes();
     let flags = if last { VERSION | PUSH } else { VERSION };
     [flags, sequence, kind, DESTINATION, o0, o1, o2, o3, l0, l1]
-}
-
-/// Copies the channels from `offset` of the frame's stream into `out`, a universe's slice
-/// at a time (a byte at a time took 20 to 40 µs of a 64-universe frame, #130). Past the
-/// frame's end, `out` keeps what it held.
-fn channels(frame: &[Levels], offset: usize, out: &mut [u8]) {
-    let mut done = 0;
-    while let Some(rest) = out.get_mut(done..).filter(|rest| !rest.is_empty()) {
-        let at = offset + done;
-        let Some(from) = frame
-            .get(at / ADDRESSES)
-            .and_then(|universe| universe.0.get(at % ADDRESSES..))
-        else {
-            return;
-        };
-        let n = from.len().min(rest.len());
-        if let (Some(to), Some(from)) = (rest.get_mut(..n), from.get(..n)) {
-            to.copy_from_slice(from);
-        }
-        done += n;
-    }
 }
 
 #[cfg(test)]
@@ -455,28 +435,6 @@ mod tests {
         ];
         for (sequence, color, offset, length, last, expected) in cases {
             assert_eq!(header(sequence, color, offset, length, last), expected);
-        }
-    }
-
-    #[test]
-    fn channels_run_across_universes() {
-        let mut frame = [Levels::ZERO; 2];
-        frame[0].0[510] = 1;
-        frame[0].0[511] = 2;
-        frame[1].0[0] = 3;
-        // (offset, length, bytes)
-        let cases = [
-            (510, 3, vec![1, 2, 3]),
-            (511, 2, vec![2, 3]),
-            (512, 1, vec![3]),
-            (0, 2, vec![0, 0]),
-            (1023, 2, vec![0, 9]), // past the frame: left as it was
-            (1024, 1, vec![9]),
-        ];
-        for (offset, length, expected) in cases {
-            let mut out = vec![9; length];
-            channels(&frame, offset, &mut out);
-            assert_eq!(out, expected, "{offset}");
         }
     }
 
@@ -656,7 +614,7 @@ mod tests {
     fn refusals_now_and_then_keep_the_output_failed_until_a_clean_stretch() {
         let reopen: Reopen = Box::new(|| Err(io::Error::other("not needed")));
         let mut ddp = Ddp::with(Box::new(Refused(6, 0)), reopen, Color::Rgb).unwrap();
-        let frame = [Levels::ZERO];
+        let frame = [0; engine_core::ADDRESSES];
         let outcomes: Vec<_> = (0..198).map(|_| ddp.take(&frame)).collect(); // ends on a refusal
         // The first five frames went out before the first refusal.
         assert!(
@@ -711,7 +669,7 @@ mod tests {
             Color::Rgb,
         )
         .unwrap();
-        let frame = [Levels::ZERO];
+        let frame = [0; engine_core::ADDRESSES];
         assert_eq!(
             ddp.take(&frame),
             Outcome::Failed,

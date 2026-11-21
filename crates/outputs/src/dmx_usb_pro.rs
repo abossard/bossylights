@@ -7,7 +7,7 @@
 //! | 1 | label 6: send DMX |
 //! | 2 to 3 | data length, little endian: 513 |
 //! | 4 | DMX start code 0 |
-//! | 5 to 516 | 512 channels: the first 512 of the run |
+//! | 5 to 516 | 512 channels: the routed stream, zero-padded |
 //! | 517 | end of message `0xE7` |
 //!
 //! Who does what:
@@ -17,7 +17,7 @@
 //! | output thread | [`DmxUsbPro::take`]: puts the message in a one-slot wait-free queue and wakes the port thread. Never calls the serial driver: a vanishing device holds the driver up for many milliseconds |
 //! | port thread, one per adapter | owns the port: writes each message, never more often than the link drains. While the adapter is not there yet, or after a write fails or the port takes no byte for [`STALLED_FOR`] (then it closes the port first), it looks for the adapter every [`LOOK_EVERY`] |
 
-use crate::{Adapter, Device, Levels, Outcome};
+use crate::{Adapter, Device, Outcome};
 use engine_core::ADDRESSES;
 use nix::errno::Errno;
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
@@ -53,13 +53,16 @@ const QUEUE_FULL: Duration = Duration::from_millis(1);
 /// being gone, and a person sees a stall within about that time anyway.
 const STALLED_FOR: Duration = Duration::from_millis(500);
 
-/// Writes the message for a frame into `out`: the first 512 channels of the run.
-fn message(frame: &[Levels], out: &mut [u8; MESSAGE]) {
+/// Writes the first 512 stream bytes, with zeroes in any unused slots.
+fn message(stream: &[u8], out: &mut [u8; MESSAGE]) {
     let [lsb, msb] = ((ADDRESSES + 1) as u16).to_le_bytes();
     let (head, rest) = out.split_at_mut(5);
     head.copy_from_slice(&[0x7E, 6, lsb, msb, 0]);
     let (channels, end) = rest.split_at_mut(ADDRESSES);
-    channels.copy_from_slice(&frame.first().map_or([0; ADDRESSES], |universe| universe.0));
+    let bytes = stream.get(..ADDRESSES).unwrap_or(stream);
+    let (routed, padding) = channels.split_at_mut(bytes.len());
+    routed.copy_from_slice(bytes);
+    padding.fill(0);
     end.copy_from_slice(&[0xE7]);
 }
 
@@ -142,14 +145,14 @@ impl DmxUsbPro {
 impl Device for DmxUsbPro {
     /// Hands the message to the port thread. While it has not taken the last one yet,
     /// this frame is dropped; while the port is lost, it fails.
-    fn take(&mut self, frame: &[Levels]) -> Outcome {
+    fn take(&mut self, stream: &[u8]) -> Outcome {
         if self.shared.lost.load(Ordering::Acquire) {
             return Outcome::Failed;
         }
         if self.to_port.is_full() {
             return Outcome::Dropped;
         }
-        message(frame, &mut self.message);
+        message(stream, &mut self.message);
         match self.to_port.push(self.message) {
             Ok(()) => {
                 if let Some(port_thread) = &self.port_thread {
@@ -542,22 +545,17 @@ mod tests {
 
     #[test]
     fn a_frame_becomes_one_send_dmx_message() {
-        let counting = Levels(std::array::from_fn(|n| (n % 251) as u8));
+        let counting = (0..ADDRESSES).map(|n| (n % 251) as u8).collect();
         // (frame, channel 1, channel 512)
         let cases = [
             (vec![], 0, 0),
-            (vec![counting], 0, (511 % 251) as u8),
-            (vec![Levels([9; ADDRESSES]), Levels([3; ADDRESSES])], 9, 9),
+            (counting, 0, (511 % 251) as u8),
+            ([[9; ADDRESSES], [3; ADDRESSES]].concat(), 9, 9),
         ];
         for (frame, first, last) in cases {
             let mut out = [0xAA; MESSAGE];
             message(&frame, &mut out);
-            assert_eq!(
-                out[..5],
-                [0x7E, 6, 0x01, 0x02, 0],
-                "{} universes",
-                frame.len()
-            );
+            assert_eq!(out[..5], [0x7E, 6, 0x01, 0x02, 0], "{} bytes", frame.len());
             assert_eq!((out[5], out[516]), (first, last));
             assert_eq!(out[517], 0xE7);
         }

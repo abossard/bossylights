@@ -3,8 +3,8 @@
 //! lateness p99 and command-to-device-handoff p95 in nanoseconds for each output.
 
 use engine::{
-    ChannelNumbers, Color, Command, Device, Engine, Levels, Outcome, OutputKind, OutputNumber,
-    Rate, RunNumbers, Timing, Timings, Universes,
+    ChannelNumbers, Color, Command, Device, Engine, Outcome, OutputKind, OutputNumber, Rate,
+    RunNumbers, Timing, Timings, Universes,
 };
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -103,7 +103,7 @@ fn baseline(duration: Duration) -> ExitCode {
 struct Nowhere;
 
 impl Device for Nowhere {
-    fn take(&mut self, _frame: &[Levels]) -> Outcome {
+    fn take(&mut self, _frame: &[u8]) -> Outcome {
         Outcome::Accepted
     }
 }

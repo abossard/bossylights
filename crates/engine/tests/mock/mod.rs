@@ -5,9 +5,7 @@
 
 #![allow(dead_code, reason = "each test binary uses only part of it")]
 
-use engine::{
-    ADDRESSES, Device, Levels, Outcome, OutputNumber, Rate, RunNumbers, Sender, Universes,
-};
+use engine::{ADDRESSES, Device, Outcome, OutputNumber, Rate, RunNumbers, Sender, Universes};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use std::thread;
@@ -73,19 +71,14 @@ pub fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
 struct Mock(Arc<Heard>);
 
 impl Device for Mock {
-    fn take(&mut self, frame: &[Levels]) -> Outcome {
-        let levels = frame.iter().flat_map(|universe| universe.0.iter());
-        for (cell, level) in self.0.levels.iter().zip(levels) {
+    fn take(&mut self, frame: &[u8]) -> Outcome {
+        for (cell, level) in self.0.levels.iter().zip(frame) {
             cell.store(*level, Ordering::Relaxed);
         }
         let n = self.0.frames.load(Ordering::Relaxed) + 1;
-        let first = frame.first().map_or(0, |universe| universe.0[0]);
+        let first = frame.first().copied().unwrap_or(0);
         self.0.history[(n % HISTORY as u64) as usize].store(first, Ordering::Relaxed);
-        let lit = frame
-            .iter()
-            .flat_map(|u| u.0.iter())
-            .filter(|l| **l > 0)
-            .count();
+        let lit = frame.iter().filter(|l| **l > 0).count();
         self.0.lit[(n % HISTORY as u64) as usize].store(lit, Ordering::Relaxed);
         self.0.frames.store(n, Ordering::Release);
         Outcome::Accepted

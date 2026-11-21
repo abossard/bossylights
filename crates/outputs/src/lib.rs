@@ -6,10 +6,9 @@
 //! ([`dmx_usb_pro`]): the engine sees only failed, then accepted frames.
 //!
 //! ```text
-//! API thread:    open(kind) -> Box<dyn Device>   socket made, connected, non-blocking
-//!                    |  engine: Sender::attach (the same door for a test's own device)
-//!                    v
-//! output thread: device.take(frame) -> Outcome   never waits, never allocates
+//! blocking pool: open(kind) -> Box<dyn Device>, then start its lane
+//! tick thread:   gather route into a spare box, hand the box to the lane
+//! output thread: device.take(stream) -> Outcome   never waits, never allocates
 //! ```
 
 #![forbid(unsafe_code)]
@@ -24,15 +23,15 @@ mod ddp;
 pub mod dmx_usb_pro;
 
 pub use engine_core::{Adapter, Color, Levels, Outcome, OutputKind, Rate, Refusal, Run};
+use engine_core::{ROUTE_MOST, RouteFault, SPANS_MOST, Span, route_length};
 
 use std::io;
 use std::num::NonZeroU16;
 
 /// An output, opened and ready for the output thread. Made and dropped off it.
 pub trait Device: Send {
-    /// Hands over a frame: the output's run of universes. Never waits: a device that is
-    /// busy drops the frame.
-    fn take(&mut self, frame: &[Levels]) -> Outcome;
+    /// Takes the route's bytes in order, without waiting or allocating. A busy device drops the frame.
+    fn take(&mut self, stream: &[u8]) -> Outcome;
 }
 
 /// Opens the device for `kind`. Blocks for as long as the system takes: call it off the
@@ -54,6 +53,10 @@ pub fn open(kind: OutputKind) -> io::Result<Box<dyn Device>> {
 pub struct Limits {
     /// The most universes in one output's run.
     pub universes: u16,
+    /// The most spans in one route.
+    pub spans: usize,
+    /// The most bytes in their joined stream.
+    pub channels: u32,
     /// The run's channels go out in whole units of this many: the last channels of a run
     /// that make no whole unit are never sent. DDP: a pixel, 3 for RGB, 4 for RGBW.
     pub whole: NonZeroU16,
@@ -64,17 +67,32 @@ pub struct Limits {
 pub const fn limits(kind: OutputKind) -> Limits {
     match kind {
         OutputKind::Ddp { color, .. } => Limits {
-            universes: engine_core::MAX_UNIVERSES,
             whole: ddp::pixel(color),
+            ..Limits::RAW
         },
         OutputKind::DmxUsbPro { .. } => Limits {
             universes: 1,
+            spans: 1,
+            channels: engine_core::ADDRESSES as u32,
             whole: NonZeroU16::MIN,
         },
     }
 }
 
 impl Limits {
+    /// A device brought through the engine's attach door takes every routed byte.
+    pub const RAW: Self = Self {
+        universes: engine_core::MAX_UNIVERSES,
+        spans: SPANS_MOST,
+        channels: ROUTE_MOST,
+        whole: NonZeroU16::MIN,
+    };
+
+    /// The length in bytes of a route this kind can send.
+    pub fn route(self, spans: &[Span]) -> Result<u32, RouteFault> {
+        route_length(spans, self.spans, self.channels, self.whole)
+    }
+
     /// The run, if all of it fits; else why not, naming the limit.
     pub const fn check(self, run: Run) -> Result<Run, Refusal> {
         if run.count() <= self.universes {
@@ -100,6 +118,31 @@ mod tests {
     use super::*;
     use engine_core::{MAX_UNIVERSES, RunNumbers, Universes};
     use std::net::{Ipv4Addr, SocketAddrV4};
+
+    #[test]
+    fn each_kind_checks_its_span_count_and_joined_length() {
+        let ddp = OutputKind::Ddp {
+            address: SocketAddrV4::new(Ipv4Addr::LOCALHOST, 4048),
+            color: Color::Rgbw,
+        };
+        let usb = OutputKind::DmxUsbPro {
+            adapter: Adapter::FIRST,
+        };
+        let span = |len| Span { start: 0, len };
+        let cases = [
+            (usb, vec![span(1); 2], None),
+            (usb, vec![span(513)], None),
+            (usb, vec![span(512)], Some(512)),
+            (ddp, vec![span(319)], None),
+            (ddp, vec![span(320)], Some(320)),
+            (ddp, vec![span(64); SPANS_MOST], Some(ROUTE_MOST)),
+            (ddp, vec![span(64); SPANS_MOST + 1], None),
+            (ddp, vec![span(16_385); 4], None),
+        ];
+        for (kind, spans, expected) in cases {
+            assert_eq!(limits(kind).route(&spans).ok(), expected, "{kind:?}");
+        }
+    }
 
     #[test]
     fn each_kind_takes_the_runs_it_can_send() {

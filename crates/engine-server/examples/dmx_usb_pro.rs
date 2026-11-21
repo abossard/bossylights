@@ -15,8 +15,8 @@
 //! 2 ms is printed with the time it was seen (within 10 ms), so a failed run says when.
 
 use engine::{
-    ChannelNumbers, Command, Counters, Device, Engine, Levels, Outcome, OutputKind, OutputNumber,
-    Rate, RunNumbers, State, Status, Universes,
+    ChannelNumbers, Command, Counters, Device, Engine, Outcome, OutputKind, OutputNumber, Rate,
+    RunNumbers, State, Status, Universes,
 };
 #[path = "../src/report_line.rs"]
 mod report_line;
@@ -61,7 +61,7 @@ fn main() -> ExitCode {
 struct Nowhere;
 
 impl Device for Nowhere {
-    fn take(&mut self, _frame: &[Levels]) -> Outcome {
+    fn take(&mut self, _frame: &[u8]) -> Outcome {
         Outcome::Accepted
     }
 }
@@ -73,7 +73,7 @@ struct Timed {
 }
 
 impl Device for Timed {
-    fn take(&mut self, frame: &[Levels]) -> Outcome {
+    fn take(&mut self, frame: &[u8]) -> Outcome {
         let started = Instant::now();
         let outcome = self.device.take(frame);
         let took = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);

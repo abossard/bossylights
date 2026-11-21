@@ -602,14 +602,14 @@ fn main() {
 /// With reclamation held, a free anywhere (including on either output thread) fails.
 #[cfg(feature = "test-support")]
 fn output_health() {
-    use engine::{Device, Levels, Outcome, OutputNumber, Status};
+    use engine::{Device, Outcome, OutputNumber, Route, Span, Status};
     use engine_core::health::HealthSample;
     use std::time::Duration;
 
     struct UnplugOnOne;
     impl Device for UnplugOnOne {
-        fn take(&mut self, frame: &[Levels]) -> Outcome {
-            if frame[0].0[0] == 1 {
+        fn take(&mut self, frame: &[u8]) -> Outcome {
+            if frame[0] == 1 {
                 Outcome::Failed
             } else {
                 Outcome::Accepted
@@ -626,7 +626,8 @@ fn output_health() {
     wakes.hold().unwrap();
     engine.stall_reclamation(true);
     let one = OutputNumber::try_from(1).unwrap();
-    let run = RunNumbers { first: 1, count: 1 }.check(universes).unwrap();
+    let kind = engine_core::TEST_STREAM_KIND;
+    let spans = [Span { start: 0, len: 2 }, Span { start: 512, len: 1 }];
     let channel = ChannelNumbers {
         universe: 1,
         address: 1,
@@ -636,7 +637,12 @@ fn output_health() {
     for generation in 1..=2 {
         // The front makes the lane and its boxes. Count from before the tick applies it.
         sender
-            .attach(one, Box::new(UnplugOnOne), run, Rate::Sixty)
+            .attach_route(
+                one,
+                Box::new(UnplugOnOne),
+                Route::new(outputs::limits(kind), &spans).unwrap(),
+                Rate::Sixty,
+            )
             .unwrap();
         let before = counts();
         let mut initial_presses = 0;
@@ -673,13 +679,23 @@ fn output_health() {
 
     // A reconfigure that keeps the lane, with a frame of the old generation in flight.
     let two = OutputNumber::try_from(2).unwrap();
-    let set_two = |first| Command::SetOutput {
+    let set_two = |first, count| Command::SetOutput {
         output: two,
-        kind: engine_core::TEST_KIND,
-        universes: RunNumbers { first, count: 1 },
+        kind,
+        universes: RunNumbers { first, count },
         rate: Some(Rate::Sixty),
     };
-    counting::uncounted(|| sender.send(set_two(1))).unwrap();
+    let Begun::Opening(opening) = begin(&mut sender, set_two(1, 1), &[]).unwrap() else {
+        panic!("the new device needs an opening");
+    };
+    let opened = opening.open();
+    let before = counts();
+    sender.finish(opened).unwrap();
+    assert_eq!(
+        counts(),
+        before,
+        "publishing a ready lane allocated or freed"
+    );
     let runs = |engine: &mut Engine, sender: &Sender, generation, presses| {
         let mut sample = HealthSample::new(Duration::ZERO, 0, Status::NotFound);
         mock::wait_until("output 2 did not run", || {
@@ -695,7 +711,7 @@ fn output_health() {
     let before = counts();
     wakes.wake().unwrap(); // hands a frame of generation 1
     assert!(
-        send(&mut sender, set_two(2), &[]),
+        send(&mut sender, set_two(2, 1), &[]),
         "output 2 moves, same device"
     );
     sender
@@ -707,7 +723,26 @@ fn output_health() {
         before,
         "allocation or free during a reconfigure that keeps the lane"
     );
+    // Retire the lane with the free thread stalled. The only work in this
+    // window is the tick handing the old lane back and serving the routed mirror.
+    let restart = begin(&mut sender, set_two(1, 2), &[]).unwrap();
+    let Begun::Opening(restart) = restart else {
+        panic!("a longer route needs new boxes");
+    };
+    let before = counts();
+    wakes.wake().unwrap();
+    assert_eq!(counts(), before, "retiring the lane allocated or freed");
+
     engine.stall_reclamation(false);
+    let opened = restart.open(); // the worker joins one thread and starts another
+    let before = counts();
+    sender.finish(opened).unwrap();
+    runs(&mut engine, &sender, 4, 0);
+    assert_eq!(
+        counts(),
+        before,
+        "installing or serving the restarted lane allocated or freed"
+    );
 }
 
 /// Queue two replacement revisions while every once-use crosses its end between wakes.
