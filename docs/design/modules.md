@@ -61,7 +61,7 @@ flowchart LR
   LIB --> PROJ
   PROJ --> MIX
   CLOCK --> MIX
-  MIX -- "look" --> RIG -- "universes" --> OUT
+  MIX -- "look" --> RIG -- "channel space" --> OUT
   MIX -. "state" .-> DOOR
 ```
 
@@ -126,13 +126,17 @@ sequenceDiagram
   participant D as Engine
   participant M as Mixer
   participant R as Rig
+  participant C as Channel space
   participant O as Output
   S->>D: send(start Sunset on Manual)
   D->>M: apply(command)
-  loop each output, at its own rate
-    O->>M: frame(time), gives a look
-    M->>R: resolve(look), gives universes
-    R->>O: universes
+  loop each frame
+    M->>R: resolve the look
+    R->>C: write the channel values
+    loop each output due
+      O->>C: gather this output's route
+      C-->>O: bytes in route order
+    end
   end
   M-->>D: state
   D-->>S: reflect(state)

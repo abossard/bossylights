@@ -442,18 +442,13 @@ fn reserve(history: &Arc<Semaphore>, bytes: usize) -> Result<OwnedSemaphorePermi
 /// The answer when it is taken, `Stopping` when the engine stops first: nothing changed.
 async fn send(api: &Api, command: Command) -> Result<Reply<'static>, Refusal> {
     let shelf = Arc::clone(&api.shelf.borrow());
-    // Opening a device can finish later. Reserve its single visible output change
-    // before starting it, so completion always has somewhere to publish.
-    let mut credit = if matches!(
+    let mut credit = None;
+    let output_edit = matches!(
         command,
         Command::SetOutput { .. } | Command::RemoveOutput { .. }
-    ) {
-        Some(reserve(&api.history, REVISION_BYTES)?)
-    } else {
-        None
-    };
-    let begun = if engine::edits(&command) {
-        edit(api, command, &shelf).await
+    );
+    let begun = if output_edit || engine::edits(&command) {
+        edit(api, command, &shelf, &mut credit).await
     } else {
         api.changing(&mut credit, |sender| {
             sender.begin(command, shelf.fixtures())
@@ -484,7 +479,12 @@ async fn send(api: &Api, command: Command) -> Result<Reply<'static>, Refusal> {
 
 /// Prepares the edit `command` on the blocking pool and admits it, again while another
 /// change replaced its base, [`PREPARES`] times at most. `None` once the engine stops.
-async fn edit(api: &Api, command: Command, shelf: &Arc<Shelf>) -> Option<Result<Begun, Refusal>> {
+async fn edit(
+    api: &Api,
+    command: Command,
+    shelf: &Arc<Shelf>,
+    opening_credit: &mut Option<OwnedSemaphorePermit>,
+) -> Option<Result<Begun, Refusal>> {
     let mut begun = Some(Err(Refusal::Stale));
     for _ in 0..PREPARES {
         // Bound in-flight edits too. A full history refuses before compiling.
@@ -508,8 +508,16 @@ async fn edit(api: &Api, command: Command, shelf: &Arc<Shelf>) -> Option<Result<
         .await;
         begun = match prepared {
             Ok(Ok((prepared, credit))) => {
-                api.changing(&mut Some(credit), |sender| sender.admit(prepared))
-                    .await
+                let mut credit = Some(credit);
+                let admitted = api
+                    .changing(&mut credit, |sender| sender.admit(prepared))
+                    .await;
+                if matches!(admitted, Some(Ok(Begun::Opening(_)))) {
+                    // The pending open has no visible change yet. Keep its place
+                    // in history until the device is ready and finish publishes it.
+                    *opening_credit = credit;
+                }
+                admitted
             }
             // refused before the engine stops, or answered `Stopping` as an admitted one is
             Ok(Err(reason)) => (!*api.stop.borrow()).then_some(Err(reason)),

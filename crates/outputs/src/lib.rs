@@ -30,6 +30,20 @@ use std::num::NonZeroU16;
 
 /// An output, opened and ready for the output thread. Made and dropped off it.
 pub trait Device: Send {
+    /// The route this opened device can send. A byte-oriented test sink takes any route.
+    fn limits(&self) -> Limits {
+        Limits::RAW
+    }
+
+    /// Whether the adapter already owns a worker that reopens a lost connection.
+    fn reconnects_itself(&self) -> bool {
+        false
+    }
+
+    /// Completes any old-route writes and discards queued frames before a reroute.
+    /// Called off the output thread, with exclusive access after the last `take`.
+    fn finish_route(&mut self) {}
+
     /// Takes the route's bytes in order, without waiting or allocating. A busy device drops the frame.
     fn take(&mut self, stream: &[u8]) -> Outcome;
 }
@@ -66,20 +80,26 @@ pub struct Limits {
 /// universe an engine has, in whole pixels.
 pub const fn limits(kind: OutputKind) -> Limits {
     match kind {
-        OutputKind::Ddp { color, .. } => Limits {
-            whole: ddp::pixel(color),
-            ..Limits::RAW
-        },
-        OutputKind::DmxUsbPro { .. } => Limits {
-            universes: 1,
-            spans: 1,
-            channels: engine_core::ADDRESSES as u32,
-            whole: NonZeroU16::MIN,
-        },
+        OutputKind::Ddp { color, .. } => Limits::ddp(color),
+        OutputKind::DmxUsbPro { .. } => Limits::USB,
     }
 }
 
 impl Limits {
+    const USB: Self = Self {
+        universes: 1,
+        spans: 1,
+        channels: engine_core::ADDRESSES as u32,
+        whole: NonZeroU16::MIN,
+    };
+
+    const fn ddp(color: Color) -> Self {
+        Self {
+            whole: ddp::pixel(color),
+            ..Self::RAW
+        }
+    }
+
     /// A device brought through the engine's attach door takes every routed byte.
     pub const RAW: Self = Self {
         universes: engine_core::MAX_UNIVERSES,

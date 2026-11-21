@@ -10,7 +10,7 @@
 //! | 4 to 7 | offset of this packet's data in the frame, bytes, big endian |
 //! | 8 to 9 | length of this packet's data, bytes, big endian |
 
-use crate::{Color, Device, Outcome};
+use crate::{Color, Device, Limits, Outcome};
 use std::io::{self, ErrorKind};
 use std::net::{Ipv4Addr, SocketAddrV4, UdpSocket};
 use std::num::NonZeroU16;
@@ -306,6 +306,14 @@ impl Drop for Ddp {
 }
 
 impl Device for Ddp {
+    fn reconnects_itself(&self) -> bool {
+        true
+    }
+
+    fn limits(&self) -> Limits {
+        Limits::ddp(self.color)
+    }
+
     /// Sends the frame as packets. A busy link drops the rest of the frame. A device that
     /// refused stays failed until `CLEAN` frames went out without a refusal. Running means
     /// frames were sent: DDP has no answer from the device.

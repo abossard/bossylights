@@ -17,11 +17,13 @@
 //! | output thread | [`DmxUsbPro::take`]: puts the message in a one-slot wait-free queue and wakes the port thread. Never calls the serial driver: a vanishing device holds the driver up for many milliseconds |
 //! | port thread, one per adapter | owns the port: writes each message, never more often than the link drains. While the adapter is not there yet, or after a write fails or the port takes no byte for [`STALLED_FOR`] (then it closes the port first), it looks for the adapter every [`LOOK_EVERY`] |
 
-use crate::{Adapter, Device, Outcome};
+use crate::{Adapter, Device, Limits, Outcome};
 use engine_core::ADDRESSES;
 use nix::errno::Errno;
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
-use serialport::{DataBits, FlowControl, Parity, SerialPort, SerialPortType, StopBits, TTYPort};
+use serialport::{
+    ClearBuffer, DataBits, FlowControl, Parity, SerialPort, SerialPortType, StopBits, TTYPort,
+};
 use std::io::{self, ErrorKind};
 use std::os::fd::AsRawFd;
 use std::sync::Arc;
@@ -83,6 +85,8 @@ struct Shared {
     /// Set while there is no port: not found yet, or lost.
     lost: AtomicBool,
     stop: AtomicBool,
+    /// Requested by the opener and cleared by the port thread after old-route writes end.
+    finish_route: AtomicBool,
     /// The system error that lost the port last, 0 if none.
     lost_with: AtomicI32,
 }
@@ -143,6 +147,28 @@ impl DmxUsbPro {
 }
 
 impl Device for DmxUsbPro {
+    fn reconnects_itself(&self) -> bool {
+        true
+    }
+
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the off-thread opener waits for the port worker"
+    )]
+    fn finish_route(&mut self) {
+        if let Some(worker) = &self.port_thread {
+            self.shared.finish_route.store(true, Ordering::Release);
+            worker.thread().unpark();
+            while self.shared.finish_route.load(Ordering::Acquire) && !worker.is_finished() {
+                thread::sleep(QUEUE_FULL);
+            }
+        }
+    }
+
+    fn limits(&self) -> Limits {
+        Limits::USB
+    }
+
     /// Hands the message to the port thread. While it has not taken the last one yet,
     /// this frame is dropped; while the port is lost, it fails.
     fn take(&mut self, stream: &[u8]) -> Outcome {
@@ -189,28 +215,57 @@ struct PortThread {
     link: Link,
     messages: rtrb::Consumer<[u8; MESSAGE]>,
     /// The message whose write lost the port. Written first once the adapter is found
-    /// again, then the one `take` queued meanwhile, if any: a loss throws away no frame
-    /// `take` accepted, and sends them in the order they were taken.
+    /// again, then the one `take` queued meanwhile. A route change discards both.
     unsent: Option<[u8; MESSAGE]>,
     shared: Arc<Shared>,
 }
 
 impl PortThread {
+    /// Between writes, discard pending messages and let bytes already in the
+    /// driver leave before the opener accepts the new route.
+    fn finish_route(&mut self) {
+        self.unsent = None;
+        while self.messages.pop().is_ok() {}
+        if let Some(port) = &self.port
+            && !drain(port)
+        {
+            let _ = port.clear(ClearBuffer::Output);
+            self.lose(Errno::ETIMEDOUT);
+        }
+        self.shared.finish_route.store(false, Ordering::Release);
+    }
+
+    fn lose(&mut self, with: Errno) {
+        self.link = Link::Lost { with };
+        self.shared.lost_with.store(with as i32, Ordering::Relaxed);
+        self.shared.lost.store(true, Ordering::Release);
+        self.port = None;
+    }
+
     #[expect(
         clippy::disallowed_methods,
         reason = "the port thread sleeps; the output thread never does"
     )]
     fn run(mut self) {
         while !self.shared.stop.load(Ordering::Relaxed) {
+            if self.shared.finish_route.load(Ordering::Acquire) {
+                self.finish_route();
+            }
             let Some(port) = &self.port else {
                 // An adapter not found or lost is gone for a while; then look again.
                 // `drop` wakes it; a wake left over from `take` does not cut the wait short.
                 let look_at = Instant::now() + LOOK_EVERY;
-                while Instant::now() < look_at && !self.shared.stop.load(Ordering::Relaxed) {
+                while Instant::now() < look_at
+                    && !self.shared.stop.load(Ordering::Relaxed)
+                    && !self.shared.finish_route.load(Ordering::Acquire)
+                {
                     thread::park_timeout(look_at.saturating_duration_since(Instant::now()));
                 }
                 if self.shared.stop.load(Ordering::Relaxed) {
                     break;
+                }
+                if self.shared.finish_route.load(Ordering::Acquire) {
+                    continue;
                 }
                 if let Ok(port) = (self.find)() {
                     self.port = Some(port);
@@ -232,9 +287,7 @@ impl PortThread {
                 }
                 Link::Lost { with } => {
                     self.unsent = Some(message);
-                    self.shared.lost_with.store(with as i32, Ordering::Relaxed);
-                    self.shared.lost.store(true, Ordering::Release);
-                    self.port = None; // closed here, never on the output thread
+                    self.lose(with);
                 }
                 // A write never leads here: the link was found before it.
                 Link::NotFound => {}
@@ -254,7 +307,7 @@ impl PortThread {
     clippy::disallowed_methods,
     reason = "the port thread sleeps; the output thread never does"
 )]
-fn drain(port: &TTYPort) {
+fn drain(port: &TTYPort) -> bool {
     let held = || port.bytes_to_write().unwrap_or(0);
     let (mut left, mut moved) = (held(), Instant::now());
     while left > 0 && moved.elapsed() < STALLED_FOR {
@@ -266,6 +319,7 @@ fn drain(port: &TTYPort) {
         left = now;
     }
     thread::sleep(LINK_TIME);
+    left == 0
 }
 
 /// Writes the whole message, straight to the system: a full driver queue is waited out

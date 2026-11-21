@@ -12,9 +12,9 @@
 //! ```text
 //! None or other kind --SetOutput--> Opening --Opened--> Kind
 //!                                         --OpenFailed--> as before
-//! same kind, same length --SetOutput--> Kind (lane kept)
-//! same kind, new length  --SetOutput--> Restarting --Opened--> Kind (device kept)
-//!                                                 --OpenFailed--> None
+//! same kind, same run --SetOutput--> Kind (lane kept)
+//! same kind, new run  --SetOutput--> Restarting --Opened--> Kind (device kept)
+//!                                                 --OpenFailed--> old Kind
 //! any --RemoveOutput--> None        any --Attached--> Attached (a device brought by a test)
 //! ```
 
@@ -49,9 +49,9 @@ struct Setup {
 }
 
 impl Setup {
-    /// A routed attachment can have holes; a restarting device has left its old lane.
+    /// A routed attachment can have holes. Its bounds alone never guarantee a stream.
     fn has_run(self) -> bool {
-        !self.routed && !matches!(self.pending, Some(Opening::Restart(_, _)))
+        !self.routed
     }
 }
 
@@ -122,7 +122,7 @@ pub enum ProjectEffect {
     Patch(PatchCommand),
     /// The saved looks and the plays check this and say what follows (`crates/looks`).
     Look(LookCommand),
-    /// The output keeps its device: only its run and rate change.
+    /// The output keeps its lane and run. Its rate may change.
     Keep {
         output: OutputNumber,
         kind: OutputKind,
@@ -190,12 +190,9 @@ impl Project {
                             kind: was,
                             universes: run,
                         }) if was == kind => {
-                            if run.count() == universes.count() {
-                                let project = self.with(output, |slot, _| {
-                                    *slot = Some(ProjectOutput::Kind { kind, universes });
-                                });
+                            if run == universes {
                                 return Ok((
-                                    project,
+                                    self,
                                     Some(ProjectEffect::Keep {
                                         output,
                                         kind,
@@ -372,14 +369,7 @@ impl Project {
                 Ok((project, None))
             }
             ProjectEvent::OpenFailed { output } => {
-                let mut effect = None;
-                let project = self.with(output, |slot, setup| {
-                    if let Some(Opening::Restart(_, _)) = setup.pending.take() {
-                        *slot = None;
-                        effect = Some(ProjectEffect::Send(EngineCommand::RemoveOutput { output }));
-                    }
-                });
-                Ok((project, effect))
+                Ok((self.with(output, |_, setup| setup.pending = None), None))
             }
             ProjectEvent::Attached { output, universes }
             | ProjectEvent::Routed {
@@ -404,8 +394,8 @@ impl Project {
     }
 
     /// Whether one output streams every universe from `first` to `last` as one run. An
-    /// output changing kind must cover it before and after opening. A restarting
-    /// lane can fail and leave no output, so it cannot support a new patch.
+    /// output changing kind must cover it before and after opening. A restart retains the old
+    /// run on failure, so a patch must fit either outcome.
     pub fn streams(&self, first: u16, last: u16) -> bool {
         self.outputs.iter().zip(&self.setup).any(|(output, setup)| {
             if !setup.has_run() {
@@ -426,8 +416,8 @@ impl Project {
 
     /// What each output sends: its number as a client counts it, its kind and its run. The
     /// kind is `None` for a device a test brought, which sends every channel. An output
-    /// changing kind appears with its current and requested runs. A restart sends
-    /// only its requested run once its new lane is ready.
+    /// changing kind appears with its current and requested runs. The same holds for a
+    /// restart until the new lane is ready.
     pub fn sends(&self) -> impl Iterator<Item = (u8, Option<OutputKind>, Run)> + '_ {
         (1_u8..)
             .zip(self.outputs.iter().zip(&self.setup))
@@ -752,7 +742,7 @@ mod tests {
     }
 
     #[test]
-    fn changing_the_route_length_restarts_with_the_same_device() {
+    fn changing_the_run_restarts_with_the_same_device() {
         let output = output(4);
         let kind = kinds::EXAMPLE;
         let four = Universes::new(4).unwrap();
@@ -773,19 +763,28 @@ mod tests {
             .update(opened)
             .unwrap()
             .0;
-        let after = RunNumbers { first: 2, count: 2 };
-        let next = after.check(four).unwrap();
-        let (kept, effect) = ready.update(set(after)).unwrap();
+        let (kept, effect) = ready.update(set(before)).unwrap();
         assert_eq!(
             effect,
             Some(ProjectEffect::Keep {
                 output,
                 kind,
-                universes: next,
+                universes: before.check(four).unwrap(),
                 rate: None
             })
         );
-        assert!(kept.streams(2, 3));
+        assert_eq!(kept, ready);
+
+        let shifted = RunNumbers { first: 2, count: 2 };
+        assert_eq!(
+            ready.update(set(shifted)).unwrap().1,
+            Some(ProjectEffect::Restart {
+                output,
+                kind,
+                universes: shifted.check(four).unwrap(),
+                rate: None
+            })
+        );
 
         let longer = RunNumbers { first: 1, count: 3 };
         let next = longer.check(four).unwrap();
@@ -803,7 +802,10 @@ mod tests {
         assert!(!waiting.streams(1, 3));
         assert_eq!(
             waiting.sends().collect::<Vec<_>>(),
-            vec![(4, Some(kind), next)]
+            vec![
+                (4, Some(kind), before.check(four).unwrap()),
+                (4, Some(kind), next)
+            ]
         );
         let remove = ProjectEvent::Client(Command::RemoveOutput { output });
         for event in [set(before), remove] {
@@ -820,14 +822,14 @@ mod tests {
             ),
             (
                 ProjectEvent::OpenFailed { output },
+                ready.output(output),
                 None,
-                Some(ProjectEffect::Send(EngineCommand::RemoveOutput { output })),
             ),
         ];
         for (event, slot, expected) in cases {
             let (done, effect) = waiting.update(event).unwrap();
             assert_eq!(done.output(output), slot);
-            assert_eq!(done.streams(1, 3), slot.is_some());
+            assert_eq!(done.streams(1, 3), event == opened);
             assert_eq!(effect, expected);
             assert!(!done.restarting(output));
             assert!(done.update(set(before)).is_ok());
@@ -957,9 +959,20 @@ mod tests {
                 2,
                 false,
             ),
-            // the same kind keeps its device: the new run counts at once
+            // A shifted run counts only after its replacement lane is ready.
             (
                 vec![set(1, kind, 2, 2), opened(1, kind), set(1, kind, 1, 2)],
+                1,
+                2,
+                false,
+            ),
+            (
+                vec![
+                    set(1, kind, 2, 2),
+                    opened(1, kind),
+                    set(1, kind, 1, 2),
+                    opened(1, kind),
+                ],
                 1,
                 2,
                 true,

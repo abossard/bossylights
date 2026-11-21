@@ -46,7 +46,7 @@ use engine_core::{RouteFault, Span, bounds, gather};
 use outputs::Limits;
 use std::io;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -92,6 +92,10 @@ impl Route {
     /// The first through last universes the route touches, as API v11 reports them.
     pub fn bounds(&self) -> Run {
         self.bounds
+    }
+
+    pub(crate) fn spans(&self) -> &[Span] {
+        &self.spans
     }
 }
 
@@ -169,34 +173,160 @@ struct Shared {
     stop: AtomicBool,
     /// The thread is in its loop: whatever its start-up allocated is done.
     ready: AtomicBool,
+    failed: AtomicBool,
+    pause: AtomicU8,
 }
 
-/// The tick's end of an output's thread. Dropping it off the tick thread stops the
-/// output thread and returns the device for a restart, or frees it.
+/// Only an opener or the free thread joins a lane. The tick keeps its wait-free wake handle.
+#[derive(Clone)]
+pub(crate) struct Control(Arc<Worker>);
+
+type DeviceBox = Box<dyn Device>;
+type Returning = JoinHandle<Option<DeviceBox>>;
+
+#[expect(
+    clippy::disallowed_types,
+    reason = "only the opener and the free thread join an output worker"
+)]
+struct Worker {
+    shared: Arc<Shared>,
+    wake: thread::Thread,
+    port: std::sync::Mutex<Delivery>,
+}
+
+impl Control {
+    /// The opener and recovery worker transfer devices through these queues.
+    /// The tick and output worker never acquire the port lock.
+    pub(crate) fn install(&self, device: DeviceBox) {
+        let mut delivery = self.0.port.lock().unwrap_or_else(|e| e.into_inner());
+        let reconnects_itself = device.reconnects_itself();
+        if delivery.thread.is_some() && delivery.next.push(device).is_ok() {
+            delivery.reconnects_itself = reconnects_itself;
+            self.0.shared.failed.store(false, Ordering::Release);
+        }
+    }
+
+    pub(crate) fn needs_open(&self) -> bool {
+        let mut delivery = self.0.port.lock().unwrap_or_else(|e| e.into_inner());
+        drop(delivery.old.pop());
+        !delivery.reconnects_itself
+            && !delivery.next.is_full()
+            && self.0.shared.failed.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn pause(&self, paused: bool) {
+        self.0
+            .shared
+            .pause
+            .store(if paused { PAUSING } else { SERVING }, Ordering::Release);
+        self.0.wake.unpark();
+    }
+
+    pub(crate) fn quiet(&self) -> bool {
+        self.0.shared.pause.load(Ordering::Acquire) == QUIET
+    }
+
+    pub(crate) fn closed(&self) -> bool {
+        self.0.shared.stop.load(Ordering::Acquire)
+    }
+
+    /// Finishes the send already in the adapter before returning the device. Queued
+    /// frames can never start afterwards. Called outside the publisher lock.
+    pub(crate) fn take(&self) -> Option<DeviceBox> {
+        self.0.shared.stop.store(true, Ordering::Release);
+        self.0.wake.unpark();
+        let mut port = self.0.port.lock().unwrap_or_else(|e| e.into_inner());
+        let thread = port.thread.take()?;
+        drop(port.old.pop());
+        let mut device = thread.join().ok()??;
+        drop(port.old.pop());
+        device.finish_route();
+        Some(device)
+    }
+}
+
+/// A lane can start before the old device changes hands. Replacements, including a
+/// reopened adapter, travel in one direction; displaced devices are freed off thread.
+struct Delivery {
+    reconnects_itself: bool,
+    thread: Option<Returning>,
+    next: rtrb::Producer<DeviceBox>,
+    old: rtrb::Consumer<DeviceBox>,
+}
+
+struct Devices {
+    current: Option<DeviceBox>,
+    next: rtrb::Consumer<DeviceBox>,
+    old: rtrb::Producer<DeviceBox>,
+}
+
+impl Devices {
+    fn receive(&mut self) {
+        if !self.old.is_full()
+            && let Ok(device) = self.next.pop()
+            && let Some(old) = self.current.replace(device)
+        {
+            let _ = self.old.push(old);
+        }
+    }
+}
+
+/// The tick keeps the last accepted lane and its boxes throughout a pending restart.
 pub(crate) struct Lane {
     spans: Box<[Span]>,
     frames: rtrb::Producer<Frame>,
     back: rtrb::Consumer<Frame>,
     spare: [Option<Frame>; BOXES],
-    shared: Arc<Shared>,
-    thread: Option<JoinHandle<Box<dyn Device>>>,
-    hand_back: Option<rtrb::Producer<Box<dyn Device>>>,
+    pub(crate) control: Control,
+    /// The attachment that resumed after a refused restart, for loss reporting.
+    pub(crate) resumed: Option<u64>,
+}
+
+/// Rendezvous on the thread preparing an output. Dropping the release end lets it run.
+#[cfg(feature = "test-support")]
+#[expect(
+    clippy::disallowed_types,
+    reason = "only the test and the blocking opener rendezvous"
+)]
+pub(crate) struct StartPause {
+    pub reached: std::sync::mpsc::Sender<()>,
+    pub release: std::sync::mpsc::Receiver<()>,
 }
 
 impl Lane {
     /// Starts `device`'s own thread with real-time priority and boxes sized to the route.
     /// Off the tick thread: it allocates and starts a thread. Returns once
     /// the thread is in its loop. Fails only when the system refuses a thread.
-    pub(crate) fn start(device: Box<dyn Device>, route: Route, clock: Clock) -> io::Result<Self> {
+    pub(crate) fn start(
+        device: Option<Box<dyn Device>>,
+        route: Route,
+        clock: Clock,
+        #[cfg(feature = "test-support")] pause: Option<StartPause>,
+    ) -> io::Result<Self> {
+        #[cfg(feature = "test-support")]
+        if let Some(pause) = pause {
+            let _ = pause.reached.send(());
+            let _ = pause.release.recv();
+        }
         let (frames, waiting) = rtrb::RingBuffer::new(BOXES);
         let (done, back) = rtrb::RingBuffer::new(BOXES);
         let shared = Arc::new(Shared {
             stop: AtomicBool::new(false),
             ready: AtomicBool::new(false),
+            failed: AtomicBool::new(false),
+            pause: AtomicU8::new(SERVING),
         });
+        let (next, receive) = rtrb::RingBuffer::new(1);
+        let (retire, old) = rtrb::RingBuffer::new(1);
+        let reconnects_itself = device.as_ref().is_some_and(|d| d.reconnects_itself());
+        let devices = Devices {
+            current: device,
+            next: receive,
+            old: retire,
+        };
         let (thread, _) = rt_thread::spawn(THREAD, {
             let shared = Arc::clone(&shared);
-            move |_| run(device, waiting, done, &shared, &clock)
+            move |_| run(devices, waiting, done, &shared, &clock)
         })?;
         while !shared.ready.load(Ordering::Acquire) {
             thread::yield_now();
@@ -210,27 +340,33 @@ impl Lane {
                 sent: None,
             })
         });
+        let control = Control(Arc::new(Worker {
+            shared,
+            wake: thread.thread().clone(),
+            port: Delivery {
+                reconnects_itself,
+                thread: None,
+                next,
+                old,
+            }
+            .into(),
+        }));
+        // Publish the join handle here. This also initializes the platform mutex
+        // during setup, before the lane enters service.
+        control
+            .0
+            .port
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .thread = Some(thread);
         Ok(Self {
             spans: route.spans,
             frames,
             back,
             spare,
-            shared,
-            thread: Some(thread),
-            hand_back: None,
+            control,
+            resumed: None,
         })
-    }
-
-    /// Keep a v11 lane with its original byte length at a new first channel.
-    pub(crate) fn shift(&mut self, start: u32) {
-        if let [span] = self.spans.as_mut() {
-            span.start = start;
-        }
-    }
-
-    /// The free thread gives the device back after its output thread has stopped.
-    pub(crate) fn hand_back(&mut self, slot: rtrb::Producer<Box<dyn Device>>) {
-        self.hand_back = Some(slot);
     }
 
     /// Hands `frame`, due at `due`, to the output's thread; the output's next frame is
@@ -243,6 +379,9 @@ impl Lane {
         next: Duration,
         prefix: Prefix,
     ) -> Hand {
+        if self.control.0.shared.pause.load(Ordering::Acquire) != SERVING {
+            return Hand::Full;
+        }
         let Some(mut free) = self.spare.iter_mut().find_map(Option::take) else {
             return Hand::Full;
         };
@@ -253,9 +392,7 @@ impl Lane {
         free.sent = None;
         match self.frames.push(free) {
             Ok(()) => {
-                if let Some(thread) = &self.thread {
-                    thread.thread().unpark();
-                }
+                self.control.0.wake.unpark();
                 Hand::Handed
             }
             // Cannot happen: the queue has room for every box.
@@ -291,38 +428,43 @@ impl Lane {
 }
 
 impl Drop for Lane {
-    /// Stops the thread once its send is done. A restart takes the device back here,
-    /// on the free thread.
     fn drop(&mut self) {
-        self.shared.stop.store(true, Ordering::Release);
-        if let Some(thread) = self.thread.take() {
-            thread.thread().unpark();
-            if let Ok(device) = thread.join()
-                && let Some(slot) = &mut self.hand_back
-            {
-                // The restart reserved this one-place queue for this device alone.
-                let _ = slot.push(device);
-            }
-        }
+        self.control.take();
     }
 }
+
+// The tick asks for a pause; only the output worker can acknowledge it between sends.
+const SERVING: u8 = 0;
+const PAUSING: u8 = 1;
+const QUIET: u8 = 2;
 
 /// The output's thread, an action: does what [`step`] says until it is stopped, then
 /// gives the device back. Never allocates or frees; the only call outward is `take`.
 fn run(
-    mut device: Box<dyn Device>,
+    mut devices: Devices,
     mut waiting: rtrb::Consumer<Frame>,
     mut done: rtrb::Producer<Frame>,
     shared: &Shared,
     clock: &Clock,
-) -> Box<dyn Device> {
+) -> Option<DeviceBox> {
     thread::park_timeout(Duration::ZERO); // sets up the park state
     shared.ready.store(true, Ordering::Release);
     let mut next = Duration::ZERO;
     loop {
         let stop = shared.stop.load(Ordering::Acquire);
+        if !stop && shared.pause.load(Ordering::Acquire) != SERVING {
+            let _ =
+                shared
+                    .pause
+                    .compare_exchange(PAUSING, QUIET, Ordering::AcqRel, Ordering::Acquire);
+            thread::park();
+            continue;
+        }
         match step(waiting.slots(), stop, clock.now(), next) {
-            Step::Stop => return device,
+            Step::Stop => {
+                devices.receive();
+                return devices.current;
+            }
             Step::Sleep(time) => thread::park_timeout(time),
             Step::Look => thread::park_timeout(LOOK),
             Step::Send { passed_over } => {
@@ -334,7 +476,16 @@ fn run(
                 if let Ok(frame) = waiting.pop() {
                     next = frame.next;
                     let at = clock.now();
-                    let outcome = device.take(&frame.bytes);
+                    devices.receive();
+                    let outcome = devices
+                        .current
+                        .as_mut()
+                        .map_or(Outcome::Failed, |device| device.take(&frame.bytes));
+                    if outcome != Outcome::Dropped {
+                        shared
+                            .failed
+                            .store(outcome == Outcome::Failed, Ordering::Release);
+                    }
                     back(&mut done, frame, outcome, at);
                 }
             }
@@ -432,7 +583,14 @@ mod tests {
             taken: Arc::clone(&taken),
         };
         let route = Route::new(Limits::RAW, &[Span { start: 0, len: 1 }]).unwrap();
-        let mut lane = Lane::start(Box::new(gate), route, Clock::wall()).unwrap();
+        let mut lane = Lane::start(
+            Some(Box::new(gate)),
+            route,
+            Clock::wall(),
+            #[cfg(feature = "test-support")]
+            None,
+        )
+        .unwrap();
         // Every frame is due at once: the thread sends what it finds.
         let prefix = |n| Prefix {
             presses: 100 + n,

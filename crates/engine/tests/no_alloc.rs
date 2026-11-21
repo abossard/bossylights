@@ -679,13 +679,13 @@ fn output_health() {
 
     // A reconfigure that keeps the lane, with a frame of the old generation in flight.
     let two = OutputNumber::try_from(2).unwrap();
-    let set_two = |first, count| Command::SetOutput {
+    let set_two = |count, rate| Command::SetOutput {
         output: two,
         kind,
-        universes: RunNumbers { first, count },
-        rate: Some(Rate::Sixty),
+        universes: RunNumbers { first: 1, count },
+        rate: Some(rate),
     };
-    let Begun::Opening(opening) = begin(&mut sender, set_two(1, 1), &[]).unwrap() else {
+    let Begun::Opening(opening) = begin(&mut sender, set_two(1, Rate::Thirty), &[]).unwrap() else {
         panic!("the new device needs an opening");
     };
     let opened = opening.open();
@@ -711,8 +711,8 @@ fn output_health() {
     let before = counts();
     wakes.wake().unwrap(); // hands a frame of generation 1
     assert!(
-        send(&mut sender, set_two(2, 1), &[]),
-        "output 2 moves, same device"
+        send(&mut sender, set_two(1, Rate::Sixty), &[]),
+        "output 2 changes rate on its existing lane"
     );
     sender
         .send(Command::SetChannel { channel, value: 0 })
@@ -723,9 +723,9 @@ fn output_health() {
         before,
         "allocation or free during a reconfigure that keeps the lane"
     );
-    // Retire the lane with the free thread stalled. The only work in this
-    // window is the tick handing the old lane back and serving the routed mirror.
-    let restart = begin(&mut sender, set_two(1, 2), &[]).unwrap();
+    // Pause the lane with reclamation stalled. The tick returns the worker
+    // handle and serves the routed mirror while the accepting lane stays installed.
+    let restart = begin(&mut sender, set_two(2, Rate::Sixty), &[]).unwrap();
     let Begun::Opening(restart) = restart else {
         panic!("a longer route needs new boxes");
     };
@@ -735,9 +735,12 @@ fn output_health() {
 
     engine.stall_reclamation(false);
     let opened = restart.open(); // the worker joins one thread and starts another
+    // Commit now retires the old boxes. Hold their free thread so this window
+    // counts every allocation and free on the tick and both output workers.
+    engine.stall_reclamation(true);
     let before = counts();
     sender.finish(opened).unwrap();
-    runs(&mut engine, &sender, 4, 0);
+    runs(&mut engine, &sender, 3, 0);
     assert_eq!(
         counts(),
         before,
