@@ -25,7 +25,8 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+          # no recommends: the desktop portal they bring never answers on the runner's session bus, and GTK waits on it before the window exists (#256)
+          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
       - run: npm ci
       - run: npx playwright install --with-deps chromium
       - run: npm test
@@ -33,25 +34,5 @@ jobs:
       - name: npm test (with a display, for the shell's window)
         if: runner.os == 'Linux'
         run: xvfb-run -a npm test
-      # #256: on the runner the shell's window starts no WebKit process and says nothing.
-      - name: What the shell's window waits on (Linux, when red)
-        if: failure() && runner.os == 'Linux'
-        run: |
-          set +e
-          sysctl kernel.apparmor_restrict_unprivileged_userns
-          cargo build -q -p shell -p engine-server
-          python3 -m http.server 45888 --bind 127.0.0.1 > /dev/null 2>&1 &
-          BOSSYLIGHTS_ENGINE=127.0.0.1:45999 BOSSYLIGHTS_UI=http://127.0.0.1:45888/ \
-            xvfb-run -a target/debug/bossylights > shell.log 2>&1 &
-          sleep 20
-          # shellcheck disable=SC2009 # the whole tree under xvfb-run, with args
-          ps -eo pid,ppid,stat,etime,args --forest | grep -E -A12 'xvfb-run|xdg-dbus-proxy|bwrap|WebKit' | grep -v grep
-          pid=$(pgrep -f '^target/debug/bossylights$')
-          for task in "/proc/$pid/task/"*; do echo "$(cat "$task/comm"): $(cat "$task/wchan")"; done
-          tr '\0' '\n' < "/proc/$pid/environ" | grep -E '^(DBUS|XDG|DISPLAY|GDK|GTK|WEBKIT)'
-          sudo dmesg | grep -iE 'apparmor|bwrap|webkit' | tail -20
-          sudo apt-get install -y -qq gdb > /dev/null
-          sudo gdb -batch -p "$pid" -ex 'thread 1' -ex 'bt 40' -ex 'thread apply all bt 12' 2>&1 | grep -E '^(\[Switching|Thread|#)' | head -300
-          cat shell.log
       - name: Scorecard (written into the run summary, no timing on a runner)
         run: npm run scorecard
