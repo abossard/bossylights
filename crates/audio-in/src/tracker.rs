@@ -173,38 +173,34 @@ impl Tracker {
         }
         if self.second_hop {
             let level = (100.0 * energy.max(previous).sqrt()).round().min(100.0) as u8;
-            let signal = self.signal_at(self.quiet_through);
-            let estimate = if signal == Signal::Lost {
-                Estimate::default()
-            } else {
-                self.onsets.estimate
-            };
+            self.age_onsets(self.quiet_through);
             out.push(Event::Reading {
                 at: end,
                 level,
-                signal,
-                confidence: estimate.confidence,
-                tempo: estimate.tempo,
+                signal: self.onset_signal,
+                confidence: self.onsets.estimate.confidence,
+                tempo: self.onsets.estimate.tempo,
             });
         }
         self.second_hop = !self.second_hop;
         self.history.push(energy);
     }
 
-    fn signal_at(&self, at: u64) -> Signal {
-        self.onsets.last.map_or(self.onset_signal, |last| {
-            self.onset_signal.next(Step::Quiet {
-                since_onset: at.saturating_sub(last),
-            })
-        })
+    fn age_onsets(&mut self, at: u64) {
+        let Some(last) = self.onsets.last else {
+            return;
+        };
+        self.onset_signal = self.onset_signal.next(Step::Quiet {
+            since_onset: at.saturating_sub(last),
+        });
+        if self.onset_signal == Signal::Lost {
+            self.onsets = Onsets::default();
+        }
     }
 
     fn hear_onset(&mut self, at: u64, out: &mut Vec<Event>) {
-        // A block may overlap a quiet reading. Age the history at the captured click.
-        let before = self.signal_at(at);
-        if before == Signal::Lost {
-            self.onsets = Onsets::default();
-        }
+        self.age_onsets(at);
+        let before = self.onset_signal;
         if let Some(last) = self.onsets.last.replace(at) {
             self.onsets.gaps.push(at - last);
         }

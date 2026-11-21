@@ -559,7 +559,7 @@ fn the_captured_click_time_decides_the_three_second_timeout() {
     let pulse = &[i16::MIN][..];
     let click = &[24_576; 40][..];
     // Stream start, first click frame, steady gaps, waveform, block layout,
-    // distance either side of the deadline (ns), confidence before it.
+    // distance either side of the deadline (ns), signal and confidence just before it.
     let inside = |frames, reading_at| Capture::Inside { frames, reading_at };
     let after_reading = Capture::NextBlock(BeforeClick::LastReading(7480 * MS));
     let after_beat = Capture::NextBlock(BeforeClick::Beat(2760 * MS));
@@ -571,7 +571,7 @@ fn the_captured_click_time_decides_the_three_second_timeout() {
             pulse,
             inside(60_000, START + 7500 * MS),
             FRAME_NS,
-            87,
+            (Locked, 87),
         ),
         (
             0,
@@ -580,19 +580,19 @@ fn the_captured_click_time_decides_the_three_second_timeout() {
             click,
             inside(5800 * 8, 5780 * MS),
             FRAME_NS,
-            80,
+            (Locked, 80),
         ),
-        (0, HOP, 7, pulse, after_reading, MS, 87),
-        (0, 200 * 8, 4, click, after_beat, 1, 80),
+        (0, HOP, 7, pulse, after_reading, MS, (Locked, 87)),
+        (0, 200 * 8, 4, click, after_beat, 1, (Weak, 0)),
     ];
     for (start, first, steady, click, capture, step, held) in cases {
         let last = first + steady * 5120;
         let deadline_frame = last + 24_000;
         let deadline = start + deadline_frame as u64 * FRAME_NS;
-        for (heard, confidence, signal) in [
-            (deadline - step, held, Locked),
-            (deadline, 0, Weak),
-            (deadline + step, 0, Weak),
+        for (heard, (signal, confidence)) in [
+            (deadline - step, held),
+            (deadline, (Weak, 0)),
+            (deadline + step, (Weak, 0)),
         ] {
             let mut events;
             let observed = match capture {
@@ -653,7 +653,7 @@ fn overlapping_quiet_blocks_stay_lost_until_an_onset() {
     for ms in (215..=2775).step_by(640) {
         before[ms * 8] = i16::MIN;
     }
-    for (sample, signal, confidence) in [(0, Signal::Lost, 0), (i16::MIN, Signal::Locked, 80)] {
+    for (sample, signal, confidence) in [(0, Signal::Lost, 0), (i16::MIN, Signal::Weak, 0)] {
         let mut tracker = tracker(1);
         let mut events = Vec::new();
         tracker.push(0, Samples::I16(&before), &mut events).unwrap();
@@ -675,6 +675,44 @@ fn overlapping_quiet_blocks_stay_lost_until_an_onset() {
             matches!(events.last(), Some(Event::Reading { at, signal: s, confidence: c, .. })
             if (*at, *s, *c) == (5770 * MS, signal, confidence)),
             "{events:?}"
+        );
+    }
+}
+
+#[test]
+fn a_published_lost_reading_cannot_jump_straight_to_locked() {
+    let deadline = 5760 * MS;
+    let mut before = vec![0; 5760 * 8];
+    for ms in (200..=2760).step_by(640) {
+        before[ms * 8] = i16::MIN;
+    }
+    let mut after = [0; 2 * HOP];
+    after[0] = i16::MIN;
+    for stamp in [deadline, deadline + 1, deadline - 1] {
+        let mut tracker = tracker(1);
+        let mut events = Vec::new();
+        tracker.push(0, Samples::I16(&before), &mut events).unwrap();
+        let prior = events.last().copied();
+        events.clear();
+        tracker
+            .push(stamp, Samples::I16(&after), &mut events)
+            .unwrap();
+        let next = events.last();
+        assert!(
+            !matches!(
+                (prior, next),
+                (
+                    Some(Event::Reading {
+                        signal: Signal::Lost,
+                        ..
+                    }),
+                    Some(Event::Reading {
+                        signal: Signal::Locked,
+                        ..
+                    })
+                )
+            ),
+            "click at {stamp}, deadline {deadline}: {prior:?} followed by {events:?}"
         );
     }
 }
