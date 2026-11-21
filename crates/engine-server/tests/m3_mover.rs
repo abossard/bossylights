@@ -98,33 +98,38 @@ struct Handed {
 }
 
 impl Handed {
-    /// Takes the tick's events, then waits until every frame handed over is heard or
-    /// dropped.
-    async fn drain(&mut self, wakes: &mut Wakes, heard: &Heard) {
-        let started = Instant::now();
-        loop {
-            for event in wakes.events() {
-                match event {
-                    Event::Handed { output, due, .. } if output.slot() == 0 => self.dues.push(due),
-                    Event::Came {
-                        output,
-                        outcome,
-                        due,
-                    } if output.slot() == 0 => {
-                        self.dropped += usize::from(outcome == Outcome::Dropped);
-                        self.came.push((due, outcome));
-                    }
-                    Event::Handed { .. } | Event::Came { .. } | Event::Counted { .. } => {}
+    fn collect(&mut self, wakes: &mut Wakes) {
+        for event in wakes.events() {
+            match event {
+                Event::Handed { output, due, .. } if output.slot() == 0 => self.dues.push(due),
+                Event::Came {
+                    output,
+                    outcome,
+                    due,
+                } if output.slot() == 0 => {
+                    self.dropped += usize::from(outcome == Outcome::Dropped);
+                    self.came.push((due, outcome));
                 }
+                Event::Handed { .. } | Event::Came { .. } | Event::Counted { .. } => {}
             }
-            if heard.lock().unwrap().len() + self.dropped >= self.dues.len() {
-                return;
-            }
+        }
+    }
+
+    /// Waits for every outcome and for the port to hear every accepted frame.
+    async fn drain(&mut self, wakes: &mut Wakes, heard: &Heard) {
+        self.collect(wakes);
+        let handed = self.dues.len();
+        let started = Instant::now();
+        while self.came.len() != handed || heard.lock().unwrap().len() + self.dropped < handed {
             assert!(
                 started.elapsed() < Duration::from_secs(10),
                 "frames handed over but not heard"
             );
             tokio::task::yield_now().await;
+            // wake_at never goes back: this collects outcomes at the last wake's time.
+            block_in_place(|| wakes.wake_at(Duration::ZERO)).unwrap();
+            self.collect(wakes);
+            assert_eq!(self.dues.len(), handed, "an early wake handed a frame");
         }
     }
 }

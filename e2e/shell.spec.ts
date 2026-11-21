@@ -1,7 +1,7 @@
 // The real shell and engine processes: the engine outlives the window (#107).
 // Its own free port, so it never meets the engine of `npm run dev`, the other tests or another run.
 import { expect, test } from "@playwright/test";
-import { type ChildProcess, execFileSync, spawn } from "node:child_process";
+import { type ChildProcess, execFileSync, spawn, spawnSync } from "node:child_process";
 import { createSocket } from "node:dgram";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -110,21 +110,39 @@ test("kill the shell: the engine keeps sending, a new shell adopts it and the fr
 
 /** What the window's page shows, as the text its layout makes: the page posts it here. */
 async function windowText() {
+  let posts = 0;
+  let last = new URLSearchParams();
   let seen = "";
   const server = createServer((ask, answer) => {
     let text = "";
     ask.on("data", (chunk: Buffer) => (text += chunk.toString()));
-    ask.on("end", () => ((seen = text), answer.end()));
+    ask.on("end", () => {
+      posts++;
+      last = new URL(ask.url ?? "/", to).searchParams;
+      seen = text;
+      answer.end();
+    });
   });
   await new Promise<void>((listening) => server.listen(0, "127.0.0.1", listening));
   const to = `http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
   return {
     /** Runs in the window before its page, and on: posts what the page shows. */
-    script: `setInterval(() => fetch("${to}", { method: "POST", mode: "no-cors", body: document.body?.innerText ?? "" }).catch(() => {}), 250);`,
+    script: `setInterval(() => {
+      const page = new URLSearchParams({ readyState: document.readyState, href: location.href });
+      fetch("${to}?" + page, { method: "POST", mode: "no-cors", body: document.body?.innerText ?? "" }).catch(() => {});
+    }, 250);`,
     /** The lines the page showed last, in lower case (the status is styled upper case). */
     lines: () => seen.toLowerCase().split("\n"),
+    status: () =>
+      `Window posts: ${posts}\nLast readyState: ${last.get("readyState") ?? "(none)"}\nLast href: ${last.get("href") ?? "(none)"}`,
     close: () => new Promise((closed) => server.close(closed)),
   };
+}
+
+function windowProcesses(): string {
+  const ps = spawnSync("ps", ["-eo", "pid,ppid,stat,etime,args"], { encoding: "utf8" });
+  if (ps.status !== 0) return ps.error?.message || ps.stderr?.trim() || `ps exited with ${ps.signal ?? ps.status}`;
+  return ps.stdout.split("\n").filter((line) => /WebKit|bwrap|bossylights/.test(line)).join("\n") || "(none)";
 }
 
 // The page's text as laid out in the window's web view is read, not its pixels.
@@ -137,7 +155,8 @@ test("the window shows the engine on the test port", async ({ baseURL }) => {
     expect(window.lines()).toContain(`engine on ${ADDRESS}`);
   } catch (cause) {
     throw new Error(
-      `Shell output:\n${shell.said() || "(none)"}\nLast window lines: ${JSON.stringify(window.lines())}`,
+      `Shell output:\n${shell.said() || "(none)"}\nLast window lines: ${JSON.stringify(window.lines())}\n` +
+        `${window.status()}\nProcesses (pid, ppid, stat, etime, args):\n${windowProcesses()}`,
       { cause },
     );
   } finally {
