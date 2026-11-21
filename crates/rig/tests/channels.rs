@@ -4,7 +4,7 @@
 mod common;
 
 use common::mode;
-use engine_core::{Levels, Light, Universes, resolve};
+use engine_core::{Color, Levels, Light, PatchCommand, Pixels, Text, Universes, resolve};
 use fixture_library::{Byte, Direction, Does, Function, Mode, Range};
 use rig::channels::{
     Change, Compound, Config, Field, Follows, PastTheEnd, Sense, Shape, Ties, Travel, Width,
@@ -280,10 +280,14 @@ fn each_channel_gets_rules_from_its_declared_role() {
         (&mh6, 6, "rest 0, dark 0, fade, none"),
         // inverse zoom: big to small
         (&mh6, 8, "rest 0, dark 0, fade, none, runs 255 to 0"),
-        // Smoke leaves its dimmer independent. The emitters beside it follow both.
+        // Only the LED dimmer carries master and blackout in this fogger mode.
         (&fogger, 0, "rest 0, dark 0, jump, none"),
-        (&fogger, 1, "rest 0, dark 0, jump, none"),
-        (&fogger, 4, "rest 0, dark 0, fade, master and blackout"),
+        (&fogger, 1, "rest 0, dark 0, fade, master and blackout"),
+        (&fogger, 2, "rest 0, dark 0, jump, none"),
+        (&fogger, 3, "rest 0, dark 0, jump, none"),
+        (&fogger, 4, "rest 0, dark 0, fade, none"),
+        (&fogger, 5, "rest 0, dark 0, fade, none"),
+        (&fogger, 6, "rest 0, dark 0, fade, none"),
         // a shutter with no Closed range does not follow Blackout
         (&spectral, 6, "rest 0, dark 0, jump, none"),
         // the macro wheel lets the mix through at the midpoint of its 0..13 bypass
@@ -329,7 +333,7 @@ fn each_channel_gets_rules_from_its_declared_role() {
 }
 
 #[test]
-fn a_fine_byte_pairs_by_adjacency_then_declared_key_then_group() {
+fn a_fine_byte_pairs_by_adjacency_then_channel_order() {
     // (mode, first, pairs as coarse and fine)
     let shehds = mode(SHEHDS, "14 Channel");
     let mh6 = mode(MH6, "Standard");
@@ -338,6 +342,8 @@ fn a_fine_byte_pairs_by_adjacency_then_declared_key_then_group() {
     let clay_16 = mode("Clay-Paky-Alpha-Spot-575-HPE.qxf", "Option 16b");
     let focus_spot = mode("American-DJ-Focus-Spot-4Z.qxf", "22 Channel");
     let elation = mode(ELATION, "Extended");
+    let vari_lite = |name| mode("Vari-Lite-VL2202-Spot.qxf", name);
+    let cameo = |name| mode("Cameo-CLMPAR3.qxf", name);
     let trailing = hand(
         vec![
             channel("PositionPan"),
@@ -423,13 +429,18 @@ fn a_fine_byte_pairs_by_adjacency_then_declared_key_then_group() {
                 (2, 3),
                 (4, 5),
                 (7, 8),
-                (9, 10),
                 (12, 13),
                 (14, 15),
                 (17, 18),
                 (19, 20),
             ],
         ),
+        (&vari_lite("Standard 16bit"), 0, &[(1, 2), (3, 4)]),
+        (&vari_lite("Enhanced 16bit"), 0, &[(1, 2), (3, 4)]),
+        (&vari_lite("Standard 8bit"), 0, &[]),
+        (&vari_lite("Enhanced 8bit"), 0, &[]),
+        (&cameo("9 Channel"), 0, &[]),
+        (&cameo("21 Channel"), 0, &[]),
     ];
     let mut wrong = Vec::new();
     for &(mode, first, expected) in cases {
@@ -487,7 +498,7 @@ fn fine_pair_candidates_use_the_declared_group_and_all_the_heads() {
             &[(0, 1)],
         ),
         (
-            "loose adjacent before strict",
+            "adjacent group-only coarse before an earlier preset",
             hand(vec![pan(), group("Pan", Byte::Coarse), pan_fine()], &[]),
             &[(1, 2)],
         ),
@@ -499,12 +510,17 @@ fn fine_pair_candidates_use_the_declared_group_and_all_the_heads() {
         (
             "two heads share the coarse",
             hand(vec![pan(), pan_fine()], &[&[0], &[0, 1]]),
-            &[(0, 1)],
+            &[],
         ),
         (
             "two heads list the fine",
             hand(vec![pan(), pan(), pan_fine()], &[&[0, 2], &[2], &[1]]),
-            &[(0, 2)],
+            &[],
+        ),
+        (
+            "both bytes in the same two heads",
+            hand(vec![pan(), pan_fine()], &[&[0, 1], &[0, 1]]),
+            &[(0, 1)],
         ),
         (
             "fine outside every head",
@@ -529,9 +545,9 @@ fn fine_pair_candidates_use_the_declared_group_and_all_the_heads() {
 }
 
 #[test]
-fn loose_candidates_use_the_qlc_group_of_either_preset() {
+fn a_group_only_byte_uses_the_qlc_group_of_the_other_byte() {
     let cases = [
-        ("IntensityRed", "Intensity"),
+        ("IntensityDimmer", "Intensity"),
         ("PositionPan", "Pan"),
         ("PositionXAxis", "Pan"),
         ("PositionTilt", "Tilt"),
@@ -560,7 +576,302 @@ fn loose_candidates_use_the_qlc_group_of_either_preset() {
 }
 
 #[test]
-fn strict_candidates_precede_loose_candidates_and_non_slots_precede_slots() {
+fn presets_pair_by_family_and_keep_the_specific_control() {
+    let cases = [
+        ("SpeedPanSlowFast", "SpeedPanFastSlow", true),
+        ("BeamZoomBigSmall", "BeamZoomSmallBig", true),
+        ("BeamFocusNearFar", "BeamFocusFarNear", true),
+        ("ShutterIrisMinToMax", "ShutterIrisMaxToMin", true),
+        ("IntensityMasterDimmer", "IntensityDimmer", true),
+        ("ColorCTOMixer", "ColorCTCMixer", true),
+        ("ColorCTCMixer", "ColorCTBMixer", true),
+        ("GoboWheel", "GoboIndex", false),
+        ("SpeedPanSlowFast", "SpeedTiltFastSlow", false),
+        ("ColorMacro", "ColorWheel", false),
+    ];
+    for (coarse, low, joins) in cases {
+        let result = lower(&hand(vec![channel(coarse), fine(low)], &[]), 0, SPACE).unwrap();
+        assert_eq!(result.pairs.len(), usize::from(joins), "{coarse} / {low}");
+    }
+}
+
+/// Ranges with the given capability kinds in order. The pair depends only on the kinds.
+fn ranged(
+    mut channel: fixture_library::Channel,
+    kinds: &[Option<Does>],
+) -> fixture_library::Channel {
+    channel.ranges = kinds
+        .iter()
+        .enumerate()
+        .map(|(i, does)| {
+            let at = u8::try_from(i).unwrap();
+            range(at, at, "step", does.clone())
+        })
+        .collect();
+    channel
+}
+
+#[test]
+fn a_fine_with_steps_matches_each_step_and_a_plain_fine_matches_one_kind() {
+    use Direction::{Down, Up};
+    use Does::{Closed, Open, Runs};
+    type Case<'a> = (&'a str, &'a [Option<Does>], &'a [Option<Does>], bool);
+    let cases: &[Case] = &[
+        (
+            "same kinds, different direction",
+            &[Some(Open), Some(Runs(Up))],
+            &[Some(Open), Some(Runs(Down))],
+            true,
+        ),
+        (
+            "order matters",
+            &[Some(Open), Some(Closed)],
+            &[Some(Closed), Some(Open)],
+            false,
+        ),
+        (
+            "missing last step",
+            &[Some(Open), None, Some(Closed)],
+            &[Some(Open), None],
+            false,
+        ),
+        (
+            "unnamed step stays in place",
+            &[None, Some(Open)],
+            &[Some(Open), None],
+            false,
+        ),
+        ("no coarse steps", &[], &[None, None], false),
+        (
+            "no named coarse capability",
+            &[None],
+            &[Some(Runs(Up))],
+            true,
+        ),
+        (
+            "one kind found among several",
+            &[Some(Open), Some(Runs(Up))],
+            &[Some(Runs(Down))],
+            true,
+        ),
+        ("unnamed fine", &[Some(Closed)], &[None], true),
+        (
+            "one kind absent",
+            &[None, Some(Closed)],
+            &[Some(Open)],
+            false,
+        ),
+    ];
+    for &(name, coarse, low, joins) in cases {
+        let mode = hand(
+            vec![
+                ranged(channel("ShutterIris"), coarse),
+                ranged(fine("ShutterIris"), low),
+            ],
+            &[],
+        );
+        assert_eq!(
+            lower(&mode, 0, SPACE).unwrap().pairs.len(),
+            usize::from(joins),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn a_selector_and_its_rotation_use_separate_words() {
+    let gobo = Some(Does::Gobo {
+        picture: None,
+        shakes: false,
+    });
+    let rotation = Some(Does::Rotation(fixture_library::Turn::Indexed));
+    let group = |byte| declared(None, Some("Gobo"), byte);
+    let index = || channel("GoboIndex");
+    let wheel = || channel("GoboWheel");
+    let group_coarse = || group(Byte::Coarse);
+    let group_fine = || group(Byte::Fine);
+    // Both spellings of the gobo wheel and its index, followed by the index fine.
+    for (index, wheel) in [(index(), wheel()), (group_coarse(), group_coarse())] {
+        let mode = hand(
+            vec![
+                ranged(index, std::slice::from_ref(&rotation)),
+                ranged(wheel, std::slice::from_ref(&gobo)),
+                fine("GoboIndex"),
+            ],
+            &[],
+        );
+        assert_eq!(
+            lower(&mode, 0, SPACE).unwrap().pairs,
+            [rig::channels::Pair { coarse: 0, fine: 2 }]
+        );
+    }
+    let selector = |c| ranged(c, std::slice::from_ref(&gobo));
+    let turns = |c| ranged(c, std::slice::from_ref(&rotation));
+    let cases = [
+        (
+            "selector fine beside an index",
+            index(),
+            selector(group_fine()),
+            false,
+        ),
+        (
+            "selector that also indexes",
+            selector(index()),
+            selector(group_fine()),
+            true,
+        ),
+        (
+            "index fine that also selects",
+            selector(group_coarse()),
+            selector(fine("GoboIndex")),
+            true,
+        ),
+        (
+            "rotation on the wheel preset",
+            turns(group_coarse()),
+            turns(fine("GoboWheel")),
+            true,
+        ),
+        (
+            "wheel that declares rotation accepts an index fine",
+            ranged(group_coarse(), &[gobo, rotation]),
+            fine("GoboIndex"),
+            true,
+        ),
+    ];
+    for (name, coarse, low, joins) in cases {
+        assert_eq!(
+            lower(&hand(vec![coarse, low], &[]), 0, SPACE)
+                .unwrap()
+                .pairs
+                .len(),
+            usize::from(joins),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn each_fine_keeps_the_policy_of_its_own_colour_capability_and_heads() {
+    let emitter = |colour, byte| {
+        let mut c = declared(None, Some("Intensity"), byte);
+        c.declared.colour = Some(colour);
+        c
+    };
+    let fog = |byte| {
+        ranged(
+            declared(None, Some("Intensity"), byte),
+            &[Some(Does::Runs(Direction::Up))],
+        )
+    };
+    let mut tagged = channel("IntensityGreen");
+    tagged.declared.colour = Some(Function::Red);
+    let gate = ranged(
+        declared(None, Some("Shutter"), Byte::Coarse),
+        &[Some(Does::Closed), Some(Does::Open)],
+    );
+    let strobe = ranged(
+        declared(None, Some("Shutter"), Byte::Fine),
+        &[Some(Does::Strobe(fixture_library::Pace::Unsaid))],
+    );
+    type Case<'a> = (&'a str, Mode, &'a [(u32, u32)], &'a [u8]);
+    let cases: &[Case] = &[
+        (
+            "red and fog",
+            hand(
+                vec![
+                    emitter(Function::Red, Byte::Coarse),
+                    fog(Byte::Coarse),
+                    emitter(Function::Red, Byte::Fine),
+                    fog(Byte::Fine),
+                ],
+                &[],
+            ),
+            &[(0, 2), (1, 3)],
+            &[3, 0, 3, 0],
+        ),
+        (
+            "green coarse and red fine",
+            hand(
+                vec![
+                    emitter(Function::Green, Byte::Coarse),
+                    emitter(Function::Red, Byte::Fine),
+                ],
+                &[],
+            ),
+            &[],
+            &[3, 3],
+        ),
+        (
+            "gate and strobe fine",
+            hand(vec![gate, strobe], &[]),
+            &[],
+            &[2, 0],
+        ),
+        (
+            "red fine outside the dimmer's head",
+            hand(
+                vec![
+                    channel("IntensityDimmer"),
+                    channel("IntensityRed"),
+                    fine("IntensityRed"),
+                ],
+                &[&[0, 1], &[1, 2]],
+            ),
+            &[],
+            &[3, 0, 3],
+        ),
+        (
+            "red tag and red preset",
+            hand(
+                vec![emitter(Function::Red, Byte::Coarse), fine("IntensityRed")],
+                &[],
+            ),
+            &[(0, 1)],
+            &[3, 3],
+        ),
+        (
+            "tag supplies the colour when a preset also names one",
+            hand(vec![tagged, emitter(Function::Red, Byte::Fine)], &[]),
+            &[(0, 1)],
+            &[3, 3],
+        ),
+        (
+            "uncoloured coarse and red preset",
+            hand(
+                vec![
+                    declared(None, Some("Intensity"), Byte::Coarse),
+                    fine("IntensityRed"),
+                ],
+                &[],
+            ),
+            &[],
+            &[0, 3],
+        ),
+        (
+            "red preset and uncoloured fine",
+            hand(
+                vec![
+                    channel("IntensityRed"),
+                    declared(None, Some("Intensity"), Byte::Fine),
+                ],
+                &[],
+            ),
+            &[],
+            &[3, 0],
+        ),
+    ];
+    for &(name, ref mode, pairs, masks) in cases {
+        let lowered = lower(mode, 0, SPACE).unwrap();
+        let actual: Vec<_> = lowered.pairs.iter().map(|p| (p.coarse, p.fine)).collect();
+        assert_eq!(actual, pairs, "{name}");
+        let follows: Vec<_> = lowered.channels.iter().map(|c| c.follows.bits()).collect();
+        assert_eq!(follows, masks, "{name}");
+    }
+}
+
+#[test]
+fn compatible_non_slots_precede_slots_unless_the_slot_is_adjacent() {
     let rgb = fixture_library::Rgb {
         red: 255,
         green: 0,
@@ -580,46 +891,56 @@ fn strict_candidates_precede_loose_candidates_and_non_slots_precede_slots() {
             c.ranges.push(range(3, 8, "A", Some(does.clone())));
             c
         };
-        let strict = || channel("GoboWheel");
-        let loose = || declared(None, Some("Gobo"), Byte::Coarse);
+        let preset = || channel("GoboWheel");
+        let group = || declared(None, Some("Gobo"), Byte::Coarse);
         let gap = || channel("PositionPan");
-        let end = || fine("GoboIndex");
+        let end = || fine("GoboWheel");
         let cases = [
             (
-                "strict non-slot",
-                vec![slot(strict()), strict(), strict(), gap(), end()],
+                "first non-slot preset",
+                vec![slot(preset()), preset(), preset(), gap(), end()],
                 1,
             ),
             (
-                "strict slot before loose non-slot",
-                vec![loose(), slot(strict()), gap(), end()],
-                1,
-            ),
-            (
-                "first strict slot",
-                vec![slot(strict()), slot(strict()), gap(), end()],
+                "group-only non-slot before preset slot",
+                vec![group(), slot(preset()), gap(), end()],
                 0,
             ),
             (
-                "loose non-slot",
-                vec![slot(loose()), loose(), loose(), gap(), end()],
-                1,
-            ),
-            (
-                "first loose slot",
-                vec![slot(loose()), slot(loose()), gap(), end()],
+                "first preset slot",
+                vec![slot(preset()), slot(preset()), gap(), end()],
                 0,
             ),
             (
-                "adjacent loose slot",
-                vec![strict(), slot(loose()), end()],
+                "first group-only non-slot",
+                vec![slot(group()), group(), group(), gap(), end()],
                 1,
             ),
             (
-                "a group-only fine: the group-only coarse is strict, the preset loose",
+                "first group-only slot",
+                vec![slot(group()), slot(group()), gap(), end()],
+                0,
+            ),
+            (
+                "adjacent group-only slot",
+                vec![preset(), slot(group()), end()],
+                1,
+            ),
+            (
+                "group-only fine uses the first compatible coarse",
                 vec![
-                    strict(),
-                    loose(),
+                    preset(),
+                    group(),
+                    gap(),
+                    declared(None, Some("Gobo"), Byte::Fine),
+                ],
+                0,
+            ),
+            (
+                "a wheel that also indexes still has slots",
+                vec![
+                    slot(channel("GoboIndex")),
+                    group(),
                     gap(),
                     declared(None, Some("Gobo"), Byte::Fine),
                 ],
@@ -1110,11 +1431,6 @@ fn undeclared_intensity_and_smoke_dimmers_jump_independently() {
             mode(SMOKE, "Amount"),
             "IntensityMasterDimmer",
         ),
-        (
-            "Botex DSP-405",
-            mode("Botex-DSP-405.qxf", "4 Channels"),
-            "Intensity",
-        ),
     ];
     let mut wrong = Vec::new();
     for (fixture, mode, label) in cases {
@@ -1151,6 +1467,60 @@ fn the_auxiliary_head_dimmer_carries_its_emitters() {
         [16, 18, 19, 20].map(|i| lowered.channels[i].follows.bits()),
         [3, 0, 0, 0]
     );
+}
+
+#[test]
+fn every_channel_of_the_botex_dimmer_pack_fades_with_master_and_blackout() {
+    for mode in common::fixture("Botex-DSP-405.qxf").modes {
+        let lowered = lower(&mode, 0, SPACE).unwrap();
+        for (channel, config) in mode.channels.iter().zip(lowered.channels) {
+            assert_eq!(channel.function, Function::Dimmer);
+            assert_eq!(channel.role(), Function::Dimmer);
+            assert_eq!(
+                (config.change, config.follows.bits()),
+                (Change::Fade, 3),
+                "{} / {}",
+                mode.name,
+                channel.name
+            );
+        }
+    }
+}
+
+#[test]
+fn fresh_strip_emitters_follow_master_and_blackout_and_form_a_colour_per_pixel() {
+    let empty = rig::Patch::new(Universes::ONE, common::lights(), common::whole());
+    let cases = [
+        (Color::Rgb, 6, ["head 0: rgb 0 1 2", "head 1: rgb 3 4 5"]),
+        (
+            Color::Rgbw,
+            8,
+            ["head 0: rgbw 0 1 2 3", "head 1: rgbw 4 5 6 7"],
+        ),
+    ];
+    for (color, bytes, compounds) in cases {
+        let command = PatchCommand::PatchStrip {
+            name: Text::new("Strip").unwrap(),
+            pixels: Pixels::try_from(2).unwrap(),
+            color,
+            at: common::at(1),
+        };
+        let (patch, _) = empty.update(command, &[]).unwrap();
+        let patch = patch.unwrap();
+        let mode = patch.mode(1).unwrap();
+        for channel in &mode.channels {
+            assert_eq!(
+                channel.declared.colour.as_ref(),
+                Some(&channel.function),
+                "{color:?}"
+            );
+        }
+        let lowered = lower(mode, 0, SPACE).unwrap();
+        let masks: Vec<_> = lowered.channels.iter().map(|c| c.follows.bits()).collect();
+        let colours: Vec<_> = lowered.compounds.iter().filter_map(say_compound).collect();
+        assert_eq!(masks, vec![3; bytes], "{color:?}");
+        assert_eq!(colours, compounds, "{color:?}");
+    }
 }
 
 #[test]
@@ -1196,12 +1566,7 @@ fn tagged_emitters_pair_and_mix_beside_a_fog_channel() {
     let bypass = "rest 24, dark 0, jump, none";
     for (mode, coarse, fine, expected) in [
         (emitter_first, 0, 1, [light, light, independent, bypass]),
-        (
-            fog_before_fine,
-            1,
-            2,
-            [light, independent, independent, bypass],
-        ),
+        (fog_before_fine, 0, 2, [light, independent, light, bypass]),
     ] {
         let lowered = lower(&mode, 0, SPACE).unwrap();
         let configs: Vec<_> = lowered.channels.iter().map(say).collect();

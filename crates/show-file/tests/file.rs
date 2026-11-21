@@ -183,9 +183,7 @@ fn v6_keeps_the_old_channel_schema_for_tagged_emitters() {
     assert_eq!(write(&read(&saved, &empty()).unwrap()).unwrap(), saved);
 }
 
-#[test]
-fn a_v6_channel_written_without_declarations_still_opens() {
-    let old = r#"{
+const V6_DIMMER: &str = r#"{
         "version": 6,
         "patch": [{"fixture":1,"name":"Dimmer","mode":"Generic / Dimmer / 1ch","at":{"universe":1,"address":1},"first":1}],
         "groups": [], "looks": [],
@@ -195,16 +193,43 @@ fn a_v6_channel_written_without_declarations_still_opens() {
             "pixels":[],"layout":null,"degrees":null
         }}}
     }"#;
-    let restored = read(old, &empty()).unwrap();
+
+#[test]
+fn a_v6_channel_written_without_declarations_still_opens() {
+    let restored = read(V6_DIMMER, &empty()).unwrap();
     let channel = &restored.mode(1).unwrap().channels[0];
     assert_eq!(channel.function, fixture_library::Function::Dimmer);
     assert_eq!(
         channel.role(),
         fixture_library::Function::Other(String::new())
     );
-    let original: serde_json::Value = serde_json::from_str(old).unwrap();
+    let original: serde_json::Value = serde_json::from_str(V6_DIMMER).unwrap();
     let written: serde_json::Value = serde_json::from_str(&write(&restored).unwrap()).unwrap();
     assert_eq!(written, original);
+}
+
+#[test]
+fn v6_rejects_channel_fields_outside_the_v6_schema() {
+    for (field, value) in [
+        ("colour", serde_json::json!("Red")),
+        ("declared", serde_json::json!({})),
+        (
+            "declared",
+            serde_json::json!({
+                "preset": "IntensityRed", "group": null, "colour": "Red", "smoke": false
+            }),
+        ),
+    ] {
+        let mut show: serde_json::Value = serde_json::from_str(V6_DIMMER).unwrap();
+        show["modes"]["Generic / Dimmer / 1ch"]["mode"]["channels"][0][field] = value;
+        assert!(
+            matches!(
+                read(&show.to_string(), &empty()),
+                Err(Unopened::Broken { .. })
+            ),
+            "v6 accepted channel field {field}"
+        );
+    }
 }
 
 /// V6 keeps the mode and all of its v11 writers; declarations first persist in v7.

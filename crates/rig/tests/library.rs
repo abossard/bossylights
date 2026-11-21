@@ -1,11 +1,18 @@
 //! Check the channel model against the declarations in every fixture and head.
+//!
+//! An independent oracle: it never asks the lowering's own pairing key. It reads only
+//! what a definition declares (preset, group, `<Colour>`, capability ranges, heads, the
+//! fixture's type) and checks every pair and every follows byte against it.
 mod common;
 
 use fixture_library::{Byte, Channel, Does, Function, Kind, Mode, parse};
 use rig::channels::{Follows, Lowered, lower};
-use std::collections::BTreeSet;
+use std::mem::{Discriminant, discriminant};
 use std::path::{Path, PathBuf};
 use std::{env, fs, io};
+
+/// QXF files of the pinned QLC+ library. A smaller `QLCPLUS_FIXTURES` corpus is refused.
+const PINNED: usize = 1782;
 
 fn qxf_files(folder: &Path, files: &mut Vec<PathBuf>) -> io::Result<()> {
     for entry in fs::read_dir(folder)? {
@@ -20,27 +27,6 @@ fn qxf_files(folder: &Path, files: &mut Vec<PathBuf>) -> io::Result<()> {
     Ok(())
 }
 
-/// Presets with the same function share a key. Every other stem is its own key.
-fn preset_key(stem: &str) -> &str {
-    match stem {
-        "IntensityMasterDimmer" => "IntensityDimmer",
-        "ColorMacro" => "ColorWheel",
-        "ColorCTOMixer" | "ColorCTBMixer" => "ColorCTCMixer",
-        "GoboIndex" => "GoboWheel",
-        "SpeedPanFastSlow"
-        | "SpeedTiltSlowFast"
-        | "SpeedTiltFastSlow"
-        | "SpeedPanTiltSlowFast"
-        | "SpeedPanTiltFastSlow" => "SpeedPanSlowFast",
-        "ShutterStrobeFastSlow" => "ShutterStrobeSlowFast",
-        "ShutterIrisMinToMax" | "ShutterIrisMaxToMin" => "ShutterIris",
-        "BeamFocusNearFar" | "BeamFocusFarNear" => "BeamFocus",
-        "BeamZoomSmallBig" | "BeamZoomBigSmall" => "BeamZoom",
-        "PrismRotationFastSlow" => "PrismRotationSlowFast",
-        _ => stem,
-    }
-}
-
 fn stem(c: &Channel) -> Option<&str> {
     c.declared
         .preset
@@ -48,6 +34,25 @@ fn stem(c: &Channel) -> Option<&str> {
         .map(|p| p.strip_suffix("Fine").unwrap_or(p))
 }
 
+/// The preset without the way it runs: a zoom from small to big and one from big to
+/// small are one function. A gobo index and a gobo wheel are not.
+fn family(stem: &str) -> String {
+    let mut family = stem.replace("MasterDimmer", "Dimmer");
+    for (from, to) in [("CTOMixer", "CTCMixer"), ("CTBMixer", "CTCMixer")] {
+        family = family.replace(from, to);
+    }
+    for way in [
+        "SlowFast", "FastSlow", "SmallBig", "BigSmall", "NearFar", "FarNear", "MinToMax",
+        "MaxToMin",
+    ] {
+        if let Some(rest) = family.strip_suffix(way) {
+            return rest.to_string();
+        }
+    }
+    family
+}
+
+/// The QLC+ group: the `<Group>` text, or the group a preset belongs to.
 fn group(c: &Channel) -> Option<&str> {
     if let Some(group) = &c.declared.group {
         return Some(group);
@@ -73,16 +78,39 @@ fn group(c: &Channel) -> Option<&str> {
     }
 }
 
-/// Some(false) for a strict match, Some(true) for a loose match (second choice).
-fn loose_match(fine: &Channel, coarse: &Channel) -> Option<bool> {
-    match (stem(fine), stem(coarse)) {
-        (Some(f), Some(c)) => (preset_key(f) == preset_key(c)).then_some(false),
-        (None, None) => (group(fine)? == group(coarse)?).then_some(false),
-        _ => (group(fine)? == group(coarse)?).then_some(true),
+/// The colour a channel emits or subtracts: its `<Colour>`, else its Intensity colour preset.
+fn colour(c: &Channel) -> Option<Function> {
+    use Function::{Amber, Blue, Cyan, Green, Indigo, Lime, Magenta, Red, Uv, White, Yellow};
+    if let Some(colour) = &c.declared.colour {
+        return Some(colour.clone());
     }
+    Some(match stem(c)? {
+        "IntensityRed" => Red,
+        "IntensityGreen" => Green,
+        "IntensityBlue" => Blue,
+        "IntensityWhite" => White,
+        "IntensityAmber" => Amber,
+        "IntensityUV" => Uv,
+        "IntensityLime" => Lime,
+        "IntensityIndigo" => Indigo,
+        "IntensityCyan" => Cyan,
+        "IntensityMagenta" => Magenta,
+        "IntensityYellow" => Yellow,
+        _ => return None,
+    })
 }
 
-fn is_slot(c: &Channel) -> bool {
+/// What each range does, by kind, in order. A range with no capability preset is `None`.
+fn kinds(c: &Channel) -> Vec<Option<Discriminant<Does>>> {
+    c.ranges
+        .iter()
+        .map(|r| r.does.as_ref().map(discriminant))
+        .collect()
+}
+
+/// A wheel selector: a range picks a gobo, a colour or a prism. A preset name alone
+/// does not say it (Briteq BTX Saturn calls its rotation fine `GoboWheelFine`).
+fn wheel(c: &Channel) -> bool {
     c.ranges.iter().any(|r| {
         matches!(
             r.does,
@@ -97,7 +125,63 @@ fn is_slot(c: &Channel) -> bool {
     })
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+/// An index: its preset is an index, or a range turns or indexes.
+fn index(c: &Channel) -> bool {
+    stem(c).is_some_and(|s| s.ends_with("Index"))
+        || c.ranges
+            .iter()
+            .any(|r| matches!(r.does, Some(Does::Rotation(_))))
+}
+
+/// Why `fine` cannot be the second byte of `coarse`, from the definition alone.
+fn incompatible(fine: &Channel, coarse: &Channel) -> Option<String> {
+    if colour(fine) != colour(coarse) {
+        return Some(format!(
+            "colour {:?} joins colour {:?}",
+            colour(fine),
+            colour(coarse)
+        ));
+    }
+    match (stem(fine), stem(coarse)) {
+        (Some(f), Some(c)) if family(f) != family(c) => {
+            return Some(format!("preset {f} joins preset {c}"));
+        }
+        (Some(_), Some(_)) => {}
+        _ if group(fine).is_none() || group(fine) != group(coarse) => {
+            return Some(format!(
+                "group {:?} joins group {:?}",
+                group(fine),
+                group(coarse)
+            ));
+        }
+        _ => {}
+    }
+    let (f, c) = (kinds(fine), kinds(coarse));
+    // A fine with steps of its own has the coarse's steps. A plain fine names nothing
+    // the coarse does not, unless the coarse names nothing at all (Martin smartMAC).
+    let shaped = if f.len() > 1 {
+        f == c
+    } else {
+        c.iter().all(Option::is_none) || f.iter().flatten().all(|kind| c.contains(&Some(*kind)))
+    };
+    if !shaped {
+        return Some(format!(
+            "{} ranges {:?} join {} ranges {:?}",
+            f.len(),
+            fine.ranges.iter().map(|r| &r.label).collect::<Vec<_>>(),
+            c.len(),
+            coarse.ranges.iter().map(|r| &r.label).collect::<Vec<_>>()
+        ));
+    }
+    let only_index = |c: &Channel| index(c) && !wheel(c);
+    let only_wheel = |c: &Channel| wheel(c) && !index(c);
+    if (only_index(fine) && only_wheel(coarse)) || (only_wheel(fine) && only_index(coarse)) {
+        return Some("an index joins a wheel selector".into());
+    }
+    None
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Light {
     Dimmer,
     Emitter,
@@ -105,25 +189,19 @@ enum Light {
     Independent,
 }
 
-fn light(c: &Channel, kind: &Kind) -> Light {
-    use Function::{Amber, Blue, Cyan, Green, Indigo, Lime, Magenta, Red, Uv, White, Yellow};
-    if matches!(
-        c.declared.colour,
-        Some(Red | Green | Blue | White | Amber | Uv | Lime | Indigo | Cyan | Magenta | Yellow)
-    ) {
+/// What a channel does to the light, from its declarations and the fixture's type.
+/// On a smoke machine or hazer a dimmer preset is the fog output, unless the mode has
+/// emitters for it to dim. On a dimmer pack every group-only Intensity channel is a dimmer.
+fn light(c: &Channel, kind: &Kind, emitters: bool) -> Light {
+    if colour(c).is_some() {
         return Light::Emitter;
     }
+    let fog = matches!(kind, Kind::Smoke | Kind::Hazer) && !emitters;
     match stem(c) {
-        Some("IntensityDimmer" | "IntensityMasterDimmer")
-            if !matches!(kind, Kind::Smoke | Kind::Hazer) =>
-        {
+        Some("IntensityDimmer" | "IntensityMasterDimmer") if !fog => Light::Dimmer,
+        None if c.declared.group.as_deref() == Some("Intensity") && *kind == Kind::Dimmer => {
             Light::Dimmer
         }
-        Some(
-            "IntensityRed" | "IntensityGreen" | "IntensityBlue" | "IntensityWhite"
-            | "IntensityAmber" | "IntensityUV" | "IntensityLime" | "IntensityIndigo"
-            | "IntensityCyan" | "IntensityMagenta" | "IntensityYellow",
-        ) => Light::Emitter,
         None if group(c) == Some("Shutter")
             && c.ranges.iter().any(|r| r.does == Some(Does::Closed)) =>
         {
@@ -176,7 +254,22 @@ fn check_mode(mode: &Mode, kind: &Kind, result: &Lowered) -> Vec<String> {
         }
     }
     let share_head = |i: usize, j: usize| heads[i].iter().any(|h| heads[j].contains(h));
+    // A fine in a head joins a coarse in exactly its heads.
+    let can_join = |fine: usize, coarse: usize| -> Option<String> {
+        if channels[coarse].byte != Byte::Coarse {
+            return Some("not a coarse byte".into());
+        }
+        if !heads[fine].is_empty() && heads[fine] != heads[coarse] {
+            return Some(format!(
+                "heads {:?} join heads {:?}",
+                heads[fine], heads[coarse]
+            ));
+        }
+        incompatible(&channels[fine], &channels[coarse])
+    };
+
     let mut owner = vec![None; channels.len()];
+    let mut taken = vec![None; channels.len()];
     for pair in &result.pairs {
         let fine = pair.fine as usize;
         let coarse = pair.coarse as usize;
@@ -186,59 +279,52 @@ fn check_mode(mode: &Mode, kind: &Kind, result: &Lowered) -> Vec<String> {
             report(coarse, format!("pair with {fine} needs a coarse byte here"));
         } else if let Some(previous) = owner[fine].replace(coarse) {
             report(fine, format!("joined both {previous} and {coarse}"));
+        } else if let Some(other) = taken[coarse].replace(fine) {
+            report(coarse, format!("coarse of both {other} and {fine}"));
+        } else if let Some(why) = can_join(fine, coarse) {
+            report(
+                fine,
+                format!("joined {coarse} {}: {why}", channels[coarse].name),
+            );
         }
     }
-
-    // Rank all free candidates by the table. Replay the actual pairs in fine order
-    // so a wrong choice also reports the remaining options for the next fine.
-    let mut used = BTreeSet::new();
-    for (i, fine) in channels
+    for (i, _) in channels
         .iter()
         .enumerate()
         .filter(|(_, c)| c.byte == Byte::Fine)
     {
-        let best = channels
-            .iter()
-            .enumerate()
-            .filter_map(|(j, c)| {
-                if c.byte == Byte::Fine
-                    || used.contains(&j)
-                    || !(heads[i].is_empty() || share_head(i, j))
-                {
-                    return None;
-                }
-                Some((
-                    i.checked_sub(1) != Some(j),
-                    loose_match(fine, c)?,
-                    is_slot(c),
-                    j,
-                ))
-            })
-            .min()
-            .map(|(_, _, _, j)| j);
-        if owner[i] != best {
+        // The coarse byte right before a fine is its partner, unless an earlier fine has it.
+        if let Some(j) = i.checked_sub(1)
+            && can_join(i, j).is_none()
+            && taken[j].is_none_or(|other| other > i)
+            && owner[i] != Some(j)
+        {
             report(
                 i,
-                format!(
-                    "joined {:?}, expected {best:?} from the free candidates",
-                    owner[i]
-                ),
+                format!("not joined to {j} {}, right before it", channels[j].name),
             );
         }
-        if let Some(j) = owner[i]
-            && !used.insert(j)
+        // A fine left alone has no free coarse it could join.
+        if owner[i].is_none()
+            && let Some(j) =
+                (0..channels.len()).find(|&j| taken[j].is_none() && can_join(i, j).is_none())
         {
-            report(i, format!("coarse {j} already has a fine"));
+            report(
+                i,
+                format!("left alone, but {j} {} is free", channels[j].name),
+            );
         }
     }
 
-    let roles: Vec<_> = channels.iter().map(|c| light(c, kind)).collect();
+    let emitters = channels.iter().any(|c| colour(c).is_some());
+    let roles: Vec<_> = channels.iter().map(|c| light(c, kind, emitters)).collect();
     let dimmers: Vec<_> = channels
         .iter()
         .enumerate()
         .filter_map(|(i, c)| (c.byte == Byte::Coarse && roles[i] == Light::Dimmer).then_some(i))
         .collect();
     let both = Follows::MASTER.bits() | Follows::BLACKOUT.bits();
+    // A dimmer carries the emitters of its own heads. A dimmer in no head is shared.
     let carried = |i| {
         dimmers
             .iter()
@@ -264,8 +350,9 @@ fn check_mode(mode: &Mode, kind: &Kind, result: &Lowered) -> Vec<String> {
             report(
                 i,
                 format!(
-                    "follows {}, expected {expected} (controlling channel {controlling:?})",
-                    config.follows.bits()
+                    "follows {}, expected {expected} ({:?}, controlling channel {controlling:?})",
+                    config.follows.bits(),
+                    roles[i]
                 ),
             );
         }
@@ -273,12 +360,6 @@ fn check_mode(mode: &Mode, kind: &Kind, result: &Lowered) -> Vec<String> {
             report(
                 i,
                 "non-light name and no declared light, yet follows a modifier".into(),
-            );
-        }
-        if roles[i] == Light::Emitter && config.follows == Follows::NONE && !carried(i) {
-            report(
-                i,
-                "emitter follows nothing and has no dimmer to carry it".into(),
             );
         }
     }
@@ -292,14 +373,19 @@ fn every_mode_obeys_the_channel_rules() -> io::Result<()> {
         qxf_files(&folder, &mut paths)?;
     }
     if let Some(root) = env::var_os("QLCPLUS_FIXTURES") {
-        let before = paths.len();
+        let mut pinned = Vec::new();
         for maker in fs::read_dir(&root)? {
             let maker = maker?;
             if maker.file_type()?.is_dir() {
-                qxf_files(&maker.path(), &mut paths)?;
+                qxf_files(&maker.path(), &mut pinned)?;
             }
         }
-        assert!(paths.len() > before, "no QXF files under {root:?}/*/");
+        assert!(
+            pinned.len() >= PINNED,
+            "{} QXF files under {root:?}/*/, the pinned library has {PINNED}",
+            pinned.len()
+        );
+        paths.extend(pinned);
     }
 
     paths.sort();
@@ -327,6 +413,11 @@ fn every_mode_obeys_the_channel_rules() -> io::Result<()> {
             );
         }
     }
-    assert!(errors.is_empty(), "{}", errors.join("\n"));
+    assert!(
+        errors.is_empty(),
+        "{} problems:\n{}",
+        errors.len(),
+        errors.join("\n")
+    );
     Ok(())
 }

@@ -3,7 +3,7 @@
 use crate::capability::{self, Said};
 use crate::error::{Error, LeftOut, Problem, Warning};
 use crate::function::{colour_of, direction_of, function_of};
-use crate::model::{Byte, Channel, Declared, Degrees, Fixture, Kind, Layout, Mode, Range};
+use crate::model::{Byte, Channel, Declared, Degrees, Dimming, Fixture, Kind, Layout, Mode, Range};
 use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -87,15 +87,14 @@ fn read<'a>(document: &'a Document<'a>) -> Result<Fixture, Failure<'a>> {
     let maker = text_of(root, "Manufacturer")?;
     let model = text_of(root, "Model")?;
     let kind = kind_of(&text_of(root, "Type")?);
-    let smoke = matches!(kind, Kind::Smoke | Kind::Hazer);
     let channels = root
         .children()
         .filter(|n| n.has_tag_name("Channel"))
-        .map(|node| channel(node, smoke))
+        .map(channel)
         .collect::<Result<Vec<_>, _>>()?;
     let (mut modes, mut warnings) = (Vec::new(), Vec::new());
     for node in root.children().filter(|n| n.has_tag_name("Mode")) {
-        modes.push(mode(node, root, &channels, &mut warnings)?);
+        modes.push(mode(node, root, &channels, &kind, &mut warnings)?);
     }
     Ok(Fixture {
         maker,
@@ -152,7 +151,7 @@ fn number<'a, T: core::str::FromStr>(
     })
 }
 
-fn channel<'a>(node: Node<'a, 'a>, smoke: bool) -> Result<Channel, Failure<'a>> {
+fn channel<'a>(node: Node<'a, 'a>) -> Result<Channel, Failure<'a>> {
     let name = node.attribute("Name").unwrap_or_default().to_string();
     let group = match node.children().find(|n| n.has_tag_name("Group")) {
         Some(group) => {
@@ -197,7 +196,7 @@ fn channel<'a>(node: Node<'a, 'a>, smoke: bool) -> Result<Channel, Failure<'a>> 
             preset: preset.map(String::from),
             group: group.map(|(name, _)| String::from(name)),
             colour,
-            smoke,
+            ..Declared::default()
         },
         byte,
         default,
@@ -232,6 +231,7 @@ fn mode<'a>(
     node: Node<'a, 'a>,
     root: Node<'a, 'a>,
     defined: &[Channel],
+    kind: &Kind,
     warnings: &mut Vec<Warning>,
 ) -> Result<Mode, Failure<'a>> {
     let name = node.attribute("Name").unwrap_or_default().to_string();
@@ -267,7 +267,25 @@ fn mode<'a>(
             .unwrap_or(node);
         return Err((entry, Problem::SkippedNumber(number)));
     }
-    let channels: Vec<Channel> = by_number.values().map(|c| (*c).clone()).collect();
+    let dimming = if *kind == Kind::Dimmer {
+        Dimming::DimmerPack
+    } else if matches!(kind, Kind::Smoke | Kind::Hazer)
+        && !by_number
+            .values()
+            .any(|c| c.declared.emitter_colour().is_some())
+    {
+        Dimming::Fog
+    } else {
+        Dimming::Preset
+    };
+    let channels: Vec<_> = by_number
+        .into_values()
+        .cloned()
+        .map(|mut channel| {
+            channel.declared.dimming = dimming;
+            channel
+        })
+        .collect();
     let warn = |at: Node, left_out| Warning {
         mode: name.clone(),
         line: line_of(at),

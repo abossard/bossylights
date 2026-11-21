@@ -9,7 +9,8 @@
 //!
 //! The channels of a mode are `first`, `first + 1`, … in one flat space: no universe and
 //! no stride. Defaults come from the declared colour, else the preset, else the group.
-//! Group-only Intensity and Beam channels without a declared colour start independent (cx-3).
+//! Group-only Intensity channels on a dimmer fixture are dimmers. On other fixtures,
+//! group-only Intensity and Beam channels without a declared colour start independent.
 //!
 //! | Function | Follows | Dark | Change |
 //! |---|---|---|---|
@@ -18,7 +19,7 @@
 //! | cyan, magenta, yellow | master and blackout, none when a dimmer carries it | 255 | fade |
 //! | shutter | blackout, none without a range marked closed | the first byte of that range | jump |
 //! | hue to colour temperature, pan, tilt, zoom, focus, iris, frost | none | 0 | fade |
-//! | strobe, wheels, gobo, prism, speed, effect, control, nothing, other (including dimmer presets on Smoke and Hazer fixtures) | none | 0 | jump |
+//! | strobe, wheels, gobo, prism, speed, effect, control, nothing, other (including dimmer presets in emitterless Smoke and Hazer modes) | none | 0 | jump |
 //!
 //! - [Roles](Channel::role) use only declarations. A v6 channel with none starts independent.
 //! - A coarse dimmer carries the emitters in every head that lists it. A dimmer listed in
@@ -29,17 +30,22 @@
 //!   jumps and fades. Otherwise it spans every byte in the channel's direction.
 //! - `rest`: the value that lets light out for a shutter or strobe, the bypass for a colour
 //!   wheel over a colour mix, else the default, else 0. Ties: latest wins.
-//! - Fine bytes take one free coarse byte in channel order. They must share a head if
-//!   the fine belongs to any head. A strict match has the same preset function (unknown
-//!   presets keep their stem), or two equal group-only declarations. A loose match has the
-//!   same QLC+ group with at least one group-only channel.
+//! - Fine bytes claim one free coarse byte in fine-channel order.
+//!
+//! | A pair must agree on | Compatibility |
+//! |---|---|
+//! | Colour | Same declared colour or Intensity colour preset, including both absent |
+//! | Presets | Same preset family, ignoring direction and the dimmer and colour-temperature aliases |
+//! | Group | When either preset is absent, both bytes declare or imply the same QLC+ group |
+//! | Ranges | Two or more fine ranges match the coarse range kinds in order. A single named fine range occurs on the coarse, unless all coarse ranges are unnamed |
+//! | Wheel | An index-only channel cannot join a selector-only channel |
+//! | Heads | A fine in heads has exactly the coarse's heads. A fine in no head can join any head |
 //!
 //! | Fine byte, first match wins | Coarse byte |
 //! |---|---|
-//! | 1 | Immediately preceding strict or loose match |
-//! | 2 | First strict match, preferring channels without gobo, colour or prism slots |
-//! | 3 | First loose match with the same preference |
-//! | 4 | No match. The fine stays a single byte. A declared emitter follows its own head's dimmer rules |
+//! | 1 | Immediately preceding compatible coarse |
+//! | 2 | First compatible coarse in channel order, preferring channels without gobo, colour or prism slots |
+//! | 3 | No match. The fine stays a single byte. A declared emitter follows its own head's dimmer rules |
 //!
 //! A joined fine keeps its rest, takes the low byte of the pair's dark, and inherits
 //! the coarse byte's follows, change and travel.
@@ -59,6 +65,7 @@ use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
+use core::mem::{Discriminant, discriminant};
 use fixture_library::{Byte, Channel, Degrees, Direction, Does, Function, Mode};
 
 pub use crate::capabilities::slot_byte;
@@ -402,62 +409,111 @@ fn rests(group: &[(usize, &Channel)]) -> Vec<u8> {
 /// Declared facts used to find a fine byte's partner. A channel can belong to several heads.
 struct PairChannel<'a> {
     byte: Byte,
-    preset: Option<Function>,
+    colour: Option<Function>,
+    preset: Option<&'a str>,
     group: Option<&'a str>,
+    ranges: Vec<Option<Discriminant<Does>>>,
+    wheel: Wheel,
     heads: Vec<usize>,
-    slot: bool,
 }
 
-#[derive(PartialEq, Eq, PartialOrd, Ord)]
-enum Match {
-    Strict,
-    Loose,
+#[derive(Clone, Copy)]
+enum Wheel {
+    Neither,
+    Index,
+    Slots,
+    IndexAndSlots,
+}
+
+impl Wheel {
+    fn of(channel: &Channel, stem: Option<&str>) -> Self {
+        let index = stem.is_some_and(|s| s.ends_with("Index"))
+            || channel
+                .ranges
+                .iter()
+                .any(|r| matches!(r.does, Some(Does::Rotation(_))));
+        let slots = channel.ranges.iter().any(|r| {
+            matches!(
+                r.does,
+                Some(
+                    Does::Gobo { .. }
+                        | Does::Color(_)
+                        | Does::Colors(_, _)
+                        | Does::Prism { .. }
+                        | Does::PrismOff
+                )
+            )
+        });
+        match (index, slots) {
+            (false, false) => Self::Neither,
+            (true, false) => Self::Index,
+            (false, true) => Self::Slots,
+            (true, true) => Self::IndexAndSlots,
+        }
+    }
 }
 
 impl<'a> PairChannel<'a> {
     fn new(channel: &'a Channel) -> Self {
         let declared = &channel.declared;
+        let stem = declared.preset_stem();
         Self {
             byte: channel.byte,
-            preset: declared.preset_key(),
+            colour: declared.emitter_colour(),
+            preset: stem.map(preset_family),
             group: declared
                 .group
                 .as_deref()
-                .or_else(|| declared.preset.as_deref().and_then(preset_group)),
+                .or_else(|| stem.and_then(preset_group)),
+            ranges: channel
+                .ranges
+                .iter()
+                .map(|r| r.does.as_ref().map(discriminant))
+                .collect(),
+            wheel: Wheel::of(channel, stem),
             heads: Vec::new(),
-            slot: channel.ranges.iter().any(|range| {
-                matches!(
-                    range.does,
-                    Some(
-                        Does::Gobo { .. }
-                            | Does::Color(_)
-                            | Does::Colors(_, _)
-                            | Does::Prism { .. }
-                            | Does::PrismOff
-                    )
-                )
-            }),
         }
     }
 
-    fn matches(&self, fine: &Self) -> Option<Match> {
-        if self.byte != Byte::Coarse
-            || !(fine.heads.is_empty() || fine.heads.iter().any(|h| self.heads.contains(h)))
-        {
-            return None;
-        }
-        match (&self.preset, &fine.preset) {
-            (Some(a), Some(b)) => (a == b).then_some(Match::Strict),
-            _ if self.group.is_none() || self.group != fine.group => None,
-            (None, None) => Some(Match::Strict),
-            _ => Some(Match::Loose),
-        }
+    fn can_take(&self, fine: &Self) -> bool {
+        let same_function = match (self.preset, fine.preset) {
+            (Some(a), Some(b)) => a == b,
+            _ => self.group.is_some() && self.group == fine.group,
+        };
+        self.byte == Byte::Coarse
+            && self.colour == fine.colour
+            && same_function
+            && (fine.heads.is_empty() || self.heads == fine.heads)
+            && !matches!(
+                (self.wheel, fine.wheel),
+                (Wheel::Slots, Wheel::Index) | (Wheel::Index, Wheel::Slots)
+            )
+            && match fine.ranges.as_slice() {
+                [] | [None] => true,
+                [kind] => self.ranges.contains(kind) || self.ranges.iter().all(Option::is_none),
+                steps => self.ranges == steps,
+            }
+    }
+}
+
+/// A QLC+ preset identifies a capability even when its travel direction differs.
+fn preset_family(stem: &str) -> &str {
+    let family = [
+        "SlowFast", "FastSlow", "SmallBig", "BigSmall", "NearFar", "FarNear", "MinToMax",
+        "MaxToMin",
+    ]
+    .into_iter()
+    .find_map(|way| stem.strip_suffix(way))
+    .unwrap_or(stem);
+    match family {
+        "IntensityMasterDimmer" => "IntensityDimmer",
+        "ColorCTOMixer" | "ColorCTBMixer" => "ColorCTCMixer",
+        _ => family,
     }
 }
 
 /// QLC+ group of a preset on a channel without an explicit group.
-fn preset_group(preset: &str) -> Option<&'static str> {
-    let stem = preset.strip_suffix("Fine").unwrap_or(preset);
+fn preset_group(stem: &str) -> Option<&'static str> {
     match stem {
         "PositionXAxis" => Some("Pan"),
         "PositionYAxis" => Some("Tilt"),
@@ -495,15 +551,13 @@ fn pair_bytes(mode: &Mode) -> BTreeMap<usize, usize> {
         .filter(|(_, c)| c.byte == Byte::Fine)
     {
         let rank = |(coarse, c): (usize, &PairChannel<'_>)| {
-            if fine_of.contains_key(&coarse) {
-                return None;
-            }
-            Some((c.matches(channel)?, c.slot, coarse))
+            let slot = matches!(c.wheel, Wheel::Slots | Wheel::IndexAndSlots);
+            (!fine_of.contains_key(&coarse) && c.can_take(channel)).then_some((slot, coarse))
         };
         let adjacent = fine
             .checked_sub(1)
             .and_then(|i| rank((i, channels.get(i)?)));
-        if let Some((_, _, coarse)) =
+        if let Some((_, coarse)) =
             adjacent.or_else(|| channels.iter().enumerate().filter_map(rank).min())
         {
             fine_of.insert(coarse, fine);

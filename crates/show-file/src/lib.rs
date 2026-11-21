@@ -858,9 +858,10 @@ mod sequence_tests {
         let step_file = write(&patch, &Looks::new().put(step, &patch).unwrap()).unwrap();
         let sequence = r#"{"look":1,"name":"parent","sequence":{"items":[{"look":9}]}}"#;
         let whole = step_file.replace("\"looks\": [", &format!("\"looks\": [\n    {sequence},"));
-        let (_, read_back) = read(&whole, &empty).unwrap();
+        // v6 carries no QXF declarations, so compare with the patch as reopened.
+        let (reopened, read_back) = read(&whole, &empty).unwrap();
         assert_eq!(read_back.all().len(), 2);
         let canonical = write(&patch, &read_back).unwrap();
-        assert_eq!(read(&canonical, &empty), Ok((patch, read_back)));
+        assert_eq!(read(&canonical, &empty), Ok((reopened, read_back)));
     }
 }

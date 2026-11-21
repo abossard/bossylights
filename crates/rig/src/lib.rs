@@ -203,14 +203,18 @@ fn strip(pixels: Pixels, color: Color) -> (&'static str, Mode) {
             ],
         ),
     };
-    let channel = |function: &Function| fixture_library::Channel {
-        name: format!("{function:?}"),
-        function: function.clone(),
-        declared: Default::default(),
-        byte: Byte::Coarse,
-        default: None,
-        direction: None,
-        ranges: vec![],
+    let channel = |function: &Function| {
+        let mut channel = fixture_library::Channel {
+            name: format!("{function:?}"),
+            function: function.clone(),
+            declared: Default::default(),
+            byte: Byte::Coarse,
+            default: None,
+            direction: None,
+            ranges: vec![],
+        };
+        channel.declared.colour = Some(function.clone());
+        channel
     };
     let size = functions.len();
     let mode = Mode {

@@ -132,12 +132,11 @@ fn every_qlc_channel_preset_has_a_function_and_keeps_its_byte() {
         assert_eq!((&found.function, found.byte), (&function, byte), "{preset}");
         assert_eq!(found.role(), function, "{preset}");
         assert_eq!(found.declared.preset.as_deref(), Some(preset));
-        let key = if matches!(function, Other(_)) {
-            other(preset.strip_suffix("Fine").unwrap_or(preset))
-        } else {
-            function
-        };
-        assert_eq!(found.declared.preset_key(), Some(key), "{preset}");
+        assert_eq!(
+            found.declared.preset_stem(),
+            Some(preset.strip_suffix("Fine").unwrap_or(preset)),
+            "{preset}"
+        );
     }
 }
 
@@ -338,7 +337,7 @@ fn roles_without_a_preset_come_from_the_group() {
         let channel = format!(r#"<Channel Name="{name}"><Group>{group}</Group></Channel>"#);
         let channel = only_channel(&channel);
         assert_eq!(channel.declared.group.as_deref(), Some(*group));
-        assert_eq!(channel.declared.preset_key(), None);
+        assert_eq!(channel.declared.preset_stem(), None);
         channel.role()
     });
     assert_eq!(actual, cases.map(|(_, _, expected)| expected));
@@ -393,10 +392,47 @@ fn roles_with_a_preset_respect_declared_colour_and_fixture_type() {
     let actual = cases.each_ref().map(|(name, preset, kind, children, _)| {
         let channel = format!(r#"<Channel Name="{name}" Preset="{preset}">{children}</Channel>"#);
         let channel = channel_of_kind(&channel, kind);
-        assert_eq!(channel.declared.smoke, matches!(*kind, "Smoke" | "Hazer"));
         channel.role()
     });
     assert_eq!(actual, cases.map(|(_, _, _, _, expected)| expected));
+}
+
+#[test]
+fn dimmer_roles_come_from_the_channels_in_each_mode() {
+    for (kind, pump, bank) in [
+        ("Smoke", other("IntensityDimmer"), other("Intensity")),
+        ("Hazer", other("IntensityDimmer"), other("Intensity")),
+        ("Dimmer", Dimmer, Dimmer),
+        ("Other", Dimmer, other("Intensity")),
+    ] {
+        let xml = format!(
+            r#"<FixtureDefinition><Manufacturer>A</Manufacturer><Model>M</Model><Type>{kind}</Type>
+            <Channel Name="Level" Preset="IntensityDimmer"/>
+            <Channel Name="Ch 1"><Group>Intensity</Group></Channel>
+            <Channel Name="Lamp"><Group>Intensity</Group><Colour>Amber</Colour></Channel>
+            <Channel Name="Fine" Preset="IntensityRedFine"/>
+            <Channel Name="Aux"><Group>Effect</Group></Channel>
+            <Mode Name="Unlit"><Channel Number="0">Level</Channel><Channel Number="1">Ch 1</Channel><Channel Number="2">Aux</Channel></Mode>
+            <Mode Name="Lamp"><Channel Number="0">Level</Channel><Channel Number="1">Lamp</Channel></Mode>
+            <Mode Name="Fine"><Channel Number="0">Level</Channel><Channel Number="1">Fine</Channel></Mode>
+            </FixtureDefinition>"#
+        );
+        let fixture = parse("modes.qxf", xml.as_bytes()).unwrap();
+        let roles: Vec<Vec<_>> = fixture
+            .modes
+            .iter()
+            .map(|mode| mode.channels.iter().map(Channel::role).collect())
+            .collect();
+        assert_eq!(
+            roles,
+            [
+                vec![pump, bank, Effect],
+                vec![Dimmer, Amber],
+                vec![Dimmer, Red]
+            ],
+            "{kind}"
+        );
+    }
 }
 
 #[test]
@@ -424,12 +460,20 @@ fn a_declared_colour_sets_the_role_and_keeps_the_v11_function() {
                 r#"<Channel Name="Fan"><Group>{group}</Group><Colour>{name}</Colour></Channel>"#
             ));
             let expected_role = colour.clone().unwrap_or(fallback);
+            assert_eq!(channel.declared.emitter_colour(), colour);
             assert_eq!(
                 (channel.role(), &channel.declared.colour, channel.function),
                 (expected_role, &colour, function),
                 "{name} in {group}"
             );
         }
+    }
+
+    for (tag, expected) in [("", Red), ("<Colour>Blue</Colour>", Blue)] {
+        let channel = only_channel(&format!(
+            r#"<Channel Name="Lamp" Preset="IntensityRedFine">{tag}</Channel>"#
+        ));
+        assert_eq!(channel.declared.emitter_colour(), Some(expected));
     }
 }
 

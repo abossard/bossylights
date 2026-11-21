@@ -69,17 +69,16 @@ pub struct Layout {
     pub height: u16,
 }
 
-/// One DMX channel. The v11 writers use its `function`. The channel model derives
-/// [`Self::role`] and fine-byte partners from the definition's declarations.
+/// One DMX channel. The v11 writers use its `function`. Its [`Self::role`] comes from
+/// the declarations in its fixture and mode. Pairing also uses its ranges and heads.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Channel {
     pub name: String,
     pub function: Function,
-    /// What the definition declares about the channel. The channel model reads only
-    /// these declarations for its role and pairing key. A v6 show or a hand-made
-    /// channel without them has role `Other("")` and cannot form a pair.
-    #[serde(default, skip_serializing)]
+    /// QXF declarations live only in memory. A v6 channel has none, starts with
+    /// role `Other("")` and stays a single byte.
+    #[serde(skip)]
     pub declared: Declared,
     /// The high byte, or the second byte of a 16-bit value.
     pub byte: Byte,
@@ -91,9 +90,8 @@ pub struct Channel {
     pub ranges: Vec<Range>,
 }
 
-/// The QLC+ metadata used to classify a channel independently of its name.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+/// The channel's QLC+ declarations and how dimmers are used in its mode.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Declared {
     /// The preset as written, including its `Fine` suffix.
     pub preset: Option<String>,
@@ -101,8 +99,19 @@ pub struct Declared {
     pub group: Option<String>,
     /// The emitter or subtractive colour named by the `<Colour>` child.
     pub colour: Option<Function>,
-    /// The fixture declares type `Smoke` or `Hazer`.
-    pub smoke: bool,
+    pub(crate) dimming: Dimming,
+}
+
+/// Which declarations identify a dimmer in this mode.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Dimming {
+    /// A dimmer preset controls light.
+    #[default]
+    Preset,
+    /// On a dimmer fixture, a group-only Intensity channel also controls light.
+    DimmerPack,
+    /// In a Smoke or Hazer mode with no declared emitter, a dimmer preset controls fog.
+    Fog,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

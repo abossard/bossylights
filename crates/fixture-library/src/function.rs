@@ -1,12 +1,12 @@
 //! The v11 function of a channel and its declared channel-model role.
 //! Both use the QLC+ preset table. Only v11 interprets a channel name.
 
-use crate::model::{Byte, Channel, Declared, Direction, Function};
+use crate::model::{Byte, Channel, Declared, Dimming, Direction, Function};
 use alloc::string::{String, ToString};
 
 impl Channel {
-    /// The declared colour, else preset, else group. Dimmer presets on a smoke
-    /// fixture and ambiguous groups keep the declaration as their label.
+    /// The declared colour, else preset, else group. In an emitter-free Smoke or Hazer
+    /// mode a dimmer preset controls fog. On a dimmer pack the Intensity group dims.
     #[must_use]
     pub fn role(&self) -> Function {
         let declared = &self.declared;
@@ -15,12 +15,15 @@ impl Channel {
         }
         if let Some(preset) = &declared.preset {
             return match from_preset(preset_stem(preset)) {
-                Some(Function::Dimmer) if declared.smoke => Function::Other(preset.clone()),
+                Some(Function::Dimmer) if declared.dimming == Dimming::Fog => {
+                    Function::Other(preset.clone())
+                }
                 Some(function) => function,
                 None => Function::Other(preset.clone()),
             };
         }
         match declared.group.as_deref().unwrap_or_default() {
+            "Intensity" if declared.dimming == Dimming::DimmerPack => Function::Dimmer,
             "Pan" => Function::Pan,
             "Tilt" => Function::Tilt,
             "Colour" => Function::ColorWheel,
@@ -37,17 +40,27 @@ impl Channel {
 }
 
 impl Declared {
-    /// The preset's pairing key. Both bytes share the preset function, or the stem
-    /// when the preset is unknown. A channel without a preset pairs by its group.
+    /// The channel preset without its optional `Fine` suffix.
     #[must_use]
-    pub fn preset_key(&self) -> Option<Function> {
-        let stem = preset_stem(self.preset.as_deref()?);
-        Some(from_preset(stem).unwrap_or_else(|| Function::Other(stem.into())))
+    pub fn preset_stem(&self) -> Option<&str> {
+        self.preset.as_deref().map(preset_stem)
+    }
+
+    /// The emitted or subtractive colour, from `<Colour>` first, then the Intensity preset.
+    #[must_use]
+    pub fn emitter_colour(&self) -> Option<Function> {
+        self.colour
+            .clone()
+            .or_else(|| preset_colour(self.preset_stem()?))
     }
 }
 
 fn preset_stem(preset: &str) -> &str {
     preset.strip_suffix("Fine").unwrap_or(preset)
+}
+
+fn preset_colour(stem: &str) -> Option<Function> {
+    stem.strip_prefix("Intensity").and_then(colour_of)
 }
 
 /// The colour named by a QLC+ `<Colour>` child or an `Intensity` colour preset.
@@ -101,7 +114,7 @@ fn from_preset(stem: &str) -> Option<Function> {
         "BeamZoomSmallBig" | "BeamZoomBigSmall" | "BeamZoom" => Function::Zoom,
         "PrismRotationSlowFast" | "PrismRotationFastSlow" => Function::Prism,
         "NoFunction" => Function::NoFunction,
-        _ => return stem.strip_prefix("Intensity").and_then(colour_of),
+        _ => return preset_colour(stem),
     };
     Some(function)
 }

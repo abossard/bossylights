@@ -41,3 +41,5 @@ the Apache License 2.0 (`COPYING` in the repository root, copied here as
 | `Generic-Generic-Smoke.qxf` | Generic | a pump with a master dimmer preset on a smoke machine |
 | `Shehds-120W-4in1-RGBW-LED-Wash-Moving-Head.qxf` | Shehds | an auxiliary head with its own dimmer and RGB channels |
 | `Botex-DSP-405.qxf` | Botex | four Intensity channels with only a group declaration |
+| `Vari-Lite-VL2202-Spot.qxf` | Vari-Lite | a gobo index declared as a fine byte right after the gobo selector: two channels, no pair |
+| `Cameo-CLMPAR3.qxf` | Cameo | external On/Off fine bytes after White and the master dimmer: no pair |
