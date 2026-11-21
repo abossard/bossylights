@@ -18,7 +18,7 @@ export type Screen = "Top bar" | "Console" | "Songs" | "Looks" | "Patch" | "DMX"
 export const PRIMITIVES = {
   Button: ["action", "toggle"],
   Pad: [],
-  Fader: [],
+  Fader: ["percent", "byte"],
   XY: ["position", "colour"],
   Picker: ["tabs", "segments", "cards", "pictures", "list"],
   Field: ["text", "search", "steps"],

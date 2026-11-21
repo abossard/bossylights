@@ -3215,7 +3215,6 @@ dependencies = [
  "engine-core",
  "tauri",
  "tauri-build",
- "tungstenite",
 ]
 
 [[package]]

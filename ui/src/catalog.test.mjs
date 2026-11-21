@@ -135,7 +135,6 @@ const plays = [
   ["an edge dropped elsewhere says it landed", "songs.section.edge", "alone", [{ is: "lift" }, { is: "drop", by: { across: 2, down: 0, wider: 0 } }], ["MoveSectionEdge where it landed"], { at: "idle" }],
   ["a drop where it started sends nothing", "looks.seq.bar", "alone", [{ is: "lift" }, { is: "drop", by: { across: -4, down: 0, wider: 0 } }], [], { variant: "", at: "idle", sub: "At beat 1, 1 beat" }],
   ["an arrow that cannot move it sends nothing", "looks.seq.bar", "alone", [{ is: "nudge", by: { across: -1, down: 0, wider: 0 } }], [], { sub: "At beat 1, 1 beat" }],
-  ["a test of an output does nothing while it runs", "inout.out.test", "alone", [{ is: "press" }, { is: "press" }], ["TestOutput on: true"], { label: "Testing" }],
   ["a drag put back sends nothing", "patch.grid.light", "alone", [{ is: "lift" }, { is: "cancel" }], [], { variant: "", at: "idle" }],
   ["a lifted thing looks lifted", "looks.seq.bar", "alone", [{ is: "lift" }], [], { variant: "lifted", at: "dragging" }],
   ["the cross takes a look out of a section", "songs.section.remove-look", "alone", [{ is: "remove" }], ["RemoveSectionLook"], {}],
@@ -144,7 +143,7 @@ const plays = [
   ["the add flow: yes adds the light and stops the flashing", "patch.add.confirm", "alone", [{ is: "press" }], ["AddFixture", "Identify"], { at: "find" }],
   ["the add flow: Next says where it leads", "patch.add.next", "alone", [{ is: "press" }], [], { label: "Next: flash it", at: "address" }],
   ["Stop engine is off while LIVE is on", "menubar.stop-engine", "live-on", [{ is: "press" }], [], { off: "LIVE is on" }],
-  ["Stop engine works with the window closed", "menubar.stop-engine", "window-closed", [{ is: "press" }], ["StopEngine"], { gone: "" }],
+  ["Stop engine works with the window closed", "menubar.stop-engine", "window-closed", [{ is: "press" }], ["Stop"], { gone: "" }],
   ["the menu bar item opens its menu and sends nothing", "menubar.item", "window-closed", [{ is: "press" }], [], { on: true }],
   ["a control of a screen is not there with the window closed", "top.blackout", "window-closed", [{ is: "press" }], [], { gone: "The window is closed" }],
   // #189

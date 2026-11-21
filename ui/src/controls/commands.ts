@@ -1,5 +1,5 @@
 // The commands the controls send: the union is the first list of engine commands (issue #102).
-// Names follow `engine-api.ts`. `engine: true` means the engine already accepts it today.
+// Names follow `engine-api.ts`: a command (`Command`) or a request (`Request`). `engine: true` means the engine already accepts it today.
 // This is the list the UI needs, not a design of the engine: fields and names are settled per issue.
 
 interface CommandSpec {
@@ -32,18 +32,18 @@ export const COMMANDS = {
   SaveShowAs: command("Write a copy of the show file. The copy becomes the open one", "file"),
 
   // ---- tempo
-  TapTempo: command("One tap. After two taps the beat follows the taps, until ReleaseTempo"),
-  ReleaseTempo: command("The taps let go: the beat follows the picked feed again"),
+  TapTempo: command("One tap. After two taps the beat follows the taps, until ReleaseTempo", "", true),
+  ReleaseTempo: command("The taps let go: the beat follows the picked feed again", "", true),
   SetTempoFeed: command("Which source drives the beat", "feed: tap, audio, midi clock, virtualdj, timecode"),
   SetFollows: command("Which deck or timecode gives the song and its position", "source: deck 1, deck 2, timecode"),
   SetSpeed: command("Sequences and patterns run at half, normal or double speed", "factor"),
 
   // ---- playing by hand
-  StartLook: command("A look runs by hand, in the next frame", "look"),
-  StopLook: command("A look that runs by hand is switched off. What it touched stays held until Release", "look"),
-  EndFlash: command("A look that was flashed ends and gives back what it touched", "look"),
+  StartLook: command("A look runs by hand, in the next frame", "look", true),
+  StopLook: command("A look that runs by hand is switched off. What it touched stays held until Release", "look", true),
+  EndFlash: command("A look that was flashed ends and gives back what it touched", "look", true),
   SkipLook: command("One look of the show or the autopilot stops for the rest of the section", "look"),
-  ReleaseHold: command("Give back one thing held by hand", "hold"),
+  ReleaseHold: command("Give back one thing held by hand", "hold", true),
   ReleaseAll: command("Give back everything held by hand", "", true),
   SetMaster: command("The level of everything", "level"),
   SetGroupLevel: command("The level of one fader: a group of lights or a rate", "fader, level"),
@@ -123,11 +123,10 @@ export const COMMANDS = {
   // ---- raw channels
   SetChannel: command("Hold one channel by hand at a value", "channel, value", true),
   ReleaseChannel: command("Give one channel back", "channel", true),
-  ReleaseChannels: command("Give back every channel held by hand, and nothing else"),
+  ReleaseChannels: command("Give back every channel held by hand, and nothing else", "", true),
   SetWhoWins: command("One setting of the who-wins rules", "rule, value"),
 
   // ---- in and out
-  TestOutput: command("Every channel of one output at half for three seconds", "output"),
   StartLearn: command("Wait for a hardware control to map to this control", "control"),
   CancelLearn: command("Stop waiting"),
   UpdateMapping: command("Change a mapping: device, note or controller number, feedback", "mapping, change"),
@@ -140,7 +139,7 @@ export const COMMANDS = {
   SetOsc: command("Listen for commands over OSC, or not, and on which port", "on, port"),
 
   // ---- the engine itself
-  StopEngine: command("The engine ends in an orderly way: it answers, closes every connection and sends no more frames. The request Stop of the API (#107)", "", true),
+  Stop: command("The engine ends in an orderly way: it answers, closes every connection and sends no more frames. A request of the API (#107)", "", true),
 
 } as const satisfies Record<string, CommandSpec>;
 

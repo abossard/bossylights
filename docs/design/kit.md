@@ -5,8 +5,8 @@ The catalog shows the same as live pages, primitives first: `npm run catalog`.
 
 ```mermaid
 flowchart LR
-  R["212 controls<br/>one row each"] --> K["11 primitives<br/>named by what they are for"]
-  K --> V["24 kinds in use"]
+  R["213 controls<br/>one row each"] --> K["11 primitives<br/>named by what they are for"]
+  K --> V["25 kinds in use"]
   K --> C["colour<br/>one prop on all of them"]
   R -. "where it lives" .-> T["a tag:<br/>the screen"]
 ```
@@ -24,9 +24,9 @@ flowchart LR
 | --- | --- | --- | --- | --- |
 | **Button** | Do it, or switch it | action, toggle | 106 | 9 |
 | **Pad** | Play a look | one | 3 | – |
-| **Fader** | Set one value | one | 8 | – |
+| **Fader** | Set one value | percent, byte | 8 | – |
 | **XY** | Set two values at once | position, colour | 3 | – |
-| **Picker** | Choose one of a few | tabs, segments, cards, pictures, list | 39 | – |
+| **Picker** | Choose one of a few | tabs, segments, cards, pictures, list | 40 | – |
 | **Field** | Give a value in words or in steps | text, search, steps | 25 | – |
 | **Status** | Read a state. Never pressed: no control is one, many carry one | lamp, pill, flag, value | – | 31 |
 | **Item** | A thing where it lives: pick it, open it, take it out | row, tile, cell, entry, chip, strip | 19 | – |
@@ -158,7 +158,7 @@ Fixed props are the ones that never change for the control. Its words, its state
 | Flash it | `patch.details.flash` | Patch | plain | fires: down |  |
 | Patched only | `dmx.filter.patched` | DMX | plain |  |  |
 | Changing | `dmx.filter.changing` | DMX | plain |  |  |
-| Test an output | `inout.out.test` | In/Out | plain | fires: down, holds: 2 lines |  |
+| Test an output | `inout.out.test` | In/Out | plain |  |  |
 | Edit a mapping | `inout.mapping.edit` | In/Out | plain | holds: 3 lines |  |
 | Mapping feedback | `inout.mapping.feedback` | In/Out | plain | holds: 3 lines |  |
 | Set up an output | `inout.out.setup` | In/Out | plain | holds: 3 lines |  |
@@ -174,7 +174,7 @@ Fixed props are the ones that never change for the control. Its words, its state
 | Play on lights | `looks.try` | Looks | plain |  | Status.flag + Status.pill |
 | Pad to try | `how.pad` | How it works | plain |  | Status.flag + Status.pill |
 
-### Fader (8)
+### Fader, percent (7)
 
 | Control | Name | Where | Colour | Fixed props | Carries |
 | --- | --- | --- | --- | --- | --- |
@@ -184,8 +184,13 @@ Fixed props are the ones that never change for the control. Its words, its state
 | Spread | `looks.seq.spread` | Looks | plain |  | Status.value |
 | Transition | `looks.seq.transition` | Looks | plain |  | Status.value |
 | How wild | `looks.autopilot.wild` | Looks | plain |  | Status.value |
-| Channel fader | `dmx.channel.fader` | DMX | plain |  | Status.value |
 | Master to try | `how.master` | How it works | plain |  | Status.value |
+
+### Fader, byte (1)
+
+| Control | Name | Where | Colour | Fixed props | Carries |
+| --- | --- | --- | --- | --- | --- |
+| Channel fader | `dmx.channel.fader` | DMX | plain |  | Status.value |
 
 ### XY, position (2)
 
@@ -208,7 +213,7 @@ Fixed props are the ones that never change for the control. Its words, its state
 | Console pages | `console.pages` | Console | plain |  |  |
 | Universe tabs | `dmx.universe` | DMX | plain |  |  |
 
-### Picker, segments (14)
+### Picker, segments (15)
 
 | Control | Name | Where | Colour | Fixed props | Carries |
 | --- | --- | --- | --- | --- | --- |
@@ -224,7 +229,8 @@ Fixed props are the ones that never change for the control. Its words, its state
 | Manual control ends | `dmx.who-wins.manual-ends` | DMX | plain | size: small |  |
 | When a look ends | `dmx.who-wins.look-ends` | DMX | plain | size: small |  |
 | Follows | `inout.follows` | In/Out | plain |  |  |
-| Frames a second | `inout.out.rate` | In/Out | plain |  |  |
+| Frames a second, DDP | `inout.out.rate` | In/Out | plain |  |  |
+| Frames a second, DMX USB Pro | `inout.out.rate-usb` | In/Out | plain |  |  |
 | Pick a walk | `how.walk` | How it works | plain |  |  |
 
 ### Picker, cards (4)

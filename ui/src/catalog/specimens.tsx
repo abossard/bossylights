@@ -41,7 +41,7 @@ function Pick(props: { kind: PickerKind; label: string; options: readonly PickOp
 
 function Level(props: { start: number; off?: string }) {
   const [value, setValue] = createSignal(props.start);
-  return <Fader label="Master" value={value()} {...(props.off === undefined ? {} : { off: props.off })} onChange={setValue} />;
+  return <Fader label="Master" most={100} value={value()} {...(props.off === undefined ? {} : { off: props.off })} onChange={setValue} />;
 }
 
 function Aim(props: { held?: boolean; off?: string; colour?: boolean }) {

@@ -35,7 +35,8 @@ const FIXED: Record<string, Readonly<Record<string, string>>> = {
 /** What a primitive of a kind always carries inside. */
 const INSIDE: Partial<Record<Kit, readonly string[]>> = {
   Pad: ["Status.flag", "Status.pill"],
-  Fader: ["Status.value"],
+  "Fader.percent": ["Status.value"],
+  "Fader.byte": ["Status.value"],
   "Field.steps": ["Button.action", "Status.value", "Button.action"],
   "Item.row": ["Status.pill"],
   "Item.cell": ["Status.value"],

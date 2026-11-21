@@ -250,7 +250,7 @@ export const CONSOLE: Control[] = [
     screen: "Console",
     part: "Fader bank, Slider widget",
     from: ["console/WidgetBody/fader", "console/WidgetBody/fader#2"],
-    kit: "Fader",
+    kit: "Fader.percent",
     kind: "play",
     does: "Sets the master, the level of a group of lights, or a rate",
     sends: ["SetMaster", "SetGroupLevel"],

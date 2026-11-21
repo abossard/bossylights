@@ -1,6 +1,6 @@
 // In/Out: the tempo, the outputs, and the list of what was mapped with Learn.
 import { off, works, type Cell, type SituationId } from "../situations.ts";
-import { button, change, choice, control, field, liveToggle, remove, select, toggle, LOCKED, NOT_A_BUTTON, NOT_A_LIST, UNIVERSES, no, type Control, type Row } from "../spec.ts";
+import { button, change, choice, control, field, remove, select, toggle, LOCKED, NOT_A_BUTTON, NOT_A_LIST, UNIVERSES, no, type Control, type Row } from "../spec.ts";
 
 const LIVE_IS_ON = off("LIVE is on");
 const ROW = no("It belongs to one row of a list that changes");
@@ -9,6 +9,15 @@ const ROW = no("It belongs to one row of a list that changes");
 const MAPPING: Partial<Record<SituationId, Cell>> = { lock: LOCKED, empty: works("Works. Top bar controls can be mapped before any light is patched") };
 const mapping = (row: Omit<Row, "screen" | "kind" | "part">): Control =>
   control({ learn: ROW, ...row, screen: "In/Out", part: "Mappings", kind: "edit", in: { ...MAPPING, ...row.in } });
+
+/** The rates each kind of output takes, in frames a second. The DMX USB Pro sends at most 44. */
+export const RATES = { DDP: ["30", "44", "60"], "DMX USB Pro": ["30", "44"] } as const;
+
+/** The rate picker of each kind of output. */
+export const RATE_PICKERS = [
+  { id: "inout.out.rate", kind: "DDP" },
+  { id: "inout.out.rate-usb", kind: "DMX USB Pro" },
+] as const;
 
 const ON_SCREEN = no("Outputs and inputs are set up on screen");
 /** A control that sets up an output: not while LIVE is on, the lights hang on it. */
@@ -91,22 +100,11 @@ export const INOUT: Control[] = [
     from: ["inout/Screen/testing"],
     kit: "Button.toggle",
     kind: "play",
-    does: "Every channel of that output at half for three seconds, then back. To see that the cable works",
-    sends: ["TestOutput"],
-    gestures: liveToggle("Starts the test", "nothing: it ends by itself after three seconds"),
-    in: {
-      "live-on": LIVE_IS_ON,
-      lock: LIVE_IS_ON,
-      recording: LIVE_IS_ON,
-      autopilot: LIVE_IS_ON,
-      holding: works("Works. For three seconds the test covers what you hold, then it is back"),
-      empty: works("Works. An output can be tested before any light is patched"),
-      "output-lost": off("Fix the connection first"),
-    },
-    feedback: { screen: "The button says 'Testing' and the line above it says what happens, at once", controller: "None" },
-    learn: no("A test is started on screen, looking at the lights"),
-    first: change("It works while LIVE is on: one press and the whole room is at half, mid-show. It is off then and says 'LIVE is on'"),
-    states: ["Test", "Testing", "off"],
+    does: "Nothing: it goes. To find a light, Identify it",
+    sends: [],
+    gestures: button("Nothing"),
+    learn: no("It goes"),
+    first: remove("Identify only: no test drives every channel of an output. Haze, strobe and sound never move unless a look or a hand sets them"),
   }),
   mapping({
     id: "inout.mapping.edit",
@@ -201,21 +199,24 @@ export const INOUT: Control[] = [
     name: "Universes of an output",
     from: ["inout/OutputSetup/universes-of-the-output"],
     kit: "Field.text",
-    does: "Which universes the output carries: '1', or '2 to 9'. A universe another output carries is refused and the field says which",
+    does: "Which universes the output carries: '1', or '2 to 9'.",
     sends: ["SetOutput"],
     gestures: field(`one universe or a range, each from 1 to ${UNIVERSES}`, "Enter or leaving the field saves, Escape puts the old one back"),
     learn: NOT_A_BUTTON,
   }),
-  output({
-    id: "inout.out.rate",
-    name: "Frames a second",
-    from: ["inout/OutputSetup/frames-a-second"],
-    kit: "Picker.segments",
-    does: "How often the output sends: 30, 40 or 44 frames a second. Each output has its own rate",
-    sends: ["SetOutput"],
-    gestures: choice("The output sends at that rate"),
-    states: ["30", "40", "44"],
-  }),
+  // One rate picker per kind of output: each offers only the rates that kind takes.
+  ...RATE_PICKERS.map(({ id, kind }) =>
+    output({
+      id,
+      name: `Frames a second, ${kind}`,
+      from: ["inout/OutputSetup/frames-a-second"],
+      kit: "Picker.segments",
+      does: `How often a ${kind} output sends: ${RATES[kind].join(", ")} frames a second. Each output has its own rate`,
+      sends: ["SetOutput"],
+      gestures: choice("The output sends at that rate"),
+      states: [...RATES[kind]],
+    }),
+  ),
   output({
     id: "inout.out.remove",
     name: "Remove output",

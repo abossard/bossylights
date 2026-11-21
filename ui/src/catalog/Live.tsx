@@ -113,8 +113,9 @@ export function Live(props: { control: Control; look: Look; act: (act: Act) => v
           onUp={(heldMs) => props.act({ is: "up", long: heldMs > SHORT_PRESS_MS })}
         />
       );
-    case "Fader":
-      return <Fader label={l().label} value={l().value} {...off()} onChange={(value) => props.act({ is: "set", value, value2: l().value2 })} />;
+    case "Fader.percent":
+    case "Fader.byte":
+      return <Fader label={l().label} most={c.kit === "Fader.byte" ? 255 : 100} value={l().value} {...off()} onChange={(value) => props.act({ is: "set", value, value2: l().value2 })} />;
     case "XY.position":
     case "XY.colour":
       return <XY kind={c.kit === "XY.colour" ? "colour" : "position"} label={l().label} across={l().value} up={l().value2} held={l().on} {...off()} onChange={(value, value2) => props.act({ is: "set", value, value2 })} />;

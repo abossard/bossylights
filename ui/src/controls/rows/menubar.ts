@@ -71,7 +71,7 @@ export const MENUBAR: Control[] = [
     name: "Stop engine",
     kind: "setting",
     does: "Ends the engine in an orderly way. No frame is sent after it: this is the one control that ends the lights",
-    sends: ["StopEngine"],
+    sends: ["Stop"],
     gestures: entry("Stops the engine"),
     in: {
       "live-off": works("Stops the engine. The window, if open, closes with it and the item goes"),

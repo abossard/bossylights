@@ -19,4 +19,3 @@ tauri-build = { version = "2.7.5", features = [] }
 [dependencies]
 engine-core = { path = "../crates/engine-core" } # the API version it speaks
 tauri = { version = "2.12.6", features = [] }
-tungstenite = "0.29.0" # sends the API's Stop when the app quits

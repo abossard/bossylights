@@ -81,7 +81,9 @@ export const offWith = (reason: string | undefined): { off?: string } => (reason
 export const unbroken = (text: string) => text.replace(/-/g, "‑");
 
 /** A value kept inside 0 to 100, in whole steps. */
-export const level = (value: number) => Math.max(0, Math.min(100, Math.round(value)));
+export const level = (value: number) => scaled(value, 100);
+/** A value on a range from 0 to `most`: rounded, kept inside. */
+export const scaled = (value: number, most: number) => Math.max(0, Math.min(most, Math.round(value)));
 
 /** Where a pointer is inside a box, as 0 to 100 from the left and from the bottom. */
 export function placeIn(box: { left: number; top: number; width: number; height: number }, x: number, y: number): { across: number; up: number } {

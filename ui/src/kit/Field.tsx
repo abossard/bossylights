@@ -1,5 +1,6 @@
 import { createSignal, Show } from "solid-js";
 import { Button } from "./Button.tsx";
+import { CLEAN, fieldStep, judge, type FieldEvent, type FieldState } from "./editing.ts";
 import { offWith, type Pressable } from "./common.ts";
 import { Status } from "./Status.tsx";
 
@@ -66,37 +67,28 @@ const NOT_SAVED = "Not saved. Enter saves it";
  * Text on screen is the value or says it is not saved: it never differs from the value unsaid.
  */
 function Text(props: TextProps) {
-  // Why the last text was refused, and whether a text that fits was left unsaved: the field's own state, gone with the next letter.
-  const [refused, setRefused] = createSignal<string>();
-  const [unsaved, setUnsaved] = createSignal(false);
-  const save = (input: HTMLInputElement) => {
-    const text = input.value.trim();
-    const reason = text === "" || text === props.value ? undefined : props.refuse?.(text);
-    setRefused(reason);
-    setUnsaved(false);
-    if (text === "" || text === props.value) input.value = props.value;
-    else if (reason === undefined && text !== props.value) props.onText(text);
+  // What the field says under itself: the field's own state, gone with the next letter.
+  const [state, setState] = createSignal<FieldState>(CLEAN);
+  const refused = () => {
+    const now = state();
+    return now.is === "refused" ? now.reason : undefined;
   };
+  const on = (input: HTMLInputElement, event: FieldEvent) => {
+    const [next, effect] = fieldStep(state(), event);
+    setState(next);
+    if (effect.is === "putBack") input.value = props.value;
+    if (effect.is === "send") props.onText(effect.text);
+  };
+  const judged = (input: HTMLInputElement) => judge(input.value, props.value, props.refuse);
   const key = (e: KeyboardEvent & { currentTarget: HTMLInputElement }) => {
     if (props.kind === "search") return;
-    if (e.key === "Enter") save(e.currentTarget);
-    if (e.key === "Escape") {
-      e.currentTarget.value = props.value;
-      setRefused(undefined);
-      setUnsaved(false);
-    }
+    if (e.key === "Enter") on(e.currentTarget, { is: "enter", text: judged(e.currentTarget) });
+    if (e.key === "Escape") on(e.currentTarget, { is: "escape" });
   };
   // Leaving saves where it says so. Elsewhere a text that does not fit is refused on leaving too: it is never kept unsaid.
   const leave = (e: FocusEvent & { currentTarget: HTMLInputElement }) => {
     if (props.kind === "search") return;
-    if (props.saves === "enter or leave") save(e.currentTarget);
-    else {
-      const text = e.currentTarget.value.trim();
-      setRefused(text === "" || text === props.value ? undefined : props.refuse?.(text));
-      setUnsaved(refused() === undefined && text !== "" && text !== props.value);
-      if (text === "" || text === props.value) e.currentTarget.value = props.value;
-    }
-    if (refused() !== undefined) e.currentTarget.value = props.value;
+    on(e.currentTarget, { is: "leave", text: judged(e.currentTarget), saves: props.saves === "enter or leave" });
   };
   return (
     <label class="k-field" classList={{ "is-refused": refused() !== undefined }}>
@@ -110,13 +102,12 @@ function Text(props: TextProps) {
         aria-invalid={refused() !== undefined}
         onInput={(e) => {
           if (props.kind === "search") props.onText(e.currentTarget.value);
-          setRefused(undefined);
-          setUnsaved(false);
+          on(e.currentTarget, { is: "typed" });
         }}
         onKeyDown={key}
         onBlur={leave}
       />
-      <Show when={props.off ?? refused()} fallback={<Show when={unsaved()}><span class="k-sub k-unsaved">{NOT_SAVED}</span></Show>}>
+      <Show when={props.off ?? refused()} fallback={<Show when={state().is === "unsaved"}><span class="k-sub k-unsaved">{NOT_SAVED}</span></Show>}>
         {(reason) => <span class="k-reason">{reason()}</span>}
       </Show>
     </label>

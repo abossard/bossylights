@@ -32,7 +32,7 @@ export const EXPLAINERS: Control[] = [
     name: "Master to try",
     part: "Try it",
     from: ["how/Screen/master"],
-    kit: "Fader",
+    kit: "Fader.percent",
     does: "Moves the master of the explainer",
     gestures: fader("the explainer's master"),
   }),

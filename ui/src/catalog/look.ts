@@ -2,7 +2,7 @@
 // a state by its name or a situation by its cell. The frame draws a `Look` with the kit and nothing else.
 import { MACHINES } from "../controls/machines.ts";
 import type { SituationId } from "../controls/situations.ts";
-import type { Control } from "../controls/spec.ts";
+import { primitiveOf, type Control } from "../controls/spec.ts";
 import type { Colour } from "../kit/common.ts";
 import { SAMPLES, SITUATION_STATE, STATE_LOOKS } from "./samples.ts";
 import { atLimit } from "./steps.ts";
@@ -113,7 +113,7 @@ export function inState(control: Control, state: string): Look {
   if (same(state, "not picked")) return { ...look, picked: look.options[1] ?? "" };
   if (same(state, "marked: trouble")) return { ...look, variant: "marked" };
 
-  if (control.kit === "Fader" && /^at \d+$/.test(state)) return { ...look, value: Number(state.slice(3)) };
+  if (primitiveOf(control.kit) === "Fader" && /^at \d+$/.test(state)) return { ...look, value: Number(state.slice(3)) };
   if (control.kit === "Pad") return { ...look, variant: PAD[state] ?? "idle", on: (PAD[state] ?? "idle") !== "idle" };
   if (control.id === "menubar.item" && LAMP[state.toLowerCase()]) return { ...look, variant: LAMP[state.toLowerCase()] ?? "", sub: capital(state) };
   if (control.kit === "Button.toggle" && same(state, "empty")) return { ...look, on: true, value: 0 };

@@ -175,11 +175,6 @@ function plainAct(control: Control, look: Look, gesture: Act): Result {
   }
 }
 
-/** A toggle that ends by itself: a press while it runs does nothing, after `ms` it is back. Data. */
-export const ENDS_BY_ITSELF: Record<string, { while: string; back: string; ms: number }> = {
-  "inout.out.test": { while: "Testing", back: "Test", ms: 3000 },
-};
-
 /** A press that takes it away: the state it is in after it was used. Data. */
 export const GOES: Record<string, string> = {
   "looks.autopilot.use-style": "gone while in use",
@@ -208,7 +203,6 @@ function nextWords(words: readonly Pick<Look, "label" | "sub">[], look: Look): P
 
 /** A toggle goes to the other of its first two states. With two commands the first turns it on, the second off. */
 function flip(control: Control, look: Look): Result {
-  if (ENDS_BY_ITSELF[control.id]?.while === look.label) return { look, sent: [] };
   const other = control.states
     .slice(0, 2)
     .map((state) => inState(control, state))

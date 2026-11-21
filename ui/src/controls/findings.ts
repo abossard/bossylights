@@ -70,7 +70,7 @@ export const CONTRADICTIONS: readonly Contradiction[] = [
 
   // ---- against a rule
   { kind: "rule", what: "The lock holds 'Edit surface', but 'Add page', 'Put on Console', Learn and the mappings still change the surface while it is on", where: ["console.pages.add", "looks.put-on-console", "top.learn", "inout.mapping.edit", "inout.mapping.remove"], resolved: "The lock holds everything that changes what a press does: layout, pads, pages, Learn, mappings. Each is off and says 'Locked while LIVE is on'", asks: 21, decided: "Everything that changes what a press does" },
-  { kind: "rule", what: "'Test' on an output puts the whole room at half, also while LIVE is on", where: ["inout.out.test"], resolved: "Off while LIVE is on, and says so" },
+  { kind: "rule", what: "'Test' on an output puts the whole room at half, also while LIVE is on", where: ["inout.out.test"], resolved: "It goes: Identify only" },
   { kind: "rule", what: "A tempo feed with no signal can be picked: then nothing drives the beat", where: ["inout.tempo.feed"], resolved: "Off, with 'No signal'" },
   { kind: "rule", what: "One press of Tap takes the beat away from the DJ software, and the way back is on In/Out", where: ["top.tap", "top.tempo.source", "inout.tempo.feed"], resolved: "The tempo says where it comes from. Taps hold until the words 'from Tap' are pressed: then the picked feed is back", asks: 23, decided: "Taps hold until you press the words 'from Tap'" },
   { kind: "rule", what: "An output that is lost, or an engine that is not connected, has no mark in the top bar", where: ["top.trouble"], resolved: "The chip that says 'No lights connected' says these two as well" },

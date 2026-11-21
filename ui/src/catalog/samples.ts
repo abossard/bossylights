@@ -146,7 +146,8 @@ export const SAMPLES: Record<string, Sample> = {
   "inout.mapping.message": { label: "Note or controller", picked: "Note 36" },
   "inout.out.kind": { label: "Kind", options: ["DMX USB Pro", "DDP", "Art-Net", "sACN"] },
   "inout.out.universes": { label: "Universes", picked: "2 to 9" },
-  "inout.out.rate": { picked: "40" },
+  "inout.out.rate": { picked: "60" },
+  "inout.out.rate-usb": { picked: "44" },
   "inout.audio.input": { label: "Listens to", options: ["Built-in input", "USB audio interface", "Loopback"] },
   "inout.osc.port": { label: "Port", picked: "9000" },
   // A toggle starts at its off state: its first press turns it on.

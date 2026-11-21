@@ -6,11 +6,11 @@ This is the paper form of the storyboard catalog of issue #102. The catalog show
 ```mermaid
 flowchart LR
   M["8 mockups<br/>281 elements in the code"] --> I["Inventory<br/>by script"]
-  I --> R["212 controls<br/>one row each"]
+  I --> R["213 controls<br/>one row each"]
   I --> N["37 not controls<br/>each with a reason"]
-  R --> C["103 commands"]
+  R --> C["102 commands"]
   R --> S["9 state machines"]
-  R --> F["Function first<br/>165 keep, 41 change, 6 remove"]
+  R --> F["Function first<br/>166 keep, 40 change, 7 remove"]
 ```
 
 | Where | What |
@@ -78,7 +78,7 @@ flowchart LR
 
 The test of `DESIGN.md`, run on every control. Proposals until the owner rates them in the catalog.
 
-### Removed: 6
+### Removed: 7
 
 | Control | Screen | Why it goes |
 | --- | --- | --- |
@@ -88,8 +88,9 @@ The test of `DESIGN.md`, run on every control. Proposals until the owner rates t
 | Order grip `patch.fixtures.order` | Patch | Two controls for one thing, and a grip that is always there. The two arrows on the same row move a light one place, by touch and by keyboard. The number stays: it says the place |
 | Output row `dmx.output.row` | DMX | Two controls for one thing: the universe tabs open a universe. A status table whose rows are also buttons says two things |
 | Tap, on In/Out `inout.tempo.tap` | In/Out | Two controls for one thing. Tap is in the top bar on every screen, right above this one. The Tap feed says 'Tap in the top bar' |
+| Test an output `inout.out.test` | In/Out | Identify only: no test drives every channel of an output. Haze, strobe and sound never move unless a look or a hand sets them |
 
-### Changed: 41
+### Changed: 40
 
 | Control | Screen | What changes |
 | --- | --- | --- |
@@ -126,7 +127,6 @@ The test of `DESIGN.md`, run on every control. Proposals until the owner rates t
 | Release channels `dmx.held.release-all` | DMX | The mockup says 'Release all', the words of the Console button that gives back everything. The owner's decision 22: this one gives back raw channels only and says 'Release channels' |
 | Tempo feed `inout.tempo.feed` | In/Out | A feed with no signal can be picked, and then nothing drives the beat. It is off and says 'No signal' |
 | Follows `inout.follows` | In/Out | In the mockup it sits in the header of one song. The owner's decision 26: it is a setting of the whole app and sits on In/Out, beside the tempo feed. DJ link stays the on or off |
-| Test an output `inout.out.test` | In/Out | It works while LIVE is on: one press and the whole room is at half, mid-show. It is off then and says 'LIVE is on' |
 | Note or controller number `inout.mapping.message` | In/Out | Free text for something that has a shape: 'Note 36', 'CC 48'. Text that is not one of the two is refused and the field says so |
 | Pad to try `how.pad` | How it works | In the mockup it plays on the same lights as the Console. The owner's decision 25: the explainers ship, and play on their own small model. They never touch the lights |
 | Master to try `how.master` | How it works | In the mockup it plays on the same lights as the Console. The owner's decision 25: the explainers ship, and play on their own small model. They never touch the lights |
@@ -180,7 +180,7 @@ A number is a question on the owner's decisions page. The last column is what th
 | What | Rows | Resolved | Asked | The owner said |
 | --- | --- | --- | --- | --- |
 | The lock holds 'Edit surface', but 'Add page', 'Put on Console', Learn and the mappings still change the surface while it is on | `console.pages.add` `looks.put-on-console` `top.learn` `inout.mapping.edit` `inout.mapping.remove` | The lock holds everything that changes what a press does: layout, pads, pages, Learn, mappings. Each is off and says 'Locked while LIVE is on' | 21 | Everything that changes what a press does |
-| 'Test' on an output puts the whole room at half, also while LIVE is on | `inout.out.test` | Off while LIVE is on, and says so |  |  |
+| 'Test' on an output puts the whole room at half, also while LIVE is on | `inout.out.test` | It goes: Identify only |  |  |
 | A tempo feed with no signal can be picked: then nothing drives the beat | `inout.tempo.feed` | Off, with 'No signal' |  |  |
 | One press of Tap takes the beat away from the DJ software, and the way back is on In/Out | `top.tap` `top.tempo.source` `inout.tempo.feed` | The tempo says where it comes from. Taps hold until the words 'from Tap' are pressed: then the picked feed is back | 23 | Taps hold until you press the words 'from Tap' |
 | An output that is lost, or an engine that is not connected, has no mark in the top bar | `top.trouble` | The chip that says 'No lights connected' says these two as well |  |  |
@@ -196,7 +196,7 @@ A thing the product needs and no mockup shows. The owner's decision 29: it goes 
 | Screen | What cannot be done | Engine command that waits |
 | --- | --- | --- |
 
-## Commands: 103
+## Commands: 102
 
 The union of what the controls send: the first list of engine commands. A proposal for the engine, not a design of it.
 
@@ -215,16 +215,16 @@ The union of what the controls send: the first list of engine commands. A propos
 | `NewShow` | An empty show file. The open one is saved first |  |  | `top.show.new` |
 | `OpenShow` | Open another show file. The open one is saved first | file |  | `top.show.open` |
 | `SaveShowAs` | Write a copy of the show file. The copy becomes the open one | file |  | `top.show.save-as` |
-| `TapTempo` | One tap. After two taps the beat follows the taps, until ReleaseTempo |  |  | `top.tap` `inout.tempo.tap` |
-| `ReleaseTempo` | The taps let go: the beat follows the picked feed again |  |  | `top.tempo.source` |
+| `TapTempo` | One tap. After two taps the beat follows the taps, until ReleaseTempo |  | yes | `top.tap` `inout.tempo.tap` |
+| `ReleaseTempo` | The taps let go: the beat follows the picked feed again |  | yes | `top.tempo.source` |
 | `SetTempoFeed` | Which source drives the beat | feed: tap, audio, midi clock, virtualdj, timecode |  | `inout.tempo.feed` |
 | `SetFollows` | Which deck or timecode gives the song and its position | source: deck 1, deck 2, timecode |  | `inout.follows` |
 | `SetSpeed` | Sequences and patterns run at half, normal or double speed | factor |  | `console.speed` |
-| `StartLook` | A look runs by hand, in the next frame | look |  | `console.pad` `looks.try` |
-| `StopLook` | A look that runs by hand is switched off. What it touched stays held until Release | look |  | `console.pad` |
-| `EndFlash` | A look that was flashed ends and gives back what it touched | look |  | `console.pad` `looks.try` |
+| `StartLook` | A look runs by hand, in the next frame | look | yes | `console.pad` `looks.try` |
+| `StopLook` | A look that runs by hand is switched off. What it touched stays held until Release | look | yes | `console.pad` |
+| `EndFlash` | A look that was flashed ends and gives back what it touched | look | yes | `console.pad` `looks.try` |
 | `SkipLook` | One look of the show or the autopilot stops for the rest of the section | look |  | `console.running.stop` |
-| `ReleaseHold` | Give back one thing held by hand | hold |  | `console.running.release` |
+| `ReleaseHold` | Give back one thing held by hand | hold | yes | `console.running.release` |
 | `ReleaseAll` | Give back everything held by hand |  | yes | `console.running.release-all` |
 | `SetMaster` | The level of everything | level |  | `console.fader` |
 | `SetGroupLevel` | The level of one fader: a group of lights or a rate | fader, level |  | `console.fader` |
@@ -292,19 +292,18 @@ The union of what the controls send: the first list of engine commands. A propos
 | `AddPanel` | A pixel panel, spread over as many universes as it needs | name, columns, rows, wiring, pixel, order, start universe |  | `patch.panel.add` |
 | `SetChannel` | Hold one channel by hand at a value | channel, value | yes | `dmx.channel.fader` `dmx.channel.zero` `dmx.channel.full` |
 | `ReleaseChannel` | Give one channel back | channel | yes | `dmx.channel.release` `dmx.held.release` |
-| `ReleaseChannels` | Give back every channel held by hand, and nothing else |  |  | `dmx.held.release-all` |
+| `ReleaseChannels` | Give back every channel held by hand, and nothing else |  | yes | `dmx.held.release-all` |
 | `SetWhoWins` | One setting of the who-wins rules | rule, value |  | `dmx.who-wins.brightness` `dmx.who-wins.manual-ends` `dmx.who-wins.look-ends` |
-| `TestOutput` | Every channel of one output at half for three seconds | output |  | `inout.out.test` |
 | `StartLearn` | Wait for a hardware control to map to this control | control |  | `top.learn` |
 | `CancelLearn` | Stop waiting |  |  | `top.learn` `top.learn.cancel` |
 | `UpdateMapping` | Change a mapping: device, note or controller number, feedback | mapping, change |  | `inout.mapping.device` `inout.mapping.message` `inout.mapping.feedback` |
 | `TestMapping` | Show that a mapping is alive: the hardware control lights. Nothing fires | mapping |  | `inout.mapping.test` |
 | `RemoveMapping` | Remove a mapping | mapping |  | `inout.mapping.remove` |
-| `SetOutput` | Set up an output: its kind, universes and rate | output, kind, universes, rate | yes | `inout.out.kind` `inout.out.universes` `inout.out.rate` `inout.out.add` |
+| `SetOutput` | Set up an output: its kind, universes and rate | output, kind, universes, rate | yes | `inout.out.kind` `inout.out.universes` `inout.out.rate` `inout.out.rate-usb` `inout.out.add` |
 | `RemoveOutput` | Remove an output | output | yes | `inout.out.remove` |
 | `SetAudioInput` | Which input the beat is heard on | input |  | `inout.audio.input` |
 | `SetOsc` | Listen for commands over OSC, or not, and on which port | on, port |  | `inout.osc.on` `inout.osc.port` |
-| `StopEngine` | The engine ends in an orderly way: it answers, closes every connection and sends no more frames. The request Stop of the API (#107) |  | yes | `menubar.stop-engine` |
+| `Stop` | The engine ends in an orderly way: it answers, closes every connection and sends no more frames. A request of the API (#107) |  | yes | `menubar.stop-engine` |
 
 ## State machines: 9
 
@@ -2303,14 +2302,14 @@ stateDiagram-v2
 
 ## In/Out
 
-19 controls.
+20 controls.
 
 | Control | Name | Does | Sends | Kind |
 | --- | --- | --- | --- | --- |
 | Tempo feed | `inout.tempo.feed` | Picks what drives the beat: Tap, Audio, MIDI clock, VirtualDJ or Timecode. Each says its tempo and how sure it is. While taps hold the beat the picked feed waits: 'from Tap' in the top bar gives it back | `SetTempoFeed` | setting |
 | Follows | `inout.follows` | Which deck, or timecode, gives the song that plays and its position. Beside the tempo feed, which gives the beat | `SetFollows` | setting |
 | Tap, on In/Out | `inout.tempo.tap` | The same as Tap in the top bar | `TapTempo` | play |
-| Test an output | `inout.out.test` | Every channel of that output at half for three seconds, then back. To see that the cable works | `TestOutput` | play |
+| Test an output | `inout.out.test` | Nothing: it goes. To find a light, Identify it | nothing:  | play |
 | Edit a mapping | `inout.mapping.edit` | Turns device, number and feedback of that row into fields. Pressed again as 'Done', they are text again | nothing: which row is being edited | edit |
 | Mapping device | `inout.mapping.device` | Which controller the mapping listens to. There while the row is edited | `UpdateMapping` | edit |
 | Note or controller number | `inout.mapping.message` | The note or controller number the mapping listens to. There while the row is edited. An empty field keeps the old one | `UpdateMapping` | edit |
@@ -2319,8 +2318,9 @@ stateDiagram-v2
 | Remove a mapping | `inout.mapping.remove` | Removes the mapping. The control on screen loses its paper square | `RemoveMapping` | edit |
 | Set up an output | `inout.out.setup` | Opens one output to set up: its kind, universes, rate, and Remove. Pressed again as 'Done', they are text again | nothing: which output is being set up | view |
 | Kind of an output | `inout.out.kind` | What the output is: DMX USB Pro, DDP, Art-Net or sACN. There while the output is set up | `SetOutput` | setting |
-| Universes of an output | `inout.out.universes` | Which universes the output carries: '1', or '2 to 9'. A universe another output carries is refused and the field says which | `SetOutput` | setting |
-| Frames a second | `inout.out.rate` | How often the output sends: 30, 40 or 44 frames a second. Each output has its own rate | `SetOutput` | setting |
+| Universes of an output | `inout.out.universes` | Which universes the output carries: '1', or '2 to 9'. | `SetOutput` | setting |
+| Frames a second, DDP | `inout.out.rate` | How often a DDP output sends: 30, 44, 60 frames a second. Each output has its own rate | `SetOutput` | setting |
+| Frames a second, DMX USB Pro | `inout.out.rate-usb` | How often a DMX USB Pro output sends: 30, 44 frames a second. Each output has its own rate | `SetOutput` | setting |
 | Remove output | `inout.out.remove` | Removes the output. Its universes send nowhere until another output carries them | `RemoveOutput` | setting |
 | Add output | `inout.out.add` | Adds an output that is not set up yet and opens it. It sends nothing until it has a universe | `SetOutput` | setting |
 | Audio input | `inout.audio.input` | Which input the beat is heard on. The meter beside it shows what arrives | `SetAudioInput` | setting |
@@ -2334,7 +2334,7 @@ stateDiagram-v2
 | Tempo feed | ● | ◆ | ● | ● | ● | ● | ○ | ● | ● | ● | ◆ | ◆ | ● | – |
 | Follows | ● | ● | ● | ● | ● | ● | ○ | ◆ | ● | ● | ◆ | ◆ | ● | – |
 | Tap, on In/Out | ● | ● | ● | ● | ● | ● | ○ | ● | ● | ● | ● | ● | ● | – |
-| Test an output | ● | ○ | ○ | ○ | ○ | ◆ | ○ | ◆ | ● | ◆ | ● | ● | ○ | – |
+| Test an output | ● | ● | ● | ● | ● | ● | ○ | ● | ● | ◆ | ● | ● | ● | – |
 | Edit a mapping | ● | ● | ○ | ● | ● | ● | ○ | ◆ | ● | ◆ | ● | ● | ● | – |
 | Mapping device | ● | ● | ○ | ● | ● | ● | ○ | ◆ | ● | ◆ | ● | ● | ● | – |
 | Note or controller number | ● | ● | ○ | ● | ● | ● | ○ | ◆ | ● | ◆ | ● | ● | ● | – |
@@ -2344,7 +2344,8 @@ stateDiagram-v2
 | Set up an output | ● | ● | ● | ● | ● | ● | ● | ● | ● | ◆ | ● | ● | ● | – |
 | Kind of an output | ● | ○ | ○ | ○ | ● | ● | ○ | ◆ | ● | ◆ | ● | ● | ◆ | – |
 | Universes of an output | ● | ○ | ○ | ○ | ● | ● | ○ | ◆ | ● | ◆ | ● | ● | ◆ | – |
-| Frames a second | ● | ○ | ○ | ○ | ● | ● | ○ | ◆ | ● | ◆ | ● | ● | ◆ | – |
+| Frames a second, DDP | ● | ○ | ○ | ○ | ● | ● | ○ | ◆ | ● | ◆ | ● | ● | ◆ | – |
+| Frames a second, DMX USB Pro | ● | ○ | ○ | ○ | ● | ● | ○ | ◆ | ● | ◆ | ● | ● | ◆ | – |
 | Remove output | ● | ○ | ○ | ○ | ● | ● | ○ | ◆ | ● | ◆ | ● | ● | ◆ | – |
 | Add output | ● | ◆ | ◆ | ◆ | ● | ● | ○ | ◆ | ● | ◆ | ● | ● | ◆ | – |
 | Audio input | ● | ◆ | ● | ● | ● | ● | ○ | ● | ● | ◆ | ● | ● | ● | – |
@@ -2361,14 +2362,7 @@ stateDiagram-v2
 | Follows | Nothing patched | works | Works. No song has a show yet: it counts once one has |
 | Follows | A song plays | works | Works. The Show row jumps to the song of that source, at once |
 | Follows | No song plays | works | Works. It counts from the next song on |
-| Test an output | LIVE on | off | LIVE is on |
-| Test an output | Lock on | off | LIVE is on |
-| Test an output | Recording on | off | LIVE is on |
-| Test an output | Autopilot on | off | LIVE is on |
-| Test an output | Something held | works | Works. For three seconds the test covers what you hold, then it is back |
-| Test an output | Nothing patched | works | Works. An output can be tested before any light is patched |
-| Test an output | Learn mode | works | Not picked: a test is started on screen, looking at the lights. It works as usual and Learn keeps waiting |
-| Test an output | An output lost | off | Fix the connection first |
+| Test an output | Learn mode | works | Not picked: it goes. It works as usual and Learn keeps waiting |
 | Edit a mapping | Lock on | off | Locked while LIVE is on |
 | Edit a mapping | Nothing patched | works | Works. Top bar controls can be mapped before any light is patched |
 | Edit a mapping | Learn mode | works | Not picked: it belongs to one row of a list that changes. It works as usual and Learn keeps waiting |
@@ -2400,12 +2394,18 @@ stateDiagram-v2
 | Universes of an output | Nothing patched | works | Works. An output is set up before any light is patched |
 | Universes of an output | Learn mode | works | Not picked: text cannot come from a pad or a fader. It works as usual and Learn keeps waiting |
 | Universes of an output | An output lost | works | Works. This is how a lost output gets another device |
-| Frames a second | LIVE on | off | LIVE is on |
-| Frames a second | Lock on | off | LIVE is on |
-| Frames a second | Recording on | off | LIVE is on |
-| Frames a second | Nothing patched | works | Works. An output is set up before any light is patched |
-| Frames a second | Learn mode | works | Not picked: outputs and inputs are set up on screen. It works as usual and Learn keeps waiting |
-| Frames a second | An output lost | works | Works. This is how a lost output gets another device |
+| Frames a second, DDP | LIVE on | off | LIVE is on |
+| Frames a second, DDP | Lock on | off | LIVE is on |
+| Frames a second, DDP | Recording on | off | LIVE is on |
+| Frames a second, DDP | Nothing patched | works | Works. An output is set up before any light is patched |
+| Frames a second, DDP | Learn mode | works | Not picked: outputs and inputs are set up on screen. It works as usual and Learn keeps waiting |
+| Frames a second, DDP | An output lost | works | Works. This is how a lost output gets another device |
+| Frames a second, DMX USB Pro | LIVE on | off | LIVE is on |
+| Frames a second, DMX USB Pro | Lock on | off | LIVE is on |
+| Frames a second, DMX USB Pro | Recording on | off | LIVE is on |
+| Frames a second, DMX USB Pro | Nothing patched | works | Works. An output is set up before any light is patched |
+| Frames a second, DMX USB Pro | Learn mode | works | Not picked: outputs and inputs are set up on screen. It works as usual and Learn keeps waiting |
+| Frames a second, DMX USB Pro | An output lost | works | Works. This is how a lost output gets another device |
 | Remove output | LIVE on | off | LIVE is on |
 | Remove output | Lock on | off | LIVE is on |
 | Remove output | Recording on | off | LIVE is on |
@@ -2430,7 +2430,7 @@ stateDiagram-v2
 | Tempo feed | The beat follows that feed. Fires on the way up | Nothing more | As one press: the choice is already made | Nothing. Sliding to another option picks nothing | Tab to the group, arrows move and pick | As a press. 44 px |
 | Follows | Follows that source. Fires on the way up | Nothing more | As one press: the choice is already made | Nothing. Sliding to another option picks nothing | Tab to the group, arrows move and pick | As a press. 44 px |
 | Tap, on In/Out | One tap. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
-| Test an output | Starts the test. Pressed again: nothing: it ends by itself after three seconds. Fires on the way down | Nothing more: it fired on the way down | Two presses | Nothing. Sliding off does not take it back | Tab to it, then Enter or Space | As a press. 44 px or more |
+| Test an output | Nothing. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
 | Edit a mapping | Opens the row to edit. Pressed again: the row is text again. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
 | Mapping device | Opens the list. A press on an entry: the mapping listens to that device | Nothing more | Opens and closes the list | Nothing | Tab to it, arrows change the choice, Enter opens the list | Opens the system's picker. 44 px high |
 | Note or controller number | Puts the cursor in the field | Selects a word, as the system does | Selects a word | Selects text | Type a note or a controller number. Enter or leaving the field saves, Escape puts the old one back | Opens the on-screen keyboard. 44 px high |
@@ -2440,7 +2440,8 @@ stateDiagram-v2
 | Set up an output | Opens the output to set up. Pressed again: it is text again. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
 | Kind of an output | Opens the list. A press on an entry: the output sends as that kind | Nothing more | Opens and closes the list | Nothing | Tab to it, arrows change the choice, Enter opens the list | Opens the system's picker. 44 px high |
 | Universes of an output | Puts the cursor in the field | Selects a word, as the system does | Selects a word | Selects text | Type one universe or a range, each from 1 to 64. Enter or leaving the field saves, Escape puts the old one back | Opens the on-screen keyboard. 44 px high |
-| Frames a second | The output sends at that rate. Fires on the way up | Nothing more | As one press: the choice is already made | Nothing. Sliding to another option picks nothing | Tab to the group, arrows move and pick | As a press. 44 px |
+| Frames a second, DDP | The output sends at that rate. Fires on the way up | Nothing more | As one press: the choice is already made | Nothing. Sliding to another option picks nothing | Tab to the group, arrows move and pick | As a press. 44 px |
+| Frames a second, DMX USB Pro | The output sends at that rate. Fires on the way up | Nothing more | As one press: the choice is already made | Nothing. Sliding to another option picks nothing | Tab to the group, arrows move and pick | As a press. 44 px |
 | Remove output | Removes the output. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
 | Add output | Adds an output. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
 | Audio input | Opens the list. A press on an entry: the beat is heard on that input | Nothing more | Opens and closes the list | Nothing | Tab to it, arrows change the choice, Enter opens the list | Opens the system's picker. 44 px high |
@@ -2454,7 +2455,7 @@ stateDiagram-v2
 | Tempo feed | The new setting shows when the engine reports it, in the same screen frame | The mapped control shows on or off | yes. One step in Undo | yes. A button or a value: one mapping | **change**. A feed with no signal can be picked, and then nothing drives the beat. It is off and says 'No signal' |
 | Follows | The new setting shows when the engine reports it, in the same screen frame | The mapped control shows on or off | yes. One step in Undo | yes. A button or a value: one mapping | **change**. In the mockup it sits in the header of one song. The owner's decision 26: it is a setting of the whole app and sits on In/Out, beside the tempo feed. DJ link stays the on or off |
 | Tap, on In/Out | Pressed look on the way down, before the engine answers. Its state when the engine reports it, in the same screen frame | The mapped control shows the same state | no. Playing is not a change to the show file. Its opposite is at hand: stop, Release | yes. A button or a value: one mapping | **remove**. Two controls for one thing. Tap is in the top bar on every screen, right above this one. The Tap feed says 'Tap in the top bar' |
-| Test an output | The button says 'Testing' and the line above it says what happens, at once | None | no. Playing is not a change to the show file. Its opposite is at hand: stop, Release | no. A test is started on screen, looking at the lights | **change**. It works while LIVE is on: one press and the whole room is at half, mid-show. It is off then and says 'LIVE is on' |
+| Test an output | Pressed look on the way down, before the engine answers. Its state when the engine reports it, in the same screen frame | The mapped control shows the same state | no. Playing is not a change to the show file. Its opposite is at hand: stop, Release | no. It goes | **remove**. Identify only: no test drives every channel of an output. Haze, strobe and sound never move unless a look or a hand sets them |
 | Edit a mapping | The change shows when the engine reports it, in the same screen frame | None | no. Opening a row changes nothing | no. It belongs to one row of a list that changes | **keep**. It says what it is and what a press does |
 | Mapping device | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | no. A list that opens has no pad or fader to stand for it | **keep**. It says what it is and what a press does |
 | Note or controller number | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | no. Text cannot come from a pad or a fader | **change**. Free text for something that has a shape: 'Note 36', 'CC 48'. Text that is not one of the two is refused and the field says so |
@@ -2464,7 +2465,8 @@ stateDiagram-v2
 | Set up an output | At once: the screen owns this state | None | no. Nothing in the show file changes | no. Outputs and inputs are set up on screen | **keep**. It says what it is and what a press does |
 | Kind of an output | The new setting shows when the engine reports it, in the same screen frame | The mapped control shows on or off | yes. One step in Undo | no. A list that opens has no pad or fader to stand for it | **keep**. It says what it is and what a press does |
 | Universes of an output | The new setting shows when the engine reports it, in the same screen frame | The mapped control shows on or off | yes. One step in Undo | no. Text cannot come from a pad or a fader | **keep**. It says what it is and what a press does |
-| Frames a second | The new setting shows when the engine reports it, in the same screen frame | The mapped control shows on or off | yes. One step in Undo | no. Outputs and inputs are set up on screen | **keep**. It says what it is and what a press does |
+| Frames a second, DDP | The new setting shows when the engine reports it, in the same screen frame | The mapped control shows on or off | yes. One step in Undo | no. Outputs and inputs are set up on screen | **keep**. It says what it is and what a press does |
+| Frames a second, DMX USB Pro | The new setting shows when the engine reports it, in the same screen frame | The mapped control shows on or off | yes. One step in Undo | no. Outputs and inputs are set up on screen | **keep**. It says what it is and what a press does |
 | Remove output | The new setting shows when the engine reports it, in the same screen frame | The mapped control shows on or off | yes. One step in Undo | no. Outputs and inputs are set up on screen | **keep**. It says what it is and what a press does |
 | Add output | The new setting shows when the engine reports it, in the same screen frame | The mapped control shows on or off | yes. One step in Undo | no. Outputs and inputs are set up on screen | **keep**. It says what it is and what a press does |
 | Audio input | The new setting shows when the engine reports it, in the same screen frame | The mapped control shows on or off | yes. One step in Undo | no. A list that opens has no pad or fader to stand for it | **keep**. It says what it is and what a press does |
@@ -2583,7 +2585,7 @@ stateDiagram-v2
 | --- | --- | --- | --- | --- |
 | Menu bar item | `menubar.item` | Says that the engine runs, also with no window. A press opens its menu: the state in words, the frame counter, Open window, Stop engine | nothing: its menu, open or closed | view |
 | Open window | `menubar.open-window` | Opens the window, or brings it to the front. The lights do not notice | nothing: the window, open or closed. It is the shell's own state | view |
-| Stop engine | `menubar.stop-engine` | Ends the engine in an orderly way. No frame is sent after it: this is the one control that ends the lights | `StopEngine` | setting |
+| Stop engine | `menubar.stop-engine` | Ends the engine in an orderly way. No frame is sent after it: this is the one control that ends the lights | `Stop` | setting |
 
 ### Menu bar: in each situation
 
@@ -2738,7 +2740,7 @@ stateDiagram-v2
 | `inout/OutputSetup/set-up-the-output` | screens/inout/Setup.tsx:15 | Set up the output | `inout.out.setup` |
 | `inout/OutputSetup/kind-of-the-output` | screens/inout/Setup.tsx:21 | Kind of the output | `inout.out.kind` |
 | `inout/OutputSetup/universes-of-the-output` | screens/inout/Setup.tsx:27 | Universes of the output | `inout.out.universes` |
-| `inout/OutputSetup/frames-a-second` | screens/inout/Setup.tsx:29 | Frames a second | `inout.out.rate` |
+| `inout/OutputSetup/frames-a-second` | screens/inout/Setup.tsx:29 | Frames a second | `inout.out.rate` `inout.out.rate-usb` |
 | `inout/OutputSetup/remove-the-output` | screens/inout/Setup.tsx:39 | Remove the output | `inout.out.remove` |
 | `inout/AddOutput/add-an-output` | screens/inout/Setup.tsx:57 | Add an output | `inout.out.add` |
 | `inout/AudioInput/audio-input` | screens/inout/Setup.tsx:74 | Audio input | `inout.audio.input` |

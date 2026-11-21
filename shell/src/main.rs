@@ -1,13 +1,14 @@
 //! The desktop shell. Adopts the running engine or starts one, and shows the web UI.
 //! The UI reaches the engine only through its API, exactly as in a browser.
 //!
-//! The engine is its own process and outlives the window: a killed or crashed shell
-//! leaves it running, and the next shell adopts it. Quitting the app stops it.
+//! The engine is its own process and outlives the window: a closed window, a quit app or a
+//! killed or crashed shell leaves it running, and the next shell adopts it. The shell never
+//! stops it: it does not even speak the API.
 //!
 //! ```text
-//! GET /version --> nothing answers --> start one   (Own)
-//!              --> same version    --> adopt it    (Adopted)
-//!              --> anything else   --> start nothing, say so (Foreign)
+//! GET /version --> nothing answers --> start one   (Ours, or Gone if it ends first)
+//!              --> same version    --> adopt it    (Ours)
+//!              --> anything else   --> start nothing, say so (NotOurs)
 //! ```
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
@@ -22,11 +23,6 @@ use std::time::{Duration, Instant};
 
 /// Where the engine listens. `BOSSYLIGHTS_ENGINE=127.0.0.1:7798` picks another port (tests).
 const ADDRESS: &str = "127.0.0.1:7744";
-/// How long an orderly stop may take before the shell kills its own engine.
-const STOP: Duration = Duration::from_secs(3);
-/// How long an engine may take to connect and to answer `Stop`, each. An engine that does
-/// not answer is killed, if it is ours, after that.
-const ANSWER: Duration = Duration::from_secs(1);
 /// How long an engine this shell started may take to answer, or to end. Longer than the
 /// engine waits for the port of an engine that is stopping (3 s).
 const START: Duration = Duration::from_secs(5);
@@ -41,12 +37,11 @@ enum Found {
     Other(String),
 }
 
-/// The engine this shell works with, and so what quitting does to it.
+/// The engine this shell found or started. Whichever it is, the window closing leaves it running.
 enum Engine {
-    /// Started by this shell.
-    Own(Child),
-    Adopted,
-    /// Not ours to stop: another version.
+    /// One of this version: started by this shell, or adopted.
+    Ours,
+    /// Another version: the window says so.
     NotOurs,
     /// None could be started, or ours ended before it answered.
     Gone,
@@ -58,20 +53,29 @@ fn main() {
         eprintln!("bossylights: not an address: {address}");
         std::process::exit(2);
     };
-    // One window per engine: a second window closing would stop an engine in use.
+    // One window per engine.
     let Some(_window) = one_window(address) else {
         eprintln!("bossylights: a window for the engine on {address} is already open");
         return;
     };
-    let mut engine = meet(address);
+    let engine = meet(address);
     let window = window_engine(address, &engine);
     let page = window_page();
-    // `BOSSYLIGHTS_WINDOW_SCRIPT` runs in the window too: the tests read the page with it.
-    let script =
-        window_script(address) + &std::env::var("BOSSYLIGHTS_WINDOW_SCRIPT").unwrap_or_default();
+    let script = window_script(address) + &test_script();
     tauri::Builder::default()
         .setup(move |app| {
             eprintln!("bossylights: {window}");
+            #[cfg(debug_assertions)]
+            if let tauri::WebviewUrl::External(test_page) = &page {
+                // The test page may close the window, as a person does: the tests see what follows.
+                tauri::Manager::add_capability(
+                    app,
+                    tauri::ipc::CapabilityBuilder::new("test-page-closes-the-window")
+                        .remote(format!("{}/*", test_page.origin().ascii_serialization()))
+                        .window("main")
+                        .permission("core:window:allow-close"),
+                )?;
+            }
             tauri::WebviewWindowBuilder::new(app, "main", page)
                 .title("Bossylights")
                 .inner_size(640.0, 420.0)
@@ -79,13 +83,8 @@ fn main() {
                 .build()?;
             Ok(())
         })
-        .build(tauri::generate_context!())
-        .expect("the window could not be created")
-        .run(move |_, event| {
-            if let tauri::RunEvent::Exit = event {
-                stop(address, &mut engine);
-            }
-        });
+        .run(tauri::generate_context!())
+        .expect("the window could not be created");
 }
 
 /// The lock that keeps one window per engine. It goes with the process, however it ends.
@@ -110,19 +109,33 @@ fn lock_name(address: SocketAddr) -> String {
 /// Which engine the window talks to, if any. A calculation.
 fn window_engine(address: SocketAddr, engine: &Engine) -> String {
     match engine {
-        Engine::Own(_) | Engine::Adopted | Engine::NotOurs => {
+        Engine::Ours | Engine::NotOurs => {
             format!("the window talks to the engine on {address}")
         }
         Engine::Gone => format!("the window has no engine on {address}"),
     }
 }
 
-/// The page the window shows: the UI, or `BOSSYLIGHTS_UI=http://127.0.0.1:5299/` (tests).
+/// The page the window shows: the UI. A debug build (the tests) shows
+/// `BOSSYLIGHTS_UI=http://127.0.0.1:5299/` instead; a release build never reads it.
 fn window_page() -> tauri::WebviewUrl {
-    std::env::var("BOSSYLIGHTS_UI")
+    #[cfg(debug_assertions)]
+    if let Some(page) = std::env::var("BOSSYLIGHTS_UI")
         .ok()
         .and_then(|page| page.parse().ok())
-        .map_or_else(tauri::WebviewUrl::default, tauri::WebviewUrl::External)
+    {
+        return tauri::WebviewUrl::External(page);
+    }
+    tauri::WebviewUrl::default()
+}
+
+/// What a debug build (the tests) also runs in the window: `BOSSYLIGHTS_WINDOW_SCRIPT`, which
+/// reads the page. A release build runs nothing extra.
+fn test_script() -> String {
+    #[cfg(debug_assertions)]
+    return std::env::var("BOSSYLIGHTS_WINDOW_SCRIPT").unwrap_or_default();
+    #[cfg(not(debug_assertions))]
+    String::new()
 }
 
 /// What the window runs before its page: which engine it talks to.
@@ -138,7 +151,7 @@ fn meet(address: SocketAddr) -> Engine {
                 "bossylights: adopted the engine on {address} (api {})",
                 engine_core::API_VERSION
             );
-            Engine::Adopted
+            Engine::Ours
         }
         Found::Other(answer) => {
             eprintln!(
@@ -164,7 +177,7 @@ fn answered(address: SocketAddr, mut child: Child) -> Engine {
         }
         if found(ask_version(address).as_deref()) == Found::Same || Instant::now() >= until {
             eprintln!("bossylights: started the engine on {address}");
-            return Engine::Own(child);
+            return Engine::Ours;
         }
         thread::sleep(Duration::from_millis(20));
     }
@@ -215,59 +228,6 @@ fn found(answer: Option<&str>) -> Found {
     }
 }
 
-/// Whether quitting orders the engine to stop. An engine of our own that has died is gone:
-/// whoever listens on its address now is another shell's engine.
-fn orders_stop(engine: &mut Engine) -> bool {
-    match engine {
-        Engine::NotOurs | Engine::Gone => false,
-        Engine::Adopted => true,
-        Engine::Own(child) => matches!(child.try_wait(), Ok(None)),
-    }
-}
-
-/// Quitting stops the engine in an orderly way. Its own engine is killed if it does not
-/// end in time.
-fn stop(address: SocketAddr, engine: &mut Engine) {
-    if !orders_stop(engine) {
-        return;
-    }
-    send_stop(address, ANSWER);
-    if let Engine::Own(child) = engine {
-        let until = Instant::now() + STOP;
-        while matches!(child.try_wait(), Ok(None)) && Instant::now() < until {
-            thread::sleep(Duration::from_millis(20));
-        }
-        if matches!(child.try_wait(), Ok(None)) {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
-    }
-}
-
-/// Sends the API's `Stop` and waits for its answer, each step at most `timeout`.
-fn send_stop(address: SocketAddr, timeout: Duration) {
-    let stopped = TcpStream::connect_timeout(&address, timeout)
-        .map_err(tungstenite::Error::Io)
-        .and_then(|stream| {
-            stream
-                .set_read_timeout(Some(timeout))
-                .and_then(|()| stream.set_write_timeout(Some(timeout)))
-                .map_err(tungstenite::Error::Io)?;
-            let (mut socket, _) = tungstenite::client(format!("ws://{address}/api"), stream)
-                .map_err(|error| match error {
-                    tungstenite::HandshakeError::Failure(error) => error,
-                    tungstenite::HandshakeError::Interrupted(_) => {
-                        tungstenite::Error::Io(std::io::ErrorKind::TimedOut.into())
-                    }
-                })?;
-            socket.send(tungstenite::Message::text("\"Stop\""))?;
-            socket.read().map(drop)
-        });
-    if let Err(error) = stopped {
-        eprintln!("bossylights: cannot stop the engine on {address}: {error}");
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -302,64 +262,11 @@ mod tests {
         }
     }
 
-    /// A listener that accepts and never answers.
+    /// A listener that accepts and never answers: an address nobody else uses right now.
     fn mute() -> (std::net::TcpListener, SocketAddr) {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         (listener, address)
-    }
-
-    #[test]
-    fn an_engine_that_never_answers_does_not_hold_the_stop() {
-        let (listener, address) = mute();
-        let holding = thread::spawn(move || listener.accept().map(|(stream, _)| stream));
-        let (done, returned) = std::sync::mpsc::channel();
-        thread::spawn(move || {
-            send_stop(address, Duration::from_millis(100));
-            let _ = done.send(());
-        });
-        // A hang guard of seconds: `send_stop` must return at all.
-        assert_eq!(returned.recv_timeout(Duration::from_secs(10)), Ok(())); // guard
-        drop(holding);
-    }
-
-    fn dead() -> Child {
-        let mut child = Command::new("true").spawn().unwrap();
-        child.wait().unwrap();
-        child
-    }
-
-    #[test]
-    fn a_shell_orders_a_stop_only_for_an_engine_it_may_stop() {
-        // (the engine, whether a Stop is ordered)
-        let cases = [
-            ("adopted", Engine::Adopted, true),
-            ("not ours", Engine::NotOurs, false),
-            ("own, died meanwhile", Engine::Own(dead()), false),
-            (
-                "own, running",
-                Engine::Own(Command::new("sleep").arg("30").spawn().unwrap()),
-                true,
-            ),
-        ];
-        for (name, mut engine, ordered) in cases {
-            assert_eq!(orders_stop(&mut engine), ordered, "{name}");
-            if let Engine::Own(child) = &mut engine {
-                let _ = child.kill();
-                let _ = child.wait();
-            }
-        }
-    }
-
-    #[test]
-    fn a_dead_engine_of_our_own_gets_no_stop() {
-        let (listener, address) = mute();
-        listener.set_nonblocking(true).unwrap();
-        stop(address, &mut Engine::Own(dead()));
-        assert!(
-            listener.accept().is_err(),
-            "a Stop was sent to whoever listens now"
-        );
     }
 
     #[cfg(unix)]

@@ -108,6 +108,70 @@ test("kill the shell: the engine keeps sending, a new shell adopts it and the fr
   }
 });
 
+/** A page for the window that closes the window, as a person does, once `close` is called. */
+async function closingPage() {
+  let closing = false;
+  const server = createServer((ask, answer) => {
+    answer.setHeader("access-control-allow-origin", "*");
+    if (ask.url === "/close") answer.end(closing ? "yes" : "no");
+    else answer.end("<!doctype html><title>Bossylights</title><p>closing page</p>");
+  });
+  await new Promise<void>((listening) => server.listen(0, "127.0.0.1", listening));
+  const page = `http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
+  return {
+    page,
+    script: `setInterval(() => fetch("${page}close").then((r) => r.text()).then((said) => {
+      if (said === "yes") window.__TAURI_INTERNALS__.invoke("plugin:window|close", { label: "main" });
+    }).catch(() => {}), 250);`,
+    close: () => (closing = true),
+    stop: () => new Promise((closed) => server.close(closed)),
+  };
+}
+
+// [whose engine, how it is there before the window]. Theory idea 9: a closed window cannot stop the lights.
+const engines = [
+  ["started by the shell", false],
+  ["adopted", true],
+] as const;
+for (const [whose, before] of engines) {
+  test(`close the window: the engine ${whose} keeps sending its DDP bytes`, async () => {
+    test.setTimeout(120_000);
+    const udp = createSocket("udp4");
+    const packets: Buffer[] = [];
+    udp.on("message", (packet) => packets.push(packet));
+    await new Promise<void>((bound) => udp.bind(0, "127.0.0.1", bound));
+    const engine = before ? spawn("target/debug/bossylights-engine", ["--listen", ADDRESS], { stdio: "ignore", detached: true }) : undefined;
+    if (before) await expect.poll(health, WAIT).toBe(200);
+    const window = await closingPage();
+    const shell = startShell(ADDRESS, { BOSSYLIGHTS_UI: window.page, BOSSYLIGHTS_WINDOW_SCRIPT: window.script });
+    try {
+      await expect.poll(shell.said, WAIT).toContain(`${before ? "adopted" : "started"} the engine on ${ADDRESS}`);
+      await expect.poll(health, WAIT).toBe(200);
+      const kind = { Ddp: { address: `127.0.0.1:${udp.address().port}`, color: "Rgb" } };
+      const output = { SetOutput: { output: 16, kind, universes: { first: 1, count: 1 }, rate: "30" } };
+      expect(await request({ Send: { command: output } })).toBe("Accepted");
+      expect(await request({ Send: { command: { SetChannel: { channel: { universe: 1, address: 1 }, value: 77 } } } })).toBe("Accepted");
+
+      const exited = new Promise((done) => shell.process.once("exit", done));
+      window.close();
+      await exited; // the last window closed: the app is gone
+      packets.length = 0;
+      // DDP (3waylabs): a 10 byte header, then channel 1 of universe 1.
+      await expect.poll(() => packets.length, WAIT).toBeGreaterThan(30);
+      expect(packets.at(-1)?.[10]).toBe(77);
+      expect(await health()).toBe(200);
+    } finally {
+      await kill(shell);
+      await window.stop();
+      if ((await health()) === 200) expect(await request("Stop")).toBe("Stopping");
+      await expect.poll(health, WAIT).toBe("nobody");
+      await expect.poll(gone, WAIT).toBe(true);
+      engine?.unref();
+      udp.close();
+    }
+  });
+}
+
 /** What the window's page shows, as the text its layout makes: the page posts it here. */
 async function windowText() {
   let posts = 0;

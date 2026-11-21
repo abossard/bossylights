@@ -112,7 +112,7 @@ const presses = [
   ["console.running.release-all", "holding", "button", "Release all", "ReleaseAll"],
   ["console.speed", "alone", "radio", "double", "SetSpeed double"],
   ["songs.section.remove-look", "alone", "button", "Take Warm wash out", "RemoveSectionLook"],
-  ["menubar.stop-engine", "window-closed", "menuitem", /Stop engine/, "StopEngine"],
+  ["menubar.stop-engine", "window-closed", "menuitem", /Stop engine/, "Stop"],
 ] as const;
 for (const [id, key, role, name, command] of presses) {
   test(`a press shows what is sent: ${id} in ${key}`, async ({ page }) => {
@@ -176,14 +176,22 @@ test("Blackout: Space holds it, a short press latches it, the next one brings th
   await expect(sent(page, "alone")).toHaveText("Blackout on: false");
 });
 
-test("a fader follows the keyboard and sends its level", async ({ page }) => {
-  await page.goto("/#/console.fader");
-  const fader = frame(page, "alone").getByRole("slider");
-  await fader.focus();
-  await page.keyboard.press("End");
-  await expect(fader).toHaveAttribute("aria-valuenow", "100");
-  await expect(sent(page, "alone")).toHaveText("SetMaster 100");
-});
+// [control, the top of its range, what End sends]. A level is 0 to 100, a raw DMX channel 0 to 255 (DMX512).
+const faders = [
+  ["console.fader", "100", /^SetMaster 100$/],
+  ["dmx.channel.fader", "255", /^SetChannel .*255/],
+] as const;
+for (const [id, most, command] of faders) {
+  test(`a fader follows the keyboard and sends its level: ${id} up to ${most}`, async ({ page }) => {
+    await page.goto(`/#/${id}`);
+    const fader = frame(page, "alone").getByRole("slider");
+    await expect(fader).toHaveAttribute("aria-valuemax", most);
+    await fader.focus();
+    await page.keyboard.press("End");
+    await expect(fader).toHaveAttribute("aria-valuenow", most);
+    await expect(sent(page, "alone")).toHaveText(command);
+  });
+}
 
 test("a light dragged in the universe grid sends its new address once, when dropped", async ({ page }) => {
   await page.goto("/#/patch.grid.light");
@@ -330,7 +338,6 @@ test("UX-05 songs.section.edge dragged 80 px sends where it landed", async ({ pa
 
 // [control, the words before, the words while on, the command of the first press]
 const toggles = [
-  ["inout.out.test", "Test", "Testing", "TestOutput on: true"],
   ["inout.osc.on", "Off", "Listening", "SetOsc on: true"],
 ] as const;
 for (const [id, before, on, command] of toggles) {
@@ -345,18 +352,6 @@ for (const [id, before, on, command] of toggles) {
     await expect(sent(page, "alone")).toHaveText(command);
   });
 }
-
-test("UX-07 a test of an output ends by itself after three seconds, a press while it runs does nothing", async ({ page }) => {
-  await page.goto("/#/inout.out.test");
-  const button = frame(page, "alone").getByRole("button");
-  await button.click();
-  await expect(button).toHaveText("Testing");
-  await button.click();
-  await expect(button).toHaveText("Testing");
-  await expect(page.locator("[data-log] li")).toHaveCount(1);
-  await expect(button).toHaveText("Test", { timeout: 5000 });
-  await expect(page.locator("[data-log] li")).toHaveCount(1);
-});
 
 test("UX-07 OSC goes back off on the second press", async ({ page }) => {
   await page.goto("/#/inout.osc.on");

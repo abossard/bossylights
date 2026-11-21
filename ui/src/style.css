@@ -34,40 +34,15 @@ main {
   color: var(--connected);
 }
 
-.status[data-status="disconnected"] {
+.status[data-status="disconnected"],
+.status[data-status="unreadable reply"],
+.status[data-status="no address"] {
   color: var(--danger);
-}
-
-.frame {
-  margin: 8px 0;
-  font-family: "Big Shoulders Display", "Archivo Narrow", system-ui, sans-serif;
-  font-size: 96px;
-  font-weight: 900;
-  line-height: 1;
-  font-variant-numeric: tabular-nums;
 }
 
 .label {
   font-size: 14px;
   color: var(--mute);
-}
-
-.channels {
-  display: grid;
-  gap: 4px;
-  margin-top: 24px;
-}
-
-.channel {
-  display: grid;
-  grid-template-columns: 3em 12em 3em;
-  align-items: center;
-  gap: 8px;
-}
-
-.level {
-  font-variant-numeric: tabular-nums;
-  text-align: right;
 }
 
 .outputs {

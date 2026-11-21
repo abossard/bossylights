@@ -2,10 +2,10 @@
 import { createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { COMMANDS } from "../controls/commands.ts";
 import type { Control } from "../controls/spec.ts";
-import { act, ENDS_BY_ITSELF, type Act, type Sent } from "./act.ts";
+import { act, type Act, type Sent } from "./act.ts";
 import type { Frame } from "./frames.ts";
 import { Live } from "./Live.tsx";
-import { inState, type Look } from "./look.ts";
+import type { Look } from "./look.ts";
 import { USES } from "./uses.ts";
 
 const MARK = { works: "works", off: "off", gone: "not there" } as const;
@@ -32,20 +32,9 @@ export function FrameView(props: { control: Control; frame: Frame; onSent: (fram
   const holds = USES[props.control.id]?.on.keyDown !== undefined;
   let swallowClick = false;
 
-  // A toggle that ends by itself is back after a while: the engine ends it, nothing is sent.
-  const ends = ENDS_BY_ITSELF[props.control.id];
-  let ending: ReturnType<typeof setTimeout> | undefined;
-  onCleanup(() => clearTimeout(ending));
-
   const play = (gesture: Act) => {
     const result = act(props.control, look(), gesture);
     setLook(result.look);
-    if (ends && result.look.label === ends.while && ending === undefined) {
-      ending = setTimeout(() => {
-        ending = undefined;
-        setLook(inState(props.control, ends.back));
-      }, ends.ms);
-    }
     if (result.sent.length === 0) return;
     setSent(result.sent);
     setFired(fired() + 1);

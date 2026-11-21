@@ -117,7 +117,7 @@ export const DMX: Control[] = [
     name: "Channel fader",
     part: "Channel",
     from: ["dmx/Screen/channel#2"],
-    kit: "Fader",
+    kit: "Fader.byte",
     does: "Sets the selected channel from 0 to 255. Moving it holds the channel by hand",
     sends: ["SetChannel"],
     gestures: fader("the channel"),

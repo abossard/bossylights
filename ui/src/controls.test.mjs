@@ -6,6 +6,8 @@ import { CONTRADICTIONS } from "./controls/findings.ts";
 import { MACHINES, walk } from "./controls/machines.ts";
 import { control, button, liveButton, yes, NOT_A_BUTTON } from "./controls/spec.ts";
 import { off } from "./controls/situations.ts";
+import { COMMANDS } from "./controls/commands.ts";
+import { RATES } from "./controls/rows/inout.ts";
 import { CONTROLS, NOT_CONTROLS } from "./controls/table.ts";
 
 const keys = JSON.parse(readFileSync(new URL("./controls/inventory.json", import.meta.url), "utf8")).map((e) => e.key);
@@ -113,4 +115,40 @@ for (const [name, events, end, sent] of walks) {
     assert.equal(result.states.at(-1), end);
     assert.deepEqual(result.sent, sent);
   });
+}
+
+// The names the engine takes, read from the generated engine-api.ts (from Rust): the variants of Command and Request.
+const api = readFileSync(new URL("./engine-api.ts", import.meta.url), "utf8");
+const variants = (type) => {
+  const text = api.split(`export type ${type} = `)[1]?.split("\nexport type ")[0] ?? "";
+  return [...text.matchAll(/(?:\| |^)(?:\{ )?"(\w+)"/g)].map((m) => m[1]);
+};
+const live = new Set([...variants("Command"), ...variants("Request")]);
+test("the catalog marks live exactly its commands the engine takes", () => {
+  const names = Object.keys(COMMANDS);
+  assert.deepEqual(
+    names.filter((name) => COMMANDS[name].engine),
+    names.filter((name) => live.has(name)),
+  );
+});
+
+// Identify only (AGENTS.md): no control drives every channel of an output.
+test("no control tests a whole output", () => {
+  assert.ok(!("TestOutput" in COMMANDS));
+  assert.deepEqual(CONTROLS.filter((c) => c.sends.includes("TestOutput")).map((c) => c.id), []);
+});
+
+// [kind, rates]: docs/engine.md (SetOutput: 30, 44, 60) and the DMX USB Pro's most of 44 (#261).
+const rates = [
+  ["DDP", ["30", "44", "60"]],
+  ["DMX USB Pro", ["30", "44"]],
+];
+for (const [kind, expected] of rates) test(`a ${kind} output offers the rates ${expected}`, () => assert.deepEqual(RATES[kind], expected));
+// [rate picker, the rates it offers]: the same sources, per kind.
+const pickers = [
+  ["inout.out.rate", ["30", "44", "60"]],
+  ["inout.out.rate-usb", ["30", "44"]],
+];
+for (const [id, expected] of pickers) {
+  test(`the rate picker ${id} offers ${expected}`, () => assert.deepEqual(CONTROLS.find((c) => c.id === id)?.states, expected));
 }

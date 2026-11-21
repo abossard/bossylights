@@ -1,11 +1,16 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { keyStep, lampOf, level, neighbour, placeIn, unbroken, wheelAt, wheelColour, wheelSpot } from "./kit/common.ts";
+import { keyStep, lampOf, level, neighbour, scaled, placeIn, unbroken, wheelAt, wheelColour, wheelSpot } from "./kit/common.ts";
 import { dragOutcome } from "./kit/dragging.ts";
+import { fieldStep, judge } from "./kit/editing.ts";
 
 // [value, the level it becomes]
 const levels = [[-5, 0], [0, 0], [49.5, 50], [100, 100], [140, 100]];
 for (const [value, expected] of levels) test(`level: ${value} is ${expected}`, () => assert.equal(level(value), expected));
+
+// [value, the top of the range, the value it becomes]. A DMX channel holds 0 to 255 (DMX512), a level 0 to 100.
+const ranges = [[-1, 255, 0], [0, 255, 0], [127.6, 255, 128], [255, 255, 255], [300, 255, 255], [140, 100, 100]];
+for (const [value, most, expected] of ranges) test(`scaled: ${value} of 0 to ${most} is ${expected}`, () => assert.equal(scaled(value, most), expected));
 
 const BOX = { left: 100, top: 50, width: 200, height: 100 };
 // [what, x, y, across, up]
@@ -110,3 +115,42 @@ const outcomes = [
   ["idle", "cancel", "idle", "none"],
 ];
 for (const [from, event, to, expected] of outcomes) test(`drag: ${event} in ${from}`, () => assert.equal(dragOutcome(from, to, event), expected));
+
+// A text field, as in docs/design/ui-states.md and Field's own comment: Enter saves, Escape puts the old value back,
+// an empty or unchanged text keeps the old value, a refused text says why, leaving refuses or marks unsaved.
+// [state, event, state after, effect]
+const SAME = { is: "same" };
+const NO = { is: "refused", reason: "Too long" };
+const FITS = { is: "fits", text: "Wash" };
+const fieldStates = [{ is: "clean" }, { is: "refused", reason: "Taken" }, { is: "unsaved" }];
+const fieldCases = [
+  [{ is: "typed" }, { is: "clean" }, { is: "none" }],
+  [{ is: "enter", text: SAME }, { is: "clean" }, { is: "putBack" }],
+  [{ is: "enter", text: NO }, NO, { is: "none" }],
+  [{ is: "enter", text: FITS }, { is: "clean" }, { is: "send", text: "Wash" }],
+  [{ is: "escape" }, { is: "clean" }, { is: "putBack" }],
+  [{ is: "leave", text: SAME, saves: true }, { is: "clean" }, { is: "putBack" }],
+  [{ is: "leave", text: NO, saves: true }, NO, { is: "putBack" }],
+  [{ is: "leave", text: FITS, saves: true }, { is: "clean" }, { is: "send", text: "Wash" }],
+  [{ is: "leave", text: SAME, saves: false }, { is: "clean" }, { is: "putBack" }],
+  [{ is: "leave", text: NO, saves: false }, NO, { is: "putBack" }],
+  [{ is: "leave", text: FITS, saves: false }, { is: "unsaved" }, { is: "none" }],
+];
+for (const state of fieldStates) {
+  for (const [event, after, effect] of fieldCases) {
+    test(`field ${JSON.stringify(state)} + ${JSON.stringify(event)}`, () => assert.deepEqual(fieldStep(state, event), [after, effect]));
+  }
+}
+
+// [typed, old value, refuses, judged]
+const refuseLong = (text) => (text.length > 4 ? "Too long" : undefined);
+const judgements = [
+  ["", "Wash", refuseLong, SAME],
+  ["  Wash ", "Wash", refuseLong, SAME],
+  ["Beam", "Wash", refuseLong, { is: "fits", text: "Beam" }],
+  [" Beam ", "Wash", undefined, { is: "fits", text: "Beam" }],
+  ["Spotlight", "Wash", refuseLong, NO],
+];
+for (const [typed, value, refuse, expected] of judgements) {
+  test(`judge ${JSON.stringify(typed)} over ${value}`, () => assert.deepEqual(judge(typed, value, refuse), expected));
+}
