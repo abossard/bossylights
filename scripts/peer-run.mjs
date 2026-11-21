@@ -40,7 +40,7 @@ async function runOne(tool) {
   console.log(`${tool} ${settings.mode}: running in ${dir}`);
 
   const prompt = promptOf(brief, task, settings.mode, outDir);
-  const run = await runCli(settings, { cwd: copy, dir, outDir, prompt, env: { ...process.env, CARGO_TARGET_DIR: join(dir, "target") } });
+  const run = await runCli(settings, { cwd: copy, dir, outDir, prompt, env: { ...process.env, CARGO_TARGET_DIR: join(dir, "target"), COPILOT_TASK_WAIT_TIMEOUT_SECONDS: "3600" } });
 
   const patchFile = patchFileOf(settings.mode);
   let diff = "";

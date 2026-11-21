@@ -42,6 +42,7 @@ flowchart LR
 | Codex | `--json`, `-o last-message.md`, prompt on stdin | the report counts commands, failures, tokens; the answer is one file |
 | Copilot | `--model gpt-6.2-sol --reasoning-effort max --context long_context` | strongest effort and window it offers |
 | Copilot | `--allow-all --no-ask-user`, stdin `/dev/null` | a prompt in a `-p` run is a denial; all tools, paths and URLs are allowed in the throwaway copy |
+| Copilot | env `COPILOT_TASK_WAIT_TIMEOUT_SECONDS=3600` | the default 600 s wait for its background shells ended review-248 with no answer while a cargo build ran |
 | Copilot | `--add-dir <out> --share transcript.md --log-dir logs --output-format json --usage-output-file usage.json` | evidence folder, a readable transcript, events and tokens |
 | both | a scratch copy of the commit (`git worktree add --detach`), removed after; `CARGO_TARGET_DIR` in the run folder | the shared checkout is never touched, no overlap with workers |
 
