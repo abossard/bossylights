@@ -135,6 +135,26 @@ impl State {
             clock: Clock::START,
         }
     }
+
+    /// A new run for the same adapter starts a fresh set of counters. Its
+    /// current status, including consecutive failures, belongs to the adapter.
+    pub fn reroute(self, output: OutputNumber, run: Run, rate: Rate) -> Self {
+        let Some(Some(previous)) = self.outputs.get(output.slot()) else {
+            return self;
+        };
+        self.with_output(output, run, rate, previous.status)
+    }
+
+    fn with_output(mut self, output: OutputNumber, run: Run, rate: Rate, status: Status) -> Self {
+        let due = first_due(&self.outputs, rate, self.now);
+        if let Some(slot) = self.outputs.get_mut(output.slot()) {
+            *slot = Some(Output {
+                status,
+                ..Output::new(run, rate, due)
+            });
+        }
+        self
+    }
 }
 
 /// The output thread's priority, as the system answered when the thread started.
@@ -519,14 +539,7 @@ pub fn update(
             output,
             universes: run,
             rate,
-        } => {
-            let mut outputs = state.outputs;
-            let due = first_due(&outputs, rate, state.now);
-            if let Some(slot) = outputs.get_mut(output.slot()) {
-                *slot = Some(Output::new(run, rate, due));
-            }
-            State { outputs, ..state }
-        }
+        } => state.with_output(output, run, rate, Status::NotFound),
         EngineCommand::RemoveOutput { output } => {
             let mut outputs = state.outputs;
             if let Some(slot) = outputs.get_mut(output.slot()) {

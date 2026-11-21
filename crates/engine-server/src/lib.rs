@@ -378,7 +378,7 @@ async fn talk(mut socket: WebSocket, api: Arc<Api>) {
 }
 
 async fn answer(
-    api: &Api,
+    api: &Arc<Api>,
     text: &str,
     pictures: &mut watch::Receiver<Arc<Picture>>,
     subscription: &mut Option<Subscription>,
@@ -440,7 +440,7 @@ fn reserve(history: &Arc<Semaphore>, bytes: usize) -> Result<OwnedSemaphorePermi
 /// without the front (a patch measures its show file, a look compiles), and admitted
 /// under it: every other client is answered meanwhile. So is a device it needs opened.
 /// The answer when it is taken, `Stopping` when the engine stops first: nothing changed.
-async fn send(api: &Api, command: Command) -> Result<Reply<'static>, Refusal> {
+async fn send(api: &Arc<Api>, command: Command) -> Result<Reply<'static>, Refusal> {
     let shelf = Arc::clone(&api.shelf.borrow());
     let mut credit = None;
     let output_edit = matches!(
@@ -458,16 +458,22 @@ async fn send(api: &Api, command: Command) -> Result<Reply<'static>, Refusal> {
     match begun {
         None => Ok(Reply::Stopping),
         Some(Ok(Begun::Opening(opening))) => {
-            match tokio::task::spawn_blocking(move || opening.open()).await {
-                Ok(opened) => match api
-                    .changing(&mut credit, |sender| sender.finish(opened))
-                    .await
-                {
-                    None => Ok(Reply::Stopping),
-                    Some(finished) => finished.map(|()| Reply::Accepted),
-                },
-                Err(_) => Err(Refusal::CannotOpen), // the task was cancelled: the engine stops
-            }
+            let api = Arc::clone(api);
+            // Keep the opener through the handoff. A busy blocking pool cannot
+            // put another job between publication and delivery of the device.
+            tokio::task::spawn_blocking(move || {
+                let opened = opening.open();
+                let publish = api.changing(&mut credit, |sender| sender.publish_output(opened));
+                let Some(result) = tokio::runtime::Handle::current().block_on(publish) else {
+                    return Ok(Reply::Stopping);
+                };
+                if let Some(handoff) = result? {
+                    handoff.wait();
+                }
+                Ok(Reply::Accepted)
+            })
+            .await
+            .unwrap_or(Ok(Reply::Stopping))
         }
         Some(Ok(Begun::Queued)) => Ok(Reply::Accepted),
         Some(Ok(Begun::Patched { fixture })) => Ok(Reply::Patched { fixture }),

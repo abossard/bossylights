@@ -728,7 +728,7 @@ fn output_health() {
         before,
         "allocation or free during a reconfigure that keeps the lane"
     );
-    // A refused restart resumes the old generation and its press history.
+    // A refused restart keeps the old generation and its press history.
     // A successful restart serves the first press of a new generation.
     for (hand_back, result, generation, presses) in [
         (false, Err(Refusal::CannotOpen), 2, 2),
@@ -740,12 +740,15 @@ fn output_health() {
         };
         let before = counts();
         wakes.wake().unwrap();
-        assert_eq!(counts(), before, "retiring the lane allocated or freed");
+        assert_eq!(
+            counts(),
+            before,
+            "checking for device reuse allocated or freed"
+        );
 
         engine.stall_reclamation(!hand_back);
         let opened = restart.open();
-        // Hold the free thread through the tick's resume or replacement and the
-        // delivery of a new press. Count every allocation and free on both paths.
+        // Count both the refusal and the accepted switch through the next press.
         engine.stall_reclamation(true);
         let before = counts();
         assert_eq!(sender.finish(opened), result);
@@ -755,6 +758,32 @@ fn output_health() {
         runs(&mut engine, &sender, generation, presses);
         assert_eq!(counts(), before, "allocation or free after {result:?}");
     }
+    // Let the tick install the new lane before the blocking worker delivers its
+    // device. The prepared boxes retain a press through the handoff.
+    let Begun::Opening(opening) = begin(&mut sender, set_two(1, Rate::Sixty), &[]).unwrap() else {
+        panic!("a shorter run needs a new lane");
+    };
+    wakes.wake().unwrap();
+    engine.stall_reclamation(false);
+    let ready = opening.open();
+    engine.stall_reclamation(true);
+    let before = counts();
+    let handoff = sender.publish_output(ready).unwrap().unwrap();
+    assert!(matches!(
+        sender.begin(set_two(2, Rate::Sixty), &[]),
+        Err(Refusal::Opening)
+    ));
+    sender
+        .send(Command::SetChannel { channel, value: 91 })
+        .unwrap();
+    wakes.wake().unwrap();
+    handoff.wait();
+    runs(&mut engine, &sender, 4, 1);
+    assert_eq!(
+        counts(),
+        before,
+        "allocation or free during the device handoff"
+    );
 }
 
 /// Queue two replacement revisions while every once-use crosses its end between wakes.

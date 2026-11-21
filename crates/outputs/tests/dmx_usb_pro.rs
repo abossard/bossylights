@@ -60,6 +60,29 @@ fn every_frame_is_one_send_dmx_message() {
 }
 
 #[test]
+fn a_healthy_route_finishes_its_last_accepted_message_before_the_next_route() {
+    let (find, mut fake) = Fake::new(true);
+    let mut device = DmxUsbPro::open(find).unwrap();
+    let mut end = fake.next_end();
+    let received = thread::spawn(move || {
+        let mut markers = Vec::new();
+        while markers.last() != Some(&91) {
+            markers.push(read_message(&mut end)[5]);
+        }
+        markers
+    });
+
+    // The serial worker has taken the first message. The last one can still be
+    // in its one-slot queue while the driver sends the first.
+    for marker in [11, 73] {
+        take_when_free(&mut device, &[marker]);
+    }
+    device.finish_route();
+    take_when_free(&mut device, &[91]);
+    assert_eq!(received.join().unwrap(), [11, 73, 91]);
+}
+
+#[test]
 fn an_unplugged_port_fails_until_the_port_thread_opens_a_new_one() {
     let (find, mut fake) = Fake::new(true);
     let mut device = DmxUsbPro::open(find).unwrap();

@@ -36,13 +36,15 @@ An output's route lists channel spans in stream order. The tick gathers those sp
 | Step | Where | What |
 |---|---|---|
 | 1 | `Base::prepare`, then `Sender::admit` | `prepare`: `Project::update` checks the client `Command` against a `Base` (the project, patch and looks, taken from `Sender::base`) and says what follows: an `EngineCommand` for the tick thread, keep the device, restart its lane, or open one. Only this makes an `EngineCommand`. The blocking pool prepares output, patch, group and look edits. It checks route changes against the patch outside the publisher lock, so another client can still send a press. A press is prepared and admitted under the `Sender` at once, no thread hop before the next frame. Once `Stop` is taken (under the `Sender`), a command is answered `Stopping` and changes nothing: every accepted edit is in the last save. `admit`, under the `Sender`: `Stale` when another change replaced the base (the server prepares again, three times at most), else the plays, a slot and room in the queue are checked and the command queued. `Sender::begin` does both |
-| 1b | `Opening::open` | The blocking pool starts the lane with boxes sized to the requested route. A restart reuses the device when it comes back in time. Other clients can send commands meanwhile. |
-| 2 | `Sender::finish` | Commits the prepared lane. A failed restart answers `CannotOpen` and keeps the previous run. Tests supply a device through `Sender::attach` for a run or `Sender::attach_route` for explicit spans. |
-| 3 | tick thread | Installs the new lane. Moving or resizing a run restarts its lane. A rate change on the same run keeps the lane. |
-| 4 | tick and output threads | When the output is due, the tick gathers its route and hands the box to its lane. The output thread sends or drops. Frames due during a restart count as dropped. |
-| 5 | free thread | Reclaims replaced lanes. During a restart it signals the opener that the tick has paused the old lane. The opener waits for its last send to finish before switching devices. |
+| 1b | `Opening::open` | The blocking pool starts the new lane, sizes its boxes and opens a fresh device if needed. Every due frame still uses the old lane, including a press from another client. |
+| 2 | `Sender::publish_output` | Queues the prepared lane. A failed open answers `CannotOpen` and the old lane continues. |
+| 3 | Tick thread | Installs the new run and lane together. A rate change on the same run keeps the lane. |
+| 4 | Output workers | The old worker finishes its last send. The blocking pool drains the adapter and transfers a kept device to the new worker before replying. The new worker holds its frames until the transfer finishes. |
+| 5 | Free thread | Reclaims the retired lane and its boxes. |
 
-A pending open or restart refuses another `SetOutput` or `RemoveOutput` on that output with `Opening`. Pictures show the old run until the restart succeeds. If a refused restart leaves the device unavailable, the output reports `Reconnecting` and health records `OutputLost`. Reopening happens off the tick thread and restores the old run.
+A pending open or device handoff refuses another `SetOutput` or `RemoveOutput` on that output with `Opening`. Pictures show the old run until the replacement is accepted.
+
+If the old device is lost after a refused open, health records `OutputLost` and the reopen worker restores it on the old run. An adapter already `Reconnecting` keeps its failure count across an accepted reroute and returns to `Running` when it sends on the new run.
 
 ## API
 

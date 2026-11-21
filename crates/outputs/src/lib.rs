@@ -40,7 +40,7 @@ pub trait Device: Send {
         false
     }
 
-    /// Completes any old-route writes and discards queued frames before a reroute.
+    /// Finishes accepted writes before a reroute. A lost port discards old-route retries.
     /// Called off the output thread, with exclusive access after the last `take`.
     fn finish_route(&mut self) {}
 
@@ -59,6 +59,14 @@ pub fn open(kind: OutputKind) -> io::Result<Box<dyn Device>> {
             let find = dmx_usb_pro::find(adapter);
             Ok(Box::new(dmx_usb_pro::DmxUsbPro::open(find)?) as Box<dyn Device>)
         }
+    }
+}
+
+/// Whether a reroute must transfer the open device because it owns an exclusive port.
+pub const fn exclusive(kind: OutputKind) -> bool {
+    match kind {
+        OutputKind::DmxUsbPro { .. } => true,
+        OutputKind::Ddp { .. } => false,
     }
 }
 

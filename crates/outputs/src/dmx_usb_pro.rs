@@ -215,15 +215,18 @@ struct PortThread {
     link: Link,
     messages: rtrb::Consumer<[u8; MESSAGE]>,
     /// The message whose write lost the port. Written first once the adapter is found
-    /// again, then the one `take` queued meanwhile. A route change discards both.
+    /// again, then the one `take` queued meanwhile. Rerouting a lost port discards both.
     unsent: Option<[u8; MESSAGE]>,
     shared: Arc<Shared>,
 }
 
 impl PortThread {
-    /// Between writes, discard pending messages and let bytes already in the
-    /// driver leave before the opener accepts the new route.
+    /// On a healthy port the send loop finishes its last accepted message first.
+    /// A failed write belongs to the old route and must never replay on the new one.
     fn finish_route(&mut self) {
+        if self.port.is_some() && self.unsent.is_none() && !self.messages.is_empty() {
+            return;
+        }
         self.unsent = None;
         while self.messages.pop().is_ok() {}
         if let Some(port) = &self.port

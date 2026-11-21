@@ -34,11 +34,13 @@
 //! ```text
 //! [*] --> Looking --frame there--> Sending --device took it--> Sleeping
 //! Sleeping --woken, or LEAD before its next frame--> Looking --nothing yet, LOOK later--> Looking
+//! Prepared --previous device finished its route--> Looking
+//! Looking --accepted handoff--> Returned --retired--> [*]
 //! any --stop--> [*]     (the device goes back to whoever stops it)
 //! ```
 //!
-//! Its one transition function is [`step`]: what the thread does each time it looks at
-//! its queue and the clock. The thread only does what `step` says.
+//! [`step`] schedules sends while the lane is serving. At a route switch the
+//! worker finishes its last send, gives up the device and parks until reclamation.
 
 use crate::wake::Clock;
 use crate::{Device, Levels, Outcome, Run};
@@ -174,7 +176,11 @@ struct Shared {
     /// The thread is in its loop: whatever its start-up allocated is done.
     ready: AtomicBool,
     failed: AtomicBool,
-    pause: AtomicU8,
+    /// A refused restart registered this device with the recovery worker.
+    watch_loss: AtomicBool,
+    /// A replacement waits for the adapter before serving. Once it hands that
+    /// adapter back, it stays parked until the free thread reclaims the lane.
+    phase: AtomicU8,
 }
 
 /// Only an opener or the free thread joins a lane. The tick keeps its wait-free wake handle.
@@ -200,10 +206,17 @@ impl Control {
     pub(crate) fn install(&self, device: DeviceBox) {
         let mut delivery = self.0.port.lock().unwrap_or_else(|e| e.into_inner());
         let reconnects_itself = device.reconnects_itself();
-        if delivery.thread.is_some() && delivery.next.push(device).is_ok() {
+        if !self.closed() && delivery.thread.is_some() && delivery.next.push(device).is_ok() {
             delivery.reconnects_itself = reconnects_itself;
-            self.0.shared.failed.store(false, Ordering::Release);
         }
+    }
+
+    pub(crate) fn watch_loss(&self) {
+        self.0.shared.watch_loss.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn watching_loss(&self) -> bool {
+        self.0.shared.watch_loss.load(Ordering::Acquire)
     }
 
     pub(crate) fn needs_open(&self) -> bool {
@@ -214,34 +227,88 @@ impl Control {
             && self.0.shared.failed.load(Ordering::Acquire)
     }
 
-    pub(crate) fn pause(&self, paused: bool) {
+    /// Set during preparation, before the first frame can be handed to this lane.
+    pub(crate) fn hold_for_handoff(&self) {
         self.0
             .shared
-            .pause
-            .store(if paused { PAUSING } else { SERVING }, Ordering::Release);
+            .phase
+            .store(AWAITING_DEVICE, Ordering::Release);
+    }
+
+    pub(crate) fn awaiting_device(&self) -> bool {
+        self.0.shared.phase.load(Ordering::Acquire) == AWAITING_DEVICE
+    }
+
+    /// The accepted switch. Only the worker can give up its device, between sends.
+    pub(crate) fn handoff(&self) {
+        let _ = self.0.shared.phase.compare_exchange(
+            SERVING,
+            HANDING_OVER,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
         self.0.wake.unpark();
     }
 
-    pub(crate) fn quiet(&self) -> bool {
-        self.0.shared.pause.load(Ordering::Acquire) == QUIET
+    /// Outside the publisher, tick and lanes. Finish any write in the old adapter
+    /// before enabling the new worker, even when it already has a fresh device.
+    /// Returns whether the opener must watch the new lane for a lost device.
+    pub(crate) fn finish_handoff(&self, next: &Self, reuse: bool) -> bool {
+        while self.0.shared.phase.load(Ordering::Acquire) != RETURNED {
+            thread::sleep(Duration::from_millis(1));
+        }
+        let mut port = self.0.port.lock().unwrap_or_else(|e| e.into_inner());
+        let returned = port.returned.pop().ok();
+        let missing = reuse && returned.is_none();
+        if let Some(mut device) = returned {
+            device.finish_route();
+            if reuse {
+                // A waiting lane with no device cannot have requested a retry.
+                let mut delivery = next.0.port.lock().unwrap_or_else(|e| e.into_inner());
+                delivery.reconnects_itself = device.reconnects_itself();
+                let _ = delivery.next.push(device);
+            } else if !self.0.shared.stop.load(Ordering::Acquire) {
+                port.retired = Some(device);
+            }
+        }
+        let watch = reuse && (missing || self.watching_loss());
+        if reuse {
+            let failed = missing || self.0.shared.failed.load(Ordering::Acquire);
+            next.0.shared.failed.store(failed, Ordering::Release);
+        }
+        if watch {
+            next.watch_loss();
+        }
+        next.0.shared.phase.store(SERVING, Ordering::Release);
+        next.0.wake.unpark();
+        watch
     }
 
     pub(crate) fn closed(&self) -> bool {
         self.0.shared.stop.load(Ordering::Acquire)
+            || matches!(
+                self.0.shared.phase.load(Ordering::Acquire),
+                HANDING_OVER | RETURNED
+            )
     }
 
-    /// Finishes the send already in the adapter before returning the device. Queued
-    /// frames can never start afterwards. Called outside the publisher lock.
-    pub(crate) fn take(&self) -> Option<DeviceBox> {
+    /// Retire on the free thread after the last send. The worker can transfer its
+    /// device to a concurrent handoff even when reclamation starts first.
+    fn stop(&self) {
         self.0.shared.stop.store(true, Ordering::Release);
         self.0.wake.unpark();
         let mut port = self.0.port.lock().unwrap_or_else(|e| e.into_inner());
-        let thread = port.thread.take()?;
+        let Some(thread) = port.thread.take() else {
+            return;
+        };
         drop(port.old.pop());
-        let mut device = thread.join().ok()??;
-        drop(port.old.pop());
-        device.finish_route();
-        Some(device)
+        drop(port.retired.take());
+        // Release the delivery lock before joining. The handoff can now drain
+        // the adapter even while the free thread reclaims the old worker.
+        drop(port);
+        if let Ok(Some(mut device)) = thread.join() {
+            device.finish_route();
+        }
     }
 }
 
@@ -252,21 +319,27 @@ struct Delivery {
     thread: Option<Returning>,
     next: rtrb::Producer<DeviceBox>,
     old: rtrb::Consumer<DeviceBox>,
+    returned: rtrb::Consumer<DeviceBox>,
+    /// A replaced device that finished its last write. Freed with the old lane.
+    retired: Option<DeviceBox>,
 }
 
 struct Devices {
     current: Option<DeviceBox>,
     next: rtrb::Consumer<DeviceBox>,
     old: rtrb::Producer<DeviceBox>,
+    returning: rtrb::Producer<DeviceBox>,
 }
 
 impl Devices {
-    fn receive(&mut self) {
+    fn receive(&mut self, failed: &AtomicBool) {
         if !self.old.is_full()
             && let Ok(device) = self.next.pop()
             && let Some(old) = self.current.replace(device)
         {
             let _ = self.old.push(old);
+            // Only the worker knows when a replacement actually takes ownership.
+            failed.store(false, Ordering::Release);
         }
     }
 }
@@ -278,8 +351,6 @@ pub(crate) struct Lane {
     back: rtrb::Consumer<Frame>,
     spare: [Option<Frame>; BOXES],
     pub(crate) control: Control,
-    /// The attachment that resumed after a refused restart, for loss reporting.
-    pub(crate) resumed: Option<u64>,
 }
 
 /// Rendezvous on the thread preparing an output. Dropping the release end lets it run.
@@ -314,15 +385,18 @@ impl Lane {
             stop: AtomicBool::new(false),
             ready: AtomicBool::new(false),
             failed: AtomicBool::new(false),
-            pause: AtomicU8::new(SERVING),
+            watch_loss: AtomicBool::new(false),
+            phase: AtomicU8::new(SERVING),
         });
         let (next, receive) = rtrb::RingBuffer::new(1);
         let (retire, old) = rtrb::RingBuffer::new(1);
+        let (returning, returned) = rtrb::RingBuffer::new(1);
         let reconnects_itself = device.as_ref().is_some_and(|d| d.reconnects_itself());
         let devices = Devices {
             current: device,
             next: receive,
             old: retire,
+            returning,
         };
         let (thread, _) = rt_thread::spawn(THREAD, {
             let shared = Arc::clone(&shared);
@@ -348,6 +422,8 @@ impl Lane {
                 thread: None,
                 next,
                 old,
+                returned,
+                retired: None,
             }
             .into(),
         }));
@@ -365,7 +441,6 @@ impl Lane {
             back,
             spare,
             control,
-            resumed: None,
         })
     }
 
@@ -379,9 +454,6 @@ impl Lane {
         next: Duration,
         prefix: Prefix,
     ) -> Hand {
-        if self.control.0.shared.pause.load(Ordering::Acquire) != SERVING {
-            return Hand::Full;
-        }
         let Some(mut free) = self.spare.iter_mut().find_map(Option::take) else {
             return Hand::Full;
         };
@@ -429,14 +501,25 @@ impl Lane {
 
 impl Drop for Lane {
     fn drop(&mut self) {
-        self.control.take();
+        self.control.stop();
     }
 }
 
-// The tick asks for a pause; only the output worker can acknowledge it between sends.
+// AWAITING_DEVICE -> SERVING -> HANDING_OVER -> RETURNED. An initial lane
+// starts at SERVING. Only the worker returns the device, after its last send.
+const AWAITING_DEVICE: u8 = 3;
 const SERVING: u8 = 0;
-const PAUSING: u8 = 1;
-const QUIET: u8 = 2;
+const HANDING_OVER: u8 = 1;
+const RETURNED: u8 = 2;
+
+/// Also release the opener if a supplied device unwinds on its worker.
+struct EndOfRun<'a>(&'a AtomicU8);
+
+impl Drop for EndOfRun<'_> {
+    fn drop(&mut self) {
+        self.0.store(RETURNED, Ordering::Release);
+    }
+}
 
 /// The output's thread, an action: does what [`step`] says until it is stopped, then
 /// gives the device back. Never allocates or frees; the only call outward is `take`.
@@ -448,21 +531,39 @@ fn run(
     clock: &Clock,
 ) -> Option<DeviceBox> {
     thread::park_timeout(Duration::ZERO); // sets up the park state
+    let _finished = EndOfRun(&shared.phase);
     shared.ready.store(true, Ordering::Release);
     let mut next = Duration::ZERO;
+    let mut finished_last_send = false;
     loop {
         let stop = shared.stop.load(Ordering::Acquire);
-        if !stop && shared.pause.load(Ordering::Acquire) != SERVING {
-            let _ =
-                shared
-                    .pause
-                    .compare_exchange(PAUSING, QUIET, Ordering::AcqRel, Ordering::Acquire);
+        let mut queued = waiting.slots();
+        let handoff = shared.phase.load(Ordering::Acquire);
+        if handoff == AWAITING_DEVICE && !stop {
             thread::park();
             continue;
         }
-        match step(waiting.slots(), stop, clock.now(), next) {
+        if handoff == HANDING_OVER {
+            // The cutoff that requested the handoff may have queued its last
+            // old frame after our first look. It has now finished handing frames.
+            queued = waiting.slots();
+        }
+        if handoff == HANDING_OVER && (finished_last_send || queued == 0) {
+            devices.receive(&shared.failed);
+            if let Some(device) = devices.current.take() {
+                // One worker, one handoff and one reserved place.
+                let _ = devices.returning.push(device);
+            }
+            shared.phase.store(RETURNED, Ordering::Release);
+            continue;
+        }
+        if !stop && handoff == RETURNED {
+            thread::park();
+            continue;
+        }
+        match step(queued, stop && handoff != HANDING_OVER, clock.now(), next) {
             Step::Stop => {
-                devices.receive();
+                devices.receive(&shared.failed);
                 return devices.current;
             }
             Step::Sleep(time) => thread::park_timeout(time),
@@ -476,11 +577,14 @@ fn run(
                 if let Ok(frame) = waiting.pop() {
                     next = frame.next;
                     let at = clock.now();
-                    devices.receive();
+                    devices.receive(&shared.failed);
                     let outcome = devices
                         .current
                         .as_mut()
                         .map_or(Outcome::Failed, |device| device.take(&frame.bytes));
+                    // A send already in the device when the switch arrived is
+                    // its last. Otherwise send the newest outstanding old frame.
+                    finished_last_send = shared.phase.load(Ordering::Acquire) == HANDING_OVER;
                     if outcome != Outcome::Dropped {
                         shared
                             .failed
