@@ -1,16 +1,19 @@
-//! Proves a frame of 512 patched lights allocates and frees nothing: the rig compiles the
-//! writers first (it may allocate), then every frame the light values change and `resolve`
-//! writes the universes, as the tick thread does. A counting allocator sees every
-//! allocation and free in this process; the window holds only frames, on this one thread. That the engine's own tick allocates nothing is proved in
-//! `crates/engine/tests/no_alloc.rs`.
+//! Proves turning the values of 512 patched lights into bytes allocates and frees nothing:
+//! the rig compiles the fields of each light first (it may allocate), then every frame the
+//! light values change and each light's offers are laid on its channels. Nothing of the rig
+//! runs on the tick thread any more: a step, a grab and a swatch become words off the
+//! tick, and the tick mixes words (`crates/engine/tests/no_alloc.rs` proves it allocates
+//! nothing). This keeps the words of a light free of the heap, so a reused buffer holds
+//! them. A counting allocator sees every allocation and free in this process; the window
+//! holds only frames, on this one thread.
 
 mod common;
 #[path = "../../outputs/tests/counting/mod.rs"]
 mod counting;
 
-use common::{light, lights, mode};
-use engine_core::{ChannelNumbers, Levels, Light, Position, Rgb, Universes, Writer, resolve};
-use rig::compile;
+use common::{lay, light, lights, mode};
+use engine_core::{ADDRESSES, ChannelNumbers, Light, Position, Rgb, Universes};
+use rig::{Feed, LightFields, compile};
 
 const UNIVERSES: u16 = 8;
 const LIGHTS: u16 = 512;
@@ -37,7 +40,7 @@ fn main() {
         mode("Showtec-Par-64-100W-COB-UV.qxf", "8 Bit"),
     ];
     let patch = heads.iter().cycle().take(64).chain(modes.iter().cycle());
-    let (mut writers, mut next, mut at) = (Vec::<Writer>::new(), 0, (1, 1));
+    let (mut targets, mut next, mut at) = (Vec::<LightFields>::new(), 0, (1, 1));
     for mode in patch.take(usize::from(LIGHTS)) {
         let size = u16::try_from(mode.channels.len()).unwrap();
         if at.1 + size > 513 {
@@ -48,17 +51,20 @@ fn main() {
             address: at.1,
         };
         let rigged = compile(mode, place, light(next), universes, lights()).unwrap();
-        writers.extend(rigged.writers);
-        next += rigged.lights;
+        next += u16::try_from(rigged.targets.len()).unwrap();
+        targets.extend(rigged.targets);
         at.1 += size;
     }
     assert_eq!(next, LIGHTS, "every fixture here is one light");
     assert!(
-        writers.iter().any(|w| matches!(w, Writer::Picks { .. })),
-        "wheels are written"
+        targets
+            .iter()
+            .flat_map(LightFields::feeds)
+            .any(|feed| matches!(feed, Feed::Picks(_))),
+        "wheels are fed"
     );
     let mut values = vec![Light::DARK; usize::from(LIGHTS)];
-    let mut out = vec![Levels::ZERO; usize::from(UNIVERSES)];
+    let mut out = vec![0_u8; usize::from(UNIVERSES) * ADDRESSES];
 
     let (allocations, frees) = (counting::allocations(), counting::frees());
     for frame in 0..FRAMES {
@@ -93,12 +99,14 @@ fn main() {
                 },
             };
         }
-        resolve(&values, &writers, &mut out);
+        for (target, value) in targets.iter().zip(&values) {
+            lay(&mut out, 0, target.offers(value));
+        }
     }
     let new_allocations = counting::allocations() - allocations;
     let new_frees = counting::frees() - frees;
 
-    let written = out.iter().flat_map(|u| u.0).filter(|&b| b != 0).count();
+    let written = out.iter().filter(|&&b| b != 0).count();
     assert!(written > 1_000, "the frames wrote bytes: {written}");
     assert_eq!(
         (new_allocations, new_frees),

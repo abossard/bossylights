@@ -21,7 +21,7 @@ Rust engine, web UI in a Tauri shell, Apache-2.0. Status: skeleton (engine count
 | `crates/rt-thread` | starts the tick thread with real-time priority. The only `unsafe` in the product. Four tests carry a counting allocator, which needs `unsafe` too |
 | `crates/outputs` | every output kind (DDP, DMX USB Pro) and its bytes. Opened off the tick thread, `take` a frame without waiting |
 | `crates/fixture-library` | fixture definitions as a model: QLC+ `.qxf` bytes in, maker, model, modes, channels out. Reads no files. `cargo run -p fixture-library --example read_folder -- <folder>` reads a folder and prints how many were read, why any failed, and the tally of the model (functions, "other", fine bytes, defaults, what ranges do, shutters, pixels) |
-| `crates/rig` | the Rig: a mode at an address becomes writers (which light, what to take, how, where). Off the tick thread. `engine-core`'s `resolve` runs the writers every frame. `cargo run -q --release -p rig --example resolve_lateness` measures a frame of 10 000 lights |
+| `crates/rig` | the Rig: a mode at an address becomes lowered channels (rest, dark, pairs) and per-light fields that turn a light value into offers. Off the tick thread. `cargo run -q --release -p rig --example resolve_lateness` measures a frame of 10 000 lights |
 | `crates/engine-server` | `bossylights-engine`, the headless process serving the API |
 | `ui/` | the product web UI (SolidJS). `mockups/` is design reference only |
 | `shell/` | Tauri window: starts the engine, hosts `ui/` |

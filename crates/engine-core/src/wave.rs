@@ -1,32 +1,51 @@
-//! A cyclic RGB16 ramp. The timed sampler supplies the local position for this light.
+//! A cyclic ramp over swatches, per field. The timed sampler supplies the local position
+//! for this target; the compiler gave the target's words for each swatch.
 
 use super::{Moment, interpolate};
-use crate::Rgb;
 
-pub(super) fn colour(swatches: &[Rgb], phase: Moment, span: u128) -> Option<Rgb> {
-    let count = swatches.len();
-    if count == 0 {
-        return None;
+/// One target's words of a wave: `fields` per swatch, swatch after swatch.
+pub(super) struct Ramp<'a> {
+    pub words: &'a [Option<u16>],
+    pub swatches: usize,
+    pub fields: usize,
+}
+
+impl Ramp<'_> {
+    /// The words at `phase` of a pass of `span` into `out`: between two swatches each
+    /// field interpolates in 16 bits; a field with no word on either side is a gap.
+    pub(super) fn sample(&self, phase: Moment, span: u128, out: &mut [Option<u16>]) {
+        let count = self.swatches;
+        // The whole spans select the pair. Its fractional position sets the blend.
+        let position = phase.times(count as u128);
+        let index = (position.count / span) as usize % count;
+        let weight = Moment {
+            count: position.count % span,
+            ..position
+        };
+        let set = |swatch: usize| {
+            let first = swatch * self.fields;
+            self.words
+                .get(first..first + self.fields)
+                .unwrap_or_default()
+        };
+        let (a, b) = (set(index), set((index + 1) % count));
+        for (field, out) in out.iter_mut().enumerate() {
+            *out = match (
+                a.get(field).copied().flatten(),
+                b.get(field).copied().flatten(),
+            ) {
+                (Some(a), Some(b)) => Some(interpolate(a, b, weight, span)),
+                (a, b) => a.or(b),
+            };
+        }
     }
-    // The whole spans select the pair. Its fractional position sets the blend.
-    let position = phase.times(count as u128);
-    let index = (position.count / span) as usize % count;
-    let a = swatches.get(index)?;
-    let b = swatches.get((index + 1) % count)?;
-    let weight = Moment {
-        count: position.count % span,
-        ..position
-    };
-    Some(Rgb {
-        red: interpolate(a.red, b.red, weight, span),
-        green: interpolate(a.green, b.green, weight, span),
-        blue: interpolate(a.blue, b.blue, weight, span),
-    })
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::{Binding, Item, Light, Node, Program, Repeat, Rgb, Speed, Swatches, Use};
+    use crate::{
+        Binding, Elapsed, Item, MAX_DEPTH, Node, Program, Repeat, Rgb, Sampled, Speed, Use,
+    };
 
     const BEAT: u64 = 1 << 32;
     const PERIOD: u64 = 4 * BEAT;
@@ -39,19 +58,69 @@ mod tests {
         Rgb { red, green, blue }
     }
 
-    fn wave(colours: &[Rgb]) -> Node {
-        Node::Wave {
+    /// A wave over `colours` of four beats: its node, and its words, red, green and blue
+    /// of each swatch, appended to `words`, where its bindings find them.
+    fn wave(colours: &[Rgb]) -> (Node, Vec<Option<u16>>) {
+        let words = colours
+            .iter()
+            .flat_map(|c| [Some(c.red), Some(c.green), Some(c.blue)])
+            .collect();
+        let node = Node::Wave {
             period: 4,
-            swatches: Swatches::new(colours).unwrap(),
+            swatches: u8::try_from(colours.len()).unwrap(),
+        };
+        (node, words)
+    }
+
+    /// A binding whose words start at 0: every test has one wave or one step at the
+    /// start of the words.
+    fn binding(node: usize, index: u16, count: u16) -> Binding {
+        Binding {
+            node: node as u32,
+            index,
+            count,
+            words: 0,
         }
     }
 
-    fn binding(node: usize, index: u16, count: u16) -> Binding {
-        Binding {
-            node,
-            index,
-            count,
-            discrete_colour: false,
+    /// The colour of a target of three fields, red, green and blue, all fading.
+    fn colour(
+        program: &Program<'_>,
+        bindings: &[Binding],
+        at: impl Into<Elapsed>,
+        settings: Use,
+    ) -> Option<Rgb> {
+        let target = Sampled {
+            bindings,
+            fades: &[true; 3],
+        };
+        let mut out = [None; 3];
+        let mut spare = [None; 3 * MAX_DEPTH];
+        program.sample(target, at, settings, &mut out, &mut spare);
+        let [red, green, blue] = out;
+        Some(Rgb {
+            red: red?,
+            green: green?,
+            blue: blue?,
+        })
+    }
+
+    /// A caller-built wave with no period or no swatches samples gaps, never divides by 0.
+    #[test]
+    fn a_wave_without_period_or_swatches_offers_nothing() {
+        let (_, words) = wave(&[RED, BLUE]);
+        for (period, swatches) in [(0, 2), (4, 0)] {
+            let program = Program {
+                nodes: &[Node::Wave { period, swatches }],
+                items: &[],
+                root: 0,
+                words: &words,
+            };
+            assert_eq!(
+                colour(&program, &[binding(0, 0, 1)], BEAT, Use::default()),
+                None,
+                "period {period}, swatches {swatches}"
+            );
         }
     }
 
@@ -109,13 +178,16 @@ mod tests {
             ("after palette edit", &[RED, GREEN], 0, (100, 1, 2), GREEN),
             ("partial spread", two, 0, (25, 1, 2), rgb(49151, 0, 16384)),
         ] {
+            let (node, words) = wave(colours);
             let program = Program {
-                nodes: &[wave(colours)],
+                nodes: &[node],
                 items: &[],
                 root: 0,
+                words: &words,
             };
             assert_eq!(
-                program.sample(
+                colour(
+                    &program,
                     &[binding(0, i, n)],
                     at,
                     Use {
@@ -123,10 +195,7 @@ mod tests {
                         ..Use::default()
                     }
                 ),
-                Light {
-                    colour: Some(expected),
-                    ..Light::DARK
-                },
+                Some(expected),
                 "{name}",
             );
         }
@@ -138,7 +207,8 @@ mod tests {
             spread: 100,
             ..Use::default()
         };
-        let mut nodes = vec![wave(&[rgb(1, 0, 0), rgb(0, 1, 0)])];
+        let (node, words) = wave(&[rgb(1, 0, 0), rgb(0, 1, 0)]);
+        let mut nodes = vec![node];
         let mut items = Vec::new();
         for child in 0..5 {
             items.push(Item {
@@ -157,6 +227,7 @@ mod tests {
             nodes: &nodes,
             items: &items,
             root: 5,
+            words: &words,
         };
         // The six signed offsets add to 120 / (16000 × 16001 × ... × 16005)
         // of a period, modulo whole loops. Either sign moves the midpoint by
@@ -171,24 +242,20 @@ mod tests {
                     binding(node, index as u16, count as u16)
                 })
                 .collect::<Vec<_>>();
-            assert_eq!(
-                program.sample(&bindings, BEAT, spread).colour,
-                Some(expected)
-            );
+            assert_eq!(colour(&program, &bindings, BEAT, spread), Some(expected));
         }
     }
 
     #[test]
     fn a_transition_freezes_the_outgoing_wave_just_before_a_rounding_edge() {
         let normal = Use::default();
+        let (node, mut words) = wave(&[rgb(0, 3, 0), rgb(1, 0, 5)]);
+        // the step's words after the wave's
+        let step = words.len();
+        words.extend([Some(WHITE.red), Some(WHITE.green), Some(WHITE.blue)]);
         let nodes = [
-            wave(&[rgb(0, 3, 0), rgb(1, 0, 5)]),
-            Node::Step {
-                values: Light {
-                    colour: Some(WHITE),
-                    ..Light::DARK
-                },
-            },
+            node,
+            Node::Step,
             Node::Sequence {
                 first: 0,
                 count: 2,
@@ -209,7 +276,14 @@ mod tests {
                 transition: 100,
             },
         ];
-        let bindings = [binding(0, 0, 1), binding(1, 0, 1), binding(2, 0, 1)];
+        let bindings = [
+            binding(0, 0, 1),
+            Binding {
+                words: step as u32,
+                ..binding(1, 0, 1)
+            },
+            binding(2, 0, 1),
+        ];
         for (root, at, expected) in [
             (0, BEAT, rgb(1, 2, 3)), // exact half ties round up
             (2, BEAT, rgb(0, 2, 2)), // red and blue rise, green falls into its tie
@@ -218,8 +292,9 @@ mod tests {
                 nodes: &nodes,
                 items: &items,
                 root,
+                words: &words,
             };
-            assert_eq!(program.sample(&bindings, at, normal).colour, Some(expected));
+            assert_eq!(colour(&program, &bindings, at, normal), Some(expected));
         }
     }
 
@@ -230,8 +305,9 @@ mod tests {
             repeat: Repeat::Once,
             spread: 100,
         };
+        let (node, words) = wave(&[RED, BLUE]);
         let nodes = [
-            wave(&[RED, BLUE]),
+            node,
             Node::Sequence {
                 first: 0,
                 count: 1,
@@ -249,13 +325,16 @@ mod tests {
             nodes: &nodes,
             items: &items,
             root: 1,
+            words: &words,
         };
         let child = Program {
             nodes: &nodes,
             items: &items,
             root: 0,
+            words: &words,
         };
-        for (at, colour, finished) in [
+        let colour_of = colour;
+        for (at, expected, finished) in [
             (0, BLUE, false),
             (BEAT / 2, rgb(32768, 0, 32768), false),
             (BEAT, RED, false), // spread clamps this light before the root ends
@@ -264,10 +343,10 @@ mod tests {
             (3 * BEAT, RED, true),
         ] {
             assert_eq!(child.finished(at, once), finished);
-            assert_eq!(child.sample(&bindings, at, once).colour, Some(colour));
+            assert_eq!(colour_of(&child, &bindings, at, once), Some(expected));
             assert_eq!(
-                parent.sample(&bindings, at, Use::default()).colour,
-                Some(colour)
+                colour_of(&parent, &bindings, at, Use::default()),
+                Some(expected)
             );
         }
     }

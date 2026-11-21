@@ -1,8 +1,10 @@
 //! M3 T3 end to end over the API: who wins, read on a fake DMX USB Pro. Two Generic RGB
-//! PARs at 1:1 and 1:4. Autopilot plays blue on both at full; Show green and Manual red
+//! PARs at 1:1 and 1:4, without a dimmer, and one with a dimmer at 1:7 for the
+//! brightness setting. Autopilot plays blue on both at full; Show green and Manual red
 //! on PAR 1 only. PAR 1 shows the highest rank, PAR 2 stays blue. Each release reveals the
-//! rank under it. Then each control on its own: explicit zero, blackout, `ReleaseChannels`,
-//! `ReleaseAll`, the brightness setting, `Stay` and `Reveal`, both Manual end settings,
+//! rank under it. Then each control on its own: an intensity alone on a PAR without a
+//! dimmer, blackout, `ReleaseChannels`, `ReleaseAll`, the brightness setting (an explicit
+//! zero on the dimmer), `Stay` and `Reveal`, both Manual end settings,
 //! stopped holds after a settings edit, and a direct grab over a playing Manual look.
 
 mod common;
@@ -131,6 +133,22 @@ fn raw(address: u16, value: u8) -> Value {
     json!({"SetChannel": {"channel": {"universe": 1, "address": address}, "value": value}})
 }
 
+/// Waits until the adapter's last frame shows PAR 3's dimmer (1:10) at `dimmer`.
+async fn until_dimmer(heard: &Heard, dimmer: u8) {
+    let started = Instant::now();
+    loop {
+        let seen = heard.lock().unwrap().last().map(|c| c[9]);
+        if seen == Some(dimmer) {
+            return;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "1:10: {seen:?}, wanted {dimmer}"
+        );
+        tokio::task::yield_now().await;
+    }
+}
+
 /// Waits until a frame carries every command sent before, and PAR 1 shows `one` in it:
 /// a raw channel on PAR 2's blue marks that frame. PAR 2 is blue before and after.
 async fn then_shows(socket: &mut Socket, heard: &Heard, one: [u8; 3]) {
@@ -145,8 +163,8 @@ fn set(target: &Value, value: Value) -> Value {
 }
 
 /// An engine with a fake DMX USB Pro on universe 1, two Generic RGB PARs at 1:1 and 1:4
-/// in group "both", and the looks: 1 blue at full on both, 2 green, 3 red, 4 dark on
-/// PAR 1, 5 full, 6 dark on PAR 2.
+/// in group "both", PAR 3 in mode "RGB Dimmer" at 1:7, and the looks: 1 blue at full on
+/// both, 2 green, 3 red, 4 dark on PAR 1, 5 full, 6 dark on PAR 3.
 async fn two_pars() -> (Socket, Heard, Arc<AtomicBool>) {
     let heard: Heard = Arc::new(Mutex::new(Vec::new()));
     let stop_adapter = Arc::new(AtomicBool::new(false));
@@ -165,10 +183,10 @@ async fn two_pars() -> (Socket, Heard, Arc<AtomicBool>) {
         }}),
     )
     .await;
-    for (fixture, address) in [(1, 1), (2, 4)] {
+    for (fixture, mode, address) in [(1, "RGB", 1), (2, "RGB", 4), (3, "RGB Dimmer", 7)] {
         let patch = json!({"Patch": {
             "name": format!("PAR {fixture}"), "maker": "Generic", "model": "Generic RGB",
-            "mode": "RGB", "at": {"universe": 1, "address": address},
+            "mode": mode, "at": {"universe": 1, "address": address},
         }});
         assert_eq!(
             once_read(s, &patch).await,
@@ -181,14 +199,14 @@ async fn two_pars() -> (Socket, Heard, Arc<AtomicBool>) {
         json!({"SetGroup": {"name": "both", "members": [par(1), par(2)]}}),
     )
     .await;
-    // 1 blue at full on both, 2 green, 3 red, 4 dark on PAR 1, 5 full, 6 dark on PAR 2
+    // 1 blue at full on both, 2 green, 3 red, 4 dark on PAR 1, 5 full, 6 dark on PAR 3
     let looks = [
         step(1, &both, &json!({"intensity": 65535, "colour": rgb(BLUE)})),
         step(2, &par(1), &json!({"colour": rgb(GREEN)})),
         step(3, &par(1), &json!({"colour": rgb(RED)})),
         step(4, &par(1), &json!({"intensity": 0})),
-        step(5, &par(2), &json!({"intensity": 65535})),
-        step(6, &par(2), &json!({"intensity": 0})),
+        step(5, &par(3), &json!({"intensity": 65535})),
+        step(6, &par(3), &json!({"intensity": 0})),
     ];
     for look in looks {
         accepted(s, look).await;
@@ -236,9 +254,10 @@ async fn rank_stop_and_release_decide_each_light_on_dmx() {
     accepted(s, json!({"ReleaseHold": {"play": show}})).await;
     until_dmx(&heard, BLUE, BLUE).await;
 
-    // explicit zero: a Manual dark step over the Autopilot's full
+    // a Manual dark step over the Autopilot's full: PAR 1 has no dimmer, and an intensity
+    // alone offers nothing there (cx-4), so the blue stays
     let zero = start(s, 4, "Manual").await;
-    until_dmx(&heard, DARK, BLUE).await;
+    then_shows(s, &heard, BLUE).await;
     accepted(s, json!({"ReleaseHold": {"play": zero}})).await;
     until_dmx(&heard, BLUE, BLUE).await;
     // blackout: every channel at zero, everything comes back
@@ -267,18 +286,19 @@ async fn rank_stop_and_release_decide_each_light_on_dmx() {
     accepted(s, json!({"ReleaseHold": {"play": show}})).await;
     until_dmx(&heard, BLUE, BLUE).await;
 
-    // brightness: two Show values on PAR 2, the later dark, from latest to highest
+    // brightness: two Show values on PAR 3's dimmer, the later dark, from latest to highest
     let full = start(s, 5, "Show").await;
+    until_dimmer(&heard, 255).await;
     let dark = start(s, 6, "Show").await;
-    until_dmx(&heard, BLUE, DARK).await;
+    until_dimmer(&heard, 0).await;
     accepted(s, rules("Highest", "UntilRelease", "Reveal")).await;
-    until_dmx(&heard, BLUE, BLUE).await;
+    until_dimmer(&heard, 255).await;
     until_picture(s, "/state/rules/brightness", &json!("Highest")).await;
     accepted(s, rules("Latest", "UntilRelease", "Reveal")).await;
-    until_dmx(&heard, BLUE, DARK).await;
+    until_dimmer(&heard, 0).await;
     // Reveal: a stopped Show leaves nothing
     accepted(s, json!({"StopLook": {"play": dark}})).await;
-    until_dmx(&heard, BLUE, BLUE).await;
+    until_dimmer(&heard, 255).await;
     accepted(s, json!({"ReleaseHold": {"play": full}})).await;
     // Stay: a stopped Show stays, kept, until a settings edit to Reveal clears it
     accepted(s, rules("Latest", "UntilRelease", "Stay")).await;
@@ -407,8 +427,9 @@ async fn a_grab_holds_until_its_end_or_release_on_dmx() {
     let release = |property| json!({"ReleaseProperty": {"target": both, "property": property}});
     accepted(s, release("Colour")).await;
     until_dmx(&heard, RED, BLUE).await;
+    // an intensity alone offers nothing on a PAR without a dimmer (cx-4)
     grab(s, set(&both, json!({"Intensity": 0}))).await;
-    until_dmx(&heard, DARK, DARK).await;
+    then_shows(s, &heard, RED).await;
     accepted(s, release("Intensity")).await;
     until_dmx(&heard, RED, BLUE).await;
     accepted(s, release("Intensity")).await; // nothing held: a no-op

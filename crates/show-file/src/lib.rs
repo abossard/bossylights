@@ -70,7 +70,7 @@ use engine_core::{
     ChannelNumbers, LOOKS, Light, Member, Members, MixRules, PatchCommand, Position, Refusal, Rgb,
     Saved, SavedLook, Sequence, Step, Target, Text, Unopened, Wheel,
 };
-use fixture_library::Mode;
+use fixture_library::{Declared, Fixture, Mode};
 use looks::Looks;
 use rig::{Limit, Patch, Placed, Unplaced};
 use serde::de::{IgnoredAny, SeqAccess, Visitor};
@@ -281,7 +281,7 @@ fn parts(patch: &Patch) -> Option<Parts> {
 /// universes and lights. A file whose patch would be written back over [`MOST_BYTES`]
 /// (one with less space in it than this engine writes) is too big too: it could not be
 /// saved.
-pub fn read(text: &str, empty: &Patch) -> Result<(Patch, Looks), Unopened> {
+pub fn read(text: &str, empty: &Patch, library: &[Fixture]) -> Result<(Patch, Looks), Unopened> {
     let too_big = Unopened::TooBig {
         most: u32::try_from(MOST_BYTES).unwrap_or(u32::MAX),
     };
@@ -348,7 +348,12 @@ pub fn read(text: &str, empty: &Patch) -> Result<(Patch, Looks), Unopened> {
                 name: row.name.as_str().to_string(),
                 maker: definition.maker.as_str().to_string(),
                 model: definition.model.as_str().to_string(),
-                mode: definition.mode.clone(),
+                mode: declared(
+                    definition.maker.as_str(),
+                    definition.model.as_str(),
+                    &definition.mode,
+                    library,
+                )?,
                 at: row.at,
                 first: row.first,
             })
@@ -375,12 +380,36 @@ pub fn read(text: &str, empty: &Patch) -> Result<(Patch, Looks), Unopened> {
     for (row, legacy) in saved {
         if let Some((target, OneGobo { wheel, slot })) = legacy {
             let runs = patch.runs(target).map_err(refused)?;
-            rig::shows_one_gobo(patch.writers(), &runs, wheel, slot).map_err(refused)?;
+            rig::shows_one_gobo(patch.targets(), &runs, wheel, slot).map_err(refused)?;
         }
         rows.push(row);
     }
     let looks = Looks::restore(rows, rules, &patch).map_err(refused)?;
     write(&patch, &looks).map(|_| (patch, looks)).ok_or(too_big)
+}
+
+/// `mode` as the file keeps it, with the declarations of the same mode in `library`:
+/// the file keeps none, and the channel model is made from them (pairs, rest and dark
+/// bytes, which channel dims). A strip the rig makes takes them from the rig. Refused
+/// `NoSuchMode` when neither has a mode of this maker, model and name with exactly these
+/// channels: never a rig without them.
+fn declared(maker: &str, model: &str, mode: &Mode, library: &[Fixture]) -> Result<Mode, Unopened> {
+    library
+        .iter()
+        .filter(|fixture| fixture.maker == maker && fixture.model == model)
+        .flat_map(|fixture| &fixture.modes)
+        .find(|known| {
+            let mut plain = (*known).clone();
+            for channel in &mut plain.channels {
+                channel.declared = Declared::default();
+            }
+            plain == *mode
+        })
+        .cloned()
+        .or_else(|| rig::strip_mode(maker, model, mode))
+        .ok_or(Unopened::Refused {
+            reason: Refusal::NoSuchMode,
+        })
 }
 
 /// V5 accepted sequences and plain steps. Both decode into the current model.
@@ -649,7 +678,7 @@ mod sequence_tests {
                 r#""looks": []"#,
                 &format!(r#""looks": [{}]"#, rows.join(",")),
             );
-            let result = read(&text, &empty);
+            let result = read(&text, &empty, &[]);
             if count < LOOKS {
                 assert!(matches!(result, Err(Unopened::Broken { .. })));
             } else {
@@ -661,7 +690,7 @@ mod sequence_tests {
                 );
                 // Count before decoding any other part of an oversized project.
                 let invalid_modes = text.replace(r#""modes": {}"#, r#""modes": false"#);
-                assert_eq!(read(&invalid_modes, &empty), result);
+                assert_eq!(read(&invalid_modes, &empty, &[]), result);
             }
         }
         let newer = VERSION + 1;
@@ -669,7 +698,7 @@ mod sequence_tests {
         for looks in [format!("[{many}]"), r#"{"future":"shape"}"#.into()] {
             let future = format!(r#"{{"looks":{looks},"version":{newer}}}"#);
             assert_eq!(
-                read(&future, &empty),
+                read(&future, &empty, &[]),
                 Err(Unopened::Newer { version: newer })
             );
         }
@@ -690,7 +719,7 @@ mod sequence_tests {
             let row = format!(r#""looks": [{{"look":1,"name":"two",{fields}}}]"#);
             let both = file.replace(r#""looks": []"#, &row);
             assert!(
-                matches!(read(&both, &empty), Err(Unopened::Broken { .. })),
+                matches!(read(&both, &empty, &[]), Err(Unopened::Broken { .. })),
                 "{fields}"
             );
         }
@@ -811,12 +840,12 @@ mod sequence_tests {
             file["looks"] = looks;
             for version in [4, 5, 6] {
                 file["version"] = version.into();
-                let opened = read(&file.to_string(), &empty);
+                let opened = read(&file.to_string(), &empty, &[]);
                 if version == 6 {
                     let (rig, looks) = opened.unwrap();
                     let canonical = write(&rig, &looks).unwrap();
                     assert!(canonical.contains(r#""version": 6"#));
-                    assert_eq!(read(&canonical, &empty), Ok((rig, looks)));
+                    assert_eq!(read(&canonical, &empty, &[]), Ok((rig, looks)));
                 } else {
                     assert!(matches!(opened, Err(Unopened::Broken { .. })), "v{version}");
                 }
@@ -859,9 +888,9 @@ mod sequence_tests {
         let sequence = r#"{"look":1,"name":"parent","sequence":{"items":[{"look":9}]}}"#;
         let whole = step_file.replace("\"looks\": [", &format!("\"looks\": [\n    {sequence},"));
         // v6 carries no QXF declarations, so compare with the patch as reopened.
-        let (reopened, read_back) = read(&whole, &empty).unwrap();
+        let (reopened, read_back) = read(&whole, &empty, &[]).unwrap();
         assert_eq!(read_back.all().len(), 2);
         let canonical = write(&patch, &read_back).unwrap();
-        assert_eq!(read(&canonical, &empty), Ok((reopened, read_back)));
+        assert_eq!(read(&canonical, &empty, &[]), Ok((reopened, read_back)));
     }
 }

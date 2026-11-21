@@ -189,16 +189,25 @@ fn each_live_plan_swap_reserves_a_return_and_release_keeps_its_place() {
             },
         })
         .unwrap();
-    let step = |intensity| Command::PutStep {
+    // the pixel has no dimmer: a step shows its number as its red and green bytes
+    let step = |number: u16| Command::PutStep {
         look: 1,
         name,
         step: Step {
             target: Target::Light { light: 1 },
             values: Light {
-                intensity: Some(intensity),
+                colour: Some(Rgb {
+                    red: number & 0xff00,
+                    green: number << 8,
+                    blue: 0,
+                }),
                 ..Light::DARK
             },
         },
+    };
+    let shown = |engine: &mut Engine| {
+        let levels = engine.latest().shown()[0].0;
+        u16::from_be_bytes([levels[0], levels[1]])
     };
     sender.send(step(0)).unwrap();
     let play = start(&mut sender, 1);
@@ -217,7 +226,7 @@ fn each_live_plan_swap_reserves_a_return_and_release_keeps_its_place() {
     }
     engine.latest();
     wakes.wake_at(at).unwrap();
-    assert_eq!(engine.latest().lights()[0].intensity, Some(swaps));
+    assert_eq!(shown(&mut engine), swaps);
     let sent = sender.sent();
     let project = sender.looks();
     let restart = Command::StartLook {
@@ -234,9 +243,8 @@ fn each_live_plan_swap_reserves_a_return_and_release_keeps_its_place() {
     sender.send(Command::ReleaseHold { play }).unwrap();
     engine.latest();
     wakes.wake_at(at).unwrap();
-    let idle = engine.latest();
-    assert_eq!(idle.state.plays.iter().count(), 0);
-    assert_eq!(idle.lights()[0].intensity, None);
+    assert_eq!(engine.latest().state.plays.iter().count(), 0);
+    assert_eq!(shown(&mut engine), 0);
     // The released plan still occupies its return entry until the free thread runs.
     assert_eq!(sender.send(restart), Err(Refusal::QueueFull));
     engine.stall_reclamation(false);
@@ -250,5 +258,5 @@ fn each_live_plan_swap_reserves_a_return_and_release_keeps_its_place() {
     );
     engine.latest();
     wakes.wake_at(at).unwrap();
-    assert_eq!(engine.latest().lights()[0].intensity, Some(swaps));
+    assert_eq!(shown(&mut engine), swaps);
 }

@@ -3,10 +3,9 @@
 
 mod common;
 
-use common::{all, at, light, lights, mode};
+use common::{all, at, light, lights, mode, shown};
 use engine_core::{
-    Gobo, Levels, Light, LightRun, Position, Property, Refusal, Rgb, Universes, Value, Wheel,
-    resolve,
+    Gobo, Light, LightRun, Position, Property, Refusal, Rgb, Universes, Value, Wheel,
 };
 use fixture_library::{Byte, Does, Function, Mode};
 use rig::{Rigged, Unfit, compile, supports};
@@ -160,11 +159,10 @@ fn each_property_goes_to_its_channels() {
         (&mac, zoomed(0), &[(9, 244)]),
     ];
     for (mode, light, bytes) in cases {
-        let mut out = [Levels::ZERO];
-        resolve(&[light], &rigged(mode).writers, &mut out);
+        let out = shown(&rigged(mode), &[light]);
         for &(channel, byte) in bytes {
             assert_eq!(
-                out[0].0.get(channel - 1),
+                out.get(channel - 1),
                 Some(&byte),
                 "{} channel {channel} of {light:?}",
                 mode.name
@@ -175,13 +173,11 @@ fn each_property_goes_to_its_channels() {
 
 #[test]
 fn a_gobo_cuts_to_its_slot() {
-    let writers = rigged(&shehds()).writers;
-    let mut out = [Levels::ZERO];
+    let rigged = rigged(&shehds());
     // (gobo, channel 7) one frame after the other: never a byte between two slots
     for (slot, byte) in [(3, 24), (8, 74), (2, 14), (3, 24)] {
         let light = gobos([Some(slot), None, None]);
-        resolve(&[light], &writers, &mut out);
-        assert_eq!(out[0].0[6], byte, "slot {slot}");
+        assert_eq!(shown(&rigged, &[light])[6], byte, "slot {slot}");
     }
 }
 
@@ -197,7 +193,7 @@ fn a_light_refuses_what_its_wheel_cannot_show() {
         lights(),
     )
     .unwrap();
-    let writers: Vec<_> = spot.writers.into_iter().chain(par.writers).collect();
+    let targets: Vec<_> = spot.targets.into_iter().chain(par.targets).collect();
     let run = |first, count| LightRun::new(light(first), count, lights()).unwrap();
     let both = [run(0, 2)];
     let par_only = [run(1, 1)];
@@ -256,7 +252,7 @@ fn a_light_refuses_what_its_wheel_cannot_show() {
     ];
     for (runs, values, expected) in cases {
         assert_eq!(
-            supports(&writers, runs, &values),
+            supports(&targets, runs, &values),
             expected,
             "{values:?} on {runs:?}"
         );
@@ -370,9 +366,8 @@ fn a_hybrid_binds_its_companions_to_neutral_or_is_refused() {
                 colour: Some(colour),
                 ..Light::DARK
             };
-            let mut out = [Levels::ZERO];
-            resolve(&[light], &rigged.writers, &mut out);
-            [out[0].0[0], out[0].0[1]]
+            let out = shown(&rigged, &[light]);
+            [out[0], out[1]]
         });
         assert_eq!(found, expected, "{names:?} {colour:?}");
     }
@@ -432,9 +427,8 @@ fn a_hybrid_macro_at_0_is_neutral_by_its_label() {
                 colour: Some(RED),
                 ..Light::DARK
             };
-            let mut out = [Levels::ZERO];
-            resolve(&[red], &rigged.writers, &mut out);
-            [out[0].0[0], out[0].0[1]]
+            let out = shown(&rigged, &[red]);
+            [out[0], out[1]]
         });
         assert_eq!(found, expected, "{label}");
     }
@@ -639,20 +633,20 @@ fn each_hybrid_holds_its_wheel_where_the_mix_goes_through() {
             {
                 continue;
             }
-            let held = compile(mode, at(1), light(0), Universes::ONE, lights()).map(|rigged| {
-                let mut out = [Levels::ZERO];
-                resolve(&[red], &rigged.writers, &mut out);
-                out[0]
-            });
+            let held = compile(mode, at(1), light(0), Universes::ONE, lights())
+                .map(|rigged| shown(&rigged, &[red]));
             for (index, channel) in channels.iter().enumerate().filter(|(_, c)| is_wheel(c)) {
-                let held = held.map(|out| {
-                    let byte = out.0[index];
-                    let range = channel
-                        .ranges
-                        .iter()
-                        .find(|r| (r.min..=r.max).contains(&byte));
-                    (byte, range.map_or(String::new(), |r| r.label.clone()))
-                });
+                let held = held
+                    .as_ref()
+                    .map(|out| {
+                        let byte = out[index];
+                        let range = channel
+                            .ranges
+                            .iter()
+                            .find(|r| (r.min..=r.max).contains(&byte));
+                        (byte, range.map_or(String::new(), |r| r.label.clone()))
+                    })
+                    .map_err(|unfit| *unfit);
                 found.push((file.clone(), mode.name.clone(), index + 1, held));
             }
         }

@@ -1,14 +1,18 @@
 //! End to end with the engine process and `--show <file>`: patch, stop, start again
-//! without the library: the patch and the groups are there and light up on DDP. A file
+//! with the library: the patch and the groups are there and light up on DDP. Without the
+//! library the file is left alone: its modes have no declarations to take. A file
 //! the engine cannot open is left alone and the picture says why. A save that cannot be
 //! written leaves the file as it was, and the picture says so until the next save. A
 //! change that would take the file over its most bytes is refused, and the file kept. So
 //! is a step over a patch that leaves the looks no room. A refused edit saves nothing.
-//! An edit made before the keeper first looks is saved.
+//! An edit made before the keeper first looks is saved. The files near the most bytes
+//! are made by a longer channel name, which no definition in a folder has (at most 1 MB):
+//! those open in this process, with a library of that name, as the server opens them.
 
 mod common;
 
 use common::taken;
+use fixture_library::{Fixture, Kind, Mode};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader};
@@ -195,7 +199,7 @@ async fn until_ddp(udp: &UdpSocket, bytes: &[u8]) {
 }
 
 #[tokio::test]
-async fn patch_stop_start_the_patch_and_groups_are_there_and_light_up_without_the_library() {
+async fn patch_stop_start_the_patch_and_groups_are_there_and_light_up() {
     let file = show_file("restart");
     let (mut first, listen) = engine(&file, true);
     let mut socket = connect(&listen).await;
@@ -225,7 +229,19 @@ async fn patch_stop_start_the_patch_and_groups_are_there_and_light_up_without_th
     assert!(file.exists(), "saved");
     assert!(!saving(&file).exists(), "the new file was renamed");
 
-    let (mut second, listen) = engine(&file, false);
+    let saved = std::fs::read_to_string(&file).unwrap();
+    let (mut without, listen) = engine(&file, false);
+    let mut socket = connect(&listen).await;
+    let no_mode = json!({"LeftAlone": {"why": {"Refused": {"reason": "NoSuchMode"}}}});
+    let left = until_show(&mut socket, &no_mode).await;
+    assert_eq!(left["patch"], json!([]));
+    stop(&mut socket, &mut without).await;
+    assert!(
+        std::fs::read_to_string(&file).unwrap() == saved,
+        "left alone"
+    );
+
+    let (mut second, listen) = engine(&file, true);
     let mut socket = connect(&listen).await;
     let after = until_show(&mut socket, &json!("Kept")).await;
     assert_eq!(after["patch"], before["patch"]);
@@ -255,7 +271,7 @@ async fn patch_stop_start_the_patch_and_groups_are_there_and_light_up_without_th
 
 #[tokio::test]
 async fn a_file_the_engine_cannot_open_is_left_alone_and_the_picture_says_why() {
-    let mode = r#"{"name":"RGB","channels":[],"pixels":[],"layout":null,"degrees":null}"#;
+    let mode = serde_json::to_string(&mode_of("RGB")).unwrap();
     let empty = r#"{"version":1,"patch":[],"groups":[],"modes":{}}"#;
     let past = format!(
         r#"{{"version":1,"patch":[{{"fixture":1,"name":"PAR","mode":"m","at":{{"universe":9,"address":1}},"first":1}}],"groups":[],"modes":{{"m":{{"maker":"Generic","model":"Generic RGB","mode":{mode}}}}}}}"#
@@ -289,7 +305,7 @@ async fn a_file_the_engine_cannot_open_is_left_alone_and_the_picture_says_why() 
     for (case, text, why) in cases {
         let file = show_file(case);
         std::fs::write(&file, &text).unwrap();
-        let (mut running, listen) = engine(&file, false);
+        let (mut running, listen) = engine(&file, true);
         let mut socket = connect(&listen).await;
         let picture = until_show(&mut socket, &json!({"LeftAlone": {"why": why}})).await;
         assert_eq!(picture["patch"], json!([]), "{case}");
@@ -428,6 +444,10 @@ async fn a_file_of_a_terabyte_is_not_read_whole_and_left_alone() {
 
 #[tokio::test]
 async fn a_change_that_would_take_the_file_over_the_most_is_refused_and_the_file_kept() {
+    use engine_core::{Refusal, ShowFile};
+    use engine_server::show::{Kept, keep, open};
+    use tokio::sync::watch;
+
     let file = show_file("full");
     let (mut first, listen) = engine(&file, true);
     let mut socket = connect(&listen).await;
@@ -443,20 +463,31 @@ async fn a_change_that_would_take_the_file_over_the_most_is_refused_and_the_file
     let most = show_file::LIMIT.most;
     let red = "\"name\": \"Red\"";
     assert!(text.contains(red), "{text}");
-    let longer = format!("\"name\": \"Red{}\"", "x".repeat(most - text.len()));
-    std::fs::write(&file, text.replacen(red, &longer, 1)).unwrap();
+    let longer = format!("Red{}", "x".repeat(most - text.len()));
+    let name = format!("\"name\": \"{longer}\"");
+    std::fs::write(&file, text.replacen(red, &name, 1)).unwrap();
 
-    let (mut second, listen) = engine(&file, false);
-    let mut socket = connect(&listen).await;
-    until_show(&mut socket, &json!("Kept")).await;
-    let rename = |name: &str| json!({"Rename": {"fixture": 1, "name": name}});
-    let full = json!({"Refused": {"reason": {"ShowFileFull": {"most": most}}}});
-    assert_eq!(command(&mut socket, rename("PAR 12")).await, full);
+    // The library has the same longer name: a file's mode takes the declarations of the
+    // identical mode. As the server opens and saves the file.
+    let (_engine, mut sender) = engine::Engine::start(engine::Universes::new(1).unwrap()).unwrap();
     assert_eq!(
-        command(&mut socket, rename("PAR 2")).await,
-        json!("Accepted")
+        open(&file, &mut sender, &renamed_red(&longer)),
+        ShowFile::Kept
     );
-    stop(&mut socket, &mut second).await;
+    let original = Kept::of(&sender);
+    let rename = |name: &str| {
+        serde_json::from_value(json!({"Rename": {"fixture": 1, "name": name}})).unwrap()
+    };
+    let full = Err(Refusal::ShowFileFull {
+        most: most.try_into().unwrap(),
+    });
+    assert_eq!(sender.send(rename("PAR 12")), full);
+    assert_eq!(sender.send(rename("PAR 2")), Ok(()));
+    let (patches, changes) = watch::channel(original.clone());
+    patches.send_if_modified(|kept| kept.follow(&sender));
+    let (state, _) = watch::channel(ShowFile::Kept);
+    let (_stop, stopped) = watch::channel(true);
+    keep(file.clone(), original, changes, state, stopped).await;
     let saved = std::fs::read_to_string(&file).unwrap();
     assert_eq!(saved.len(), most);
     assert!(saved.contains("\"PAR 2\""));
@@ -498,8 +529,20 @@ fn a_v4_show_with_room_for_steps_can_still_edit_a_step() {
     file.flush().unwrap();
     drop(file);
 
+    // the library of the file: its mode with the same long channel name
+    let mode = json!({"name": "RGB", "channels": [{
+        "name": format!("Red{}", "x".repeat(padding)), "function": "Red", "byte": "Coarse",
+        "default": null, "direction": null, "ranges": [],
+    }], "pixels": [], "layout": null, "degrees": null});
+    let library = [Fixture {
+        maker: "Generic".to_string(),
+        model: "PAR".to_string(),
+        kind: Kind::ColorChanger,
+        modes: vec![serde_json::from_value(mode).unwrap()],
+        warnings: Vec::new(),
+    }];
     let (_engine, mut sender) = engine::Engine::start(engine::Universes::new(1).unwrap()).unwrap();
-    let opened = open(&path, &mut sender);
+    let opened = open(&path, &mut sender, &library);
     std::fs::remove_file(&path).unwrap();
     assert_eq!(opened, ShowFile::Kept);
     assert_eq!(sender.looks().get(1).unwrap().name.as_str(), "red");
@@ -520,7 +563,7 @@ fn patch_and_sequence_edits_share_the_bytes_above_the_step_reserve() {
     use engine_core::{LOOKS, SavedLook, Sequence};
     let (_engine, mut sender) = engine::Engine::start(engine::Universes::new(1).unwrap()).unwrap();
     let empty = sender.patch();
-    let library = [fixture_library::parse("Generic-Generic-RGB.qxf", GENERIC_RGB).unwrap()];
+    let library = [generic_rgb()];
     sender
         .begin(serde_json::from_value(par("PAR", 1)).unwrap(), &library)
         .unwrap();
@@ -533,15 +576,9 @@ fn patch_and_sequence_edits_share_the_bytes_above_the_step_reserve() {
     let saved: SavedLook = serde_json::from_value(sequence("loop")).unwrap();
     let excess = serde_json::to_string(&saved).unwrap().len() - 2048;
     let legacy_limit = show_file::MOST_BYTES - LOOKS * (2048 + 6) - 128;
-    let padded = short.replacen(
-        r#""name": "Red"#,
-        &format!(
-            r#""name": "Red{}"#,
-            "x".repeat(legacy_limit - excess - short.len())
-        ),
-        1,
-    );
-    let (patch, _) = show_file::read(&padded, &empty).unwrap();
+    let longer = format!("Red{}", "x".repeat(legacy_limit - excess - short.len()));
+    let padded = short.replacen(r#""name": "Red"#, &format!(r#""name": "{longer}"#), 1);
+    let (patch, _) = show_file::read(&padded, &empty, &renamed_red(&longer)).unwrap();
     sender.load(patch.kept_in(show_file::LIMIT)).unwrap();
     let full = Err(engine_core::Refusal::ShowFileFull {
         most: show_file::LIMIT.most as u32,
@@ -560,6 +597,10 @@ fn patch_and_sequence_edits_share_the_bytes_above_the_step_reserve() {
 
 #[tokio::test]
 async fn a_step_over_a_patch_that_leaves_the_looks_no_room_is_refused_and_the_file_kept() {
+    use engine_core::{Refusal, ShowFile};
+    use engine_server::show::{Kept, keep, open};
+    use tokio::sync::watch;
+
     let file = show_file("no_room");
     let (mut first, listen) = engine(&file, true);
     let mut socket = connect(&listen).await;
@@ -572,28 +613,39 @@ async fn a_step_over_a_patch_that_leaves_the_looks_no_room_is_refused_and_the_fi
     let text = std::fs::read_to_string(&file).unwrap();
     let red = "\"name\": \"Red\"";
     let most = show_file::LIMIT.most;
-    let full = json!({"Refused": {"reason": {"ShowFileFull": {"most": most}}}});
+    let full = Err(Refusal::ShowFileFull {
+        most: most.try_into().unwrap(),
+    });
     // (the file's length, by the red channel's longer name, what the step gets)
     let cases = [
-        (most, json!("Accepted")),
-        (most + 1, full.clone()),
+        (most, Ok(())),
+        (most + 1, full),
         (show_file::MOST_BYTES, full),
     ];
     for (length, reply) in cases {
-        let longer = format!("\"name\": \"Red{}\"", "x".repeat(length - text.len()));
-        let opened = text.replacen(red, &longer, 1);
+        // The library has the same longer name: a file's mode takes the declarations of
+        // the identical mode. As the server opens and saves the file.
+        let longer = format!("Red{}", "x".repeat(length - text.len()));
+        let opened = text.replacen(red, &format!("\"name\": \"{longer}\""), 1);
         std::fs::write(&file, &opened).unwrap();
-        let (mut running, listen) = engine(&file, false);
-        let mut socket = connect(&listen).await;
-        until_show(&mut socket, &json!("Kept")).await;
+        let (_engine, mut sender) =
+            engine::Engine::start(engine::Universes::new(1).unwrap()).unwrap();
+        let library = renamed_red(&longer);
         assert_eq!(
-            command(&mut socket, red_step(1, "red")).await,
-            reply,
+            open(&file, &mut sender, &library),
+            ShowFile::Kept,
             "{length}"
         );
-        stop(&mut socket, &mut running).await;
+        let original = Kept::of(&sender);
+        let step = serde_json::from_value(red_step(1, "red")).unwrap();
+        assert_eq!(sender.send(step), reply, "{length}");
+        let (patches, changes) = watch::channel(original.clone());
+        patches.send_if_modified(|kept| kept.follow(&sender));
+        let (state, _) = watch::channel(ShowFile::Kept);
+        let (_stop, stopped) = watch::channel(true);
+        keep(file.clone(), original, changes, state, stopped).await;
         let saved = std::fs::read_to_string(&file).unwrap();
-        if reply == json!("Accepted") {
+        if reply.is_ok() {
             assert!(saved.contains("\"red\""), "{length}");
             assert!(saved.len() <= show_file::MOST_BYTES, "{length}");
         } else {
@@ -612,8 +664,10 @@ async fn mix_rules_must_fit_before_the_next_frame_or_save() {
     let file = show_file("mix_rules");
     let (mut first, listen) = engine(&file, true);
     let mut socket = connect(&listen).await;
+    let mut dimmed = par("PAR 1", 37);
+    dimmed["Patch"]["mode"] = json!("RGB Dimmer");
     assert_eq!(
-        patch_once_read(&mut socket, par("PAR 1", 37)).await,
+        patch_once_read(&mut socket, dimmed).await,
         json!({"Patched": {"fixture": 1}})
     );
     let mut bright = red_step(1, "bright");
@@ -625,9 +679,10 @@ async fn mix_rules_must_fit_before_the_next_frame_or_save() {
     let full = Err(Refusal::ShowFileFull {
         most: show_file::LIMIT.most.try_into().unwrap(),
     });
-    // The latest intensity is zero. Highest would turn the red channel fully on.
-    for (length, reply, red) in [(text.len(), Ok(()), 255), (show_file::MOST_BYTES, full, 0)] {
-        let name = format!("\"name\": \"Red{}\"", "x".repeat(length - text.len()));
+    // The latest intensity is zero. Highest would turn the dimmer fully on.
+    for (length, reply, dimmer) in [(text.len(), Ok(()), 255), (show_file::MOST_BYTES, full, 0)] {
+        let longer = format!("Red{}", "x".repeat(length - text.len()));
+        let name = format!("\"name\": \"{longer}\"");
         let opened = text.replacen("\"name\": \"Red\"", &name, 1);
         assert_eq!(opened.len(), length);
         std::fs::write(&file, &opened).unwrap();
@@ -637,7 +692,10 @@ async fn mix_rules_must_fit_before_the_next_frame_or_save() {
             Box::new(outputs::open),
         )
         .unwrap();
-        assert_eq!(open(&file, &mut sender), ShowFile::Kept);
+        assert_eq!(
+            open(&file, &mut sender, &renamed_red(&longer)),
+            ShowFile::Kept
+        );
         let original = Kept::of(&sender);
         wakes.hold().unwrap();
 
@@ -654,7 +712,7 @@ async fn mix_rules_must_fit_before_the_next_frame_or_save() {
                 .unwrap();
         }
         wakes.wake().unwrap();
-        until_ddp(&udp, &[0, 0, 0]).await;
+        until_ddp(&udp, &[255, 0, 0, 0]).await;
 
         let project = sender.project();
         let rules = MixRules {
@@ -673,7 +731,7 @@ async fn mix_rules_must_fit_before_the_next_frame_or_save() {
             reply.is_ok()
         );
         wakes.wake().unwrap();
-        until_ddp(&udp, &[red, 0, 0]).await;
+        until_ddp(&udp, &[255, 0, 0, dimmer]).await;
         wakes.run();
 
         // Stop flushes the last revision, as it does in the server.
@@ -761,6 +819,31 @@ async fn a_refused_edit_after_a_save_that_failed_leaves_the_file_as_it_was() {
 /// The test definition of a Generic RGB, read when the test is built.
 const GENERIC_RGB: &[u8] =
     include_bytes!("../../fixture-library/tests/definitions/Generic-Generic-RGB.qxf");
+
+fn generic_rgb() -> Fixture {
+    fixture_library::parse("Generic-Generic-RGB.qxf", GENERIC_RGB).unwrap()
+}
+
+/// The Generic RGB's mode `name`.
+fn mode_of(name: &str) -> Mode {
+    generic_rgb()
+        .modes
+        .into_iter()
+        .find(|mode| mode.name == name)
+        .unwrap()
+}
+
+/// The Generic RGB whose channels named "Red" are named `red`: the library of a file
+/// whose red channel was renamed to make it longer.
+fn renamed_red(red: &str) -> [Fixture; 1] {
+    let mut fixture = generic_rgb();
+    for channel in fixture.modes.iter_mut().flat_map(|mode| &mut mode.channels) {
+        if channel.name == "Red" {
+            channel.name = red.to_string();
+        }
+    }
+    [fixture]
+}
 
 #[tokio::test]
 async fn an_edit_admitted_before_the_keeper_first_looks_is_saved_on_stop() {

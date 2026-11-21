@@ -519,7 +519,10 @@ impl Clock {
     /// Where the grid is now: whole [`ONE`]s, and the part of one in `tempo.span`ths. On
     /// a beat's crossing, exactly on that beat: the grid is there all that nanosecond.
     fn position_at(&self, t: Duration) -> Count {
-        let grid = self.origin.grid.advance(self.advance(t).1, self.origin.tempo);
+        let grid = self
+            .origin
+            .grid
+            .advance(self.advance(t).1, self.origin.tempo);
         let below = grid.whole / ONE;
         let beat = Count::beat(below);
         if self.origin.grid <= beat && self.grid_crossing(below) == t {
@@ -766,7 +769,8 @@ impl Clock {
             });
         }
         let grid_at_beat = if on_crossing {
-            self.origin.grid
+            self.origin
+                .grid
                 .advance(self.advance(heard).1, self.origin.tempo)
                 .at_tempo(self.origin.tempo, tempo)
         } else {
@@ -944,7 +948,7 @@ mod tests {
 
     #[test]
     fn a_wave_started_between_counts_keeps_its_midpoint_across_a_tap() {
-        use crate::{Binding, Node, Program, Rgb, Swatches, Use};
+        use crate::{Binding, MAX_DEPTH, Node, Program, Rgb, Sampled, Use};
 
         let feed = Clock::START.set_feed(bpm(125));
         let tap_at =
@@ -971,19 +975,28 @@ mod tests {
         };
         let nodes = [Node::Wave {
             period: 1,
-            swatches: Swatches::new(&[red, green, green]).unwrap(),
+            swatches: 3,
         }];
+        let words: Vec<Option<u16>> = [red, green, green]
+            .iter()
+            .flat_map(|c| [Some(c.red), Some(c.green), Some(c.blue)])
+            .collect();
         let wave = Program {
             nodes: &nodes,
             items: &[],
             root: 0,
+            words: &words,
         };
-        let target = [Binding {
+        let bindings = [Binding {
             node: 0,
             index: 0,
             count: 1,
-            discrete_colour: false,
+            words: 0,
         }];
+        let target = Sampled {
+            bindings: &bindings,
+            fades: &[true; 3],
+        };
         // A three-swatch Wave has red/green midpoints at 1/6 and 5/6 beat.
         for (start, end) in [
             (feed.beat_at(ms(80)), feed.beat_at(ms(480))),
@@ -991,15 +1004,16 @@ mod tests {
             (a.beat_at(ms(480) + short / 6), b.beat_at(change)),
             (b.beat_at(change), c.beat_at(back + short / 6)),
         ] {
-            assert_eq!(
-                wave.sample(&target, end.since(start), Use::default())
-                    .colour,
-                Some(Rgb {
-                    red: 32_768,
-                    green: 32_768,
-                    blue: 0
-                })
+            let mut out = [None; 3];
+            let mut spare = [None; 3 * MAX_DEPTH];
+            wave.sample(
+                target,
+                end.since(start),
+                Use::default(),
+                &mut out,
+                &mut spare,
             );
+            assert_eq!(out, [Some(32_768), Some(32_768), Some(0)],);
         }
     }
 
@@ -1580,7 +1594,14 @@ mod feeds {
     #[test]
     fn the_elapsed_count_slows_and_stands_with_the_grid() {
         // (settled to, elapsed in beats)
-        let cases = [(400, 0.8), (500, 1.0), (1000, 1.5), (1500, 2.0), (2600, 2.0), (60_000, 2.0)];
+        let cases = [
+            (400, 0.8),
+            (500, 1.0),
+            (1000, 1.5),
+            (1500, 2.0),
+            (2600, 2.0),
+            (60_000, 2.0),
+        ];
         for (at, elapsed) in cases {
             let clock = run(&[Audio], &[Settle(at)]);
             assert!(
@@ -1622,7 +1643,11 @@ mod feeds {
     fn a_stopped_grid_waits_on_the_beat_it_stands_on() {
         let clock = run(&[Audio], &[Settle(1500)]);
         // (asked, waits for)
-        let cases = [(When::Now, None), (When::Beat, Some(2)), (When::Bar, Some(4))];
+        let cases = [
+            (When::Now, None),
+            (When::Beat, Some(2)),
+            (When::Bar, Some(4)),
+        ];
         for (when, beat) in cases {
             assert_eq!(clock.next(when), beat, "{when:?}");
         }
@@ -1633,10 +1658,11 @@ mod feeds {
         // 124 BPM: no beat is a whole nanosecond
         let free = Clock::START;
         let heard = free.crossing(1);
-        let clock = Clock::START
-            .set_feeds(list(&[Audio]))
-            .settle(heard)
-            .beat(Audio, heard, Tempo::new(60_000_000_000, 124).unwrap());
+        let clock = Clock::START.set_feeds(list(&[Audio])).settle(heard).beat(
+            Audio,
+            heard,
+            Tempo::new(60_000_000_000, 124).unwrap(),
+        );
         assert_eq!(clock.crossing(1), heard);
         assert_eq!(clock.crossing(2), free.crossing(2));
         assert_eq!(clock.crossing(3), Duration::MAX);
@@ -1645,7 +1671,11 @@ mod feeds {
     #[test]
     fn a_new_engine_has_tap_alone_and_runs_free() {
         assert_eq!(
-            (Clock::START.feeds(), Clock::START.driving(), Clock::START.pace()),
+            (
+                Clock::START.feeds(),
+                Clock::START.driving(),
+                Clock::START.pace()
+            ),
             (FeedList::TAP, Some(TAP), Pace::Free)
         );
     }
@@ -1659,15 +1689,43 @@ mod feeds {
             ("Audio, then none", &[Audio], Ok(())),
             ("Audio, then Tap", &[Audio, TAP], Ok(())),
             ("five", five, Ok(())),
-            ("four, then none", &[VirtualDJ, Audio, MidiClock, Timecode], Ok(())),
+            (
+                "four, then none",
+                &[VirtualDJ, Audio, MidiClock, Timecode],
+                Ok(()),
+            ),
             ("empty", &[], Err(FeedListError::Empty)),
-            ("a repeat", &[Audio, Audio], Err(FeedListError::Repeated { feed: Audio })),
-            ("a repeat later", &[Audio, MidiClock, Audio, TAP], Err(FeedListError::Repeated { feed: Audio })),
-            ("six: one repeats", &[Audio, MidiClock, VirtualDJ, Timecode, Audio, TAP], Err(FeedListError::Repeated { feed: Audio })),
+            (
+                "a repeat",
+                &[Audio, Audio],
+                Err(FeedListError::Repeated { feed: Audio }),
+            ),
+            (
+                "a repeat later",
+                &[Audio, MidiClock, Audio, TAP],
+                Err(FeedListError::Repeated { feed: Audio }),
+            ),
+            (
+                "six: one repeats",
+                &[Audio, MidiClock, VirtualDJ, Timecode, Audio, TAP],
+                Err(FeedListError::Repeated { feed: Audio }),
+            ),
             ("Tap first", &[TAP, Audio], Err(FeedListError::TapNotLast)),
-            ("Tap twice: the first is not last", &[TAP, TAP], Err(FeedListError::TapNotLast)),
-            ("Tap in the middle comes before the repeat", &[Audio, TAP, Audio], Err(FeedListError::TapNotLast)),
-            ("the repeat comes before Tap", &[Audio, Audio, TAP, MidiClock], Err(FeedListError::Repeated { feed: Audio })),
+            (
+                "Tap twice: the first is not last",
+                &[TAP, TAP],
+                Err(FeedListError::TapNotLast),
+            ),
+            (
+                "Tap in the middle comes before the repeat",
+                &[Audio, TAP, Audio],
+                Err(FeedListError::TapNotLast),
+            ),
+            (
+                "the repeat comes before Tap",
+                &[Audio, Audio, TAP, MidiClock],
+                Err(FeedListError::Repeated { feed: Audio }),
+            ),
         ];
         for (name, feeds, want) in cases {
             assert_eq!(
@@ -1681,7 +1739,10 @@ mod feeds {
         assert_ne!(list(&[Audio, TAP]), list(&[Audio]));
         assert_ne!(list(&[Audio, MidiClock]), list(&[MidiClock, Audio]));
         assert_eq!(list(&[TAP]), FeedList::TAP);
-        assert_eq!(run(&[Audio], &[List(10, &[Audio, TAP])]).feeds(), list(&[Audio, TAP]));
+        assert_eq!(
+            run(&[Audio], &[List(10, &[Audio, TAP])]).feeds(),
+            list(&[Audio, TAP])
+        );
     }
 
     #[test]
@@ -1702,7 +1763,11 @@ mod feeds {
             (500_500_000_000, 1001, false),
         ];
         for (span, beats, made) in cases {
-            assert_eq!(Tempo::new(span, beats).is_some(), made, "{span} ns, {beats} beats");
+            assert_eq!(
+                Tempo::new(span, beats).is_some(),
+                made,
+                "{span} ns, {beats} beats"
+            );
         }
     }
 

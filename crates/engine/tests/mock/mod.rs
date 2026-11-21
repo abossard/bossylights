@@ -73,10 +73,13 @@ impl Heard {
     pub fn took_everything_sent(&self, engine: &mut Engine, sender: &Sender) {
         let presses = sender.sent() - self.attached.load(Ordering::Acquire);
         let mut sample = HealthSample::new(Duration::ZERO, 0, Status::NotFound);
-        wait_until("no frame the device took carries every command sent", || {
-            engine.latest().health_sample(self.output, &mut sample)
-                && sample.press.iter().sum::<u64>() + sample.press_missing >= presses
-        });
+        wait_until(
+            "no frame the device took carries every command sent",
+            || {
+                engine.latest().health_sample(self.output, &mut sample)
+                    && sample.press.iter().sum::<u64>() + sample.press_missing >= presses
+            },
+        );
     }
 }
 

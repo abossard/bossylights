@@ -122,7 +122,7 @@ A Wave over a matrix can use the palette saved in step 3.
 
 Each sequence item and each `StartLook` accepts its own `use`. A stop samples the play at the stop event. A once-use ends with its final sample, even if the next wake comes later. An empty step supplies a rest.
 
-The patch: a fixture of the library at an address. The front checks each command against it and the library, compiles the writers (`rig`) and swaps them in on the tick thread as it swaps a device.
+The patch: a fixture of the library at an address. The front checks each command against it and the library, lowers it to channel config (`rig`) and swaps that in on the tick thread as it swaps a device.
 
 | Command | Does | Refused |
 |---|---|---|

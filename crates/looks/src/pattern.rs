@@ -4,10 +4,10 @@ use crate::{Looks, sequence};
 use alloc::{boxed::Box, collections::BTreeSet, vec, vec::Vec};
 use core::mem::size_of_val;
 use engine_core::{
-    Definition, LightNumber, LightRun, Lights, Node, Palette, Part, Pattern, Property, Refusal,
-    Target, WaveTarget, Writer,
+    Definition, LightNumber, LightRun, Lights, Node, Palette, Pattern, Property, Refusal, Swatches,
+    Target, WaveTarget,
 };
-use rig::Patch;
+use rig::{Feed, Part, Patch};
 
 pub(crate) fn reference(pattern: &Pattern) -> Option<u16> {
     match pattern {
@@ -26,7 +26,7 @@ pub(crate) fn compile(
     looks: &Looks,
     pattern: &Pattern,
     patch: &Patch,
-) -> Result<(Node, WaveBinding), Refusal> {
+) -> Result<(Node, Swatches, WaveBinding), Refusal> {
     let Pattern::Wave {
         target,
         period,
@@ -45,8 +45,13 @@ pub(crate) fn compile(
     if swatches.is_empty() {
         return Err(Refusal::EmptyPalette);
     }
+    let count = u8::try_from(swatches.as_slice().len()).map_err(|_| Refusal::WorkLimit)?;
     Ok((
-        Node::Wave { period, swatches },
+        Node::Wave {
+            period,
+            swatches: count,
+        },
+        swatches,
         WaveBinding::new(target, patch)?,
     ))
 }
@@ -87,23 +92,17 @@ impl WaveBinding {
         if runs.is_empty() {
             return Err(Refusal::EmptyGroup);
         }
-        // Rig compiles additive and subtractive mixes to continuous component writers.
-        // A fixed wheel bypass has no effect on this test, a slot alone cannot blend.
-        let continuous: BTreeSet<_> = patch
-            .writers()
-            .iter()
-            .filter_map(|writer| match writer {
-                Writer::Takes { light, take, .. }
-                    if matches!(take.of, Part::Red | Part::Green | Part::Blue | Part::Shared) =>
-                {
-                    Some(light.index())
-                }
-                Writer::Takes { .. }
-                | Writer::Fixed { .. }
-                | Writer::Picks { .. }
-                | Writer::ColourSlot { .. }
-                | Writer::GoboSlot { .. } => None,
+        // Rig compiles additive and subtractive mixes to continuous component fields.
+        // A fixed wheel bypass has no field, a slot alone cannot blend.
+        let continuous: BTreeSet<u16> = (0..)
+            .zip(patch.targets())
+            .filter(|(_, target)| {
+                target.feeds().iter().any(|feed| {
+                    matches!(feed, Feed::Takes(take)
+                        if matches!(take.of, Part::Red | Part::Green | Part::Blue | Part::Shared))
+                })
             })
+            .map(|(light, _)| light)
             .collect();
         if let Some(index) = runs
             .iter()
@@ -151,17 +150,15 @@ impl WaveBinding {
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
-    clippy::indexing_slicing,
     reason = "the fixture supplies the named looks, groups and light runs"
 )]
 mod tests {
     use super::*;
-    use crate::tests::{item, leaf, patch, sequence};
+    use crate::tests::{item, leaf, offered, patch, sequence};
     use crate::{WORK_LIMIT, play_work};
     use core::num::NonZeroU16;
     use engine_core::{
-        ChannelNumbers, Color, Light, PatchCommand, Pixels, SavedLook, SequenceItem, Text,
-        Universes, Use,
+        ChannelNumbers, Color, PatchCommand, Pixels, SavedLook, SequenceItem, Text, Universes, Use,
     };
     use rig::Whole;
 
@@ -184,9 +181,7 @@ mod tests {
 
     #[test]
     fn wave_rebinds_group_order_and_every_palette_reference_in_one_revision() {
-        use engine_core::{
-            AuthoredStep, Entry, Member, Members, Palette, Rgb, Swatches, WaveTarget,
-        };
+        use engine_core::{AuthoredStep, Member, Members, Palette, Rgb, Swatches, WaveTarget};
 
         const BEAT: u64 = 1 << 32;
         let row = Text::new("row").unwrap();
@@ -263,22 +258,15 @@ mod tests {
             for (root, usage) in [(2, spread), (3, Use::default())] {
                 let plan = revision.plan(root).unwrap();
                 assert!(plan.uses(1), "{case}, root {root} retains the palette id");
-                let entry = Entry {
-                    lights: original.runs(Target::Light { light: 1 }).unwrap()[0],
-                    values: Light::DARK,
-                };
-                let mut scratch = alloc::vec![entry; plan.lights()];
-                assert!(plan.sample(elapsed, usage, &mut scratch));
-                let samples: Vec<_> = plan
-                    .entries(&scratch)
-                    .iter()
-                    .map(|e| (e.lights.first().index() + 1, e.values.colour))
-                    .collect();
                 assert_eq!(
-                    samples,
+                    offered(&plan, elapsed, usage),
                     [
-                        (1, Some(colour(expected[0]))),
-                        (3, Some(colour(expected[1])))
+                        (0, expected[0]),
+                        (1, 0),
+                        (2, 0),
+                        (6, expected[1]),
+                        (7, 0),
+                        (8, 0)
                     ],
                     "{case} root {root}"
                 );
@@ -292,7 +280,7 @@ mod tests {
 
     #[test]
     fn a_three_column_one_row_matrix_uses_its_width_for_spread() {
-        use engine_core::{Entry, Rgb, Swatches};
+        use engine_core::{Rgb, Swatches};
         let patch = patch();
         let colours = [
             Rgb {
@@ -315,26 +303,22 @@ mod tests {
             Palette::Inline(Swatches::new(&colours).unwrap()),
         );
         let plan = Looks::new().put(saved, &patch).unwrap().plan(1).unwrap();
-        let initial = Entry {
-            lights: patch.runs(Target::Light { light: 1 }).unwrap()[0],
-            values: Light::DARK,
-        };
-        let mut scratch = [initial; 3];
-        assert!(plan.sample(
-            0,
-            Use {
-                spread: 100,
-                ..Use::default()
-            },
-            &mut scratch
-        ));
+        let words: Vec<_> = colours
+            .iter()
+            .flat_map(|colour| [colour.red, colour.green, colour.blue])
+            .enumerate()
+            .map(|(at, word)| (u32::try_from(at).unwrap(), word))
+            .collect();
         assert_eq!(
-            scratch.map(|entry| (entry.lights.first().index(), entry.values.colour)),
-            [
-                (0, Some(colours[0])),
-                (1, Some(colours[1])),
-                (2, Some(colours[2]))
-            ]
+            offered(
+                &plan,
+                0,
+                Use {
+                    spread: 100,
+                    ..Use::default()
+                }
+            ),
+            words
         );
     }
 

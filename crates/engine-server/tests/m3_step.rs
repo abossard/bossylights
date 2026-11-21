@@ -1,7 +1,8 @@
 //! M3 T2 end to end over the API: a saved step played at Manual on a fake DMX USB Pro.
 //! Generic RGB at 1:37, full intensity held, the step red: 255 0 0. Released: the
-//! colour underneath (none): 0 0 0. Restarted from the show file without the library:
-//! idle black, intensity restored by hand, the saved step played again: the same bytes.
+//! colour underneath (none): 0 0 0. Restarted from the show file with the library (each
+//! mode takes its declarations from it): idle black, intensity restored by hand, the
+//! saved step played again: the same bytes.
 
 mod common;
 
@@ -16,19 +17,13 @@ use tokio::task::JoinHandle;
 
 type Served = JoinHandle<std::io::Result<Engine>>;
 
-/// An engine serving `show`, with the test definitions when `library`, its DMX USB Pro
-/// heard into `heard`.
-async fn serve(
-    show: &Path,
-    library: bool,
-    heard: &Heard,
-    stop: &Arc<AtomicBool>,
-) -> (Served, Socket) {
+/// An engine serving `show`, with the test definitions, its DMX USB Pro heard into
+/// `heard`.
+async fn serve(show: &Path, heard: &Heard, stop: &Arc<AtomicBool>) -> (Served, Socket) {
     let opens = open(Some(Arc::clone(heard)), Arc::clone(stop));
     let (engine, sender) = Engine::start_with(Universes::new(1).unwrap(), opens).unwrap();
-    let definitions = library.then(|| {
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../fixture-library/tests/definitions")
-    });
+    let definitions =
+        Some(Path::new(env!("CARGO_MANIFEST_DIR")).join("../fixture-library/tests/definitions"));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let served = tokio::spawn(engine_server::serve(
@@ -132,7 +127,7 @@ async fn a_saved_red_step_plays_255_0_0_releases_and_replays_after_a_restart() {
     }}});
     let start = json!({"StartLook": {"look": 1}});
 
-    let (served, mut socket) = serve(&file, true, &heard, &stop_adapter).await;
+    let (served, mut socket) = serve(&file, &heard, &stop_adapter).await;
     let par = json!({"Patch": {
         "name": "PAR 1", "maker": "Generic", "model": "Generic RGB", "mode": "RGB",
         "at": {"universe": 1, "address": 37},
@@ -205,10 +200,10 @@ async fn a_saved_red_step_plays_255_0_0_releases_and_replays_after_a_restart() {
             }
             std::fs::write(&file, old.to_string()).unwrap();
         }
-        // Restart without the library. Each adapter hears only its own engine.
+        // Restart with the library. Each adapter hears only its own engine.
         let heard = Heard::default();
         let stop_adapter = Arc::new(AtomicBool::new(false));
-        let (served, mut socket) = serve(&file, false, &heard, &stop_adapter).await;
+        let (served, mut socket) = serve(&file, &heard, &stop_adapter).await;
         send(&mut socket, &json!("Query")).await;
         assert_eq!(
             answer(&mut socket).await["Picture"]["show"],

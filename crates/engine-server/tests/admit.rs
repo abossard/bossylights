@@ -435,17 +435,28 @@ fn a_press_is_admitted_while_another_clients_edit_is_prepared() {
     let (mut front, _) = Front::start();
     // client A takes its base; its compile pauses here
     let base = front.sender.base();
-    // client B's press goes through meanwhile, into the next frame
-    let dim = Command::SetIntensity {
-        target: Target::Fixture { fixture: 1 },
-        intensity: 0x8080,
+    // client B's press goes through meanwhile, into the next frame. A colour: the PAR
+    // has no dimmer, so an intensity alone offers nothing (cx-4)
+    let fixture = Target::Fixture { fixture: 1 };
+    let dim = Command::SetColour {
+        target: fixture,
+        red: 0x8080,
+        green: 0,
+        blue: 0,
     };
     assert!(matches!(front.begin(dim), Ok(Begun::Grabbed { .. })));
     assert_eq!(front.frame(), [128, 0, 0], "B's press is in the next frame");
     // A's edit, prepared on a base the press did not move, is admitted after it
     let prepared = base.prepare(step(1, GREEN), &front.library).unwrap();
     assert!(matches!(front.sender.admit(prepared), Ok(Begun::Queued)));
-    assert_eq!(front.frame(), [0, 128, 0], "A's step plays green");
+    assert_eq!(
+        front.frame(),
+        [128, 0, 0],
+        "B's later press holds the colour"
+    );
+    let release = Command::ReleaseColour { target: fixture };
+    assert!(front.begin(release).is_ok());
+    assert_eq!(front.frame(), [0, 255, 0], "A's step plays green");
 }
 
 /// (what, then what, the frame after)

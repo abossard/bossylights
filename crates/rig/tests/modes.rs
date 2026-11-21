@@ -1,15 +1,17 @@
-//! A mode at an address becomes writers: real definitions, at universe 1, address 37.
+//! A mode at an address becomes its channels and the fields of its lights: real
+//! definitions, at universe 1, address 37.
 
 mod common;
 
-use common::{all, at, light, lights, mode, say};
-use engine_core::{Levels, Light, Refusal, Rgb, Universes, Writer, resolve};
-use rig::{Unfit, compile};
+use common::{all, at, light, lights, mode, say, shown, whole};
+use engine_core::{Field, Light, Refusal, Rgb, Universes};
+use rig::{Patch, Placed, Unfit, compile};
+use std::num::NonZeroU16;
 
 #[test]
-fn a_mode_at_an_address_becomes_writers() {
-    // (definition, mode, lights it makes, writers in words)
-    let cases: [(&str, &str, u16, &[&str]); 10] = [
+fn a_mode_at_an_address_becomes_channels_and_fields() {
+    // (definition, mode, lights it makes, channels in words)
+    let cases: [(&str, &str, usize, &[&str]); 10] = [
         (
             "Showtec-Par-64-100W-COB-UV.qxf",
             "8 Bit",
@@ -200,45 +202,53 @@ fn a_mode_at_an_address_becomes_writers() {
             lights(),
         )
         .unwrap_or_else(|e| panic!("{file} {name}: {e:?}"));
-        let said: Vec<String> = rigged.writers.iter().map(say).collect();
-        assert_eq!(said, expected, "{file} {name}");
-        assert_eq!(rigged.lights, count, "{file} {name}");
+        assert_eq!(say(&rigged), expected, "{file} {name}");
+        assert_eq!(rigged.targets.len(), count, "{file} {name}");
     }
 }
 
+/// A patch places a mode's lights from its first: light 100 is the fixture's light 0.
 #[test]
 fn the_lights_are_numbered_from_the_first() {
-    let rigged = compile(
-        &mode("XStatic-X-240Bar-RGB.qxf", "4 Channel"),
-        at(1),
-        light(100),
-        Universes::ONE,
-        lights(),
-    )
-    .unwrap();
-    let said: Vec<String> = rigged.writers.iter().map(say).collect();
+    let mode = mode("XStatic-X-240Bar-RGB.qxf", "4 Channel");
+    let rigged = compile(&mode, at(1), light(100), Universes::ONE, lights()).unwrap();
+    let placed = Placed {
+        fixture: NonZeroU16::MIN,
+        name: "Bar".into(),
+        maker: "XStatic".into(),
+        model: "X-240Bar RGB".into(),
+        mode,
+        at: at(1),
+        first: 101,
+    };
+    let patch = Patch::new(Universes::ONE, lights(), whole())
+        .restore(vec![placed])
+        .unwrap();
     assert_eq!(
-        said,
+        say(&rigged),
         [
-            "1 light 100: intensity",
-            "2 light 100: red",
-            "3 light 100: green",
-            "4 light 100: blue",
+            "1 light 0: intensity",
+            "2 light 0: red",
+            "3 light 0: green",
+            "4 light 0: blue",
         ]
     );
+    assert_eq!(patch.targets().len(), 101);
+    assert!(patch.targets()[..100].iter().all(|t| t.fields.is_empty()));
+    assert_eq!(patch.target(light(100)), rigged.targets.first());
 }
 
 #[test]
 fn a_mode_that_does_not_fit_is_refused() {
-    let martin = mode("Martin-Rush-MH6-Wash.qxf", "Standard"); // 14 channels, 11 writers
+    let martin = mode("Martin-Rush-MH6-Wash.qxf", "Standard"); // 14 channels
     let bar = mode("XStatic-X-240Bar-RGB.qxf", "26 Channel"); // 9 lights
     let two = Universes::new(2).unwrap();
     // (mode, universe, address, first light, result)
     let cases = [
-        (&martin, 1, 499, 0, Ok(11)),
-        (&martin, 2, 499, 0, Ok(11)),
+        (&martin, 1, 499, 0, Ok(14)),
+        (&martin, 2, 499, 0, Ok(14)),
         // past 512 it runs on at the next universe's address 1, but there is no third
-        (&martin, 1, 500, 0, Ok(11)),
+        (&martin, 1, 500, 0, Ok(14)),
         (&martin, 2, 500, 0, Err(Unfit::PastTheEnd { channels: 14 })),
         (
             &martin,
@@ -259,7 +269,8 @@ fn a_mode_that_does_not_fit_is_refused() {
     ];
     for (mode, universe, address, first, expected) in cases {
         let at = engine_core::ChannelNumbers { universe, address };
-        let found = compile(mode, at, light(first), two, lights()).map(|r| r.writers.len());
+        let found =
+            compile(mode, at, light(first), two, lights()).map(|r| r.lowered.channels.len());
         assert_eq!(
             found, expected,
             "{} at {universe}/{address}, light {first}",
@@ -268,42 +279,45 @@ fn a_mode_that_does_not_fit_is_refused() {
     }
 }
 
-/// Every channel of every mode of the test definitions is written by exactly one writer.
-/// A mode refused for a colour it cannot show (`m3_properties`) has no writers.
+/// Every channel of every mode of the test definitions is lowered once, in order, and is
+/// in at most one field of one light. A mode refused for a colour it cannot show
+/// (`m3_properties`) has none.
 #[test]
-fn every_channel_is_written_once() {
+fn every_channel_is_lowered_once_and_in_one_field_at_most() {
     for (file, fixture) in all() {
         for mode in &fixture.modes {
             let rigged = match compile(mode, at(1), light(0), Universes::ONE, lights()) {
                 Err(Unfit::Refused(Refusal::Unsupported { .. })) => continue,
                 rigged => rigged.unwrap(),
             };
-            let mut written: Vec<u16> = rigged
-                .writers
+            let lowered: Vec<u32> = rigged.lowered.channels.iter().map(|c| c.at).collect();
+            let all: Vec<u32> = (0..).take(mode.channels.len()).collect();
+            assert_eq!(lowered, all, "{file} {}", mode.name);
+            let mut in_fields: Vec<u32> = rigged
+                .targets
                 .iter()
-                .flat_map(|writer| match *writer {
-                    Writer::Fixed { at, .. } | Writer::Picks { at, .. } => {
-                        vec![common::address(at)]
-                    }
-                    Writer::ColourSlot { .. } | Writer::GoboSlot { .. } => vec![],
-                    Writer::Takes { at, .. } => match at {
-                        engine_core::Place::Byte(at) => vec![common::address(at)],
-                        engine_core::Place::Pair { coarse, fine } => {
-                            vec![common::address(coarse), common::address(fine)]
-                        }
-                    },
+                .flat_map(|target| &target.fields)
+                .flat_map(|&field| match field {
+                    Field::Byte(at) => vec![at],
+                    Field::Word { coarse, fine } => vec![coarse, fine],
                 })
                 .collect();
-            written.sort_unstable();
-            let all: Vec<u16> = (1..).take(mode.channels.len()).collect();
-            assert_eq!(written, all, "{file} {}", mode.name);
+            in_fields.sort_unstable();
+            let count = in_fields.len();
+            in_fields.dedup();
+            assert_eq!(in_fields.len(), count, "{file} {}", mode.name);
+            assert!(
+                in_fields.iter().all(|at| all.contains(at)),
+                "{file} {}",
+                mode.name
+            );
         }
     }
 }
 
 /// A channel two heads name (14 modes of the QLC+ library, GLP JDC1 among them) is the
-/// fixture's own: the fixture is a light, its one writer writes the channel, and no two
-/// writers ever reach it.
+/// fixture's own: the fixture is a light, it has the channel, and no two lights ever
+/// offer on it.
 #[test]
 fn a_channel_two_heads_name_is_the_fixtures_own() {
     const RED: Light = Light {
@@ -323,7 +337,7 @@ fn a_channel_two_heads_name_is_the_fixtures_own() {
     let strobe = r#"<Channel Name="Shared"><Group Byte="0">Shutter</Group>
   <Capability Min="0" Max="7" Preset="ShutterClose">Closed</Capability>
   <Capability Min="8" Max="255" Preset="ShutterOpen">Open</Capability></Channel>"#;
-    // (kind, the shared channel, writers in words, bytes 37 to 39 with the fixture full,
+    // (kind, the shared channel, channels in words, bytes 37 to 39 with the fixture full,
     // head 1 red, head 2 dark)
     let cases: [(&str, &str, [&str; 3], [u8; 3]); 2] = [
         (
@@ -347,7 +361,7 @@ fn a_channel_two_heads_name_is_the_fixtures_own() {
             [8, 255, 0],
         ),
     ];
-    for (kind, shared, writers, bytes) in cases {
+    for (kind, shared, said, bytes) in cases {
         let definition = format!(
             r#"<?xml version="1.0"?>
 <FixtureDefinition xmlns="http://www.qlcplus.org/FixtureDefinition">
@@ -373,14 +387,12 @@ fn a_channel_two_heads_name_is_the_fixtures_own() {
             lights(),
         )
         .unwrap();
-        assert_eq!(rigged.lights, 3, "{kind}: the fixture, then each head");
         assert_eq!(
-            rigged.writers.iter().map(say).collect::<Vec<_>>(),
-            writers,
-            "{kind}"
+            rigged.targets.len(),
+            3,
+            "{kind}: the fixture, then each head"
         );
-        let mut out = [Levels::ZERO];
-        resolve(&[FULL, RED, Light::DARK], &rigged.writers, &mut out);
-        assert_eq!(out[0].0[36..39], bytes, "{kind}");
+        assert_eq!(say(&rigged), said, "{kind}");
+        assert_eq!(shown(&rigged, &[FULL, RED, Light::DARK]), bytes, "{kind}");
     }
 }

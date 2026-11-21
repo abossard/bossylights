@@ -19,9 +19,9 @@ flowchart LR
 
 | # | Rule | Default | Can be set to |
 |---|---|---|---|
-| 1 | What is decided | each property of each light on its own. Colour is one property, position is one property | fixed |
+| 1 | What is decided | each channel on its own. A 16-bit pair is one value, never torn | fixed |
 | 2 | Rank | manual beats show, show beats autopilot | fixed for now |
-| 3 | Among equals | the one that started last wins | brightness only: the highest wins |
+| 3 | Among equals | the one that started last wins | dimmer channels only: the highest wins |
 | 4 | Manual control ends | when you press **Release** | when the pad or fader stops |
 | 5 | When a show or autopilot look ends | what was underneath shows again | it stays as it was left |
 
@@ -56,9 +56,11 @@ sequenceDiagram
 
 Decided with the owner on 2026-11-19 (decision 48): DMX is resolved at the look stage. Nothing decides between two lights on one channel, because it never happens.
 
+Since #250 (channel model T4) the rules above are applied per channel. The front lowers each look to offers on channels (a 16-bit pair as one word, never torn); the Mixer picks one winner per channel.
+
 ```mermaid
 flowchart LR
-  L["looks"] --> M["Mixer<br/>one winner per<br/>light property"] --> R["Rig<br/>one writer<br/>per channel"] --> D["DMX bytes"]
+  L["looks, grabs<br/>offers per channel"] --> M["Mixer<br/>one winner<br/>per channel"] --> D["DMX bytes"]
 ```
 
 | Case | What happens |
@@ -69,25 +71,24 @@ flowchart LR
 
 ## Per channel: the one pass
 
-Since #247 (channel model T1) every channel has 8 bytes (`engine-core/src/channel.rs`) and one pass decides each one (`mix::channels`). The old resolver still writes the lights' bytes first.
+Every channel has its bytes in `engine-core/src/channel.rs`. Since #250 one function decides each one: `mix::offer` (rank, then latest, then `highest`) and `mix::channels` (raw hold, modifiers).
 
 ```mermaid
 flowchart LR
-  R["Rest<br/>every channel"] --> L["Lights' bytes<br/>through the writers"] --> H["Raw hold<br/>replaces the byte,<br/>also with 0"] --> M["Modifiers<br/>followers move<br/>toward dark"] --> O["Frame"]
+  R["Rest<br/>every channel"] --> F["Offers<br/>rank, latest,<br/>highest"] --> H["Raw hold<br/>replaces the byte,<br/>also with 0"] --> M["Modifiers<br/>followers move<br/>toward dark"] --> O["Frame"]
 ```
 
 | Step | Byte | Source tag |
 |---|---|---|
-| nothing writes | rest (0) | `0` rest |
-| a writer's default (open shutter) | the default | `0` rest |
-| a held light value | the light's byte | `2` lights |
+| nothing offers | the channel's rest (from the fixture definition) | `0` rest |
+| a play or grab wins | its offer | `2` + its entry in the source table |
 | a raw hold | the held byte | `1` raw |
 | a follower | `dark + (byte - dark) x m1 x ... x mn / 255^n`, one rounding. A jump channel: `dark` at any level 0 | unchanged |
 
 | Modifier slot | Level | Followers today |
 |---|---|---|
 | 0 Master | 255 (no command yet) | none |
-| 1 Blackout | 0 while on, 255 while off | every channel, dark 0 |
+| 1 Blackout | 0 while on, 255 while off | every channel, toward its dark byte |
 
 ## One place
 

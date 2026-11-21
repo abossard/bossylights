@@ -71,13 +71,23 @@ pub const BLACKOUT: usize = 1;
 pub struct SourceTag(u16);
 
 impl SourceTag {
-    /// Nobody: the channel shows its rest, or a default the writers give it.
+    /// Nobody: the channel shows its rest.
     pub const REST: Self = Self(0);
     /// A raw hold from the DMX screen.
     pub const RAW: Self = Self(1);
-    /// The held values of the lights, through their writers. The first entry of the
-    /// source table, the only one until plays and grabs offer per channel.
-    pub const LIGHTS: Self = Self(2);
+    /// Entry `index` of the source table, `None` past it.
+    pub(crate) const fn of(index: usize) -> Option<Self> {
+        if index < crate::mix::SOURCES {
+            Some(Self(index as u16 + 2))
+        } else {
+            None
+        }
+    }
+
+    /// The entry of the source table this tag names, `None` for rest and a raw hold.
+    pub(crate) fn entry(self) -> Option<usize> {
+        usize::from(self.0).checked_sub(2)
+    }
 }
 
 /// Which modifier slots a channel follows, one bit per slot.
@@ -98,9 +108,21 @@ impl Flags {
     /// Jumps, latest wins, no pair.
     pub const NONE: Self = Self(0);
     pub const FADE: Self = Self(1);
+    /// Among equals the greater brightness wins, not the later start.
+    pub const HIGHEST: Self = Self(1 << 1);
+    pub const PAIR: Self = Self(1 << 2);
 
     pub(crate) const fn fades(self) -> bool {
         self.0 & Self::FADE.0 != 0
+    }
+
+    pub(crate) const fn highest(self) -> bool {
+        self.0 & Self::HIGHEST.0 != 0
+    }
+
+    #[must_use]
+    pub const fn with(self, other: Self) -> Self {
+        Self(self.0 | other.0)
     }
 }
 
@@ -146,6 +168,38 @@ impl Channels {
             .copied()
             .unwrap_or(SourceTag::REST)
     }
+}
+
+impl Channels {
+    /// The patch's config of every channel from this frame on. The values and who set
+    /// them stay until the frame writes them.
+    pub fn configure(&mut self, config: &ChannelConfig) {
+        self.rest.copy_from_slice(&config.rest);
+        self.dark.copy_from_slice(&config.dark);
+        self.flags.copy_from_slice(&config.flags);
+        self.follows.copy_from_slice(&config.follows);
+    }
+}
+
+/// What the patch sets of each channel, built off the tick: its rest, its dark byte,
+/// its flags and the modifiers it follows. Copied into [`Channels`] in the frame its
+/// command is applied, so the tick never builds one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChannelConfig {
+    pub rest: [u8; CHANNELS],
+    pub dark: [u8; CHANNELS],
+    pub flags: [Flags; CHANNELS],
+    pub follows: [Follows; CHANNELS],
+}
+
+impl ChannelConfig {
+    /// As [`Channels::NEW`]: at rest 0, dark 0, jumping, following Blackout.
+    pub const NEW: Self = Self {
+        rest: [0; CHANNELS],
+        dark: [0; CHANNELS],
+        flags: [Flags::NONE; CHANNELS],
+        follows: [Follows::BLACKOUT; CHANNELS],
+    };
 }
 
 /// A channel as a client sends it, counted from 1. Not checked yet.
@@ -225,12 +279,6 @@ impl Channel {
         if let Some(set) = sets.get_mut(usize::from(self.universe)) {
             set.put(usize::from(self.address), on);
         }
-    }
-
-    /// Whether `sets` has this channel.
-    pub(crate) fn marked(self, sets: &[ChannelSet]) -> bool {
-        sets.get(usize::from(self.universe))
-            .is_some_and(|set| set.has(usize::from(self.address)))
     }
 }
 
@@ -324,8 +372,8 @@ mod tests {
             for u in 1..=2 {
                 for a in 1..=512 {
                     let has = after.contains(&(u, a));
-                    assert_eq!(channel(u, a).marked(&sets), has, "{on:?} {off:?}: {u} {a}");
-                    assert_eq!(sets[usize::from(u - 1)].has(usize::from(a - 1)), has);
+                    let set = sets[usize::from(u - 1)];
+                    assert_eq!(set.has(usize::from(a - 1)), has, "{on:?} {off:?}: {u} {a}");
                 }
                 let listed: Vec<_> = sets[usize::from(u - 1)].addresses().collect();
                 let expected: Vec<_> = (1..=512)
@@ -340,7 +388,6 @@ mod tests {
         let mut one = [ChannelSet::NONE];
         channel(2, 1).mark(&mut one, true);
         assert_eq!(one, [ChannelSet::NONE]);
-        assert!(!channel(2, 1).marked(&one));
     }
 
     #[test]

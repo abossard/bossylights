@@ -29,20 +29,24 @@
 //! output streams is one it sends. What an output sends is the outputs' to know
 //! (`crates/outputs`), so [`Whole`] brings it in.
 
+use crate::channels::{Change, Lowered};
+use crate::light::LightFields;
 use crate::{ADDRESSES, Unfit, compile, flat, lights_of, strip, supports, unflat};
+use alloc::boxed::Box;
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::num::NonZeroU16;
 use engine_core::{
-    ChannelNumbers, EngineCommand, Grouped, LightChange, LightNumber, LightRun, Lights, Member,
-    OutputKind, PatchCommand, Patched, Project, Refusal, SavedLook, Target, Universes, Value,
-    Writer,
+    Brightness, ChannelConfig, ChannelNumbers, Flags, Grouped, LightNumber, LightRun, Lights,
+    Member, MixRules, OutputKind, PatchCommand, Patched, Project, Property, Refusal, SavedLook,
+    Target, Universes, Value,
 };
+use fixture_library::{Byte, Function};
 use fixture_library::{Fixture, Mode};
 
-/// Every patched fixture, and the writers they make together.
+/// Every patched fixture, and the lights they make together.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Patch {
     universes: Universes,
@@ -50,8 +54,8 @@ pub struct Patch {
     /// By number, lowest first. Shared with the patch before: a change copies only the
     /// fixtures it changes.
     fixtures: Vec<Arc<Entry>>,
-    /// The writers of every fixture, in the order of their numbers.
-    writers: Vec<Writer>,
+    /// The fields of every light, by number: none where no fixture has the light.
+    targets: Vec<LightFields>,
     /// In the order they were made. Every member is patched.
     groups: Vec<Group>,
     /// The show file it is kept in, `None` when it is kept in none.
@@ -116,7 +120,9 @@ struct Entry {
     at: ChannelNumbers,
     first: LightNumber,
     lights: u16,
-    writers: Vec<Writer>,
+    /// One per light, from `first`.
+    targets: Vec<LightFields>,
+    lowered: Lowered,
 }
 
 /// A fixture as a show file keeps it: its number and its lights as they were.
@@ -146,13 +152,15 @@ pub enum Unplaced {
 pub enum PatchEffect {
     /// The fixture was patched with this number: the reply says it.
     Patched { fixture: u16 },
-    /// The writers of the whole patch, to swap in on the tick thread.
-    Writers(Vec<Writer>),
-    /// Send this to the tick thread.
-    Send(EngineCommand),
-    /// Make `change` to each of these runs, all in one frame: a group of more than one run.
-    Runs {
-        change: LightChange,
+    /// The channel config changed: the front sends it anew ([`Patch::config`]).
+    Config,
+    /// A moved fixture's lights are at its new channels: what holds them offers there.
+    Moved { lights: LightRun },
+    /// An unpatched fixture's lights: what held them lets go.
+    Unpatched { lights: LightRun },
+    /// Every direct hold of `property` on the lights of `runs` lets go, all in one frame.
+    Release {
+        property: Property,
         runs: Vec<LightRun>,
     },
     /// A new grab of `value` on these runs, lowest first: the front gives it its ID.
@@ -167,7 +175,7 @@ impl Patch {
             universes,
             lights,
             fixtures: Vec::new(),
-            writers: Vec::new(),
+            targets: Vec::new(),
             groups: Vec::new(),
             limit: None,
             whole,
@@ -286,12 +294,15 @@ impl Patch {
                 let rigged = compile(&entry.mode, at, entry.first, self.universes, self.lights)
                     .map_err(refusal)?;
                 self.free_channels(fixture, at, entry.mode.channels.len())?;
+                let run = self.run(entry);
                 let patch = self.changed(fixture, |entry| {
                     entry.at = at;
-                    entry.writers = rigged.writers;
+                    entry.targets = rigged.targets;
+                    entry.lowered = rigged.lowered;
                 });
-                let writers = PatchEffect::Writers(patch.writers.clone());
-                Ok((Some(patch), vec![writers]))
+                let mut effects = vec![PatchEffect::Config];
+                effects.extend(run.map(|lights| PatchEffect::Moved { lights }));
+                Ok((Some(patch), effects))
             }
             PatchCommand::Unpatch { fixture } => {
                 let entry = self.entry(fixture)?;
@@ -310,9 +321,8 @@ impl Patch {
                 for group in &mut patch.groups {
                     group.members.retain(|member| !gone(member));
                 }
-                let mut effects = vec![PatchEffect::Writers(patch.writers.clone())];
-                effects
-                    .extend(run.map(|lights| PatchEffect::Send(EngineCommand::Darken { lights })));
+                let mut effects = vec![PatchEffect::Config];
+                effects.extend(run.map(|lights| PatchEffect::Unpatched { lights }));
                 Ok((Some(patch), effects))
             }
             PatchCommand::Rename { fixture, name } => {
@@ -329,7 +339,8 @@ impl Patch {
                 Ok((None, vec![PatchEffect::Grab { value, runs }]))
             }
             PatchCommand::Release { target, property } => {
-                self.send(target, LightChange::Release { property })
+                let runs = self.runs(target)?;
+                Ok((None, vec![PatchEffect::Release { property, runs }]))
             }
             PatchCommand::SetGroup { name, members } => {
                 for member in members.as_slice() {
@@ -379,8 +390,9 @@ impl Patch {
                 text: None,
                 at: p.at,
                 first,
-                lights: rigged.lights,
-                writers: rigged.writers,
+                lights: u16::try_from(rigged.targets.len()).unwrap_or(u16::MAX),
+                targets: rigged.targets,
+                lowered: rigged.lowered,
             };
             if fixtures
                 .iter()
@@ -424,39 +436,26 @@ impl Patch {
             text,
             at,
             first,
-            lights: rigged.lights,
-            writers: rigged.writers,
+            lights: u16::try_from(rigged.targets.len()).unwrap_or(u16::MAX),
+            targets: rigged.targets,
+            lowered: rigged.lowered,
         };
         let mut fixtures = self.fixtures.clone();
         let place = fixtures.partition_point(|e| e.number < number);
         fixtures.insert(place, Arc::new(entry));
         let patch = self.with(fixtures);
-        let writers = PatchEffect::Writers(patch.writers.clone());
         Ok((
             Some(patch),
-            vec![PatchEffect::Patched { fixture: number }, writers],
+            vec![
+                PatchEffect::Patched { fixture: number },
+                PatchEffect::Config,
+            ],
         ))
-    }
-
-    /// `change` for the lights `target` names: one run for a light or a fixture, the
-    /// fewest runs for a group, lowest first. A group of more than one run is one effect.
-    fn send(
-        &self,
-        target: Target,
-        change: LightChange,
-    ) -> Result<(Option<Self>, Vec<PatchEffect>), Refusal> {
-        let runs = self.runs(target)?;
-        let effects = match runs.as_slice() {
-            [] => vec![],
-            [run] => vec![PatchEffect::Send(change.on(*run))],
-            [_, _, ..] => vec![PatchEffect::Runs { change, runs }],
-        };
-        Ok((None, effects))
     }
 
     /// `Unsupported` when a light of `runs` cannot show `value`.
     pub fn supports(&self, runs: &[LightRun], value: Value) -> Result<(), Refusal> {
-        supports(&self.writers, runs, &value.light())
+        supports(&self.targets, runs, &value.light())
     }
 
     /// The lights `target` names: one run for a light or a fixture, the fewest runs for a
@@ -578,20 +577,81 @@ impl Patch {
             .collect()
     }
 
-    /// The writers of every fixture, in the order of their numbers.
-    pub fn writers(&self) -> &[Writer] {
-        &self.writers
+    /// The fields of every light, by number from 0: empty where no fixture has it.
+    pub fn targets(&self) -> &[LightFields] {
+        &self.targets
     }
 
-    /// This patch with these fixtures: their writers made anew.
+    /// The fields of light `light`, counted from 0.
+    pub fn target(&self, light: LightNumber) -> Option<&LightFields> {
+        self.targets.get(usize::from(light.index()))
+    }
+
+    /// The config of every channel, as the tick takes it: each patched channel's rest,
+    /// dark byte and flags from its lowered config (fade, pair, and highest on a dimmer
+    /// when `rules` say so); every channel follows Blackout, until rules per channel come
+    /// (T5). A channel no fixture has is at rest 0.
+    pub fn config(&self, rules: MixRules) -> Box<ChannelConfig> {
+        let mut config = Box::new(ChannelConfig::NEW);
+        let highest = rules.brightness == Brightness::Highest;
+        for entry in &self.fixtures {
+            let lowered = &entry.lowered;
+            let dimmer = |at: u32| {
+                let first = lowered.channels.first().map_or(0, |c| c.at);
+                let channel = at.checked_sub(first).and_then(|i| usize::try_from(i).ok());
+                channel
+                    .and_then(|i| entry.mode.channels.get(i))
+                    .is_some_and(|c| c.byte == Byte::Coarse && c.role() == Function::Dimmer)
+            };
+            for channel in &lowered.channels {
+                let Ok(at) = usize::try_from(channel.at) else {
+                    continue;
+                };
+                let pair = lowered
+                    .pairs
+                    .iter()
+                    .find(|p| p.coarse == channel.at || p.fine == channel.at);
+                let coarse = pair.map_or(channel.at, |p| p.coarse);
+                let mut flags = Flags::NONE;
+                if channel.change == Change::Fade {
+                    flags = flags.with(Flags::FADE);
+                }
+                if pair.is_some() {
+                    flags = flags.with(Flags::PAIR);
+                }
+                if highest && dimmer(coarse) {
+                    flags = flags.with(Flags::HIGHEST);
+                }
+                if let (Some(rest), Some(dark), Some(slot)) = (
+                    config.rest.get_mut(at),
+                    config.dark.get_mut(at),
+                    config.flags.get_mut(at),
+                ) {
+                    *rest = channel.rest;
+                    *dark = channel.dark;
+                    *slot = flags;
+                }
+            }
+        }
+        config
+    }
+
+    /// This patch with these fixtures: their lights placed anew.
     fn with(&self, fixtures: Vec<Arc<Entry>>) -> Self {
+        let mut targets = Vec::new();
+        for entry in &fixtures {
+            let first = usize::from(entry.first.index());
+            if targets.len() < first + entry.targets.len() {
+                targets.resize(first + entry.targets.len(), LightFields::default());
+            }
+            for (slot, target) in targets.iter_mut().skip(first).zip(&entry.targets) {
+                slot.clone_from(target);
+            }
+        }
         Self {
             universes: self.universes,
             lights: self.lights,
-            writers: fixtures
-                .iter()
-                .flat_map(|e| e.writers.iter().copied())
-                .collect(),
+            targets,
             fixtures,
             groups: self.groups.clone(),
             limit: self.limit,

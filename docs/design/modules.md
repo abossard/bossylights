@@ -99,7 +99,7 @@ The bar shows depth: interface size on the left, what it hides on the right.
 
 ### Rig: a mode becomes channels (channel model, #239)
 
-`rig::channels::lower` is a calculation off the tick. `resolve` (writers per light) goes at T4, when the tick runs on channels.
+`rig::channels::lower` is a calculation off the tick. Since T4 (#250) the tick runs on channels: `resolve` and its writers are gone.
 
 ```mermaid
 flowchart LR

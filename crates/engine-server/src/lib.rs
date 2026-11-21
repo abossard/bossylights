@@ -29,7 +29,7 @@ use engine::{
     API_VERSION, Begun, ChannelLevel, Command, Engine, Grouped, Looks, Patch, Patched, Project,
     ProjectView, Refusal, Reply, Request, SavedLook, Sender, Snapshot, changes,
 };
-use engine_core::{HeldLight, Library, ShowFile, held_lights, light_changes};
+use engine_core::{HeldLight, Library, ShowFile};
 use library::Shelf;
 use std::collections::VecDeque;
 use std::io;
@@ -54,9 +54,18 @@ pub async fn serve(
 ) -> io::Result<Engine> {
     let (stop, mut stopped) = watch::channel(false);
     let shelf = library::start(fixtures);
-    let opened = show
-        .as_deref()
-        .map_or(ShowFile::None, |path| show::open(path, &mut sender));
+    // a show file keeps no declarations: it opens once the library is read
+    let opened = match show.as_deref() {
+        None => ShowFile::None,
+        Some(path) => {
+            let mut read = shelf.clone();
+            let _ = read
+                .wait_for(|shelf| !matches!(**shelf, Shelf::Reading))
+                .await;
+            let library = Arc::clone(&read.borrow());
+            show::open(path, &mut sender, library.fixtures())
+        }
+    };
     let (kept, shown) = watch::channel(opened);
     let (moments, taken) = mpsc::unbounded_channel();
     let saved = show::Kept::of(&sender);
@@ -85,6 +94,7 @@ pub async fn serve(
         health.view(),
     );
     let through = Arc::clone(&first.through);
+    let held = Arc::clone(&first.held);
     let front = Front {
         shelf: shelf.clone(),
         moments: taken,
@@ -96,7 +106,11 @@ pub async fn serve(
     let api = Arc::new(Api {
         moments,
         patch,
-        sender: Mutex::new(Publisher { sender, through }),
+        sender: Mutex::new(Publisher {
+            sender,
+            through,
+            held,
+        }),
         history: Arc::new(Semaphore::new(engine::PLAN_BYTES)),
         stop,
         pictures,
@@ -162,6 +176,8 @@ struct Picture {
     /// Compare authored revisions for deltas without pinning their compiled plans.
     source: Weak<Looks>,
     show: ShowFile,
+    /// The lights the grabs hold in this snapshot.
+    held: Arc<[HeldLight]>,
 }
 
 impl Picture {
@@ -175,6 +191,7 @@ impl Picture {
     ) -> Self {
         let project = moment.project.at(&snapshot);
         Self {
+            held: moment.held.at(snapshot.applied()),
             snapshot,
             requested_at,
             health: health.clone(),
@@ -201,6 +218,8 @@ struct Moment {
     looks: Arc<Looks>,
     /// Materialize one plan-free copy for all pictures taken under this revision.
     rows: OnceLock<Arc<[SavedLook]>>,
+    /// The held lights after each grab of this revision.
+    held: Arc<HeldLog>,
 }
 
 impl Moment {
@@ -214,7 +233,43 @@ impl Moment {
             patch: sender.patch(),
             looks: sender.looks(),
             rows: OnceLock::new(),
+            held: Arc::new(HeldLog::new(sender.sent(), sender.held())),
         }
+    }
+}
+
+/// The lights the grabs hold after each command a grab queued, by its number: the front
+/// keeps its grabs, the tick has no lights. A picture shows those its snapshot applied.
+struct HeldLog(std::sync::Mutex<VecDeque<(u64, Arc<[HeldLight]>)>>);
+
+impl HeldLog {
+    fn new(sent: u64, held: Arc<[HeldLight]>) -> Self {
+        Self(std::sync::Mutex::new(VecDeque::from([(sent, held)])))
+    }
+
+    /// The lights held once the first `sent` commands are applied, if they changed.
+    fn push(&self, sent: u64, held: Arc<[HeldLight]>) {
+        let mut log = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if log.back().is_none_or(|(_, last)| !Arc::ptr_eq(last, &held)) {
+            log.push_back((sent, held));
+        }
+    }
+
+    /// The lights held in a snapshot that applied the first `applied` commands. Forgets
+    /// the ones before: the reader never goes back.
+    fn at(&self, applied: u64) -> Arc<[HeldLight]> {
+        let mut log = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        while log.get(1).is_some_and(|(sent, _)| *sent <= applied) {
+            log.pop_front();
+        }
+        log.front()
+            .map_or_else(|| Arc::from([]), |(_, held)| Arc::clone(held))
     }
 }
 
@@ -420,6 +475,8 @@ async fn answer(
 struct Publisher {
     sender: Sender,
     through: Arc<AtomicU64>,
+    /// The held lights of the newest moment.
+    held: Arc<HeldLog>,
 }
 
 /// How often a command prepared on a base another change replaced is prepared again,
@@ -594,10 +651,12 @@ impl Api {
             moment.credit = credit.take();
             debug_assert!(moment.credit.is_some());
             publisher.through = Arc::clone(&moment.through);
+            publisher.held = Arc::clone(&moment.held);
             // The reader is gone only once the server stops.
             let _ = self.moments.send(moment);
         } else {
-            let sent = sender.sent();
+            let (sent, held) = (sender.sent(), sender.held());
+            publisher.held.push(sent, held);
             publisher.through.store(sent, Ordering::Release);
         }
         Some(changed)
@@ -613,7 +672,6 @@ impl Api {
 }
 
 fn picture(now: &Picture) -> Option<String> {
-    let lights: Vec<HeldLight> = held_lights(now.snapshot.lights()).collect();
     json(&Reply::Picture {
         state: now.snapshot.state,
         health: now.health.health(),
@@ -624,7 +682,7 @@ fn picture(now: &Picture) -> Option<String> {
         looks: &now.looks,
         show: now.show,
         universes: now.snapshot.universes(),
-        lights: &lights,
+        lights: &now.held,
     })
 }
 
@@ -696,12 +754,50 @@ impl Subscription {
     }
 }
 
+/// Every light whose held parts differ between `before` and `after`, as `after` holds
+/// them, by number: a light let go holds nothing.
+fn held_changes(before: &[HeldLight], after: &[HeldLight]) -> Vec<HeldLight> {
+    if core::ptr::eq(before, after) {
+        return Vec::new();
+    }
+    let let_go = |light| HeldLight {
+        light,
+        intensity: None,
+        colour: None,
+    };
+    let (mut old, mut new) = (before.iter().peekable(), after.iter().peekable());
+    let mut changed = Vec::new();
+    loop {
+        match (old.peek(), new.peek()) {
+            (None, None) => return changed,
+            (Some(o), Some(n)) if o.light == n.light => {
+                if o != n {
+                    changed.push(**n);
+                }
+                old.next();
+                new.next();
+            }
+            (Some(o), None) => {
+                changed.push(let_go(o.light));
+                old.next();
+            }
+            (Some(o), Some(n)) if o.light < n.light => {
+                changed.push(let_go(o.light));
+                old.next();
+            }
+            (_, Some(n)) => {
+                changed.push(**n);
+                new.next();
+            }
+        }
+    }
+}
+
 /// The channels and lights that differ from this connection's last frame.
 fn changed(last: &Picture, now: &Picture) -> Option<String> {
     let channels: Vec<ChannelLevel> =
         changes(last.snapshot.universes(), now.snapshot.universes()).collect();
-    let lights: Vec<HeldLight> =
-        light_changes(last.snapshot.lights(), now.snapshot.lights()).collect();
+    let lights = held_changes(&last.held, &now.held);
     let new = !Arc::ptr_eq(&last.patch, &now.patch);
     let fixtures: Option<Vec<Patched>> = new.then(|| now.patch.fixtures());
     let groups: Option<Vec<Grouped>> = new.then(|| now.patch.groups());
@@ -820,12 +916,12 @@ mod tests {
             .picture(&b, Instant::now(), &health)
             .expect("B's moment is kept");
 
-        // (picture, saved looks, the play's look, light 1's colour)
+        // (picture, saved looks, the play's look, light 1's bytes: the play's colour)
         let cases = [
-            (&a, vec![1], Some(1), Some(green)),
-            (&b, vec![2], None, None),
+            (&a, vec![1], Some(1), [0, 255, 0]),
+            (&b, vec![2], None, [0, 0, 0]),
         ];
-        for (picture, looks, playing, colour) in cases {
+        for (picture, looks, playing, bytes) in cases {
             let saved: Vec<u16> = picture.looks.iter().map(|saved| saved.look).collect();
             assert_eq!(saved, looks);
             let plays: Vec<u16> = picture
@@ -836,8 +932,8 @@ mod tests {
                 .map(|play| play.look)
                 .collect();
             assert_eq!(plays.first().copied(), playing);
-            let held = held_lights(picture.snapshot.lights()).find(|held| held.light == 1);
-            assert_eq!(held.and_then(|held| held.colour), colour);
+            assert_eq!(picture.snapshot.shown()[0].0[..3], bytes);
+            assert!(picture.held.is_empty(), "nothing grabbed");
         }
         // Query: each picture as it is
         let query: Value = serde_json::from_str(&picture(&a).unwrap()).unwrap();

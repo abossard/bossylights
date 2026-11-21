@@ -203,7 +203,11 @@ async fn a_red_par_under_raw_38_at_9_sends_255_9_0_released_255_0_0_blackout_0_0
             json!({"SetColour": {"target": fixture, "red": 65535, "green": 0, "blue": 0}}),
             [255, 0, 0],
         ),
-        (json!({"ReleaseIntensity": {"target": fixture}}), [0, 0, 0]),
+        // the PAR has no dimmer: a colour alone is not scaled (cx-4)
+        (
+            json!({"ReleaseIntensity": {"target": fixture}}),
+            [255, 0, 0],
+        ),
     ];
     for (step, bytes) in steps {
         assert!(taken(&command(&mut socket, step.clone()).await), "{step}");

@@ -3,8 +3,8 @@
 
 mod common;
 
-use common::mode;
-use engine_core::{Color, Levels, Light, PatchCommand, Pixels, Text, Universes, resolve};
+use common::{mode, shown};
+use engine_core::{Color, Light, PatchCommand, Pixels, Text, Universes};
 use fixture_library::{Byte, Direction, Does, Function, Mode, Range};
 use rig::channels::{
     Change, Compound, Config, Field, Follows, PastTheEnd, Sense, Shape, Ties, Travel, Width,
@@ -1166,24 +1166,25 @@ fn compounds_come_from_metadata() {
 }
 
 #[test]
-fn v11_colour_bar_writers_match_the_mode_without_colour_tags() {
+fn v11_colour_bar_fields_match_the_mode_without_colour_tags() {
     let mode = mode(CAMEO, "19-Channel");
     let mut untagged = mode.clone();
     for channel in &mut untagged.channels {
         channel.declared.colour = None;
     }
-    let writers = |mode: &Mode| {
-        rig::compile(
-            mode,
-            common::at(1),
-            common::light(0),
-            Universes::ONE,
-            common::lights(),
+    let said = |mode: &Mode| {
+        common::say(
+            &rig::compile(
+                mode,
+                common::at(1),
+                common::light(0),
+                Universes::ONE,
+                common::lights(),
+            )
+            .unwrap(),
         )
-        .unwrap()
-        .writers
     };
-    assert_eq!(writers(&mode), writers(&untagged));
+    assert_eq!(said(&mode), said(&untagged));
 }
 
 #[test]
@@ -1708,9 +1709,7 @@ fn v11_intensity_still_reaches_the_fog_channels() {
             intensity: Some(*intensity),
             ..Light::DARK
         };
-        let mut frame = [Levels::ZERO];
-        resolve(&[light], &compiled.writers, &mut frame);
-        frame[0].0[..mode.channels.len()].to_vec()
+        shown(&compiled, &[light])
     });
     assert_eq!(actual, cases.map(|(_, _, expected)| expected));
 }

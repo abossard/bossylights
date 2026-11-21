@@ -237,7 +237,7 @@ stateDiagram-v2
   Ended --> [*]
 ```
 
-- Rank, ties, release and stay are the rules of [who-wins.md](who-wins.md), now per channel. The property rows there are replaced when T4 lands.
+- Rank, ties, release and stay are the rules of [who-wins.md](who-wins.md), now per channel. The property rows there were replaced in T4 (#250).
 - Explain recomputes one channel with the same `mix` function over retained inputs: the source table (start, speed, rank), the plans and grab lists the front holds, the raw holds and the eight modifier levels, all stamped with the frame. It returns the winner and the runner-up (`under`) exactly, and cannot drift from the tick. Only the latest snapshot frame is retained; an older frame reports "expired".
 
 ## Fades and jumps
@@ -457,6 +457,7 @@ Rules for every ticket:
 
 - `engine/src/lib.rs` and `engine-core/src/{api,lib}.rs` are shared hot files: tickets that touch them run one at a time. Only T3 runs beside T1 and T2.
 - T4 is built by Codex astra ultra from the reviewers' red tests and verified by Opus. It lands as one commit. If it proves too big, the only safe split is by crate behind one mixer: never two mixers on the production path.
+- T4 as built (#250): one channel mixer. Plans stay a tree whose values are channel bytes and 16-bit words per target, flat arrays per plan (targets, fields, fades, bindings, words kept once). Flattening plans into curves with `Gap` knots is #258. Grab changes that carry offers go to the tick as one `Grabs` command whose box comes back once; a grab end or removal is one `Grab` command each, with no box.
 - Product UI tickets stay behind the storyboard catalog approval (#102). They start when T5, T6 and T7 have landed.
 
 ### Tests that change

@@ -47,19 +47,19 @@ pub use engine_core::{
     Source, Speed, Swatches, Use, Value, WaveTarget, When,
 };
 use engine_core::{
-    EngineCommand, Histogram, LATENCY_BUCKETS, LATENESS_BUCKETS, MAX_LIGHTS, bucket, due, frame,
-    percentile, update, wait,
+    EngineCommand, Histogram, LATENCY_BUCKETS, LATENESS_BUCKETS, bucket, due, frame, percentile,
+    update, wait,
 };
 pub use fixture_library::Fixture;
 pub use looks::{Looks, PLAN_BYTES};
 pub use rig::Patch;
 mod grabs;
-use grabs::Grabs;
+use grabs::{Grabs, Step};
 mod snapshot;
 
 use engine_core::{
-    Channels, Claims, End, Entry, LightChange, LightRun, Lights, LookCommand, PLAYS, ProjectEffect,
-    ProjectEvent, Writer, stops, unkept,
+    ChannelConfig, Channels, End, Entry, GRABS, GrabChange, HeldLight, LightRun, Lights,
+    LookCommand, Offer, Offering, PLAYS, ProjectEffect, ProjectEvent, SOURCES, stops, unkept,
 };
 use looks::Plan;
 use rig::{PatchEffect, Whole};
@@ -95,9 +95,6 @@ const LIGHTS: Lights = Lights::MOST;
 /// freed yet, so the queue back cannot fill up, and a release needs only a place in the
 /// command queue.
 const RETIRED: usize = QUEUE + MAX_OUTPUTS;
-/// A release of every other light makes the most disjoint runs possible.
-/// Even that selection must fit in an empty FIFO, all in one wake.
-const RUNS_IN_PLACE: usize = (MAX_LIGHTS as usize).div_ceil(2 * QUEUE);
 /// How often the free thread frees retired devices when nobody wakes it.
 const FREE_EVERY: Duration = Duration::from_millis(100);
 /// How long `SetOutput` waits for the devices on their way back before it opens.
@@ -182,7 +179,8 @@ pub struct Sender {
     /// applied every command sent.
     plays: [Option<Live>; PLAYS],
     /// Visits booked for expanded light commands and retiring plans until their FIFO prefix completes.
-    prefix_work: std::collections::VecDeque<(u64, PrefixWork)>,
+    /// Sample visits a play may still make in the wake that applies command `sent`.
+    prefix_work: std::collections::VecDeque<(u64, usize)>,
     /// Bytes of immutable plans sent, including versions still waiting for reclamation.
     plan_bytes: u64,
     /// The generation of the last play started.
@@ -203,11 +201,6 @@ pub struct Sender {
     clock: Clock,
     /// Bounds for devices brought through the attachment door.
     universes: Universes,
-}
-
-enum PrefixWork {
-    Plan(usize),
-    Lights(usize),
 }
 
 /// Opens the device for an output kind, off the tick thread. The engine's own is
@@ -375,12 +368,12 @@ enum Brings {
     Reroute(Box<Lane>, bool),
     /// Tell the opener when prior attachments passed the tick and reclaimer.
     Probe(Arc<AtomicBool>),
-    /// The writers of the patch, for `Writers`.
-    Writers(Vec<Writer>),
-    /// Some runs of a group in place, for `Runs`: nothing goes back.
-    Runs([Option<LightRun>; RUNS_IN_PLACE]),
-    /// The plan of a play, for `Start` and `Plan`.
-    Plan(Version),
+    /// The patch's channel config, for `Config`: copied in, then sent back at once.
+    Config(Box<ChannelConfig>),
+    /// The grab changes, for `Grabs`: each entry's old offers go back in the same box.
+    Grabs(Box<[GrabStep]>),
+    /// The plan of a play and its scratch, for `Start` and `Plan`.
+    Plan(Running),
 }
 
 /// What goes back from the tick thread, to be freed on the free thread.
@@ -391,8 +384,9 @@ enum Brings {
 enum Retired {
     Probe(Arc<AtomicBool>),
     Device(Box<Lane>),
-    Writers(Vec<Writer>),
-    Plan(Arc<Plan>),
+    Config(Box<ChannelConfig>),
+    Grabs(Box<[GrabStep]>),
+    Plan(Running),
 }
 
 /// What came of [`Sender::begin`].
@@ -903,6 +897,40 @@ struct Version {
     usage: Use,
 }
 
+/// A play's plan on the tick, with the words its samples go in: made by the front, so
+/// the tick never allocates. A kept play's last sample stays in `scratch`.
+struct Running {
+    version: Version,
+    scratch: Box<[Option<u16>]>,
+    spare: Box<[Option<u16>]>,
+}
+
+impl Running {
+    fn new(version: Version) -> Self {
+        let (words, spare) = (version.plan.words(), version.plan.spare());
+        Self {
+            version,
+            scratch: vec![None; words].into_boxed_slice(),
+            spare: vec![None; spare].into_boxed_slice(),
+        }
+    }
+
+    /// What the play offers this frame: its step, or its last sample.
+    fn offering(&self) -> Offering<'_> {
+        self.version.plan.offering(&self.scratch)
+    }
+
+    /// Samples the plan at `elapsed` into the scratch. False when it offers nothing.
+    fn sample(&mut self, elapsed: impl Into<engine_core::Elapsed>) -> bool {
+        self.version.plan.sample(
+            elapsed,
+            self.version.usage,
+            &mut self.scratch,
+            &mut self.spare,
+        )
+    }
+}
+
 #[derive(Clone)]
 struct Live {
     play: PlayId,
@@ -1093,25 +1121,9 @@ impl Engine {
             retired: outgoing,
             devices: std::array::from_fn(|_| None),
             switching: Box::new(std::array::from_fn(|_| None)),
-            writers: Vec::new(),
             plans: std::array::from_fn(|_| None),
-            scratch: {
-                let first = engine_core::LightNumber::new(0, LIGHTS)
-                    .and_then(|first| LightRun::new(first, 1, LIGHTS))
-                    .ok_or_else(|| io::Error::other("empty lighting engine"))?;
-                std::array::from_fn(|_| {
-                    vec![
-                        Entry {
-                            lights: first,
-                            values: Light::DARK
-                        };
-                        usize::from(MAX_LIGHTS)
-                    ]
-                    .into_boxed_slice()
-                })
-            },
-            claims: vec![[None; engine_core::Property::ALL.len()]; usize::from(MAX_LIGHTS)]
-                .into_boxed_slice(),
+            offers: std::iter::repeat_with(|| None).take(GRABS).collect(),
+            sources: vec![None; SOURCES].into_boxed_slice(),
             // `run` puts in the priority, once the thread has it.
             now: Box::new(Snapshot::new(universes, Priority::RealTime)),
             hand,
@@ -1350,9 +1362,11 @@ impl Sender {
                 }) {
                     return Err(Refusal::LookInUse { look: live.look });
                 }
-                let begun = self.publish(effects, rebound.as_ref())?;
+                let patch = patch.map(Arc::new);
+                let target = patch.clone().unwrap_or_else(|| Arc::clone(&self.patch));
+                let begun = self.publish(&target, effects, rebound.as_ref())?;
                 if let Some(patch) = patch {
-                    self.patch = Arc::new(patch);
+                    self.patch = patch;
                 }
                 if let Some(looks) = rebound {
                     self.looks = Arc::new(looks);
@@ -1373,7 +1387,8 @@ impl Sender {
                 }) {
                     return Err(Refusal::EmptyPalette);
                 }
-                self.publish(Vec::new(), Some(&looks))?;
+                let patch = Arc::clone(&self.patch);
+                self.publish(&patch, Vec::new(), Some(&looks))?;
                 self.looks = Arc::new(looks);
                 Begun::Queued
             }
@@ -1409,7 +1424,10 @@ impl Sender {
                 // no play is generation zero: each slot's `Shared::ended` starts there
                 let generation = self.generation.wrapping_add(1).max(1);
                 let play = PlayId::new(slot, generation).ok_or(Refusal::PlayFull)?;
-                self.check_work(self.playing_work() + looks::play_work(plan.work()), 0)?;
+                self.check_work(
+                    self.playing_work() + looks::play_work(plan.work()),
+                    self.grabs.offers(),
+                )?;
                 let bytes = plan.bytes() as u64;
                 self.check_plan_bytes(bytes)?;
                 let version = Version {
@@ -1425,14 +1443,13 @@ impl Sender {
                         rank,
                         when,
                     },
-                    Brings::Plan(version.clone()),
+                    Brings::Plan(Running::new(version.clone())),
                 )?;
                 self.plan_bytes += bytes;
                 self.generation = generation;
                 if let Some(live) = self.plays.get_mut(slot) {
                     if let Some(old) = live.as_ref() {
-                        self.prefix_work
-                            .push_back((self.sent, PrefixWork::Plan(old.wake_work())));
+                        self.prefix_work.push_back((self.sent, old.wake_work()));
                     }
                     *live = Some(Live {
                         play,
@@ -1452,8 +1469,7 @@ impl Sender {
                             End::Keep => {
                                 self.push(EngineCommand::Keep { play }, Brings::Nothing)?;
                                 if let Some(Some(live)) = self.plays.get_mut(play.slot()) {
-                                    self.prefix_work
-                                        .push_back((self.sent, PrefixWork::Plan(live.work())));
+                                    self.prefix_work.push_back((self.sent, live.work()));
                                     live.state = PlayState::Kept;
                                 }
                             }
@@ -1486,42 +1502,38 @@ impl Sender {
                 Begun::Queued
             }
             Change::ReleaseProperty { property, runs } => {
-                let held = self.grabs.releasing(property, &runs);
-                self.lights(LightChange::Release { property }, &held)?;
-                self.grabs.let_go(Some(property), &held);
+                let patch = Arc::clone(&self.patch);
+                let mut next = self.grabs.clone();
+                let steps = next.let_go(&patch, Some(property), &runs);
+                self.grab_steps(next, steps)?;
                 Begun::Queued
             }
             Change::UpdateGrab { grab, value } => {
-                if let Some(property) = self.grabs.property(grab) {
-                    if property != value.property() {
-                        return Err(Refusal::OtherProperty { property });
-                    }
-                    // only the lights it still holds take the value
-                    let held = self.grabs.held(grab);
-                    self.patch.supports(&held, value)?;
-                    self.lights(LightChange::Update { value, grab }, &held)?;
-                }
+                let patch = Arc::clone(&self.patch);
+                let mut next = self.grabs.clone();
+                let steps = next.update(&patch, grab, value)?;
+                self.grab_steps(next, steps)?;
                 Begun::Queued
             }
             Change::EndGrab { grab } => {
-                if let Some(property) = self.grabs.property(grab) {
-                    let end = stops(Rank::Manual, self.looks.rules());
-                    let held = self.grabs.held(grab);
-                    self.lights(
-                        LightChange::End {
-                            property,
-                            grab,
-                            end,
-                        },
-                        &held,
-                    )?;
-                    self.grabs.end(grab, property, &held, end);
-                }
+                let mut next = self.grabs.clone();
+                let steps = next.end(grab, stops(Rank::Manual, self.looks.rules()));
+                self.grab_steps(next, steps)?;
                 Begun::Queued
             }
             Change::Rules { looks } => {
                 let rules = looks.rules();
-                self.push(EngineCommand::Rules { rules }, Brings::Nothing)?;
+                // the brightness rule is in the channel config: both in one frame
+                self.queue(
+                    vec![
+                        (EngineCommand::Rules { rules }, Brings::Nothing),
+                        (
+                            EngineCommand::Config,
+                            Brings::Config(self.patch.config(rules)),
+                        ),
+                    ],
+                    1,
+                )?;
                 self.forget(|live| unkept(live.rank, live.state, rules));
                 if unkept(Rank::Manual, PlayState::Kept, rules) {
                     self.grabs.clear_kept();
@@ -1538,21 +1550,17 @@ impl Sender {
         self.plays.iter().flatten().map(Live::wake_work).sum()
     }
 
-    /// Even a full set of plans leaves room to write one light property, end
-    /// its grab and release it. Other commands share the unused play budget.
-    fn check_work(&self, mut playing: usize, extra_lights: usize) -> Result<(), Refusal> {
-        const ONE_GRAB: usize = 3;
-        let mut lights = self.grabs.reserved() + extra_lights;
-        for (_, work) in &self.prefix_work {
-            match work {
-                PrefixWork::Plan(visits) => playing += visits,
-                PrefixWork::Lights(visits) => lights += visits,
-            }
-        }
+    /// The plays' visits and `offers`, the grabs' offers every frame, fit the work of a
+    /// frame. Even a full set of plans leaves room to grab one light. Other commands
+    /// share the unused play budget.
+    fn check_work(&self, playing: usize, offers: usize) -> Result<(), Refusal> {
+        /// The most offers one light makes: every field of its widest property.
+        const ONE_GRAB: usize = 16;
+        let playing = playing + self.prefix_work.iter().map(|(_, w)| w).sum::<usize>();
         let remaining = looks::WORK_LIMIT
             .checked_sub(playing)
             .ok_or(Refusal::WorkLimit)?;
-        if lights > remaining.max(ONE_GRAB) {
+        if offers > remaining.max(ONE_GRAB) {
             return Err(Refusal::WorkLimit);
         }
         Ok(())
@@ -1579,8 +1587,7 @@ impl Sender {
         if let Some(old) = self.plays.get_mut(play.slot()).and_then(Option::take) {
             let terminal = old.work_before_release();
             if terminal > 0 {
-                self.prefix_work
-                    .push_back((self.sent, PrefixWork::Plan(terminal)));
+                self.prefix_work.push_back((self.sent, terminal));
             }
         }
         Ok(())
@@ -1634,8 +1641,7 @@ impl Sender {
             {
                 let terminal = old.work_before_release();
                 if terminal > 0 {
-                    self.prefix_work
-                        .push_back((self.sent, PrefixWork::Plan(terminal)));
+                    self.prefix_work.push_back((self.sent, terminal));
                 }
                 self.retired += 1;
             }
@@ -1680,15 +1686,42 @@ impl Sender {
         Arc::clone(&self.looks)
     }
 
-    /// Publish every effect of one edit in one FIFO chunk. Starts admitted since
-    /// prepare participate. Each replacement reserves a return even if the play
-    /// naturally ends or keeps its older version before the chunk is applied.
+    /// Publish every effect of one edit in one FIFO chunk, made against `patch`, the
+    /// patch once admitted. Starts admitted since prepare participate. Each replacement
+    /// reserves a return even if the play naturally ends or keeps its older version
+    /// before the chunk is applied.
     fn publish(
         &mut self,
+        patch: &Patch,
         effects: Vec<PatchEffect>,
         looks: Option<&Looks>,
     ) -> Result<Begun, Refusal> {
-        let places: usize = effects.iter().map(places).sum();
+        let rules = looks.map_or(self.looks.rules(), Looks::rules);
+        let mut begun = Begun::Queued;
+        let mut config = None;
+        let mut next = self.grabs.clone();
+        let mut steps = Vec::new();
+        for effect in effects {
+            match effect {
+                PatchEffect::Patched { fixture } => begun = Begun::Patched { fixture },
+                PatchEffect::Config => config = Some(patch.config(rules)),
+                PatchEffect::Moved { lights } => steps.extend(next.moved(patch, &[lights])),
+                PatchEffect::Unpatched { lights } => {
+                    steps.extend(next.let_go(patch, None, &[lights]));
+                }
+                PatchEffect::Release { property, runs } => {
+                    steps.extend(next.let_go(patch, Some(property), &runs));
+                }
+                PatchEffect::Grab { value, runs } => {
+                    let grab = GrabId {
+                        generation: self.grabbed.wrapping_add(1),
+                    };
+                    steps.extend(next.grab(patch, grab, value, runs)?);
+                    self.grabbed = grab.generation;
+                    begun = Begun::Grabbed { grab };
+                }
+            }
+        }
         let mut changed = Vec::new();
         let mut playing = self.playing_work();
         if let Some(looks) = looks {
@@ -1702,85 +1735,47 @@ impl Sender {
                 if !Arc::ptr_eq(&plan, &live.current.plan) {
                     playing =
                         playing - live.wake_work() + looks::play_work(live.work_after_edit(&plan));
-                    changed.push(Version {
-                        play: live.play,
-                        sent: self.sent + places as u64 + changed.len() as u64 + 1,
-                        plan,
-                        usage: live.current.usage,
-                    });
+                    changed.push((live.play, plan, live.current.usage));
                 }
             }
         }
-        let writers = effects
-            .iter()
-            .filter(|e| matches!(e, PatchEffect::Writers(_)))
-            .count();
-        let returns = writers + changed.len();
-        self.room(places + changed.len(), returns)?;
-        let bytes = changed.iter().map(|v| v.plan.bytes() as u64).sum();
-        let lights = effects.iter().map(light_visits).sum();
-        let mut book = lights;
-        for effect in &effects {
-            if let PatchEffect::Grab { value, runs } = effect {
-                book += self.grabs.fits(value.property(), runs)?;
-            }
+        if !changed.is_empty() || !steps.is_empty() {
+            self.check_work(playing, next.offers())?;
         }
-        if !changed.is_empty() || book > 0 {
-            self.check_work(playing, book)?;
+        let bytes = changed.iter().map(|(_, plan, _)| plan.bytes() as u64).sum();
+        if !changed.is_empty() {
             self.check_plan_bytes(bytes)?;
         }
-        let at = self.clock.now();
-        let chunk = self
-            .commands
-            .write_chunk_uninit(places + changed.len())
-            .map_err(|_| Refusal::QueueFull)?;
-        let mut queued = Vec::with_capacity(places + changed.len());
-        let mut begun = Begun::Queued;
-        for effect in effects {
-            match effect {
-                PatchEffect::Patched { fixture } => begun = Begun::Patched { fixture },
-                PatchEffect::Writers(writers) => queued.push(Sent {
-                    command: EngineCommand::Writers,
-                    at,
-                    brings: Brings::Writers(writers),
-                }),
-                PatchEffect::Send(command) => {
-                    queued.push(Sent {
-                        command,
-                        at,
-                        brings: Brings::Nothing,
-                    });
-                    if let EngineCommand::Darken { lights } = command {
-                        self.grabs.let_go(None, &[lights]);
-                    }
-                }
-                PatchEffect::Runs { change, runs } => {
-                    queued.extend(run_commands(change, &runs, at));
-                }
-                PatchEffect::Grab { value, runs } => {
-                    let grab = GrabId {
-                        generation: self.grabbed.wrapping_add(1),
-                    };
-                    queued.extend(run_commands(LightChange::Grab { value, grab }, &runs, at));
-                    self.grabbed = grab.generation;
-                    self.grabs.grab(grab, value.property(), runs);
-                    begun = Begun::Grabbed { grab };
-                }
-            }
+        let mut queued = Vec::new();
+        if let Some(config) = config {
+            queued.push((EngineCommand::Config, Brings::Config(config)));
         }
-        queued.extend(changed.iter().map(|v| Sent {
-            command: EngineCommand::Plan { play: v.play },
-            at,
-            brings: Brings::Plan(v.clone()),
+        queued.extend(grab_commands(steps));
+        let mut returns = returns_of(&queued);
+        // each replaced plan is sent last, numbered by its place in the chunk
+        let first = self.sent + queued.len() as u64 + 1;
+        let versions: Vec<Version> = changed
+            .into_iter()
+            .zip(first..)
+            .map(|((play, plan, usage), sent)| Version {
+                play,
+                sent,
+                plan,
+                usage,
+            })
+            .collect();
+        returns += versions.len();
+        queued.extend(versions.iter().map(|v| {
+            (
+                EngineCommand::Plan { play: v.play },
+                Brings::Plan(Running::new(v.clone())),
+            )
         }));
-        self.sent += chunk.fill_from_iter(queued) as u64;
-        self.retired += returns as u64;
+        self.queue(queued, returns)?;
+        self.grabs = next;
+        self.grabs.sent();
         self.plan_bytes += bytes;
-        if lights > 0 {
-            self.prefix_work
-                .push_back((self.sent, PrefixWork::Lights(lights)));
-        }
-        for version in changed {
+        for version in versions {
             if let Some(Some(live)) = self.plays.get_mut(version.play.slot()) {
                 if live.current.usage.repeat == Repeat::Once {
                     Arc::make_mut(live.earlier.get_or_insert_with(Default::default))
@@ -1789,33 +1784,53 @@ impl Sender {
                 live.current = version;
             }
         }
-        if returns != 0 {
-            self.free.unpark();
-        }
         Ok(begun)
     }
 
-    /// Queues `change` on the lights of `runs`, all in one wake: the runs travel in
-    /// place, in places of the queue made visible at once, so nothing goes back and it
-    /// needs only those places.
-    fn lights(&mut self, change: LightChange, runs: &[LightRun]) -> Result<(), Refusal> {
-        if runs.is_empty() {
+    /// Queues `steps` of the grab book `next` in one chunk and takes it as the book:
+    /// refused, nothing changes.
+    fn grab_steps(&mut self, next: Grabs, steps: Vec<Step>) -> Result<(), Refusal> {
+        if steps.iter().any(|step| step.brings().is_some()) {
+            self.check_work(self.playing_work(), next.offers())?;
+        }
+        let queued = grab_commands(steps);
+        let returns = returns_of(&queued);
+        self.queue(queued, returns)?;
+        self.grabs = next;
+        self.grabs.sent();
+        Ok(())
+    }
+
+    /// Queues `commands` in one chunk, so one wake applies them all, `returns` of them
+    /// sending a box back. Refused as a whole when the queue has no room.
+    fn queue(
+        &mut self,
+        commands: Vec<(EngineCommand, Brings)>,
+        returns: usize,
+    ) -> Result<(), Refusal> {
+        if commands.is_empty() {
             return Ok(());
         }
-        let visits = run_visits(runs);
-        if matches!(change, LightChange::Update { .. }) {
-            self.check_work(self.playing_work(), visits)?;
-        }
-        let pieces = runs.len().div_ceil(RUNS_IN_PLACE);
-        let chunk = self
-            .commands
-            .write_chunk_uninit(pieces)
-            .map_err(|_| Refusal::QueueFull)?;
-        let sent = chunk.fill_from_iter(run_commands(change, runs, self.clock.now()));
+        self.room(commands.len(), returns)?;
+        let at = self.clock.now();
+        let chunk = self.commands.write_chunk_uninit(commands.len())?;
+        let sent = chunk.fill_from_iter(commands.into_iter().map(|(command, brings)| Sent {
+            command,
+            at,
+            brings,
+        }));
         self.sent += sent as u64;
-        self.prefix_work
-            .push_back((self.sent, PrefixWork::Lights(visits)));
+        self.retired += returns as u64;
+        if returns != 0 {
+            self.free.unpark();
+        }
         Ok(())
+    }
+
+    /// The lights that hold intensity or colour after every admitted command, as the
+    /// picture shows them.
+    pub fn held(&self) -> Arc<[HeldLight]> {
+        self.grabs.held()
     }
 
     /// Holds the next start of this output's lane until the test releases it.
@@ -2022,11 +2037,16 @@ impl Sender {
     }
 
     /// Takes `patch` in place of the patch, as a show file brings it: made from
-    /// [`Sender::patch`], so it has this engine's universes and lights. Its writers go to
-    /// the tick thread. Refused as a change of the patch is: nothing changes.
+    /// [`Sender::patch`], so it has this engine's universes and lights. Its channel config
+    /// goes to the tick thread, and every grab offers on the lights as this patch has
+    /// them. Refused as a change of the patch is: nothing changes.
     pub fn load(&mut self, patch: Patch) -> Result<(), Refusal> {
         check_pending_patch(&patch, self.project, &self.pending_outputs(), &self.routed)?;
-        self.publish(vec![PatchEffect::Writers(patch.writers().to_vec())], None)?;
+        let every = engine_core::LightNumber::new(0, LIGHTS)
+            .and_then(|first| LightRun::new(first, LIGHTS.count(), LIGHTS));
+        let mut effects = vec![PatchEffect::Config];
+        effects.extend(every.map(|lights| PatchEffect::Moved { lights }));
+        self.publish(&patch, effects, None)?;
         self.patch = Arc::new(patch);
         Ok(())
     }
@@ -2106,8 +2126,8 @@ impl Sender {
     }
 
     /// Queues `command` with what it `brings`. A device `Attach` brings and
-    /// `RemoveOutput` send the old one back; `Attach` with no device keeps it. `Writers`
-    /// send the old writers back.
+    /// `RemoveOutput` send the old one back; `Attach` with no device keeps it. `Config`
+    /// goes back once copied in.
     fn push(&mut self, command: EngineCommand, brings: Brings) -> Result<(), Refusal> {
         // The output this command changes, and whether the device there goes back.
         let (changes, sends_back) = match command {
@@ -2124,10 +2144,9 @@ impl Sender {
             | EngineCommand::ReleaseChannels
             | EngineCommand::ReleaseAll
             | EngineCommand::Blackout { .. }
-            | EngineCommand::Writers
-            | EngineCommand::Runs { .. }
-            | EngineCommand::Lights { .. }
-            | EngineCommand::Darken { .. }
+            | EngineCommand::Config
+            | EngineCommand::Grab { .. }
+            | EngineCommand::Grabs
             | EngineCommand::Start { .. }
             | EngineCommand::Keep { .. }
             | EngineCommand::Rules { .. }
@@ -2154,7 +2173,8 @@ impl Sender {
                     command,
                     EngineCommand::Plan { .. }
                         | EngineCommand::Release { .. }
-                        | EngineCommand::Writers
+                        | EngineCommand::Config
+                        | EngineCommand::Grabs
                 )
         };
         // one more box on its way back or held by the tick thread: all but a release
@@ -2218,57 +2238,55 @@ impl Sender {
     }
 }
 
-fn run_commands(
-    change: LightChange,
-    runs: &[LightRun],
-    at: Duration,
-) -> impl Iterator<Item = Sent> {
-    runs.chunks(RUNS_IN_PLACE).map(move |part| {
-        let (command, brings) = if let [run] = part {
-            (change.on(*run), Brings::Nothing)
-        } else {
-            let mut in_place = [None; RUNS_IN_PLACE];
-            for (place, run) in in_place.iter_mut().zip(part) {
-                *place = Some(*run);
-            }
-            (EngineCommand::Runs { change }, Brings::Runs(in_place))
-        };
-        Sent {
-            command,
-            at,
-            brings,
-        }
-    })
+/// The tick's command for one step of the grab book, with the offers it brings.
+/// One grab change on its way to the tick: its new offers with `Start` and `Update`; on
+/// the way back, the offers they took the place of.
+struct GrabStep {
+    grab: u16,
+    change: GrabChange,
+    offers: Option<Box<[Offer]>>,
 }
 
-fn run_visits(runs: &[LightRun]) -> usize {
-    runs.iter().map(|run| usize::from(run.count())).sum()
-}
-
-fn light_visits(effect: &PatchEffect) -> usize {
-    match effect {
-        PatchEffect::Runs { runs, .. } | PatchEffect::Grab { runs, .. } => run_visits(runs),
-        PatchEffect::Send(command) => {
-            if let EngineCommand::Lights { lights, .. } | EngineCommand::Darken { lights } = command
-            {
-                usize::from(lights.count())
-            } else {
-                0
-            }
-        }
-        PatchEffect::Writers(_) | PatchEffect::Patched { .. } => 0,
+/// The steps of one change to the grab book as commands. Steps without offers (a grab
+/// kept or gone) carry no box: one command each, so a release needs only places in the
+/// queue. Offers, or more such steps than the queue takes, go in one `Grabs` command whose
+/// box is one return, whatever it carries back.
+fn grab_commands(steps: Vec<Step>) -> Vec<(EngineCommand, Brings)> {
+    let step = |step| match step {
+        Step::Start(grab, offers) => (grab, GrabChange::Start, Some(offers)),
+        Step::Update(grab, offers) => (grab, GrabChange::Update, Some(offers)),
+        Step::Keep(grab) => (grab, GrabChange::Keep, None),
+        Step::Remove(grab) => (grab, GrabChange::Remove, None),
+    };
+    if steps.len() < QUEUE && steps.iter().all(|step| step.brings().is_none()) {
+        return steps
+            .into_iter()
+            .map(|s| {
+                let (grab, change, _) = step(s);
+                (EngineCommand::Grab { grab, change }, Brings::Nothing)
+            })
+            .collect();
     }
+    let steps: Box<[GrabStep]> = steps
+        .into_iter()
+        .map(|s| {
+            let (grab, change, offers) = step(s);
+            GrabStep {
+                grab,
+                change,
+                offers,
+            }
+        })
+        .collect();
+    vec![(EngineCommand::Grabs, Brings::Grabs(steps))]
 }
 
-/// Places of the command queue `effect` takes.
-fn places(effect: &PatchEffect) -> usize {
-    match effect {
-        PatchEffect::Patched { .. } => 0,
-        PatchEffect::Writers(_) | PatchEffect::Send(_) => 1,
-        PatchEffect::Runs { runs, .. } | PatchEffect::Grab { runs, .. } => {
-            runs.len().div_ceil(RUNS_IN_PLACE)
-        }
-    }
+/// How many of `commands` send a box back.
+fn returns_of(commands: &[(EngineCommand, Brings)]) -> usize {
+    commands
+        .iter()
+        .filter(|(_, brings)| !matches!(brings, Brings::Nothing))
+        .count()
 }
 
 /// Frees a device the tick thread did not take, and stops its thread, on a thread of its
@@ -2435,14 +2453,16 @@ fn free(mut retired: rtrb::Consumer<Retired>, shared: &Shared) {
                 thread::park_timeout(Duration::from_millis(1));
             }
             let device = matches!(back, Retired::Device(_));
-            let bytes = if let Retired::Plan(plan) = &back {
-                plan.bytes() as u64
+            let bytes = if let Retired::Plan(running) = &back {
+                running.version.plan.bytes() as u64
             } else {
                 0
             };
             match back {
                 Retired::Probe(ready) => ready.store(true, Ordering::Release),
-                Retired::Device(_) | Retired::Plan(_) | Retired::Writers(_) => drop(back),
+                Retired::Device(_) | Retired::Plan(_) | Retired::Config(_) | Retired::Grabs(_) => {
+                    drop(back)
+                }
             }
             if bytes > 0 {
                 shared.plan_bytes_freed.fetch_add(bytes, Ordering::Release);
@@ -2491,13 +2511,13 @@ struct Ticker {
     /// Each output's own thread, by output number, beside `State::outputs`.
     devices: [Option<Box<Lane>>; MAX_OUTPUTS],
     switching: Box<[Option<Switch>; MAX_OUTPUTS]>,
-    /// The patch's writers: lights to bytes, every frame.
-    writers: Vec<Writer>,
-    /// Each play's plan, by slot, beside `State::plays`.
-    plans: [Option<Version>; PLAYS],
-    scratch: [Box<[Entry]>; PLAYS],
-    /// Who holds each property of each light this frame: the Mixer's buffer.
-    claims: Box<[Claims]>,
+    /// Each play's plan and its sample, by slot, beside `State::plays`.
+    plans: [Option<Running>; PLAYS],
+    /// Each grab's offers, by its entry ([`GRABS`]), beside the grabs of the snapshot. A
+    /// box stays after its grab ends, until the entry's next offers send it back.
+    offers: Box<[Option<Box<[Offer]>>]>,
+    /// The source table of the frame: the Mixer's buffer.
+    sources: Box<[Option<Entry>]>,
     /// The state, the held levels and what was counted: what readers get a copy of.
     now: Box<Snapshot>,
     hand: Hand,
@@ -2703,8 +2723,8 @@ impl Ticker {
                         Brings::Nothing
                         | Brings::Reroute(_, _)
                         | Brings::Probe(_)
-                        | Brings::Writers(_)
-                        | Brings::Runs(_)
+                        | Brings::Config(_)
+                        | Brings::Grabs(_)
                         | Brings::Plan(_) => {}
                     }
                 }
@@ -2729,34 +2749,29 @@ impl Ticker {
                 .iter()
                 .filter(|p| p.state == PlayState::Playing)
             {
-                let slot = play.play.slot();
-                if let (Some(Some(version)), Some(out)) =
-                    (self.plans.get(slot), self.scratch.get_mut(slot))
-                {
-                    version
-                        .plan
-                        .sample(elapsed.since(play.start), version.usage, out);
+                if let Some(Some(running)) = self.plans.get_mut(play.play.slot()) {
+                    running.sample(elapsed.since(play.start));
                 }
             }
-            let (plans, scratch) = (&self.plans, &self.scratch);
-            self.now.show(
-                |slot| {
-                    plans
-                        .get(slot)
-                        .and_then(Option::as_ref)
-                        .zip(scratch.get(slot))
-                        .map_or(&[], |(v, out)| v.plan.entries(out))
-                },
-                &mut self.claims,
-            );
+            let (plans, offers) = (&self.plans, &self.offers);
             frame(
                 &self.now.state,
-                self.now.universes(),
-                self.now.holds(),
-                self.now.lights(),
-                &self.writers,
+                (self.now.universes(), self.now.holds()),
+                self.now.grabs(),
+                &mut self.sources,
+                |entry| match entry.checked_sub(PLAYS) {
+                    None => plans
+                        .get(entry)
+                        .and_then(Option::as_ref)
+                        .map_or(Offering::NOTHING, Running::offering),
+                    Some(grab) => offers
+                        .get(grab)
+                        .and_then(Option::as_deref)
+                        .map_or(Offering::NOTHING, Offering::List),
+                },
                 &mut self.channels,
             );
+            self.now.show(self.channels.values());
             self.back();
             self.show_returned(&wake_actions);
             let mut serve = [None; MAX_OUTPUTS];
@@ -2800,7 +2815,7 @@ impl Ticker {
         for slot in 0..PLAYS {
             if let Some(play) = self.now.state.plays.at(slot)
                 && play.state == PlayState::Playing
-                && let Some(Some(version)) = self.plans.get(slot)
+                && let Some(Some(Running { version, .. })) = self.plans.get(slot)
                 && version.usage.repeat == Repeat::Once
                 && version
                     .plan
@@ -2824,21 +2839,14 @@ impl Ticker {
         if play.state == PlayState::Kept {
             return;
         }
+        let clock = &self.now.state.clock;
+        let elapsed = clock.beat_at(clock.at()).since(play.start);
         if play.state == PlayState::Playing
-            && let (Some(Some(version)), Some(out)) =
-                (self.plans.get(slot), self.scratch.get_mut(slot))
-            && version.plan.sample(
-                self.now
-                    .state
-                    .clock
-                    .beat_at(self.now.state.clock.at())
-                    .since(play.start),
-                version.usage,
-                out,
-            )
+            && let Some(Some(running)) = self.plans.get_mut(slot)
+            && running.sample(elapsed)
         {
             if let Some(kept) = self.shared.kept.get(slot) {
-                kept.store(version.sent, Ordering::Release);
+                kept.store(running.version.sent, Ordering::Release);
             }
             self.apply(EngineCommand::Keep { play: id });
         } else {
@@ -2856,9 +2864,9 @@ impl Ticker {
 
     /// For `Attach` and `RemoveOutput`: puts the device brought at the output, sends the
     /// old one back to be freed and starts the output's lateness afresh. `Attach` without
-    /// a device keeps the one there. For `Writers`: the writers brought take the place of
-    /// the old ones, which go back. For `Runs`: each run brought takes the change, in this
-    /// wake. Others change nothing.
+    /// a device keeps the one there. For `Config`: the channel config brought is copied
+    /// in and goes back. For `Grab`: the offers brought take the place of the entry's,
+    /// which go back. Others change nothing.
     fn swap(&mut self, command: EngineCommand, brings: Brings) {
         if let EngineCommand::Release { play } = command {
             self.replan(play.slot(), None);
@@ -2868,10 +2876,10 @@ impl Ticker {
             // Rules can clear a natural hold before the sender has observed it.
             for slot in 0..PLAYS {
                 if !self.now.state.plays.has(slot) {
-                    if let Some(Some(version)) = self.plans.get(slot)
+                    if let Some(Some(running)) = self.plans.get(slot)
                         && let Some(ended) = self.shared.ended.get(slot)
                     {
-                        ended.store(version.play.generation, Ordering::Release);
+                        ended.store(running.version.play.generation, Ordering::Release);
                     }
                     self.replan(slot, None);
                 }
@@ -2879,19 +2887,19 @@ impl Ticker {
             return;
         }
         let device = match brings {
-            Brings::Plan(version) => {
-                let slot = version.play.slot();
+            Brings::Plan(running) => {
+                let play = running.version.play;
                 if self
                     .now
                     .state
                     .plays
-                    .at(slot)
-                    .is_some_and(|p| p.play == version.play && p.state != PlayState::Kept)
+                    .at(play.slot())
+                    .is_some_and(|p| p.play == play && p.state != PlayState::Kept)
                 {
-                    self.replan(slot, Some(version));
+                    self.replan(play.slot(), Some(running));
                 } else {
                     // Its reserved return carries the unused replacement itself.
-                    let _ = self.retired.push(Retired::Plan(version.plan));
+                    let _ = self.retired.push(Retired::Plan(running));
                 }
                 return;
             }
@@ -2944,17 +2952,24 @@ impl Ticker {
                 }
                 None
             }
-            Brings::Writers(writers) => {
-                let old = std::mem::replace(&mut self.writers, writers);
-                let _ = self.retired.push(Retired::Writers(old));
+            Brings::Config(config) => {
+                self.channels.configure(&config);
+                let _ = self.retired.push(Retired::Config(config));
                 return;
             }
-            Brings::Runs(runs) => {
-                if let EngineCommand::Runs { change } = command {
-                    for run in runs.into_iter().flatten() {
-                        self.apply(change.on(run));
+            Brings::Grabs(mut steps) => {
+                for step in &mut steps {
+                    self.now.update(EngineCommand::Grab {
+                        grab: step.grab,
+                        change: step.change,
+                    });
+                    if step.offers.is_some()
+                        && let Some(slot) = self.offers.get_mut(usize::from(step.grab))
+                    {
+                        core::mem::swap(slot, &mut step.offers);
                     }
                 }
+                let _ = self.retired.push(Retired::Grabs(steps));
                 return;
             }
         };
@@ -3197,13 +3212,13 @@ impl Ticker {
     }
 
     /// `plan` in place of the plan of `slot`, which goes back.
-    fn replan(&mut self, slot: usize, plan: Option<Version>) {
+    fn replan(&mut self, slot: usize, plan: Option<Running>) {
         let Some(at) = self.plans.get_mut(slot) else {
             return;
         };
         if let Some(old) = std::mem::replace(at, plan) {
             // The queue has room for every box a wake can retire (see `start`).
-            let _ = self.retired.push(Retired::Plan(old.plan));
+            let _ = self.retired.push(Retired::Plan(old));
         }
     }
 
@@ -4161,14 +4176,14 @@ mod tests {
     fn each_output_counts_a_command_when_its_own_frame_carries_it() {
         let ms = Duration::from_millis;
         #[derive(Clone, Copy, Debug)]
-        enum Step {
+        enum Then {
             Attach(usize),
             /// The `Attach` command sent at this time is applied, then the output's lane is fresh.
             Attached(u8, u64),
             Sent(u64),
             Handed(usize, u64),
         }
-        use Step::{Attach, Attached, Handed, Sent};
+        use Then::{Attach, Attached, Handed, Sent};
         // (steps, times counted in ms)
         let cases = [
             (vec![Attach(0), Sent(10), Handed(0, 12)], vec![2]),
@@ -4239,13 +4254,6 @@ mod tests {
         }
         .check(Universes::ONE)
         .unwrap();
-        let lights = engine_core::LightNumber::new(0, LIGHTS)
-            .and_then(|first| LightRun::new(first, 1, LIGHTS))
-            .unwrap();
-        let change = LightChange::Grab {
-            value: Value::Intensity(1),
-            grab: GrabId { generation: 1 },
-        };
         let play = PlayId::new(0, 1).unwrap();
         // (command, presses it adds)
         let cases = [
@@ -4254,10 +4262,14 @@ mod tests {
             (EngineCommand::ReleaseChannels, 1),
             (EngineCommand::ReleaseAll, 1),
             (EngineCommand::Blackout { on: true }, 1),
-            (EngineCommand::Writers, 1),
-            (EngineCommand::Lights { lights, change }, 1),
-            (EngineCommand::Darken { lights }, 1),
-            (EngineCommand::Runs { change }, 1),
+            (EngineCommand::Config, 1),
+            (
+                EngineCommand::Grab {
+                    grab: 0,
+                    change: GrabChange::Start,
+                },
+                1,
+            ),
             (
                 EngineCommand::Start {
                     play,
@@ -4659,7 +4671,7 @@ mod tests {
         reason = "an invalid fixture, missing play or missing frame fails this stepped test"
     )]
     fn linked_plans_at_the_fifo_cutoff() {
-        use engine_core::{Repeat, Sequence, SequenceItem, Step, Use};
+        use engine_core::{Repeat, Rgb, Sequence, SequenceItem, Step, Use};
 
         let (mut engine, mut sender, wakes) =
             Engine::start_stepped(Universes::new(1).unwrap(), Box::new(outputs::open)).unwrap();
@@ -4676,13 +4688,17 @@ mod tests {
                 },
             })
             .unwrap();
-        let put = |look, intensity| Command::PutStep {
+        // the strip has no dimmer: a step shows its red byte, 0 when it offers nothing
+        let put = |look, red: Option<u8>| Command::PutStep {
             look,
             name,
             step: Step {
                 target: Target::Light { light: 1 },
                 values: Light {
-                    intensity,
+                    colour: red.map(|red| Rgb {
+                        red: u16::from_be_bytes([red, red]),
+                        ..Rgb::BLACK
+                    }),
                     ..Light::DARK
                 },
             },
@@ -4716,9 +4732,9 @@ mod tests {
                 bpm: Bpm::new(60).unwrap(),
             })
             .unwrap();
-        sender.send(put(1, Some(123))).unwrap();
+        sender.send(put(1, Some(12))).unwrap();
         sender.send(put(2, None)).unwrap();
-        sender.send(put(3, Some(654))).unwrap();
+        sender.send(put(3, Some(65))).unwrap();
         for root in 10..10 + PLAYS as u16 {
             sender.send(sequence(root, &[1, 3])).unwrap();
         }
@@ -4729,7 +4745,7 @@ mod tests {
         let time = wakes.wake().unwrap() + Duration::from_secs(1);
         wakes.set_time(time);
         let first = begun(&mut sender, start(10, Rank::Show, Repeat::Once));
-        sender.send(put(1, Some(456))).unwrap();
+        sender.send(put(1, Some(45))).unwrap();
         let mut ids = vec![first];
         for root in 11..10 + PLAYS as u16 {
             ids.push(begun(&mut sender, start(root, Rank::Manual, Repeat::Once)));
@@ -4741,20 +4757,20 @@ mod tests {
             let snap = engine.latest();
             (
                 snap.state.plays.iter().copied().collect::<Vec<_>>(),
-                snap.lights()[0].intensity,
+                snap.shown()[0].0[0],
             )
         };
-        let (plays, intensity) = picture(&mut engine, time);
+        let (plays, red) = picture(&mut engine, time);
         assert_eq!(plays.len(), PLAYS);
-        assert_eq!(intensity, Some(456));
+        assert_eq!(red, 45);
         assert_eq!(plays[0].play, first);
         // All ends preceded the edit's timestamp, with no wake at the end.
         // The queued plans must be returned even for a removed or already-kept slot.
         let end = time + Duration::from_secs(3);
         wakes.set_time(end);
-        sender.send(put(3, Some(789))).unwrap();
-        let (plays, intensity) = picture(&mut engine, end);
-        assert_eq!(intensity, Some(654));
+        sender.send(put(3, Some(78))).unwrap();
+        let (plays, red) = picture(&mut engine, end);
+        assert_eq!(red, 65);
         assert_eq!(plays.len(), PLAYS - 1);
         assert!(
             plays
@@ -4771,28 +4787,28 @@ mod tests {
         }
         sender.send(sequence(11, &[1, 2])).unwrap();
         let play = begun(&mut sender, start(11, Rank::Manual, Repeat::Loop));
-        assert_eq!(picture(&mut engine, end).1, Some(456));
+        assert_eq!(picture(&mut engine, end).1, 45);
         let rest = end + Duration::from_millis(1500);
         wakes.set_time(rest);
         sender.send(Command::StopLook { play }).unwrap();
         // The stop was in the rest, although the next frame would be in the first item again.
         assert_eq!(
             picture(&mut engine, end + Duration::from_secs(2)),
-            (vec![], None)
+            (vec![], 0)
         );
         sender.send(Command::RemoveLook { look: 11 }).unwrap();
 
         let from = end + Duration::from_secs(2);
         sender.send(sequence(11, &[1, 3, 2])).unwrap();
         let once = begun(&mut sender, start(11, Rank::Manual, Repeat::Once));
-        assert_eq!(picture(&mut engine, from).1, Some(456));
+        assert_eq!(picture(&mut engine, from).1, 45);
         let shortened = from + Duration::from_millis(1500);
-        assert_eq!(picture(&mut engine, shortened).1, Some(789));
+        assert_eq!(picture(&mut engine, shortened).1, 78);
         sender.send(sequence(11, &[1])).unwrap();
         let (plays, sample) = picture(&mut engine, shortened);
         assert_eq!(
             (plays[0].play, plays[0].state, sample),
-            (once, PlayState::Kept, Some(456))
+            (once, PlayState::Kept, 45)
         );
         wakes.run();
     }
@@ -5198,13 +5214,17 @@ mod tests {
                 },
             })
             .unwrap();
-        let leaf = |intensity| Command::PutStep {
+        // the strip has no dimmer: a step shows its red byte on every pixel
+        let leaf = |red: u8| Command::PutStep {
             look: 1,
             name,
             step: Step {
                 target: Target::Fixture { fixture: 1 },
                 values: Light {
-                    intensity: Some(intensity),
+                    colour: Some(engine_core::Rgb {
+                        red: u16::from_be_bytes([red, red]),
+                        ..engine_core::Rgb::BLACK
+                    }),
                     ..Light::DARK
                 },
             },
@@ -5255,9 +5275,10 @@ mod tests {
             let snapshot = engine.latest();
             (
                 snapshot.state.plays.iter().copied().collect::<Vec<_>>(),
-                snapshot.lights()[..100]
+                snapshot.shown()[0].0[..300]
                     .iter()
-                    .map(|l| l.intensity)
+                    .step_by(3)
+                    .copied()
                     .collect::<Vec<_>>(),
             )
         };
@@ -5265,7 +5286,7 @@ mod tests {
             .map(|rank| started(&mut sender, start(4, rank)));
         let before = picture(&mut engine);
         assert_eq!(before.0.iter().map(|p| p.play).collect::<Vec<_>>(), ids);
-        assert_eq!(before.1, vec![Some(11); 100]);
+        assert_eq!(before.1, vec![11; 100]);
         let saved = sender.looks().all();
         let tail = sender.sent();
         for (case, command) in [
@@ -5292,10 +5313,11 @@ mod tests {
             assert_eq!(sender.looks().all(), saved, "{case}");
             assert_eq!(picture(&mut engine), before, "{case}");
         }
-        // Expanded groups share the FIFO prefix with these roots. One hundred
-        // lights fit once, but a queueful would exhaust the remaining visits.
+        // A grab's offers take the place of the older grab's on the same lights, and
+        // applying it costs the tick no visit per light: a queueful of them fits the
+        // work, the queue fills first.
         let mut refusal = None;
-        for _ in 0..QUEUE - PLAYS {
+        for _ in 0..=QUEUE {
             let tail = sender.sent();
             if let Err(reason) = sender.send(Command::SetColour {
                 target: Target::Fixture { fixture: 1 },
@@ -5308,22 +5330,21 @@ mod tests {
                 break;
             }
         }
-        assert_eq!(refusal, Some(Refusal::WorkLimit));
+        assert_eq!(refusal, Some(Refusal::QueueFull));
+        picture(&mut engine);
         for play in ids {
             if repeat == Repeat::Loop {
                 sender.send(Command::StopLook { play }).unwrap();
             }
             sender.send(Command::ReleaseHold { play }).unwrap();
         }
-        // A loop stopped under Stay and a once-use can sample before release.
-        // Together with the queued group writes, a larger root still cannot fit.
-        assert_eq!(sender.send(start(6, Rank::Manual)), Err(Refusal::WorkLimit));
-        assert_eq!(picture(&mut engine), (vec![], vec![None; 100]));
+        // Released, nothing plays; the grab shows black. The larger root fits.
+        assert_eq!(picture(&mut engine), (vec![], vec![0; 100]));
         let retry = started(&mut sender, start(6, Rank::Manual));
         sender.send(leaf(22)).unwrap();
-        let (plays, intensities) = picture(&mut engine);
+        let (plays, reds) = picture(&mut engine);
         assert_eq!(plays.iter().map(|p| p.play).collect::<Vec<_>>(), [retry]);
-        assert_eq!(intensities, vec![Some(22); 100]);
+        assert_eq!(reds, vec![22; 100]);
         wakes.run();
     }
 
@@ -5332,7 +5353,8 @@ mod tests {
     #[expect(
         clippy::unwrap_used,
         clippy::panic,
-        reason = "a missing fixture, stream or play fails this stepped admission test"
+        clippy::indexing_slicing,
+        reason = "a missing fixture, stream, play or universe fails this stepped admission test"
     )]
     fn a_saved_wave_can_start_alone_at_the_work_limit() {
         let universes = Universes::new(25).unwrap();
@@ -5388,7 +5410,13 @@ mod tests {
             pattern: Pattern::Wave {
                 target,
                 period: 1,
-                palette: Palette::Inline(Swatches::new(&[Rgb::BLACK]).unwrap()),
+                palette: Palette::Inline(
+                    Swatches::new(&[Rgb {
+                        red: u16::MAX,
+                        ..Rgb::BLACK
+                    }])
+                    .unwrap(),
+                ),
             },
         };
         let wall = wave(1, WaveTarget::Matrix { fixture: 1 });
@@ -5420,11 +5448,12 @@ mod tests {
                     .iter()
                     .map(|row| row.play)
                     .collect::<Vec<_>>(),
-                snapshot.lights().get(4095).and_then(|light| light.colour),
+                // the red of light 4095: channel 12 285, universe 24, address 510
+                snapshot.shown()[23].0[509],
             )
         };
         let before = applying_frame(&mut engine);
-        assert_eq!(before, (vec![play], Some(Rgb::BLACK)));
+        assert_eq!(before, (vec![play], 255));
         let saved = sender.looks().all();
         let tail = sender.sent();
         for command in [start(2), wave(3, WaveTarget::Group { group: name })] {
@@ -5437,7 +5466,7 @@ mod tests {
         let Ok(Begun::Started { play: next }) = sender.begin(start(2), &[]) else {
             panic!("release frees the loop's frame reservation");
         };
-        assert_eq!(applying_frame(&mut engine), (vec![next], None));
+        assert_eq!(applying_frame(&mut engine), (vec![next], 0));
 
         // A stop that keeps the Manual Wave must still sample it at the stop.
         // Releasing it in that prefix only frees the following frame sample.
@@ -5462,7 +5491,7 @@ mod tests {
         assert_eq!(sender.send(intensity), Ok(()));
         sender.send(Command::ReleaseHold { play }).unwrap();
         assert_eq!(sender.send(start(1)), Err(Refusal::WorkLimit));
-        assert_eq!(applying_frame(&mut engine), (vec![], None));
+        assert_eq!(applying_frame(&mut engine), (vec![], 0));
         sender.send(start(1)).unwrap();
         assert_eq!(applying_frame(&mut engine).0.len(), 1);
         wakes.run();
@@ -5493,7 +5522,8 @@ mod tests {
                 },
             })
             .unwrap();
-        for (look, intensity) in [(1, 10), (2, 20)] {
+        // the pixel has no dimmer: a step offers its red
+        for (look, red) in [(1, 10), (2, 20)] {
             sender
                 .send(Command::PutStep {
                     look,
@@ -5501,7 +5531,10 @@ mod tests {
                     step: Step {
                         target: Target::Light { light: 1 },
                         values: Light {
-                            intensity: Some(intensity),
+                            colour: Some(engine_core::Rgb {
+                                red,
+                                ..engine_core::Rgb::BLACK
+                            }),
                             ..Light::DARK
                         },
                     },

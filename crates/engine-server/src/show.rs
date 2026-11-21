@@ -2,7 +2,7 @@
 //! one save at a time on the blocking pool, never on the tick thread. What the file
 //! holds: the `show-file` crate.
 
-use engine::{Looks, Patch, Sender};
+use engine::{Fixture, Looks, Patch, Sender};
 use engine_core::{ShowFile, Unopened};
 use std::fs::{self, File};
 use std::io::{self, ErrorKind, Read, Write};
@@ -16,14 +16,15 @@ use tokio::sync::watch;
 /// is refused. A file that cannot be opened is left alone, and the patch stays empty.
 /// Reads at most one byte over [`show_file::MOST_BYTES`]: enough for `read` to say the
 /// file is too big, never a file of gigabytes.
-/// The looks of the file come after its patch, checked against it.
-pub fn open(path: &Path, sender: &mut Sender) -> ShowFile {
+/// The looks of the file come after its patch, checked against it. Each mode takes the
+/// declarations of the same mode in `library` ([`show_file::read`]).
+pub fn open(path: &Path, sender: &mut Sender, library: &[Fixture]) -> ShowFile {
     let mut text = String::new();
     let most = u64::try_from(show_file::MOST_BYTES).unwrap_or(u64::MAX);
     let empty = sender.patch();
     let read = match File::open(path).and_then(|file| file.take(most + 1).read_to_string(&mut text))
     {
-        Ok(_) => show_file::read(&text, &empty),
+        Ok(_) => show_file::read(&text, &empty, library),
         Err(error) if error.kind() == ErrorKind::NotFound => {
             Ok((Patch::clone(&empty), Looks::new()))
         }

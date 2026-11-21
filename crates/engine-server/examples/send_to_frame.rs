@@ -575,13 +575,14 @@ mod workload {
             ),
         )?;
         send(sender, wave_group(false))?;
-        let probe = "two lights";
+        // six RGB pixels: 18 offers, more than the one grab the desk always has room for
+        let probe = "six lights";
         if matches!(workload, Workload::Biggest | Workload::Burst) {
             send(
                 sender,
                 group(
                     probe,
-                    &[Member::Light { light: 1 }, Member::Light { light: 2 }],
+                    &[1, 2, 3, 4, 5, 6].map(|light| Member::Light { light }),
                 ),
             )?;
         }
@@ -688,7 +689,7 @@ mod workload {
     fn check_worst(visits: usize, probe: Result<(), Refusal>) -> Result<(), String> {
         if visits != 65_536 || probe != Err(Refusal::WorkLimit) {
             return Err(format!(
-                "expected a full work budget, booked {visits} and two-light grab gave {probe:?}"
+                "expected a full work budget, booked {visits} and six-light grab gave {probe:?}"
             ));
         }
         Ok(())
@@ -931,7 +932,7 @@ mod workload {
         }
 
         #[test]
-        fn worst_requires_both_the_visit_limit_and_the_two_light_refusal() {
+        fn worst_requires_both_the_visit_limit_and_the_six_light_refusal() {
             for (visits, probe, valid) in [
                 (65_536, Err(Refusal::WorkLimit), true),
                 (65_534, Err(Refusal::WorkLimit), false),
@@ -952,10 +953,10 @@ mod workload {
             let universes = Universes::new(64).unwrap();
             let (_engine, mut sender) = Engine::start(universes).unwrap();
             stream(&mut sender, universes);
-            // Two spare visits are still too few for the two-light grab.
+            // Two spare visits are still too few for the six-light grab.
             let (wave, sequence, background) = mode.strips();
             let result = prepare_strips(&mut sender, mode, (wave, sequence, background - 1));
-            assert_eq!(result, Err("expected a full work budget, booked 65534 and two-light grab gave Err(WorkLimit)".into()));
+            assert_eq!(result, Err("expected a full work budget, booked 65534 and six-light grab gave Err(WorkLimit)".into()));
         }
 
         #[test]
@@ -1088,8 +1089,18 @@ mod workload {
                 );
                 assert_eq!(engine.fresh().state.plays.iter().count(), roots);
                 let target = Target::Light { light: 1 };
+                // light 1's first field is its red channel: full once the grab is in a frame
+                let Some(&engine_core::Field::Byte(red)) = patch
+                    .targets()
+                    .first()
+                    .and_then(|light| light.fields.first())
+                else {
+                    panic!("light 1 starts with a red byte");
+                };
+                let red = usize::try_from(red).unwrap();
                 send(&mut sender, colour(target, RED)).unwrap();
-                assert_eq!(engine.fresh().lights()[0].colour, Some(RED));
+                let shown = engine.fresh().shown();
+                assert_eq!(shown[red / 512].0[red % 512], u8::MAX);
                 send(&mut sender, Command::ReleaseColour { target }).unwrap();
                 // Exercise both clients' command paths at the admitted edge.
                 send(&mut sender, wave_group(true)).unwrap();

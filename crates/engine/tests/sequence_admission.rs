@@ -133,15 +133,31 @@ fn a_saved_rgb_wave_leaves_room_to_light_its_first_pixel() {
         // A full beat later the first pixel is red for either start order.
         let second_at = first_at + beat;
         wakes.set_time(second_at);
-        // A strip without a dimmer emits no Wave colour without a separate hold.
+        // A strip without a dimmer shows the Wave's colour as it is (cx-4): the
+        // intensity offers nothing on it, but its grab is booked all the same.
         replies.push(sender.send(second));
         if pixels == 4096 {
-            // A full Wave has room for one light's write, end and release.
-            let another = Command::SetIntensity {
-                target: Target::Light { light: 2 },
-                intensity: u16::MAX,
-            };
-            assert_eq!(sender.send(another), Err(engine::Refusal::WorkLimit));
+            // A full Wave leaves room for the offers of one light at its widest, 16:
+            // five more pixels in red fit, six do not.
+            for (more, expected) in [(6, Err(engine::Refusal::WorkLimit)), (5, Ok(()))] {
+                let members: Vec<_> = (2..2 + more)
+                    .map(|light| engine::Member::Light { light })
+                    .collect();
+                let group = Text::new("more").unwrap();
+                sender
+                    .send(Command::SetGroup {
+                        name: group,
+                        members: engine::MemberList::Fits(engine::Members::new(&members).unwrap()),
+                    })
+                    .unwrap();
+                let red = Command::SetColour {
+                    target: Target::Group { group },
+                    red: u16::MAX,
+                    green: 0,
+                    blue: 0,
+                };
+                assert_eq!(sender.send(red), expected, "{more} more pixels");
+            }
         }
         wakes.wake_at(second_at).unwrap();
         mock::wait_until("the second command's frame did not arrive", || {
@@ -151,10 +167,33 @@ fn a_saved_rgb_wave_leaves_room_to_light_its_first_pixel() {
             [1, 2, 3].map(|address| heard.level(1, address)),
             [255, 0, 0]
         );
-        assert_eq!(heard.lit_of(3), Some(1));
+        assert_eq!(heard.lit_of(3), Some(usize::from(pixels)));
         wakes.run();
     }
     assert_eq!(replies, [Ok(()); 4]);
+}
+
+/// The red byte of the first `count` pixels: the strip has no dimmer, so a grab shows in
+/// its colour.
+fn reds(engine: &mut Engine, count: usize) -> Vec<u8> {
+    engine
+        .latest()
+        .shown()
+        .iter()
+        .flat_map(|levels| levels.0)
+        .step_by(3)
+        .take(count)
+        .collect()
+}
+
+/// A press of red 11 on a pixel.
+fn red(target: Target) -> Command {
+    Command::SetColour {
+        target,
+        red: u16::from_be_bytes([11, 11]),
+        green: 0,
+        blue: 0,
+    }
 }
 
 fn playing_strip() -> (Engine, engine::Sender, engine::Wakes) {
@@ -203,10 +242,7 @@ fn playing_strip() -> (Engine, engine::Sender, engine::Wakes) {
 #[test]
 fn direct_grabs_reserve_their_end_and_release_before_they_are_accepted() {
     let (mut engine, mut sender, wakes) = playing_strip();
-    let press = |light| Command::SetIntensity {
-        target: Target::Light { light },
-        intensity: 11,
-    };
+    let press = |light| red(Target::Light { light });
     let mut grabs = Vec::new();
     // The playing root leaves twenty visits free. Six distinct grabs each
     // book their write, their possible EndGrab, and their final release.
@@ -225,7 +261,7 @@ fn direct_grabs_reserve_their_end_and_release_before_they_are_accepted() {
     for &grab in grabs.iter().step_by(2) {
         sender.send(Command::EndGrab { grab }).unwrap();
     }
-    let release = Command::ReleaseIntensity {
+    let release = Command::ReleaseColour {
         target: Target::Fixture { fixture: 1 },
     };
     sender.send(release).unwrap();
@@ -235,10 +271,10 @@ fn direct_grabs_reserve_their_end_and_release_before_they_are_accepted() {
     sender.send(press(13)).unwrap();
     engine.latest();
     wakes.wake().unwrap();
-    let picture = engine.latest();
-    for (index, light) in picture.lights().iter().take(14).enumerate() {
-        assert_eq!(light.intensity, (index == 12).then_some(11));
-    }
+    let played: Vec<u8> = (0..14)
+        .map(|index| if index == 12 { 11 } else { 255 })
+        .collect();
+    assert_eq!(reds(&mut engine, 14), played);
     wakes.run();
 }
 
@@ -247,12 +283,7 @@ fn a_fragmented_fixture_release_fits_in_one_wake() {
     let pixels = 3200;
     let (mut engine, mut sender, wakes, _) = strip(pixels, 19);
     let target = Target::Fixture { fixture: 1 };
-    sender
-        .send(Command::SetIntensity {
-            target,
-            intensity: 11,
-        })
-        .unwrap();
+    sender.send(red(target)).unwrap();
 
     // Leave 1,600 single-light runs held in one fixture.
     let group = Text::new("evens").unwrap();
@@ -268,30 +299,24 @@ fn a_fragmented_fixture_release_fits_in_one_wake() {
             })
             .unwrap();
         sender
-            .send(Command::ReleaseIntensity {
+            .send(Command::ReleaseColour {
                 target: Target::Group { group },
             })
             .unwrap();
         engine.latest();
         wakes.wake().unwrap();
     }
-    let intensities = |engine: &mut Engine| {
-        engine
-            .latest()
-            .lights()
-            .iter()
-            .take(usize::from(pixels))
-            .map(|light| light.intensity)
-            .collect::<Vec<_>>()
-    };
-    let alternating: Vec<_> = (1..=pixels)
-        .map(|light| (light % 2 == 1).then_some(11))
+    let alternating: Vec<u8> = (1..=pixels)
+        .map(|light| if light % 2 == 1 { 11 } else { 0 })
         .collect();
-    assert_eq!(intensities(&mut engine), alternating);
+    assert_eq!(reds(&mut engine, usize::from(pixels)), alternating);
 
-    sender.send(Command::ReleaseIntensity { target }).unwrap();
+    sender.send(Command::ReleaseColour { target }).unwrap();
     engine.latest();
     wakes.wake().unwrap();
-    assert_eq!(intensities(&mut engine), vec![None; usize::from(pixels)]);
+    assert_eq!(
+        reds(&mut engine, usize::from(pixels)),
+        vec![0; usize::from(pixels)]
+    );
     wakes.run();
 }

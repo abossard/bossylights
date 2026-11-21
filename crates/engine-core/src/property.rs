@@ -219,7 +219,7 @@ impl Rgb {
     };
 
     /// The part red, green and blue all have: the smallest.
-    pub(crate) const fn shared(self) -> u16 {
+    pub const fn shared(self) -> u16 {
         let least = if self.red < self.green {
             self.red
         } else {

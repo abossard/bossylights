@@ -209,7 +209,6 @@ impl Looks {
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
-    clippy::indexing_slicing,
     reason = "the test fixture supplies the named looks and bound lights"
 )]
 mod tests {
@@ -223,6 +222,11 @@ mod tests {
     use rig::Whole;
 
     pub(super) fn patch() -> Patch {
+        strip(3, 1)
+    }
+
+    /// An RGB strip of `pixels` at `address` of universe 1.
+    fn strip(pixels: u16, address: u16) -> Patch {
         let empty = Patch::new(
             Universes::new(1).unwrap(),
             Lights::new(32).unwrap(),
@@ -232,11 +236,11 @@ mod tests {
             .update(
                 PatchCommand::PatchStrip {
                     name: Text::new("strip").unwrap(),
-                    pixels: Pixels::try_from(3).unwrap(),
+                    pixels: Pixels::try_from(pixels).unwrap(),
                     color: Color::Rgb,
                     at: ChannelNumbers {
                         universe: 1,
-                        address: 1,
+                        address,
                     },
                 },
                 &[],
@@ -244,6 +248,30 @@ mod tests {
             .unwrap()
             .0
             .unwrap()
+    }
+
+    /// What a plan offers at `elapsed`, as (coarse channel, word), by channel.
+    pub(super) fn offered(plan: &Plan, elapsed: u64, usage: Use) -> Vec<(u32, u16)> {
+        use engine_core::{Field, Offering};
+        let mut scratch = alloc::vec![None; plan.words()];
+        let mut spare = alloc::vec![None; plan.spare()];
+        assert!(plan.sample(elapsed, usage, &mut scratch, &mut spare));
+        let fields: Vec<(Field, u16)> = match plan.offering(&scratch) {
+            Offering::List(offers) => offers.iter().map(|offer| (offer.at, offer.value)).collect(),
+            Offering::Sampled { fields, values } => fields
+                .iter()
+                .zip(values)
+                .filter_map(|(field, value)| value.map(|value| (*field, value)))
+                .collect(),
+        };
+        let mut offered: Vec<_> = fields
+            .into_iter()
+            .map(|(field, value)| match field {
+                Field::Byte(at) | Field::Word { coarse: at, .. } => (at, value),
+            })
+            .collect();
+        offered.sort_unstable();
+        offered
     }
 
     pub(super) fn leaf(look: u16) -> Saved {
@@ -271,6 +299,31 @@ mod tests {
             look,
             name: Text::new("sequence").unwrap(),
             definition: Definition::Sequence(Sequence::new(items).unwrap()),
+        }
+    }
+
+    #[test]
+    fn a_retained_sequence_matches_only_a_patch_with_its_lights_and_fields() {
+        let patch = patch();
+        let first = Saved {
+            look: 3,
+            step: Step {
+                target: Target::Light { light: 1 },
+                values: Light::DARK,
+            },
+            ..leaf(3)
+        };
+        let looks = Looks::new().put(leaf(1), &patch).unwrap();
+        let looks = looks.put(first, &patch).unwrap();
+        // the strip, then its first light alone
+        let looks = looks.put(sequence(2, &[item(1), item(3)]), &patch).unwrap();
+        let plan = looks.plan(2).unwrap();
+        for (case, patch, matches) in [
+            ("the same patch", strip(3, 1), true),
+            ("the same lights on other channels", strip(3, 10), false),
+            ("the step names one light more", strip(4, 1), false),
+        ] {
+            assert_eq!(plan.bindings_match(&patch), matches, "{case}");
         }
     }
 
@@ -345,7 +398,7 @@ mod tests {
 
     #[test]
     fn compiled_spread_uses_each_looks_own_order_and_skips_repeated_lights() {
-        use engine_core::{Entry, Member, Members};
+        use engine_core::{Member, Members, Rgb};
         const BEAT: u64 = 1 << 32;
         let group = Text::new("front").unwrap();
         let spread = Use {
@@ -376,13 +429,13 @@ mod tests {
             ] {
                 let mut saved = leaf(id);
                 saved.step.target = target;
-                saved.step.values.intensity = Some(value);
+                // the strip has no dimmer: the value is its red
+                saved.step.values.colour = Some(Rgb {
+                    red: value,
+                    ..Rgb::BLACK
+                });
                 looks = looks.put(saved, &patch).unwrap();
             }
-            let initial = Entry {
-                lights: patch.runs(Target::Light { light: 1 }).unwrap()[0],
-                values: Light::DARK,
-            };
             let delayed = SequenceItem {
                 usage: spread,
                 ..item(2)
@@ -400,14 +453,12 @@ mod tests {
             ] {
                 let looks = looks.put(sequence(4, &items), &patch).unwrap();
                 let plan = looks.plan(4).unwrap();
-                let mut scratch = alloc::vec![initial; plan.lights()];
-                assert!(plan.sample(at, usage, &mut scratch));
                 assert_eq!(
-                    plan.entries(&scratch)
-                        .iter()
-                        .map(|e| e.values.intensity)
+                    offered(&plan, at, usage)
+                        .into_iter()
+                        .filter(|(at, _)| at % 3 == 0)
                         .collect::<Vec<_>>(),
-                    expected.map(Some),
+                    [(0, expected[0]), (3, expected[1]), (6, expected[2])],
                     "members {members:?} at {at}"
                 );
             }

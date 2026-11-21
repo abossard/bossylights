@@ -214,6 +214,19 @@ fn main() {
             send(&mut sender, colour, &library),
             "a colour for light {light}"
         );
+        if value % 16 == 12 {
+            // a burst of presses in one wake: each new grab takes its light from an older
+            // grab, whose offers go to the tick anew or whose entry is freed
+            for n in 0..8 {
+                let press = Command::SetColour {
+                    target: Target::Light { light: 2 * n + 1 },
+                    red: u16::from(value) << 8,
+                    green: n << 12,
+                    blue: 0,
+                };
+                assert!(send(&mut sender, press, &library), "press {n} of the burst");
+            }
+        }
         if value % 16 == 8 {
             // the runs of the group, in place: applied in one wake
             assert!(send(&mut sender, green, &library), "the group goes green");
@@ -409,15 +422,24 @@ fn main() {
             });
     }
     let state = engine.latest().state;
-    let lit = engine.latest().lights()[..usize::from(LIGHTS) + 100]
-        .iter()
-        .filter(|light| light.intensity == Some(u16::MAX))
-        .count();
-    let green_lights = engine.latest().lights()[..usize::from(LIGHTS)]
-        .iter()
-        .skip(1)
+    // the lights have no dimmer: their intensity is held in the front's book, the green
+    // of the group shows on its channels, where no raw channel is held
+    let lit = counting::uncounted(|| {
+        sender
+            .held()
+            .iter()
+            .filter(|light| light.intensity == Some(u16::MAX))
+            .count()
+    });
+    let green_lights = (1..LIGHTS)
         .step_by(2)
-        .filter(|light| light.colour.is_some_and(|c| c.green == u16::MAX))
+        .filter(|&light| {
+            let at = place(light);
+            let (universe, green) = (usize::from(at.universe - 1), usize::from(at.address));
+            let picture = engine.latest();
+            // a raw channel held beats every look and grab
+            picture.shown()[universe].0[green] == u8::MAX || picture.holds()[universe].has(green)
+        })
         .count();
     // Nested transition, a shared step replan, and a once-use frozen between wakes.
     // Start and finish inside the allocator window on the production tick.
@@ -506,11 +528,11 @@ fn main() {
             })
             .unwrap();
     });
+    // the green of pixels 1 and 3: universe 3 address 512, universe 4 address 6
     mock::wait_until("both strip pixels receive Wave", || {
-        let lights = engine.latest().lights();
-        [usize::from(LIGHTS), usize::from(LIGHTS) + 2]
-            .iter()
-            .all(|&index| lights[index].colour.is_some_and(|rgb| rgb.green == 4321))
+        let levels = engine.latest().shown();
+        let green = 4321_u16.to_be_bytes()[0];
+        levels[2].0[511] == green && levels[3].0[5] == green
     });
     // a Manual play live as all is released
     let start = Command::StartLook {
@@ -570,7 +592,7 @@ fn main() {
     assert_eq!(
         green_lights,
         even.len(),
-        "every light of the group is green"
+        "every light of the group is green or under a raw hold"
     );
     assert_eq!(
         state
@@ -962,16 +984,26 @@ fn linked_ends() {
     wakes.hold().unwrap();
     let name = text("once");
     let strip = Target::Fixture { fixture: 1 };
-    let leaf = |intensity, target| Command::PutStep {
+    // the strip has no dimmer: a step shows `red` as the red byte of its pixels
+    let leaf = |red: u8, target| Command::PutStep {
         look: 0,
         name,
         step: Step {
             target,
             values: Light {
-                intensity: Some(intensity),
+                colour: Some(Rgb {
+                    red: u16::from_be_bytes([red, red]),
+                    ..Rgb::BLACK
+                }),
                 ..Light::DARK
             },
         },
+    };
+    let reds_are = |snapshot: &engine::Snapshot, red: u8| {
+        snapshot.shown()[0].0[..93 * 3]
+            .iter()
+            .step_by(3)
+            .all(|&byte| byte == red)
     };
     let start = |sender: &mut Sender, slot: usize, rank| match begin(
         sender,
@@ -1061,9 +1093,11 @@ fn linked_ends() {
             begin(&mut sender, extra_root, &[]),
             Err(Refusal::PlayFull)
         ));
-        let too_large = Command::SetIntensity {
+        let too_large = Command::SetColour {
             target: strip,
-            intensity: u16::MAX,
+            red: u16::MAX,
+            green: 0,
+            blue: 0,
         };
         assert!(matches!(
             begin(&mut sender, too_large, &[]),
@@ -1080,9 +1114,7 @@ fn linked_ends() {
             let live = engine.latest();
             assert_eq!(live.state.plays.iter().count(), PLAYS);
             assert!(
-                live.lights()[..93]
-                    .iter()
-                    .all(|light| light.intensity == Some(value + 3)),
+                reds_are(live, value + 3),
                 "the replacement lights every pixel while the 32 plays are still running"
             );
         }
@@ -1125,21 +1157,13 @@ fn linked_ends() {
                     .iter()
                     .all(|p| p.state == PlayState::Kept)
             );
-            assert!(
-                snapshot.lights()[..93]
-                    .iter()
-                    .all(|l| l.intensity == Some(value))
-            );
+            assert!(reds_are(snapshot, value));
             for play in ids {
                 assert!(send(&mut sender, Command::ReleaseHold { play }, &[]));
             }
         } else {
             assert_eq!(snapshot.state.plays.iter().count(), 0);
-            assert!(
-                snapshot.lights()[..93]
-                    .iter()
-                    .all(|l| l.intensity.is_none())
-            );
+            assert!(reds_are(snapshot, 0));
         }
         if stall {
             engine.stall_reclamation(false);

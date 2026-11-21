@@ -22,12 +22,10 @@
 //! lets the value through: it has nothing to show it with.
 
 use crate::Unfit;
+use crate::light::{Choice, Feed, LightFields, Part};
 use alloc::collections::BTreeMap;
-use alloc::vec;
 use alloc::vec::Vec;
-use engine_core::{
-    Channel, Gobo, Light, LightNumber, LightRun, Part, Property, Refusal, Rgb, Wheel, Writer,
-};
+use engine_core::{Gobo, Light, LightRun, Property, Refusal, Rgb, Wheel};
 use fixture_library::{Byte, Does, Function, Range};
 
 /// The wheels of one light.
@@ -79,23 +77,21 @@ impl Wheels {
 
     /// The writers of the coarse channel `index` of the mode, at `at`, when it is a wheel
     /// of `light`. `None` when it is not a wheel.
+    /// The feed of a wheel channel of light `light` (counted from 0): picks over its
+    /// slots, or none when its bypass lets the mix through (its rest). `None` for a
+    /// channel that is not a wheel of this light.
     pub(crate) fn bind(
         &self,
         index: usize,
         channel: &fixture_library::Channel,
-        light: LightNumber,
-        at: Channel,
-    ) -> Option<Result<Vec<Writer>, Unfit>> {
-        let unheld = channel.default.unwrap_or(0);
+        light: u16,
+    ) -> Option<Result<Option<Feed>, Unfit>> {
         if is_colour_wheel(channel) {
-            let refused = Unfit::Refused(unsupported(
-                light.index().saturating_add(1),
-                Property::Colour,
-            ));
+            let refused = Unfit::Refused(unsupported(light.saturating_add(1), Property::Colour));
             if !self.mixers.is_empty() {
                 return Some(
                     bypass(channel, self.adds, &self.mixers)
-                        .map(|value| vec![Writer::Fixed { at, value }])
+                        .map(|_| None)
                         .ok_or(refused),
                 );
             }
@@ -109,165 +105,110 @@ impl Wheels {
                         .find(|(slot, _)| *slot == colour)
                         .map(|&(_, value)| value)
                         .or(neutral)
-                        .map(|value| Writer::ColourSlot { colour, value })
+                        .map(|value| (Choice::Colour(colour), value))
                 })
                 .collect::<Option<Vec<_>>>();
-            return Some(
-                slots
-                    .ok_or(refused)
-                    .and_then(|slots| picks(light, at, unheld, slots)),
-            );
+            return Some(slots.ok_or(refused).map(|slots| Some(Feed::Picks(slots))));
         }
         let wheel = self.gobos.iter().position(|&gobo| gobo == index)?;
         let wheel = u8::try_from(wheel + 1).ok().and_then(Wheel::new)?;
-        let slots = gobo_slots(channel)
+        let slots: Vec<_> = gobo_slots(channel)
             .into_iter()
             .zip(1..=u8::MAX)
-            .map(|(value, slot)| Writer::GoboSlot {
-                gobo: Gobo { wheel, slot },
-                value,
-            })
+            .map(|(value, slot)| (Choice::Gobo(Gobo { wheel, slot }), value))
             .collect();
-        Some(picks(light, at, unheld, slots).map_err(|_| {
-            Unfit::Refused(unsupported(
-                light.index().saturating_add(1),
-                Property::Gobo(wheel),
-            ))
-        }))
+        Some(Ok(Some(Feed::Picks(slots))))
     }
 }
 
-/// A `Picks` writer, then its slots.
-fn picks(
-    light: LightNumber,
-    at: Channel,
-    unheld: u8,
-    slots: Vec<Writer>,
-) -> Result<Vec<Writer>, Unfit> {
-    let count = u8::try_from(slots.len()).map_err(|_| {
-        Unfit::Refused(unsupported(
-            light.index().saturating_add(1),
-            Property::Colour,
-        ))
-    })?;
-    let mut writers = vec![Writer::Picks {
-        light,
-        at,
-        slots: count,
-        unheld,
-    }];
-    writers.extend(slots);
-    Ok(writers)
-}
-
-/// Whether every light of `runs` can show `values`: `Unsupported` names the first light
-/// and property that cannot. `writers` are the writers of the whole patch.
-pub fn supports(writers: &[Writer], runs: &[LightRun], values: &Light) -> Result<(), Refusal> {
-    /// What a light's writers say of one property: bound by a wheel, shown.
-    #[derive(Clone, Copy, Default)]
-    struct Seen {
-        wheel: bool,
-        shown: bool,
-    }
-    // by light and property index: the property and what was seen of it
-    let mut seen: BTreeMap<(u16, usize), (Property, Seen)> = BTreeMap::new();
-    let mut note = |light: LightNumber, property: Property, wheel: bool, shown: bool| {
-        let (_, entry) = seen
-            .entry((light.index(), property.index()))
-            .or_insert((property, Seen::default()));
-        entry.wheel |= wheel;
-        entry.shown |= shown;
-    };
-    for writer in writers {
-        if let Writer::Takes { light, take, .. } = *writer
-            && matches!(take.of, Part::Red | Part::Green | Part::Blue | Part::Shared)
-            && within(runs, light)
+/// `Unsupported` when a light of `runs` (`targets` by light number) has a wheel for a
+/// property of `values` but no slot that shows it, and no colour mix where `values` has
+/// a colour.
+pub fn supports(targets: &[LightFields], runs: &[LightRun], values: &Light) -> Result<(), Refusal> {
+    for light in lights(runs) {
+        let Some(target) = targets.get(usize::from(light)) else {
+            continue;
+        };
+        let mut seen: BTreeMap<usize, (Property, bool, bool)> = BTreeMap::new();
+        for feed in target.feeds() {
+            match feed {
+                Feed::Takes(take)
+                    if matches!(take.of, Part::Red | Part::Green | Part::Blue | Part::Shared) =>
+                {
+                    seen.entry(Property::Colour.index())
+                        .or_insert((Property::Colour, false, false))
+                        .2 = true;
+                }
+                Feed::Takes(_) => {}
+                Feed::Picks(slots) => {
+                    for &(choice, _) in slots {
+                        let property = match choice {
+                            Choice::Colour(_) => Property::Colour,
+                            Choice::Gobo(gobo) => Property::Gobo(gobo.wheel),
+                        };
+                        let entry = seen
+                            .entry(property.index())
+                            .or_insert((property, false, false));
+                        entry.1 = true;
+                        entry.2 |= match choice {
+                            Choice::Colour(colour) => values.colour == Some(colour),
+                            Choice::Gobo(gobo) => values.gobo(gobo.wheel) == Some(gobo.slot),
+                        };
+                    }
+                }
+            }
+        }
+        if let Some((property, _, _)) = seen
+            .into_values()
+            .find(|&(property, wheel, shown)| values.has(property) && wheel && !shown)
         {
-            note(light, Property::Colour, false, true);
+            return Err(unsupported(light.saturating_add(1), property));
         }
     }
-    for (light, writer) in slots(writers, runs) {
-        let property = match *writer {
-            Writer::GoboSlot { gobo, .. } => Property::Gobo(gobo.wheel),
-            // `slots` gives slots only
-            Writer::ColourSlot { .. }
-            | Writer::Takes { .. }
-            | Writer::Picks { .. }
-            | Writer::Fixed { .. } => Property::Colour,
-        };
-        note(light, property, true, writer.slot(values).is_some());
-    }
-    match seen
-        .into_iter()
-        .find(|&(_, (property, seen))| values.has(property) && seen.wheel && !seen.shown)
-    {
-        Some(((light, _), (property, _))) => Err(unsupported(light.saturating_add(1), property)),
-        None => Ok(()),
-    }
+    Ok(())
 }
 
-/// The check of a look of a show file before version 4, which held one gobo, a wheel and a
-/// slot, as that engine checked it: refused on the first light of `runs` with a gobo wheel
-/// and no slot `slot` on wheel `wheel`. No wheel past [`Wheel::COUNT`] is shown now: on a
-/// light with a gobo wheel it is refused, named as [`Wheel::LAST`].
+/// `Unsupported` unless every light of `runs` with a gobo wheel `wheel` has gobo `slot`.
 pub fn shows_one_gobo(
-    writers: &[Writer],
+    targets: &[LightFields],
     runs: &[LightRun],
     wheel: u8,
     slot: u8,
 ) -> Result<(), Refusal> {
-    // by light: whether a slot of a gobo wheel shows it
-    let mut shown: BTreeMap<u16, bool> = BTreeMap::new();
-    for (light, writer) in slots(writers, runs) {
-        if let Writer::GoboSlot { gobo, .. } = *writer {
-            let held = u8::from(gobo.wheel) == wheel && gobo.slot == slot;
-            *shown.entry(light.index()).or_default() |= held;
+    for light in lights(runs) {
+        let Some(target) = targets.get(usize::from(light)) else {
+            continue;
+        };
+        let mut gobos = target.feeds().iter().flat_map(|feed| match feed {
+            Feed::Picks(slots) => slots.as_slice(),
+            Feed::Takes(_) => &[],
+        });
+        let mut has = false;
+        let mut shown = false;
+        for (choice, _) in gobos.by_ref() {
+            if let Choice::Gobo(gobo) = choice {
+                has = true;
+                shown |= u8::from(gobo.wheel) == wheel && gobo.slot == slot;
+            }
+        }
+        if has && !shown {
+            return Err(unsupported(
+                light.saturating_add(1),
+                Property::Gobo(Wheel::new(wheel).unwrap_or(Wheel::LAST)),
+            ));
         }
     }
-    match shown.into_iter().find(|&(_, shown)| !shown) {
-        Some((light, _)) => Err(unsupported(
-            light.saturating_add(1),
-            Property::Gobo(Wheel::new(wheel).unwrap_or(Wheel::LAST)),
-        )),
-        None => Ok(()),
-    }
+    Ok(())
 }
 
-/// Whether `light` is one of `runs`.
-fn within(runs: &[LightRun], light: LightNumber) -> bool {
-    runs.iter().any(|run| {
+/// The light numbers of `runs`, counted from 0.
+fn lights(runs: &[LightRun]) -> impl Iterator<Item = u16> + '_ {
+    runs.iter().flat_map(|run| {
         let first = run.first().index();
-        (first..first.saturating_add(run.count())).contains(&light.index())
+        first..first.saturating_add(run.count())
     })
 }
 
-/// Each slot of a wheel of a light of `runs`, with that light: the writers after its
-/// `Picks`.
-fn slots<'a>(
-    writers: &'a [Writer],
-    runs: &'a [LightRun],
-) -> impl Iterator<Item = (LightNumber, &'a Writer)> + 'a {
-    writers
-        .iter()
-        .scan(None, move |wheel: &mut Option<LightNumber>, writer| {
-            Some(match *writer {
-                Writer::Picks { light, .. } => {
-                    *wheel = Some(light).filter(|&light| within(runs, light));
-                    None
-                }
-                Writer::Takes { .. } | Writer::Fixed { .. } => {
-                    *wheel = None;
-                    None
-                }
-                Writer::ColourSlot { .. } | Writer::GoboSlot { .. } => {
-                    wheel.map(|light| (light, writer))
-                }
-            })
-        })
-        .flatten()
-}
-
-/// Whether a channel that does this adds light to a mix.
 fn adds(function: &Function) -> bool {
     matches!(
         function,

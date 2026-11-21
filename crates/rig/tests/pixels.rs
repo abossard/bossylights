@@ -2,9 +2,9 @@
 
 mod common;
 
-use common::{fixture, lights, say};
+use common::{fixture, lights, say_patched};
 use engine_core::{
-    ChannelNumbers, Color, Lights, PatchCommand, Pixels, Refusal, Text, Universes, Writer,
+    ChannelNumbers, Color, Field, Lights, PatchCommand, Pixels, Refusal, Text, Universes,
 };
 use engine_core::{Command, OutputKind, OutputNumber, Project, ProjectEvent, RunNumbers};
 use rig::{Patch, PatchEffect};
@@ -37,15 +37,22 @@ fn strip(pixels: u16, color: Color, universe: u16, address: u16) -> PatchCommand
     }
 }
 
-/// The light of each writer in order, `-` for a fixed one: `0 1 1 1 -`.
-fn owners(writers: &[Writer]) -> String {
-    writers
-        .iter()
-        .map(|w| match w {
-            Writer::Takes { light, .. } | Writer::Picks { light, .. } => light.index().to_string(),
-            Writer::Fixed { .. } | Writer::ColourSlot { .. } | Writer::GoboSlot { .. } => {
-                "-".to_string()
-            }
+/// The light of each channel of the first fixture, at 1.1, in order, `-` for one in no
+/// light's field: `0 1 1 1 -`.
+fn owners(patch: &Patch) -> String {
+    let channels = u32::from(patch.fixtures()[0].channels);
+    (0..channels)
+        .map(|channel| {
+            patch
+                .targets()
+                .iter()
+                .position(|target| {
+                    target.fields.iter().any(|&field| match field {
+                        Field::Byte(at) => at == channel,
+                        Field::Word { coarse, fine } => coarse == channel || fine == channel,
+                    })
+                })
+                .map_or("-".to_string(), |light| light.to_string())
         })
         .collect::<Vec<_>>()
         .join(" ")
@@ -61,7 +68,7 @@ fn a_fixture_with_heads_is_one_light_per_head_in_the_order_of_the_definition() {
         mode: text("RGB"),
         at: at(1, 1),
     };
-    // (command, model and mode, lights, layout, light of each writer)
+    // (command, model and mode, lights, layout, light of each channel)
     let cases = [
         (
             // a master dimmer and a channel in no head: the bar is light 0
@@ -106,13 +113,13 @@ fn a_fixture_with_heads_is_one_light_per_head_in_the_order_of_the_definition() {
         assert_eq!(format!("{}, {}", row.model, row.mode), named);
         assert_eq!(row.lights, count, "{named}");
         assert_eq!(row.layout.map(|l| (l.width, l.height)), layout, "{named}");
-        assert_eq!(owners(patch.writers()), expected, "{named}");
+        assert_eq!(owners(&patch), expected, "{named}");
     }
 }
 
 #[test]
 fn a_strip_is_written_like_a_par_without_a_dimmer() {
-    // (colour, writers in words)
+    // (colour, channels in words)
     let cases: [(Color, &[&str]); 2] = [
         (
             Color::Rgb,
@@ -143,8 +150,7 @@ fn a_strip_is_written_like_a_par_without_a_dimmer() {
         let empty = Patch::new(Universes::ONE, lights(), common::whole());
         let (patch, effects) = empty.update(strip(2, color, 1, 37), &[]).unwrap();
         assert_eq!(effects[0], PatchEffect::Patched { fixture: 1 });
-        let said: Vec<String> = patch.unwrap().writers().iter().map(say).collect();
-        assert_eq!(said, expected, "{color:?}");
+        assert_eq!(say_patched(&patch.unwrap()), expected, "{color:?}");
     }
 }
 

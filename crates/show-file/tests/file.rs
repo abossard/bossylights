@@ -128,7 +128,7 @@ fn v5_show_with_many_sequences_still_opens() {
     }));
     project["looks"] = serde_json::Value::Array(rows);
 
-    let (_, looks) = show_file::read(&project.to_string(), &empty).unwrap();
+    let (_, looks) = show_file::read(&project.to_string(), &empty, &library()).unwrap();
     assert_eq!(looks.all().len(), 403);
 }
 
@@ -163,7 +163,7 @@ fn v6_keeps_the_old_channel_schema_for_tagged_emitters() {
             mode: text("19-Channel"),
             at: at(1, 37),
         },
-        vec![fixture],
+        vec![fixture.clone()],
     )]);
     let saved = write(&patch).unwrap();
     let show: serde_json::Value = serde_json::from_str(&saved).unwrap();
@@ -180,7 +180,8 @@ fn v6_keeps_the_old_channel_schema_for_tagged_emitters() {
             );
         }
     }
-    assert_eq!(write(&read(&saved, &empty()).unwrap()).unwrap(), saved);
+    let read = read_in(&saved, &[fixture]).unwrap();
+    assert_eq!(write(&read).unwrap(), saved);
 }
 
 const V6_DIMMER: &str = r#"{
@@ -194,18 +195,51 @@ const V6_DIMMER: &str = r#"{
         }}}
     }"#;
 
+/// The QLC+ definition of the mode `V6_DIMMER` names, one channel exactly as it has it.
+const DIMMER_QXF: &str = r#"<?xml version='1.0' encoding='UTF-8'?>
+<FixtureDefinition xmlns="http://www.qlcplus.org/FixtureDefinition">
+ <Manufacturer>Generic</Manufacturer>
+ <Model>Dimmer</Model>
+ <Type>Dimmer</Type>
+ <Channel Name="Dimmer" Preset="IntensityDimmer"/>
+ <Mode Name="1ch">
+  <Channel Number="0">Dimmer</Channel>
+ </Mode>
+</FixtureDefinition>"#;
+
+/// A v6 channel keeps no declarations: it opens with those of the identical library
+/// mode, and without one the file is refused, so nothing half-opens.
 #[test]
-fn a_v6_channel_written_without_declarations_still_opens() {
-    let restored = read(V6_DIMMER, &empty()).unwrap();
-    let channel = &restored.mode(1).unwrap().channels[0];
-    assert_eq!(channel.function, fixture_library::Function::Dimmer);
-    assert_eq!(
-        channel.role(),
-        fixture_library::Function::Other(String::new())
-    );
+fn a_v6_channel_written_without_declarations_opens_with_the_declarations_of_the_library() {
+    use fixture_library::Function;
+    let dimmer = parse("Generic-Dimmer.qxf", DIMMER_QXF.as_bytes()).unwrap();
     let original: serde_json::Value = serde_json::from_str(V6_DIMMER).unwrap();
-    let written: serde_json::Value = serde_json::from_str(&write(&restored).unwrap()).unwrap();
-    assert_eq!(written, original);
+    // (case, library, the channel's role, or why not read)
+    let cases = [
+        (
+            "the library has the mode",
+            vec![dimmer],
+            Ok(Function::Dimmer),
+        ),
+        (
+            "no library has it",
+            library(),
+            Err(Unopened::Refused {
+                reason: Refusal::NoSuchMode,
+            }),
+        ),
+    ];
+    for (case, library, role) in cases {
+        let opened = read_in(V6_DIMMER, &library).map(|restored| {
+            let written: serde_json::Value =
+                serde_json::from_str(&write(&restored).unwrap()).unwrap();
+            assert_eq!(written, original, "{case}: written back");
+            let channel = &restored.mode(1).unwrap().channels[0];
+            assert_eq!(channel.function, Function::Dimmer, "{case}");
+            channel.role()
+        });
+        assert_eq!(opened, role, "{case}");
+    }
 }
 
 #[test]
@@ -232,18 +266,14 @@ fn v6_rejects_channel_fields_outside_the_v6_schema() {
     }
 }
 
-/// V6 keeps the mode and all of its v11 writers; declarations first persist in v7.
+/// V6 keeps the mode; its declarations come from the library until they persist in v7.
 fn assert_v6_patch(read: &Patch, original: &Patch) {
-    assert_eq!(read.writers(), original.writers());
+    assert_eq!(read.targets(), original.targets());
     assert_eq!(read.groups(), original.groups());
     assert_eq!(read.fixtures(), original.fixtures());
     for fixture in original.fixtures() {
         let number = fixture.fixture;
-        let mut mode = original.mode(number).unwrap().clone();
-        for channel in &mut mode.channels {
-            channel.declared = Default::default();
-        }
-        assert_eq!(read.mode(number), Some(&mode));
+        assert_eq!(read.mode(number), original.mode(number));
         assert_eq!(
             read.definition_text(number),
             original.definition_text(number)
@@ -487,13 +517,18 @@ fn a_change_of_one_fixture_is_one_line_of_the_file() {
     }
 }
 
-/// One PAR whose red channel's name is `extra` bytes longer: a file of any length.
-fn par_with_a_longer_name(extra: usize) -> Patch {
+/// The test library, the first channel of each mode of the PAR `extra` bytes longer.
+fn longer_library(extra: usize) -> Vec<Fixture> {
     let mut library = library();
     for mode in &mut library[0].modes {
         mode.channels[0].name.push_str(&"x".repeat(extra));
     }
-    patched(vec![(par("PAR 1", 1), library)])
+    library
+}
+
+/// One PAR whose red channel's name is `extra` bytes longer: a file of any length.
+fn par_with_a_longer_name(extra: usize) -> Patch {
+    patched(vec![(par("PAR 1", 1), longer_library(extra))])
 }
 
 #[test]
@@ -520,7 +555,8 @@ fn a_file_of_the_most_bytes_is_written_and_read_and_one_byte_more_is_neither() {
         );
         // the file at the most, and spaces after it
         let text = format!("{file}{}", " ".repeat(over));
-        let opened = crate::read(&text, &empty()).map(|read| assert_v6_patch(&read, &at_most));
+        let opened = read_in(&text, &longer_library(most - short))
+            .map(|read| assert_v6_patch(&read, &at_most));
         assert_eq!(opened, read, "{case}: read");
     }
 }
@@ -554,7 +590,7 @@ fn a_patch_kept_in_its_file_refuses_the_command_that_would_take_the_file_over_th
         let file = after.map(|(patch, _)| {
             let patch = patch.unwrap();
             let file = write(&patch).unwrap();
-            let read = read(&file, &empty()).unwrap();
+            let read = read_in(&file, &longer_library(most - short)).unwrap();
             assert_v6_patch(&read.kept_in(show_file::LIMIT), &patch);
             file.len()
         });
@@ -576,7 +612,11 @@ fn a_file_under_the_most_whose_patch_is_written_back_over_it_is_not_read() {
     let too_big = Unopened::TooBig {
         most: u32::try_from(most).unwrap(),
     };
-    assert_eq!(read(&packed, &empty()), Err(too_big));
+    // the library has the mode of the longer name: the file is refused for its size only
+    assert_eq!(
+        read_in(&packed, &longer_library(most - short + 1)),
+        Err(too_big)
+    );
 }
 
 static ENCODED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -640,9 +680,16 @@ fn write(patch: &Patch) -> Option<String> {
     show_file::write(patch, &Looks::new())
 }
 
-/// The patch of `text`; its looks are tested in `looks.rs`.
+/// The patch of `text`, its modes declared from the test library as it is and as it
+/// changed; its looks are tested in `looks.rs`.
 fn read(text: &str, empty: &Patch) -> Result<Patch, Unopened> {
-    show_file::read(text, empty).map(|(patch, _)| patch)
+    let library = [library(), changed_library()].concat();
+    show_file::read(text, empty, &library).map(|(patch, _)| patch)
+}
+
+/// The patch of `text` read into `empty()`, its modes declared from `library`.
+fn read_in(text: &str, library: &[Fixture]) -> Result<Patch, Unopened> {
+    show_file::read(text, &empty(), library).map(|(patch, _)| patch)
 }
 
 fn saved(look: u16, target: Target, values: Light) -> Saved {
@@ -692,7 +739,7 @@ fn looks_written_and_read_back_are_the_same_looks() {
             .try_fold(Looks::new(), |looks, saved| looks.put(*saved, &patch))
             .unwrap();
         let file = show_file::write(&patch, &looks).unwrap();
-        let (_, read) = show_file::read(&file, &empty()).unwrap();
+        let (_, read) = show_file::read(&file, &empty(), &library()).unwrap();
         assert_eq!(read, looks, "{case}");
     }
 }
@@ -724,7 +771,7 @@ fn as_version_1(file: &str) -> String {
 fn a_file_of_version_1_has_no_looks() {
     let patch = patched(vec![lib(par("PAR 1", 1))]);
     let v1 = as_version_1(&show_file::write(&patch, &Looks::new()).unwrap());
-    let (read, looks) = show_file::read(&v1, &empty()).unwrap();
+    let (read, looks) = show_file::read(&v1, &empty(), &library()).unwrap();
     assert_v6_patch(&read, &patch);
     assert_eq!(looks, Looks::new());
 }
@@ -739,7 +786,7 @@ fn sequence_rows_first_open_in_version_5() {
     ]);
     for (version, opens) in [(4, false), (5, true)] {
         file["version"] = version.into();
-        let opened = show_file::read(&file.to_string(), &empty());
+        let opened = show_file::read(&file.to_string(), &empty(), &library());
         if opens {
             assert!(opened.unwrap().1.plan(2).is_ok(), "v{version}");
         } else {
@@ -784,7 +831,7 @@ fn a_look_the_patch_refuses_is_not_read() {
         ),
     ];
     for (case, to, why) in cases {
-        let read = show_file::read(&file.replacen(row, &to, 1), &empty());
+        let read = show_file::read(&file.replacen(row, &to, 1), &empty(), &library());
         assert_eq!(read.map(|_| ()), why, "{case}");
     }
 }
@@ -798,15 +845,17 @@ fn a_file_one_byte_over_the_most_is_not_read_in_any_version() {
     let short = write(&par_with_a_longer_name(0)).unwrap().len();
     let at_most = write(&par_with_a_longer_name(most - short)).unwrap();
     assert_eq!(at_most.len(), most);
-    assert!(read(&at_most, &empty()).is_ok());
+    assert!(read_in(&at_most, &longer_library(most - short)).is_ok());
     // one byte longer: as it is, and as version 1, which is shorter on disk but is
     // written back as the version now
     let over = at_most.replacen("\"name\": \"Red", "\"name\": \"Redx", 1);
     assert_eq!(over.len(), most + 1);
     let v1 = as_version_1(&over);
     assert!(v1.len() <= most, "{}", v1.len());
-    assert_eq!(read(&over, &empty()), too_big);
-    assert_eq!(read(&v1, &empty()), too_big);
+    // the library has the mode of the longer name: both are refused for their size only
+    let longer = longer_library(most - short + 1);
+    assert_eq!(read_in(&over, &longer), too_big);
+    assert_eq!(read_in(&v1, &longer), too_big);
 }
 
 #[test]
@@ -862,14 +911,14 @@ fn the_mixer_settings_are_saved_and_a_file_without_them_has_the_defaults() {
         }
         let now = format!("\"version\": {}", show_file::VERSION);
         let file = file.replace(&now, &format!("\"version\": {version}"));
-        let (_, looks) = show_file::read(&file, &empty()).unwrap();
+        let (_, looks) = show_file::read(&file, &empty(), &library()).unwrap();
         assert_eq!(looks.rules(), back, "{rules:?} in version {version}");
     }
 }
 
-/// The Shehds spot (gobo wheels 1 and 2) at 1.1, a PAR (no wheel) at 1.50, and the Shehds
-/// with two more copies of its first wheel, wheels 3 and 4, at 1.100.
-fn wheels() -> Patch {
+/// The test library, the Shehds spot (gobo wheels 1 and 2) and the Shehds with two more
+/// copies of its first wheel, wheels 3 and 4.
+fn wheels_library() -> Vec<Fixture> {
     let shehds = definition("Shehds-LED-Spot-100W.qxf");
     let mut four = shehds.clone();
     four.model = "LED Spot 100W, four wheels".to_string();
@@ -877,6 +926,12 @@ fn wheels() -> Patch {
         let first = mode.channels[6].clone();
         mode.channels.extend([first.clone(), first]);
     }
+    [library(), vec![shehds, four]].concat()
+}
+
+/// The Shehds spot at 1.1, a PAR (no wheel) at 1.50, and the Shehds of four wheels at
+/// 1.100.
+fn wheels() -> Patch {
     let spot = |name, model: &str, address| {
         let command = PatchCommand::Patch {
             name: text(name),
@@ -885,7 +940,7 @@ fn wheels() -> Patch {
             mode: text("14 Channel"),
             at: at(1, address),
         };
-        (command, vec![shehds.clone(), four.clone()])
+        (command, wheels_library())
     };
     patched(vec![
         spot("Spot", "LED Spot 100W", 1),
@@ -1056,7 +1111,7 @@ fn a_gobo_of_version_3_is_read_as_version_3_read_it() {
         let file = written(fixture);
         assert!(file.contains(from), "{file}");
         let v3 = file.replace(&now, "\"version\": 3").replace(from, to);
-        let read = show_file::read(&v3, &empty()).map(|(_, looks)| looks);
+        let read = show_file::read(&v3, &empty(), &wheels_library()).map(|(_, looks)| looks);
         let expected = back.map(|light| {
             let look = saved(1, Target::Fixture { fixture }, light);
             Looks::new().put(look, &patch).unwrap()
@@ -1098,7 +1153,7 @@ fn a_file_of_version_3_broken_is_broken_where_the_text_is() {
     ];
     for (case, text, (line, column)) in cases {
         assert_eq!(
-            show_file::read(&text, &empty()),
+            show_file::read(&text, &empty(), &wheels_library()),
             Err(Unopened::Broken { line, column }),
             "{case}"
         );

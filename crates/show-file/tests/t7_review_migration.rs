@@ -40,6 +40,6 @@ fn a_v5_show_near_its_compiled_plan_limit_still_opens() {
     rows.extend((2..=SEQUENCES + 1).map(sequence));
     v5["looks"] = json!(rows);
 
-    let (_, restored) = show_file::read(&v5.to_string(), &empty).unwrap();
+    let (_, restored) = show_file::read(&v5.to_string(), &empty, &[]).unwrap();
     assert_eq!(restored.rows().count(), usize::from(SEQUENCES) + 1);
 }

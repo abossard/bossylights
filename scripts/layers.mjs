@@ -18,12 +18,12 @@
 export const CRATES = {
   "engine-core": { kind: "core", deps: ["serde"] },
   "fixture-library": { kind: "calc", deps: ["roxmltree", "serde"] }, // QLC+ fixture definitions in, a model out. Reads no files
-  rig: { kind: "calc", deps: ["engine-core", "fixture-library"] }, // a mode at an address becomes writers: only it knows an address belongs to a fixture
+  rig: { kind: "calc", deps: ["engine-core", "fixture-library"] }, // a mode at an address becomes channels and offers: only it knows an address belongs to a fixture
   looks: { kind: "calc", deps: ["engine-core", "rig"] }, // saved looks: checked against the patch, compiled into plans for the core
   "show-file": { kind: "calc", deps: ["engine-core", "fixture-library", "rig", "looks", "serde", "serde_json"] }, // the patch as a show file's text and back, checked as the commands check. Reads no files
   "rt-thread": { kind: "tick", deps: ["engine-core", "libc"] }, // the only unsafe: asks for real-time priority
   outputs: { kind: "tick", deps: ["engine-core", "nix", "rtrb", "serialport"] }, // opens devices, takes frames: only it knows bytes
-  engine: { kind: "tick", deps: ["engine-core", "rt-thread", "outputs", "rig", "looks", "fixture-library", "rtrb"] }, // the front owns the patch: it checks a patch against the library and compiles writers
+  engine: { kind: "tick", deps: ["engine-core", "rt-thread", "outputs", "rig", "looks", "fixture-library", "rtrb"] }, // the front owns the patch: it checks a patch against the library and lowers it to channels
   "audio-in": { kind: "action", deps: [] }, // turns timed samples into levels and beats
   "engine-server": { kind: "action", deps: ["engine", "engine-core", "fixture-library", "looks", "show-file"] }, // reads the fixture folder, answers the library, opens and saves the show file
   shell: { kind: "action", deps: ["engine-core"] }, // knows the API version it speaks, nothing more

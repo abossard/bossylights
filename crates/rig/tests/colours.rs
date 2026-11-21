@@ -1,9 +1,9 @@
-//! The bytes a light makes: a mode compiled by the rig, resolved by the core.
+//! The bytes a light makes: a mode compiled by the rig, its offers laid on its channels.
 
 mod common;
 
-use common::{at, light, lights, mode};
-use engine_core::{Held, Levels, Light, Rgb, Universes, resolve};
+use common::{at, light, lights, mode, shown};
+use engine_core::{Light, Rgb, Universes};
 use rig::compile;
 
 const FULL: u16 = u16::MAX;
@@ -18,14 +18,12 @@ const BLACK: (u16, u16, u16) = (0, 0, 0);
 fn bytes(file: &str, name: &str, intensity: u16, (red, green, blue): (u16, u16, u16)) -> Vec<u8> {
     let mode = mode(file, name);
     let rigged = compile(&mode, at(37), light(0), Universes::ONE, lights()).unwrap();
-    let shown = [Light {
+    let value = Light {
         intensity: Some(intensity),
         colour: Some(Rgb { red, green, blue }),
         ..Light::DARK
-    }];
-    let mut out = [Levels::ZERO];
-    resolve(&shown, &rigged.writers, &mut out);
-    out[0].0[36..36 + mode.channels.len()].to_vec()
+    };
+    shown(&rigged, &[value])
 }
 
 #[test]
@@ -194,13 +192,10 @@ const DEFAULT_RED: &str = r#"<?xml version="1.0"?>
  </Mode>
 </FixtureDefinition>"#;
 
-/// A part nothing holds shows the definition's default, also after a release. A part held
-/// at 0 is 0 (#160).
+/// A part the value has none of shows the definition's default: also after a release,
+/// which leaves the value without it. A part held at 0 is 0 (#160).
 #[test]
 fn a_part_not_held_is_the_definition_default() {
-    use engine_core::{
-        ChannelSet, GrabId, LightChange, LightRun, Priority, Property, State, Value, update,
-    };
     let fixture = fixture_library::parse("default.qxf", DEFAULT_RED.as_bytes()).unwrap();
     let rigged = compile(
         &fixture.modes[0],
@@ -210,48 +205,32 @@ fn a_part_not_held_is_the_definition_default() {
         lights(),
     )
     .unwrap();
-    let one = LightRun::new(light(0), 1, lights()).unwrap();
-    let grab = GrabId { generation: 1 };
-    let set = |value| LightChange::Grab { value, grab }.on(one);
-    let full = set(Value::Intensity(FULL));
-    let colour = |(red, green, blue)| set(Value::Colour(Rgb { red, green, blue }));
-    let release = |property| LightChange::Release { property }.on(one);
-    let release_colour = release(Property::Colour);
-    let release_intensity = release(Property::Intensity);
-    // (name, commands, bytes 37 to 40)
+    let value = |intensity, colour: Option<(u16, u16, u16)>| Light {
+        intensity,
+        colour: colour.map(|(red, green, blue)| Rgb { red, green, blue }),
+        ..Light::DARK
+    };
+    // (name, the light's value, bytes 37 to 40)
     let cases = [
-        ("nothing held", vec![], [0, 200, 0, 0]),
-        ("only intensity set", vec![full], [255, 200, 0, 0]),
+        ("nothing held", value(None, None), [0, 200, 0, 0]),
+        ("only intensity", value(Some(FULL), None), [255, 200, 0, 0]),
         (
-            "colour set, then released",
-            vec![full, colour((0, FULL, 0)), release_colour],
-            [255, 200, 0, 0],
-        ),
-        (
-            "colour set",
-            vec![full, colour((0, FULL, 0))],
+            "colour and intensity",
+            value(Some(FULL), Some((0, FULL, 0))),
             [255, 0, 255, 0],
         ),
         (
-            "colour held black",
-            vec![full, colour(BLACK)],
-            [255, 0, 0, 0],
+            "only colour",
+            value(None, Some((0, FULL, 0))),
+            [0, 0, 255, 0],
         ),
         (
-            "intensity set, then released",
-            vec![full, release_intensity],
-            [0, 200, 0, 0],
+            "colour held black",
+            value(Some(FULL), Some(BLACK)),
+            [255, 0, 0, 0],
         ),
     ];
-    for (name, commands, expected) in cases {
-        let mut shown = [Held::NONE];
-        let (mut universes, mut holds) = ([Levels::ZERO], [ChannelSet::NONE]);
-        let mut state = State::new(Priority::RealTime);
-        for command in commands {
-            state = update(state, &mut universes, &mut holds, &mut shown, command);
-        }
-        let mut out = [Levels::ZERO];
-        resolve(&[*shown[0].values()], &rigged.writers, &mut out);
-        assert_eq!(out[0].0[36..40], expected, "{name}");
+    for (name, value, expected) in cases {
+        assert_eq!(shown(&rigged, &[value]), expected, "{name}");
     }
 }

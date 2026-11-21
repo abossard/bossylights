@@ -12,12 +12,12 @@
 //! for, it sends no picture.
 
 use crate::{
-    EngineCommand, Histogram, LATENCY_BUCKETS, LATENESS_BUCKETS, Levels, MAX_LIGHTS, MAX_OUTPUTS,
+    EngineCommand, Histogram, LATENCY_BUCKETS, LATENESS_BUCKETS, Levels, MAX_OUTPUTS,
     MAX_UNIVERSES, Outcome, OutputNumber, Priority, Rate, State, Status, Universes, bucket,
     percentile, update,
 };
 use engine_core::health::{HealthSample, press_is_under_target};
-use engine_core::{ChannelSet, Claims, Entry, Held, Light, show};
+use engine_core::{ChannelSet, GRABS, Grab};
 use std::thread;
 use std::time::Duration;
 
@@ -25,10 +25,9 @@ use std::time::Duration;
 const BOXES: usize = 2;
 
 /// Everything the tick thread holds, as one wake left it. The tick thread works on its
-/// own `Snapshot` and hands over a copy: a new field (held values per light, say) is in
-/// every picture with no change in the hand-over. Every field is fixed in size, as all
-/// state on the tick thread is. The values per light live on the heap, made there once:
-/// a copy on the stack would not fit a thread's stack. [`Snapshot::copy_to`] copies
+/// own `Snapshot` and hands over a copy: a new field is in every picture with no change
+/// in the hand-over. Every field is fixed in size, as all state on the tick thread is.
+/// The grabs live on the heap, made there once. [`Snapshot::copy_to`] copies
 /// without allocating; `clone` allocates, off the tick thread only.
 #[derive(Clone)]
 pub struct Snapshot {
@@ -38,12 +37,12 @@ pub struct Snapshot {
     held: [Levels; MAX_UNIVERSES as usize],
     /// Which raw channels are held.
     holds: [ChannelSet; MAX_UNIVERSES as usize],
-    /// What each light shows, by light number: [`MAX_LIGHTS`] of them, its direct holds
-    /// and the plays mixed.
-    lights: Box<[Light]>,
-    /// The direct holds per light, by light number: [`MAX_LIGHTS`] of them. The tick
-    /// thread's own: no reader reads them, so [`Snapshot::copy_to`] leaves them.
-    grabs: Box<[Held]>,
+    /// The direct grabs, by entry: [`GRABS`] of them. The tick thread's own: no reader
+    /// reads them, so [`Snapshot::copy_to`] leaves them.
+    grabs: Box<[Option<Grab>]>,
+    /// The bytes of this wake's frame, by universe: what the outputs take their rows
+    /// from, every source mixed and Blackout applied.
+    shown: Box<[Levels]>,
     /// Timing and counts for each output since its last attach.
     output_health: [OutputHealth; MAX_OUTPUTS],
     /// The time from a send to the frame that carries it, per output that carries it.
@@ -70,8 +69,8 @@ impl Snapshot {
             universes,
             held: [Levels::ZERO; MAX_UNIVERSES as usize],
             holds: [ChannelSet::NONE; MAX_UNIVERSES as usize],
-            lights: vec![Light::DARK; usize::from(MAX_LIGHTS)].into_boxed_slice(),
-            grabs: vec![Held::NONE; usize::from(MAX_LIGHTS)].into_boxed_slice(),
+            grabs: vec![None; GRABS].into_boxed_slice(),
+            shown: vec![Levels::ZERO; usize::from(MAX_UNIVERSES)].into_boxed_slice(),
             output_health: [OutputHealth::ZERO; MAX_OUTPUTS],
             latency: Times::ZERO,
             applied: 0,
@@ -93,9 +92,24 @@ impl Snapshot {
             .unwrap_or_default()
     }
 
-    /// The held values per light, by light number.
-    pub fn lights(&self) -> &[Light] {
-        &self.lights
+    /// The direct grabs, by entry.
+    pub(crate) fn grabs(&self) -> &[Option<Grab>] {
+        &self.grabs
+    }
+
+    /// The bytes of this wake's frame, of the engine's universes.
+    pub fn shown(&self) -> &[Levels] {
+        self.shown
+            .get(..usize::from(self.universes.count()))
+            .unwrap_or_default()
+    }
+
+    /// Keeps the bytes of this wake's frame, `values` by universe, without allocating.
+    pub(crate) fn show(&mut self, values: &[Levels]) {
+        let count = usize::from(self.universes.count());
+        for (to, from) in self.shown.iter_mut().zip(values).take(count) {
+            *to = *from;
+        }
     }
 
     /// Fills the cumulative measurements for this output at the snapshot's wake time.
@@ -176,15 +190,15 @@ impl Snapshot {
         self.revision
     }
 
-    /// Makes `to` this snapshot without allocating: both have every light.
+    /// Makes `to` this snapshot without allocating.
     pub(crate) fn copy_to(&self, to: &mut Self) {
         let Self {
             state,
             universes,
             held,
             holds,
-            lights,
             grabs: _,
+            shown,
             output_health,
             latency,
             applied,
@@ -194,8 +208,9 @@ impl Snapshot {
         to.universes = *universes;
         to.held = *held;
         to.holds = *holds;
-        if to.lights.len() == lights.len() {
-            to.lights.copy_from_slice(lights);
+        let count = usize::from(universes.count());
+        for (to, from) in to.shown.iter_mut().zip(shown.iter()).take(count) {
+            *to = *from;
         }
         to.output_health.copy_from_slice(output_health);
         to.latency = *latency;
@@ -213,7 +228,7 @@ impl Snapshot {
         self.applied = self.applied.wrapping_add(1);
     }
 
-    /// The only change to the state, the held levels and the held values per light: through `engine_core::update`.
+    /// The only change to the state, the held levels and the grabs: through `engine_core::update`.
     pub(crate) fn update(&mut self, command: EngineCommand) {
         let count = usize::from(self.universes.count());
         let held = self.held.get_mut(..count).unwrap_or_default();
@@ -250,19 +265,6 @@ impl Snapshot {
         {
             health.outages = health.outages.wrapping_add(1);
         }
-    }
-
-    /// What each light shows now: its direct holds and the plays, `plan` giving each
-    /// play's entries by slot.
-    pub(crate) fn show<'a>(&mut self, plan: impl Fn(usize) -> &'a [Entry], claims: &mut [Claims]) {
-        show(
-            &self.grabs,
-            &self.state.plays,
-            plan,
-            self.state.rules,
-            &mut self.lights,
-            claims,
-        );
     }
 
     /// A frame of `output` was handed over this late.
@@ -381,7 +383,10 @@ struct Times<const N: usize> {
 #[cfg(all(test, target_pointer_width = "64"))]
 #[test]
 fn snapshot_has_one_press_histogram_and_six_counts_per_output() {
-    const BEFORE: usize = 77_208; // Inline bytes with the existing lateness and global latency.
+    // Inline bytes with the existing lateness and global latency. The cut to channels
+    // (#250) took the box of light values and gave the box of the frame's bytes: the
+    // same 16 bytes.
+    const BEFORE: usize = 77_208;
     let added = MAX_OUTPUTS * (size_of::<Times<LATENCY_BUCKETS>>() + 6 * size_of::<u64>());
     assert_eq!(size_of::<Snapshot>(), BEFORE + added);
 }

@@ -4,8 +4,8 @@ mod common;
 
 use common::fixture;
 use engine_core::{
-    ChannelNumbers, EngineCommand, LightChange, Lights, PatchCommand, Place, Property, Refusal,
-    Rgb, Target, Text, Universes, Value, Writer,
+    ChannelNumbers, Field, LightRun, Lights, PatchCommand, Property, Refusal, Rgb, Target, Text,
+    Universes, Value,
 };
 use fixture_library::Fixture;
 use rig::{Patch, PatchEffect};
@@ -73,58 +73,39 @@ fn library() -> Vec<Fixture> {
     .into()
 }
 
-/// The address a writer writes first, in universe 1 or 2.
-fn address(writer: &Writer) -> u16 {
-    let channel = match *writer {
-        Writer::Fixed { at, .. }
-        | Writer::Picks { at, .. }
-        | Writer::Takes {
-            at: Place::Byte(at),
-            ..
-        } => at,
-        Writer::Takes {
-            at: Place::Pair { coarse, .. },
-            ..
-        } => coarse,
-        Writer::ColourSlot { .. } | Writer::GoboSlot { .. } => {
-            unreachable!("the test definitions have no wheels")
-        }
-    };
-    let two = Universes::new(2).unwrap();
-    (1..=2)
-        .flat_map(|universe| (1..=512).map(move |address| at(universe, address)))
-        .find(|numbers| numbers.check(two) == Ok(channel))
-        .unwrap()
-        .address
+/// The address of each field of each light of `patch`, in light order, in its universe:
+/// the coarse of a pair.
+fn fields(patch: &Patch) -> Vec<String> {
+    patch
+        .targets()
+        .iter()
+        .flat_map(|target| &target.fields)
+        .map(|&field| match field {
+            Field::Byte(at) | Field::Word { coarse: at, .. } => (at % 512 + 1).to_string(),
+        })
+        .collect()
 }
 
-/// An effect in words: `writers 37 38 39`, `darken 0+1`, `colour 0+1`, `patched 1`.
-fn said(effect: &PatchEffect) -> String {
-    let run = |run: engine_core::LightRun| format!("{}+{}", run.first().index(), run.count());
+/// An effect in words, `patch` the patch after it: `config 37 38 39` (the fields of its
+/// lights), `unpatched 0+1`, `moved 1+1`, `colour 0+1`, `release colour 1+9`,
+/// `patched 1`.
+fn said(effect: &PatchEffect, patch: &Patch) -> String {
+    let run = |run: &LightRun| format!("{}+{}", run.first().index(), run.count());
+    let runs = |runs: &[LightRun]| runs.iter().map(run).collect::<Vec<_>>().join(" ");
+    let lower = |property: Property| format!("{property:?}").to_lowercase();
     match effect {
         PatchEffect::Patched { fixture } => format!("patched {fixture}"),
-        PatchEffect::Writers(writers) => {
-            let addresses: Vec<String> = writers.iter().map(|w| address(w).to_string()).collect();
-            format!("writers {}", addresses.join(" "))
-                .trim_end()
-                .to_string()
+        PatchEffect::Config => format!("config {}", fields(patch).join(" "))
+            .trim_end()
+            .to_string(),
+        PatchEffect::Moved { lights } => format!("moved {}", run(lights)),
+        PatchEffect::Unpatched { lights } => format!("unpatched {}", run(lights)),
+        PatchEffect::Grab { value, runs: of } => {
+            format!("{} {}", lower(value.property()), runs(of))
         }
-        PatchEffect::Send(EngineCommand::Darken { lights }) => format!("darken {}", run(*lights)),
-        PatchEffect::Grab { value, runs } => {
-            let runs: Vec<String> = runs.iter().map(|r| run(*r)).collect();
-            let property = format!("{:?}", value.property()).to_lowercase();
-            format!("{property} {}", runs.join(" "))
+        PatchEffect::Release { property, runs: of } => {
+            format!("release {} {}", lower(*property), runs(of))
         }
-        PatchEffect::Send(EngineCommand::Lights {
-            lights,
-            change: LightChange::Release { property },
-        }) => format!(
-            "release {} {}",
-            format!("{property:?}").to_lowercase(),
-            run(*lights)
-        ),
-        PatchEffect::Send(other) => format!("{other:?}"),
-        PatchEffect::Runs { change, runs } => format!("{change:?} {runs:?}"),
     }
 }
 
@@ -172,7 +153,7 @@ fn a_patch_command_makes_a_new_patch_and_says_what_follows() {
             many,
             vec![],
             par_3,
-            Ok(&["patched 1", "writers 37 38 39"]),
+            Ok(&["patched 1", "config 37 38 39"]),
             &["1 PAR 3: Generic RGB, RGB at 1.37 (3) lights 1+1"],
         ),
         (
@@ -200,7 +181,7 @@ fn a_patch_command_makes_a_new_patch_and_says_what_follows() {
             many,
             vec![],
             par("X", 1, 510),
-            Ok(&["patched 1", "writers 510 511 512"]),
+            Ok(&["patched 1", "config 510 511 512"]),
             &["1 X: Generic RGB, RGB at 1.510 (3) lights 1+1"],
         ),
         (
@@ -224,7 +205,7 @@ fn a_patch_command_makes_a_new_patch_and_says_what_follows() {
             bar,
             Ok(&[
                 "patched 2",
-                "writers 37 38 39 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26",
+                "config 37 38 39 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25",
             ]),
             &[
                 "1 PAR 3: Generic RGB, RGB at 1.37 (3) lights 1+1",
@@ -250,7 +231,7 @@ fn a_patch_command_makes_a_new_patch_and_says_what_follows() {
             many,
             vec![par_3],
             par("PAR 4", 1, 40),
-            Ok(&["patched 2", "writers 37 38 39 40 41 42"]),
+            Ok(&["patched 2", "config 37 38 39 40 41 42"]),
             &[
                 "1 PAR 3: Generic RGB, RGB at 1.37 (3) lights 1+1",
                 "2 PAR 4: Generic RGB, RGB at 1.40 (3) lights 2+1",
@@ -264,7 +245,7 @@ fn a_patch_command_makes_a_new_patch_and_says_what_follows() {
                 fixture: 2,
                 at: at(2, 100),
             },
-            Ok(&["writers 37 38 39 100 101 102"]),
+            Ok(&["config 37 38 39 100 101 102", "moved 1+1"]),
             &[
                 "1 PAR 3: Generic RGB, RGB at 1.37 (3) lights 1+1",
                 "2 PAR 4: Generic RGB, RGB at 2.100 (3) lights 2+1",
@@ -290,14 +271,14 @@ fn a_patch_command_makes_a_new_patch_and_says_what_follows() {
             Err(Refusal::NotPatched),
             &["1 PAR 3: Generic RGB, RGB at 1.37 (3) lights 1+1"],
         ),
-        // unpatch: its writers and its held values go, the others keep their lights
+        // unpatch: its channels and its held values go, the others keep their lights
         (
             many,
             vec![par_3, bar],
             PatchCommand::Unpatch { fixture: 1 },
             Ok(&[
-                "writers 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26",
-                "darken 0+1",
+                "config 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25",
+                "unpatched 0+1",
             ]),
             &["2 Bar: X-240Bar RGB, 26 Channel at 2.1 (26) lights 2+9"],
         ),
@@ -315,7 +296,7 @@ fn a_patch_command_makes_a_new_patch_and_says_what_follows() {
             par("PAR 5", 1, 1),
             Ok(&[
                 "patched 1",
-                "writers 1 2 3 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26",
+                "config 1 2 3 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25",
             ]),
             &[
                 "1 PAR 5: Generic RGB, RGB at 1.1 (3) lights 1+1",
@@ -463,19 +444,21 @@ fn a_patch_command_makes_a_new_patch_and_says_what_follows() {
             new.unwrap_or(patch)
         });
         let updated = project.update(command, &library);
-        let effects = updated
-            .as_ref()
-            .map(|(_, effects)| effects.iter().map(said).collect::<Vec<_>>())
-            .map_err(|refusal| *refusal);
+        let project = match &updated {
+            Ok((Some(new), _)) => new.clone(),
+            Ok((None, _)) | Err(_) => project,
+        };
+        let effects = updated.map(|(_, effects)| {
+            effects
+                .iter()
+                .map(|e| said(e, &project))
+                .collect::<Vec<_>>()
+        });
         assert_eq!(
             effects,
             expected.map(|e| e.iter().map(ToString::to_string).collect::<Vec<_>>()),
             "{command:?} after {before:?}"
         );
-        let project = match updated {
-            Ok((Some(new), _)) => new,
-            Ok((None, _)) | Err(_) => project,
-        };
         assert_eq!(row(&project), after, "{command:?} after {before:?}");
     }
 }

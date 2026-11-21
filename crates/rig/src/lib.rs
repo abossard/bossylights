@@ -1,9 +1,10 @@
-//! The Rig: a mode of a fixture at an address becomes writers. The only crate that knows
-//! an address belongs to a fixture. A calculation: it runs off the tick thread and may use
-//! the heap. The core runs the writers every frame (`engine_core::resolve`).
+//! The Rig: a mode of a fixture at an address becomes the config of its channels and,
+//! for the v11 light commands until T7, its lights. The only crate that knows an address
+//! belongs to a fixture. A calculation: it runs off the tick thread and may use the heap.
+//! The tick sees only channels and the words offered on them.
 //!
 //! ```text
-//! mode + address + first light --compile--> writers + how many lights | Unfit
+//! mode + address + first light --compile--> lowered channels + a target per light | Unfit
 //! patch + command + library --Patch::update--> new patch + effects | Refusal
 //! ```
 //!
@@ -12,26 +13,26 @@
 //! itself when some channel is in no head or in more than one (a master dimmer): N + 1,
 //! else N.
 //!
-//! Each channel of a light, by what it does and what else the light has:
+//! Each coarse channel of a light, by what it does and what else the light has, is a
+//! field of the light's [`LightFields`]:
 //!
-//! | Channel | Writer |
+//! | Channel | Field |
 //! |---|---|
 //! | dimmer | intensity |
-//! | red, green, blue | its part of the colour, less the shared part when the light has white, times intensity when it has no dimmer |
-//! | white | the part red, green and blue share, times intensity when no dimmer |
-//! | cyan, magenta, yellow | full less red, green, blue (times intensity when no dimmer) |
+//! | red, green, blue | its part of the colour, less the shared part when the light has white, times intensity when it has no dimmer and the value has one (cx-4) |
+//! | white | the part red, green and blue share, times intensity as red |
+//! | cyan, magenta, yellow | full less red, green, blue, times intensity as red |
 //! | pan, tilt, zoom | its part of the position, the zoom; full less it when the channel runs down |
 //! | a colour or gobo wheel | the slot of the colour or gobo the light holds (`capabilities.rs`) |
-//! | a fine byte | joins the first coarse channel of the light that does the same and has no fine byte yet |
-//! | shutter, strobe | fixed: the value that lets light out |
-//! | anything else | fixed: its default, else 0 |
+//! | a coarse with a fine (`channels::lower`) | its field is the pair: a 16-bit word |
+//! | anything else | no field: it shows its rest |
 //!
-//! A writer that takes from a light writes its channel's default (else 0) while nothing
-//! holds the part it takes.
+//! A light value offers a word on each field it has a value for; a field it has none for
+//! shows what is underneath, else the channel's rest (`channels::lower`).
 //!
-//! Every channel of the mode is written by one writer. A channel two heads name is the
-//! fixture's own (a shared dimmer, a strobe): the fixture's light writes it, so no two
-//! writers reach one channel (decision 48, `docs/design/who-wins.md`).
+//! Every channel of the mode is in at most one light. A channel two heads name is the
+//! fixture's own (a shared dimmer, a strobe): the fixture's light has it, so no two
+//! lights offer one channel (decision 48, `docs/design/who-wins.md`).
 
 #![no_std]
 #![forbid(unsafe_code)]
@@ -46,9 +47,11 @@ extern crate alloc;
 
 mod capabilities;
 pub mod channels;
+mod light;
 mod patch;
 
 pub use capabilities::{shows_one_gobo, supports};
+pub use light::{Choice, Feed, Less, LightFields, Part, Scale, Sense, Take, Travel};
 pub use patch::{Limit, Patch, PatchEffect, Placed, Unplaced, Whole};
 
 use capabilities::Wheels;
@@ -56,19 +59,20 @@ use capabilities::Wheels;
 use alloc::format;
 use alloc::vec;
 use alloc::vec::Vec;
+use channels::Lowered;
 use engine_core::{
-    ADDRESSES, Channel, ChannelNumbers, Color, Less, LightNumber, Lights, Part, Pixels, Place,
-    Refusal, Scale, Sense, Take, Travel, Universes, Writer,
+    ADDRESSES, CHANNELS, ChannelNumbers, Color, Field, LightNumber, Lights, Pixels, Refusal,
+    Universes,
 };
 use fixture_library::{Byte, Direction, Does, Function, Layout, Mode};
 
 /// A mode at an address, compiled.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Rigged {
-    /// One per channel, or one per coarse and fine pair.
-    pub writers: Vec<Writer>,
-    /// How many lights the mode makes, numbered on from the first.
-    pub lights: u16,
+    /// One per light the mode makes, numbered on from the first.
+    pub targets: Vec<LightFields>,
+    /// The config of each of its channels, its pairs and compounds.
+    pub lowered: Lowered,
 }
 
 /// Why a mode does not fit where it was put.
@@ -82,8 +86,10 @@ pub enum Unfit {
     TooManyLights { needs: usize },
 }
 
-/// The writers of `mode` at `at`, its lights numbered from `first`. The address and the
-/// light numbers are checked against this engine's `universes` and `lights`.
+/// The lights of `mode` at `at`, numbered from `first`, and its channels lowered. The
+/// address and the light numbers are checked against this engine's `universes` and
+/// `lights`. A coarse channel that takes from a light and is paired with a fine one
+/// (`channels::lower`, the definition is the truth) takes a 16-bit word.
 pub fn compile(
     mode: &Mode,
     at: ChannelNumbers,
@@ -93,7 +99,7 @@ pub fn compile(
 ) -> Result<Rigged, Unfit> {
     let places = places(mode.channels.len(), at, universes)?;
     let needs = lights_of(mode);
-    let numbers = (0..needs)
+    (0..needs)
         .map(|offset| {
             u16::try_from(offset)
                 .ok()
@@ -102,54 +108,65 @@ pub fn compile(
         })
         .collect::<Option<Vec<_>>>()
         .ok_or(Unfit::TooManyLights { needs })?;
+    let space = u32::try_from(CHANNELS).unwrap_or(u32::MAX);
+    let lowered = places
+        .first()
+        .map_or(Ok(None), |&start| {
+            channels::lower(mode, start, space).map(Some)
+        })
+        .map_err(|past| Unfit::PastTheEnd {
+            channels: past.channels,
+        })?
+        .unwrap_or(Lowered {
+            channels: vec![],
+            pairs: vec![],
+            compounds: vec![],
+        });
+    let fine = |coarse: u32| {
+        lowered
+            .pairs
+            .iter()
+            .find(|pair| pair.coarse == coarse)
+            .map(|pair| pair.fine)
+    };
     let mut of_light: Vec<Vec<(usize, &fixture_library::Channel)>> = vec![vec![]; needs];
     for ((index, channel), owner) in mode.channels.iter().enumerate().zip(owners(mode)) {
         if let Some(channels) = of_light.get_mut(owner) {
             channels.push((index, channel));
         }
     }
-    let mut writers: Vec<(usize, Writer)> = Vec::new();
-    for (channels, number) in of_light.iter().zip(&numbers) {
+    let mut targets = Vec::with_capacity(needs);
+    for (light, channels) in of_light.iter().enumerate() {
+        let number = u16::try_from(light)
+            .ok()
+            .and_then(|offset| first.index().checked_add(offset))
+            .unwrap_or(u16::MAX);
         let has = Has::of(channels.iter().map(|(_, c)| *c));
         let wheels = Wheels::of(channels);
-        // the writers of each channel: none yet for a fine byte
-        let mut bound: Vec<Vec<Writer>> = channels
-            .iter()
-            .map(
-                |&(index, channel)| match (channel.byte, places.get(index)) {
-                    (Byte::Coarse, Some(&place)) => wheels
-                        .bind(index, channel, *number, place)
-                        .unwrap_or_else(|| Ok(vec![coarse(channel, has, *number, place)])),
-                    (Byte::Coarse | Byte::Fine, _) => Ok(vec![]),
-                },
-            )
-            .collect::<Result<_, _>>()?;
-        for (at, &(index, channel)) in channels.iter().enumerate() {
-            let (Byte::Fine, Some(&place)) = (channel.byte, places.get(index)) else {
+        let mut target = LightFields::default();
+        for &(index, channel) in channels {
+            let (Byte::Coarse, Some(&place)) = (channel.byte, places.get(index)) else {
                 continue;
             };
-            let joined = channels
-                .iter()
-                .zip(bound.iter_mut())
-                .filter(|((_, c), _)| c.byte == Byte::Coarse && c.function == channel.function)
-                .any(|(_, writers)| join(writers.first_mut(), place, channel.default));
-            if !joined && let Some(writers) = bound.get_mut(at) {
-                *writers = vec![fixed(channel, place)];
-            }
+            let feed = match wheels.bind(index, channel, number) {
+                Some(bound) => bound?,
+                None => take(channel, has).map(Feed::Takes),
+            };
+            let Some(feed) = feed else {
+                continue;
+            };
+            let at = match (&feed, fine(place)) {
+                (Feed::Takes(_), Some(fine)) => Field::Word {
+                    coarse: place,
+                    fine,
+                },
+                (Feed::Takes(_) | Feed::Picks(_), _) => Field::Byte(place),
+            };
+            target.push(at, feed);
         }
-        writers.extend(
-            channels
-                .iter()
-                .zip(bound)
-                .flat_map(|(&(index, _), bound)| bound.into_iter().map(move |w| (index, w))),
-        );
+        targets.push(target);
     }
-    // in channel order, a wheel's slots right after it (the sort is stable)
-    writers.sort_by_key(|&(index, _)| index);
-    Ok(Rigged {
-        writers: writers.into_iter().map(|(_, writer)| writer).collect(),
-        lights: u16::try_from(needs).unwrap_or(u16::MAX),
-    })
+    Ok(Rigged { targets, lowered })
 }
 
 /// How many lights `mode` makes: one per head, and the fixture itself when it has a
@@ -238,43 +255,35 @@ fn strip(pixels: Pixels, color: Color) -> (&'static str, Mode) {
     (model, mode)
 }
 
-/// Adds `fine`, its default `default`, to a writer that takes a light into one byte.
-/// False for any other.
-fn join(writer: Option<&mut Writer>, fine: Channel, default: Option<u8>) -> bool {
-    match writer {
-        Some(Writer::Takes { at, unheld, .. }) => match *at {
-            Place::Byte(coarse) => {
-                *at = Place::Pair { coarse, fine };
-                *unheld |= u16::from(default.unwrap_or(0));
-                true
-            }
-            Place::Pair { .. } => false,
-        },
-        Some(
-            Writer::Fixed { .. }
-            | Writer::Picks { .. }
-            | Writer::ColourSlot { .. }
-            | Writer::GoboSlot { .. },
-        )
-        | None => false,
+/// The strip mode the rig makes that `mode` is, with its declarations: a strip has no
+/// definition file to take them from. `None` when `maker` and `model` name no strip, or
+/// `mode` (declarations aside) is none of its modes.
+pub fn strip_mode(maker: &str, model: &str, mode: &Mode) -> Option<Mode> {
+    let pixels = u16::try_from(mode.pixels.len())
+        .ok()
+        .and_then(|count| Pixels::try_from(count).ok())?;
+    let (_, made) = [Color::Rgb, Color::Rgbw]
+        .into_iter()
+        .map(|color| strip(pixels, color))
+        .find(|&(strip, _)| maker == "Generic" && strip == model)?;
+    let mut plain = made.clone();
+    for channel in &mut plain.channels {
+        channel.declared = fixture_library::Declared::default();
     }
+    (plain == *mode).then_some(made)
 }
 
-/// The channel of each of the `count` channels from `at`. Past address 512 a fixture runs
-/// on at address 1 of the next universe, as an output streams a run of universes.
-fn places(count: usize, at: ChannelNumbers, universes: Universes) -> Result<Vec<Channel>, Unfit> {
+/// The channel of each of the `count` channels from `at`, counted from 0 over the one
+/// space. Past address 512 a fixture runs on at address 1 of the next universe, as an
+/// output streams a run of universes.
+fn places(count: usize, at: ChannelNumbers, universes: Universes) -> Result<Vec<u32>, Unfit> {
     at.check(universes).map_err(Unfit::Refused)?;
     let start = flat(at);
     if start + count > usize::from(universes.count()) * ADDRESSES {
         return Err(Unfit::PastTheEnd { channels: count });
     }
     (start..start + count)
-        .map(|channel| {
-            unflat(channel)
-                .ok_or(Unfit::PastTheEnd { channels: count })?
-                .check(universes)
-                .map_err(Unfit::Refused)
-        })
+        .map(|channel| u32::try_from(channel).map_err(|_| Unfit::PastTheEnd { channels: count }))
         .collect()
 }
 
@@ -322,36 +331,6 @@ impl Has {
             has.white |= channel.function == Function::White;
         }
         has
-    }
-}
-
-/// The writer of a coarse channel.
-fn coarse(
-    channel: &fixture_library::Channel,
-    has: Has,
-    light: LightNumber,
-    place: Channel,
-) -> Writer {
-    match take(channel, has) {
-        Some(take) => Writer::Takes {
-            light,
-            take,
-            at: Place::Byte(place),
-            unheld: u16::from(channel.default.unwrap_or(0)) << 8,
-        },
-        None => fixed(channel, place),
-    }
-}
-
-/// A channel no light writes: open if it is a shutter, else its default, else 0.
-fn fixed(channel: &fixture_library::Channel, at: Channel) -> Writer {
-    let value = match channel.byte {
-        Byte::Coarse => channel.open().or(channel.default),
-        Byte::Fine => channel.default,
-    };
-    Writer::Fixed {
-        at,
-        value: value.unwrap_or(0),
     }
 }
 

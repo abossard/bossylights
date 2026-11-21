@@ -389,8 +389,11 @@ fn the_live_grabs_stay_bounded_whatever_a_client_grabs() {
     let all = named("all", odd(1, 1023).collect());
     let low = named("low", odd(1, 511).collect());
     let high = named("high", odd(513, 1023).collect());
-    // every light property: 4 and a gobo per wheel, 3
-    let refused = Some(Refusal::GrabFull { most: 16_384 * 7 });
+    // a grab is a source entry: GRABS of them live at once
+    let most = engine_core::GRABS;
+    let refused = Some(Refusal::GrabFull {
+        most: u32::try_from(most).unwrap(),
+    });
     // (what, groups made first, the grabs of each round, rounds, admitted, refused)
     type Round = Box<dyn FnMut(usize) -> Vec<Command>>;
     type Case = (
@@ -412,16 +415,16 @@ fn the_live_grabs_stay_bounded_whatever_a_client_grabs() {
             None,
         ),
         (
-            // each a fresh group of 512 runs that keeps one light of its own: the 225th
-            // would keep more runs than every light property held by a grab of its own
+            // each a fresh group of 52 runs that keeps one light of its own, the others
+            // taken by the next: the grab past the last free entry is refused
             "each keeps one light",
             vec![],
             Box::new(move |n| {
-                let own = 1025 + 2 * u16::try_from(n).unwrap();
-                vec![lights(odd(1, 1021).chain([own])), grab_colour("g")]
+                let own = 102 + u16::try_from(n).unwrap();
+                vec![lights(odd(1, 101).chain([own])), grab_colour("g")]
             }),
-            230,
-            224,
+            most + 1,
+            most,
             refused,
         ),
     ];

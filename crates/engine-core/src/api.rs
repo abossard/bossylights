@@ -15,8 +15,8 @@
 use crate::health;
 use crate::library::{Failure, FixtureKind, Library, Match, ModeChannels, Text};
 use crate::{
-    ChannelLevel, Command, GrabId, Grouped, HeldLight, Levels, Light, OutputNumber, Patched,
-    PlayId, Project, Property, Rgb, Saved, ShowFile, State, Status, Step, Target,
+    ChannelLevel, Command, GrabId, Grouped, Levels, Light, OutputNumber, Patched, PlayId, Project,
+    Property, Rgb, Saved, ShowFile, State, Status, Step, Target,
 };
 use core::time::Duration;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -25,6 +25,17 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 /// another version does not talk to the engine. Raise it with every change a client of
 /// the old version would get wrong.
 pub const API_VERSION: u16 = 11;
+
+/// A light's held parts, as the picture shows them: its number, counted from 1, and each
+/// part's value, `None` where no grab holds it. The front builds it from the grabs it
+/// sent; the tick has no lights.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct HeldLight {
+    pub light: u16,
+    pub intensity: Option<u16>,
+    pub colour: Option<Rgb>,
+}
 
 /// Local time and phase of a root or a reference. Spread is a percentage.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

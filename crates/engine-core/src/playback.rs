@@ -18,16 +18,15 @@
 //! unless its request was sent at that instant too, then it keeps its request's order. So
 //! starts at one instant go by the order they were asked in, launches first.
 //!
-//! The Mixer reads one source sample per sounding play. A step supplies static runs.
-//! A sequence supplies entries sampled at its local beat. A natural end or stop can
-//! freeze that sample. The Mixer owns rank, start priority and the end rules.
+//! The Mixer reads one source per sounding play. A step offers fixed channel words. A
+//! sequence or wave offers the words sampled at its local beat. A natural end or stop
+//! freezes that sample. The Mixer owns rank, start priority and the end rules.
 
 use crate::clock::{BeatTime, Clock, When};
 use crate::library::Text;
 use crate::mix::{GrabId, MixRules};
 use crate::patch::Target;
 use crate::property::{Light, Value};
-use crate::resolve::LightRun;
 use core::time::Duration;
 use serde::{Deserialize, Serialize};
 
@@ -332,13 +331,6 @@ impl Serialize for Plays {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.collect_seq(self.iter())
     }
-}
-
-/// A step's values on one run of lights: what a play holds.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Entry {
-    pub lights: LightRun,
-    pub values: Light,
 }
 
 #[cfg(test)]

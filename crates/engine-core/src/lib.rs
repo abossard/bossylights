@@ -20,30 +20,31 @@ mod clock;
 mod evaluate;
 pub mod health;
 pub use clock::{BEATS_PER_BAR, BeatTime, Bpm, Clock, Reading, Source, When, beats};
-pub use evaluate::{Binding, Elapsed, Item, MAX_DEPTH, Node, Program};
+pub use evaluate::{Binding, Elapsed, Item, MAX_DEPTH, Node, Program, Sampled};
 mod kinds;
 mod library;
 mod mix;
 pub use mix::{
-    Brightness, Claims, End, GrabId, Held, ManualEnd, MixRules, OtherEnd, show, stops, unkept, wins,
+    Brightness, End, Entry, Field, GRABS, Grab, GrabId, ManualEnd, MixRules, Offer, Offering,
+    OtherEnd, SOURCES, stops, unkept, wins,
 };
+mod light;
 mod output;
 mod patch;
 mod playback;
 mod project;
 mod property;
-mod resolve;
 mod show;
 
 pub use api::{
-    API_VERSION, AuthoredStep, Definition, Health, HealthEvent, LateReason, LatenessWindow,
-    MATCHES, OutputHealth, OutputHealthEvent, OutputHealthState, OutputMeasurement, Palette,
-    Pattern, PressWindow, RecoveredReason, Refusal, Repeat, Reply, Request, SavedLook, Sequence,
-    SequenceItem, Speed, Swatches, Use, WaveTarget,
+    API_VERSION, AuthoredStep, Definition, Health, HealthEvent, HeldLight, LateReason,
+    LatenessWindow, MATCHES, OutputHealth, OutputHealthEvent, OutputHealthState, OutputMeasurement,
+    Palette, Pattern, PressWindow, RecoveredReason, Refusal, Repeat, Reply, Request, SavedLook,
+    Sequence, SequenceItem, Speed, Swatches, Use, WaveTarget,
 };
 pub use channel::{
-    ADDRESSES, CHANNELS, Channel, ChannelLevel, ChannelNumbers, ChannelSet, Channels, Levels,
-    MAX_UNIVERSES, SourceTag, Universes, changes,
+    ADDRESSES, CHANNELS, Channel, ChannelConfig, ChannelLevel, ChannelNumbers, ChannelSet,
+    Channels, Flags, Levels, MAX_UNIVERSES, SourceTag, Universes, changes,
 };
 use channel::{BLACKOUT, MODIFIERS};
 pub use kinds::{Adapter, Color, OutputKind};
@@ -53,6 +54,7 @@ pub use library::{
     ChannelFunction, Failure, FixtureKind, Library, Match, ModeChannels, ModeSize, NamedChannel,
     Text,
 };
+pub use light::{LightNumber, LightRun, Lights, MAX_LIGHTS};
 pub use output::{
     Counters, MAX_OUTPUTS, OFF_BEAT, Outcome, Output, OutputNumber, ROUTE_MOST, Rate, RouteFault,
     Run, RunNumbers, SPANS_MOST, Span, Status, bounds, gather, route_length,
@@ -61,14 +63,10 @@ pub use patch::{
     Grouped, Layout, Member, MemberList, Members, PatchCommand, Patched, Pixels, Target,
 };
 pub use playback::{
-    Entry, LOOKS, Launches, LookCommand, PLAYS, Play, PlayId, PlayState, Plays, Rank, Saved, Step,
+    LOOKS, Launches, LookCommand, PLAYS, Play, PlayId, PlayState, Plays, Rank, Saved, Step,
 };
 pub use project::{Project, ProjectEffect, ProjectEvent, ProjectOutput};
 pub use property::{Gobo, Light, Position, Property, Rgb, Value, Wheel};
-pub use resolve::{
-    HeldLight, Less, LightNumber, LightRun, Lights, MAX_LIGHTS, Part, Place, Scale, Sense, Take,
-    Travel, Writer, held_lights, light_changes, resolve,
-};
 pub use show::{ShowFile, Unopened};
 
 use core::time::Duration;
@@ -403,24 +401,19 @@ pub enum EngineCommand {
     RemoveOutput {
         output: OutputNumber,
     },
-    /// The writers of the patch arrive with this command and take the place of the ones
-    /// there, which go back to be freed. No light value changes.
-    Writers,
-    /// Each light of `lights` takes `change`.
-    Lights {
-        lights: LightRun,
-        change: LightChange,
+    /// The patch's channel config arrives with this command and takes the place of the
+    /// one there, which goes back to be freed. No offer changes.
+    Config,
+    /// A change to the direct grab in source entry `PLAYS + grab` ([`GRABS`]). Its
+    /// offers arrive with `Start` and `Update` and take the place of the ones there.
+    Grab {
+        grab: u16,
+        change: GrabChange,
     },
-    /// The lights of an unpatched fixture: their held values go.
-    Darken {
-        lights: LightRun,
-    },
-    /// Runs of a group arrive with this command, in place: each takes `change`. A
-    /// group's commands are queued at once, so one frame shows all of them or none. Alone
-    /// it changes nothing.
-    Runs {
-        change: LightChange,
-    },
+    /// Changes to several direct grabs, all in one frame: they arrive with this command,
+    /// and each is applied as a [`EngineCommand::Grab`]. One place in the queue, however
+    /// many grabs a release or a patch change touches.
+    Grabs,
     /// `play` of `look` starts at `rank` in its slot, in place of the play there. Its
     /// plan arrives with this command and takes the place of the slot's plan.
     Start {
@@ -461,44 +454,37 @@ pub enum EngineCommand {
     },
 }
 
-/// What a light command does to the direct holds of each light it names, without
-/// naming them. All Manual; who holds what: [`Held`].
+/// What a grab command does to one grab on the tick. All Manual; the front decides which
+/// grab and which offers ([`Grab`]).
+///
+/// ```text
+/// off --Start--> live --Update--> live, same start
+///                  |  --Keep--> kept --Rules with UntilStop--> off
+///                  |  --Remove--> off
+/// any --ReleaseAll--> off
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LightChange {
-    /// `grab` holds the value, as the latest start.
-    Grab { value: Value, grab: GrabId },
-    /// The value, where `grab` still holds its property. The start stays.
-    Update { value: Value, grab: GrabId },
-    /// Where `grab` still holds `property`: kept, or let go.
-    End {
-        property: Property,
-        grab: GrabId,
-        end: End,
-    },
-    /// Every direct hold of `property` let go.
-    Release { property: Property },
-}
-
-impl LightChange {
-    /// The command that makes this change to the lights of `run`.
-    pub const fn on(self, run: LightRun) -> EngineCommand {
-        EngineCommand::Lights {
-            lights: run,
-            change: self,
-        }
-    }
+pub enum GrabChange {
+    /// The grab starts, as the latest start.
+    Start,
+    /// New offers, the same start.
+    Update,
+    /// Its end keeps it: its offers stay until released.
+    Keep,
+    /// It ends: what is underneath shows.
+    Remove,
 }
 
 /// The only place state changes: state and command in, new state out. `universes` are
 /// the levels of the raw channels, `holds` which of them are held (a channel not held is
-/// at 0), `lights` the held values per light: buffers the caller owns; a command changes
-/// them in place, so nothing allocates. No command needs anything done outside yet: the
-/// first that does returns it as data beside the state, never in a `Vec`.
+/// at 0), `grabs` the direct grabs by entry ([`GRABS`]): buffers the caller owns; a
+/// command changes them in place, so nothing allocates. No command needs anything done
+/// outside yet: the first that does returns it as data beside the state, never in a `Vec`.
 pub fn update(
     state: State,
     universes: &mut [Levels],
     holds: &mut [ChannelSet],
-    lights: &mut [Held],
+    grabs: &mut [Option<Grab>],
     command: EngineCommand,
 ) -> State {
     let held = State {
@@ -569,7 +555,7 @@ pub fn update(
         EngineCommand::ReleaseAll => {
             universes.fill(Levels::ZERO);
             holds.fill(ChannelSet::NONE);
-            lights.fill(Held::NONE);
+            grabs.fill(None);
             let mut plays = state.plays;
             plays.release_where(|play| play.rank == Rank::Manual);
             State { plays, ..state }
@@ -578,23 +564,27 @@ pub fn update(
             blackout: on,
             ..state
         },
-        EngineCommand::Writers | EngineCommand::Runs { .. } | EngineCommand::Plan { .. } => state,
-        EngineCommand::Lights {
-            lights: run,
-            change,
-        } => {
-            for light in run.of(lights) {
-                light.change(change, state.order);
-            }
+        EngineCommand::Config | EngineCommand::Grabs | EngineCommand::Plan { .. } => state,
+        EngineCommand::Grab { grab, change } => {
+            let Some(slot) = grabs.get_mut(usize::from(grab)) else {
+                return state;
+            };
             match change {
-                LightChange::Grab { .. } => held,
-                LightChange::Update { .. }
-                | LightChange::End { .. }
-                | LightChange::Release { .. } => state,
+                GrabChange::Start => {
+                    *slot = Some(Grab {
+                        order: state.order,
+                        kept: false,
+                    });
+                    return held;
+                }
+                GrabChange::Update => {}
+                GrabChange::Keep => {
+                    if let Some(grab) = slot {
+                        grab.kept = true;
+                    }
+                }
+                GrabChange::Remove => *slot = None,
             }
-        }
-        EngineCommand::Darken { lights: run } => {
-            run.of(lights).fill(Held::NONE);
             state
         }
         EngineCommand::Start {
@@ -625,8 +615,10 @@ pub fn update(
         EngineCommand::Rules { rules } => {
             let mut plays = state.plays;
             plays.release_where(|play| unkept(play.rank, play.state, rules));
-            for light in lights.iter_mut() {
-                light.unkeep(rules);
+            for grab in grabs.iter_mut() {
+                if grab.is_some_and(|g| g.kept && unkept(Rank::Manual, PlayState::Kept, rules)) {
+                    *grab = None;
+                }
             }
             State {
                 plays,
@@ -688,23 +680,24 @@ fn retempo(state: State) -> State {
 }
 
 /// The bytes that go out now, written into `channels`, which the caller owns. Every
-/// channel starts at its rest; the resolver writes what the `writers` make of the
-/// `lights`; then one pass decides each channel: the raw channels held (`universes` at
-/// `holds`) replace their bytes, and every follower moves by its modifiers, Blackout
-/// among them. No level depends on time yet: the first that does takes the time as an
-/// argument.
-pub fn frame(
+/// channel starts at its rest; each sounding play and each grab offers what `offering`
+/// gives its source entry, and the Mixer decides each channel ([`mix::offer`]); then one
+/// pass: the raw channels held (`universes` at `holds`) replace their bytes, and every
+/// follower moves by its modifiers, Blackout among them. `sources` is the caller's buffer
+/// of [`SOURCES`] entries. No level depends on time here: a play's offers were sampled
+/// before.
+pub fn frame<'a>(
     state: &State,
-    universes: &[Levels],
-    holds: &[ChannelSet],
-    lights: &[Light],
-    writers: &[Writer],
+    (universes, holds): (&[Levels], &[ChannelSet]),
+    grabs: &[Option<Grab>],
+    sources: &mut [Option<Entry>],
+    offering: impl Fn(usize) -> Offering<'a>,
     channels: &mut Channels,
 ) {
-    let mut lit = [ChannelSet::NONE; MAX_UNIVERSES as usize];
     mix::rest(channels);
-    resolve::write(lights, writers, &mut channels.value, &mut lit);
-    mix::channels(channels, &lit, (universes, holds), modifiers(state));
+    mix::sources(state.plays.sounding(), grabs, sources);
+    mix::offers(channels, sources, offering);
+    mix::channels(channels, (universes, holds), modifiers(state));
 }
 
 /// The level of each modifier slot this frame: Master full until `SetMaster` comes,
@@ -1342,109 +1335,98 @@ mod tests {
     }
 
     #[test]
-    fn a_light_command_changes_the_values_of_its_lights() {
-        let all = Lights::new(4).unwrap();
-        let run = |first, count| {
-            LightRun::new(LightNumber::new(first, all).unwrap(), count, all).unwrap()
+    fn a_grab_command_moves_its_entry() {
+        let live = |order| Some(Grab { order, kept: false });
+        let kept = |order| Some(Grab { order, kept: true });
+        let grab = |grab, change| EngineCommand::Grab { grab, change };
+        let keep_all = MixRules {
+            manual_end: ManualEnd::UntilRelease,
+            ..MixRules::default()
         };
-        let red = Light {
-            intensity: None,
-            colour: Some(Rgb {
-                red: 0xffff,
-                green: 0,
-                blue: 0,
-            }),
-            ..Light::DARK
+        let until_stop = MixRules {
+            manual_end: ManualEnd::UntilStop,
+            ..MixRules::default()
         };
-        let lit = Light {
-            intensity: Some(0x8000),
-            ..Light::DARK
-        };
-        let held_black = Light {
-            colour: Some(Rgb {
-                red: 0,
-                green: 0,
-                blue: 0,
-            }),
-            ..Light::DARK
-        };
-        let dark = Light::DARK;
-        let grab = GrabId { generation: 1 };
-        let set = |value| move |lights| LightChange::Grab { value, grab }.on(lights);
-        let set_red = set(Value::Colour(Rgb {
-            red: 0xffff,
-            green: 0,
-            blue: 0,
-        }));
-        let half = set(Value::Intensity(0x8000));
-        let full_red = Light {
-            intensity: Some(0x8000),
-            ..red
-        };
-        let release = |property| move |lights| LightChange::Release { property }.on(lights);
-        let let_go = release(Property::Intensity);
-        let black = release(Property::Colour);
-        // (lights before, command, lights after)
-        let cases = [
-            ([dark; 4], set_red(run(1, 2)), [dark, red, red, dark]),
-            ([dark; 4], half(run(3, 1)), [dark, dark, dark, lit]),
-            // black set is held black, not nothing held
+        // (row, grabs before, command, grabs after, start order taken)
+        type Case = (
+            &'static str,
+            [Option<Grab>; 2],
+            EngineCommand,
+            [Option<Grab>; 2],
+            bool,
+        );
+        let cases: [Case; 9] = [
             (
-                [dark; 4],
-                set(Value::Colour(Rgb::BLACK))(run(0, 1)),
-                [held_black, dark, dark, dark],
-            ),
-            // intensity and colour are held on their own
-            ([red; 4], half(run(0, 1)), [full_red, red, red, red]),
-            ([lit; 4], set_red(run(0, 4)), [full_red; 4]),
-            (
-                [full_red; 4],
-                EngineCommand::Darken { lights: run(1, 3) },
-                [full_red, dark, dark, dark],
-            ),
-            ([red; 4], EngineCommand::Writers, [red; 4]),
-            // a release lets one property go back to its default, on its own
-            (
-                [full_red; 4],
-                let_go(run(1, 2)),
-                [full_red, red, red, full_red],
+                "start",
+                [None, None],
+                grab(1, GrabChange::Start),
+                [None, live(0)],
+                true,
             ),
             (
-                [full_red; 4],
-                black(run(0, 1)),
-                [lit, full_red, full_red, full_red],
+                "restart",
+                [live(3), None],
+                grab(0, GrabChange::Start),
+                [live(0), None],
+                true,
             ),
-            ([full_red; 4], black(run(0, 4)), [lit; 4]),
-            // releasing what is not held does nothing
-            ([red; 4], let_go(run(0, 4)), [red; 4]),
-            ([lit; 4], black(run(0, 4)), [lit; 4]),
-            ([dark; 4], let_go(run(0, 4)), [dark; 4]),
-            ([dark; 4], black(run(0, 4)), [dark; 4]),
+            (
+                "update",
+                [live(3), None],
+                grab(0, GrabChange::Update),
+                [live(3), None],
+                false,
+            ),
+            (
+                "keep",
+                [live(3), None],
+                grab(0, GrabChange::Keep),
+                [kept(3), None],
+                false,
+            ),
+            (
+                "remove",
+                [kept(3), live(4)],
+                grab(0, GrabChange::Remove),
+                [None, live(4)],
+                false,
+            ),
+            (
+                "past the entries",
+                [None, None],
+                grab(2, GrabChange::Start),
+                [None, None],
+                false,
+            ),
+            (
+                "release all",
+                [kept(3), live(4)],
+                EngineCommand::ReleaseAll,
+                [None, None],
+                false,
+            ),
+            (
+                "rules that keep",
+                [kept(3), live(4)],
+                EngineCommand::Rules { rules: keep_all },
+                [kept(3), live(4)],
+                false,
+            ),
+            (
+                "rules that do not keep",
+                [kept(3), live(4)],
+                EngineCommand::Rules { rules: until_stop },
+                [None, live(4)],
+                false,
+            ),
         ];
-        for (before, command, after) in cases {
-            let mut lights = before.map(|values| {
-                let mut held = Held::NONE;
-                let each = [
-                    values.intensity.map(Value::Intensity),
-                    values.colour.map(Value::Colour),
-                ];
-                for value in each.into_iter().flatten() {
-                    held.change(LightChange::Grab { value, grab }, 1);
-                }
-                held
-            });
-            let (mut universes, mut holds) = raw(&[(1, 1, 5)]);
-            let state = update(CALM, &mut universes, &mut holds, &mut lights, command);
-            assert_eq!(
-                State {
-                    order: CALM.order,
-                    ..state
-                },
-                CALM,
-                "{command:?}"
-            );
-            assert_eq!(lights.map(|held| *held.values()), after, "{command:?}");
-            assert_eq!((universes, holds), raw(&[(1, 1, 5)]), "{command:?}");
+        let (mut universes, mut holds) = raw(&[]);
+        for (row, before, command, after, starts) in cases {
+            let mut grabs = before;
+            let state = State { order: 0, ..CALM };
+            let next = update(state, &mut universes, &mut holds, &mut grabs, command);
+            assert_eq!(grabs, after, "{row}");
+            assert_eq!(next.order, u64::from(starts), "{row}");
         }
     }
 
@@ -1486,140 +1468,123 @@ mod tests {
         assert_eq!((one, holds), ([Levels::ZERO], [ChannelSet::NONE]));
     }
 
+    /// One grab in its entry, offering `offers`: what [`frame`] mixes with the raw holds.
+    fn grab_frame(
+        state: &State,
+        raw: (&[Levels], &[ChannelSet]),
+        offers: &[Offer],
+        config: &ChannelConfig,
+    ) -> Box<Channels> {
+        let grabs = [Some(Grab {
+            order: 1,
+            kept: false,
+        })];
+        let mut sources = vec![None; SOURCES];
+        let mut channels = Box::new(Channels::NEW);
+        channels.configure(config);
+        channels.value[0].0[8] = 9; // whatever was there before
+        frame(
+            state,
+            raw,
+            &grabs,
+            &mut sources,
+            |entry| {
+                if entry == PLAYS {
+                    Offering::List(offers)
+                } else {
+                    Offering::NOTHING
+                }
+            },
+            &mut channels,
+        );
+        channels
+    }
+
+    /// A byte offered on universe 1 at `address`, counted from 1.
+    fn byte(address: u16, value: u8) -> Offer {
+        Offer {
+            at: Field::Byte(u32::try_from(channel(1, address).index()).unwrap()),
+            value: u16::from(value) << 8,
+        }
+    }
+
     #[test]
-    fn frame_resolves_the_lights_and_mix_decides_each_channel() {
-        let all = Lights::new(1).unwrap();
-        let light = LightNumber::new(0, all).unwrap();
-        let takes = |of, address| Writer::Takes {
-            light,
-            take: Take {
-                of,
-                ..Take::INTENSITY
-            },
-            at: Place::Byte(channel(1, address)),
-            unheld: 0,
-        };
-        let shutter = Writer::Fixed {
-            at: channel(1, 4),
-            value: 200,
-        };
-        // a PAR at 1: red, green, blue, a shutter open at 200
-        let par = [
-            takes(Part::Red, 1),
-            takes(Part::Green, 2),
-            takes(Part::Blue, 3),
-            shutter,
-        ];
-        // two fixtures on channel 1: a light value and a default
-        let light_then_default = [
-            takes(Part::Red, 1),
-            Writer::Fixed {
-                at: channel(1, 1),
-                value: 100,
-            },
-        ];
-        let default_then_light = [
-            Writer::Fixed {
-                at: channel(1, 1),
-                value: 100,
-            },
-            takes(Part::Red, 1),
-        ];
-        let red = [Light {
-            colour: Some(Rgb {
-                red: 0xffff,
-                green: 0,
-                blue: 0,
-            }),
-            ..Light::DARK
-        }];
+    fn frame_mixes_the_offers_and_the_raw_holds_over_the_rest() {
+        // a PAR at 1: red, green, blue, and a shutter at rest open at 200
+        let mut shutter = ChannelConfig::NEW;
+        shutter.rest[channel(1, 4).index()] = 200;
+        let red = [byte(1, 255), byte(2, 0), byte(3, 0)];
         let lit = |more: &[(u16, u16, u8)]| {
-            let mut levels = vec![(1, 1, 255), (1, 4, 200)];
-            levels.extend_from_slice(more);
-            held(&levels)
+            let mut all = vec![(1, 1, 255), (1, 4, 200)];
+            all.extend(more);
+            held(&all)
         };
-        // (row, state, raw held, writers, out)
+        // (row, state, raw held, offers, out)
         type Case<'a> = (
             &'a str,
             State,
             &'a [(u16, u16, u8)],
-            &'a [Writer],
+            &'a [Offer],
             [Levels; 2],
         );
-        let cases: [Case; 13] = [
-            ("nothing", CALM, &[], &[], held(&[])),
+        let cases: [Case; 11] = [
+            ("nothing", CALM, &[], &[], held(&[(1, 4, 200)])),
             (
                 "raw only",
                 CALM,
                 &[(1, 1, 255), (2, 512, 3)],
                 &[],
-                held(&[(1, 1, 255), (2, 512, 3)]),
+                held(&[(1, 1, 255), (1, 4, 200), (2, 512, 3)]),
             ),
-            ("the light", CALM, &[], &par, lit(&[])),
+            ("the offers", CALM, &[], &red, lit(&[])),
             (
-                "2 raw over the light",
+                "2 raw over an offer",
                 CALM,
                 &[(1, 2, 9)],
-                &par,
+                &red,
                 lit(&[(1, 2, 9)]),
             ),
             (
-                "2 raw at 0 over the light",
+                "2 raw at 0 over an offer",
                 CALM,
                 &[(1, 1, 0)],
-                &par,
+                &red,
                 held(&[(1, 4, 200)]),
             ),
             (
-                "2 raw over a default",
+                "2 raw over a rest",
                 CALM,
                 &[(1, 4, 7)],
-                &par,
+                &red,
                 held(&[(1, 1, 255), (1, 4, 7)]),
             ),
             (
-                "2 raw beside the light",
+                "2 raw beside",
                 CALM,
                 &[(2, 512, 3)],
-                &par,
+                &red,
                 lit(&[(2, 512, 3)]),
             ),
-            ("1 blackout", DARK, &[], &par, held(&[])),
+            ("1 blackout", DARK, &[], &red, held(&[])),
             (
                 "1 blackout over raw",
                 DARK,
                 &[(1, 2, 9), (2, 512, 3)],
-                &par,
+                &red,
                 held(&[]),
             ),
             ("1 blackout, raw only", DARK, &[(1, 1, 255)], &[], held(&[])),
             (
-                "3 a light over a default",
+                "3 an offer over a rest",
                 CALM,
                 &[],
-                &light_then_default,
-                held(&[(1, 1, 255)]),
-            ),
-            (
-                "3 a light over a default",
-                CALM,
-                &[],
-                &default_then_light,
-                held(&[(1, 1, 255)]),
-            ),
-            (
-                "2 raw over both",
-                CALM,
-                &[(1, 1, 9)],
-                &light_then_default,
-                held(&[(1, 1, 9)]),
+                &[byte(4, 255)],
+                held(&[(1, 4, 255)]),
             ),
         ];
-        for (row, state, raw_held, writers, expected) in cases {
+        for (row, state, raw_held, offers, expected) in cases {
             let (universes, holds) = raw(raw_held);
-            let mut channels = Box::new(Channels::NEW);
-            channels.value[0].0[8] = 9; // whatever was there before
-            frame(&state, &universes, &holds, &red, writers, &mut channels);
+            let channels = grab_frame(&state, (&universes, &holds), offers, &shutter);
             assert_eq!(channels.values()[..2], expected, "{row}");
             assert!(
                 channels.values()[2..].iter().all(|u| *u == Levels::ZERO),
@@ -1630,25 +1595,10 @@ mod tests {
 
     #[test]
     fn frame_says_who_set_each_channel_and_a_release_gives_it_back() {
-        let all = Lights::new(1).unwrap();
-        let light = LightNumber::new(0, all).unwrap();
-        // a dimmer at 1, a shutter open at 200 at 2
-        let writers = [
-            Writer::Takes {
-                light,
-                take: Take::INTENSITY,
-                at: Place::Byte(channel(1, 1)),
-                unheld: 0,
-            },
-            Writer::Fixed {
-                at: channel(1, 2),
-                value: 200,
-            },
-        ];
-        let lit = [Light {
-            intensity: Some(0xffff),
-            ..Light::DARK
-        }];
+        // a dimmer at 1 offered full by the grab, a shutter at rest open at 200 at 2
+        let mut shutter = ChannelConfig::NEW;
+        shutter.rest[channel(1, 2).index()] = 200;
+        let offers = [byte(1, 255)];
         let set = |universe, address, value| EngineCommand::SetChannel {
             channel: channel(universe, address),
             value,
@@ -1658,38 +1608,39 @@ mod tests {
         };
         let blackout = |on| EngineCommand::Blackout { on };
         use SourceTag as S;
+        let grab = SourceTag::of(PLAYS).unwrap();
         // (row, commands, channels 1/1, 1/2 and 2/512: byte and source)
         type Seen = [(u8, SourceTag); 3];
         let cases: [(&str, Vec<EngineCommand>, Seen); 7] = [
             (
                 "nothing held",
                 vec![],
-                [(255, S::LIGHTS), (200, S::REST), (0, S::REST)],
+                [(255, grab), (200, S::REST), (0, S::REST)],
             ),
             (
-                "raw 91 over the light",
+                "raw 91 over the grab",
                 vec![set(1, 1, 91)],
                 [(91, S::RAW), (200, S::REST), (0, S::REST)],
             ),
             (
                 "raw 91 released",
                 vec![set(1, 1, 91), release(1, 1)],
-                [(255, S::LIGHTS), (200, S::REST), (0, S::REST)],
+                [(255, grab), (200, S::REST), (0, S::REST)],
             ),
             (
                 "raw on the last channel",
                 vec![set(2, 512, 91)],
-                [(255, S::LIGHTS), (200, S::REST), (91, S::RAW)],
+                [(255, grab), (200, S::REST), (91, S::RAW)],
             ),
             (
-                "blackout over raw and light",
+                "blackout over raw and the grab",
                 vec![set(2, 512, 91), blackout(true)],
-                [(0, S::LIGHTS), (0, S::REST), (0, S::RAW)],
+                [(0, grab), (0, S::REST), (0, S::RAW)],
             ),
             (
                 "blackout off, the hold comes back",
                 vec![set(2, 512, 91), blackout(true), blackout(false)],
-                [(255, S::LIGHTS), (200, S::REST), (91, S::RAW)],
+                [(255, grab), (200, S::REST), (91, S::RAW)],
             ),
             (
                 "every raw channel released",
@@ -1698,7 +1649,7 @@ mod tests {
                     set(2, 512, 91),
                     EngineCommand::ReleaseChannels,
                 ],
-                [(255, S::LIGHTS), (200, S::REST), (0, S::REST)],
+                [(255, grab), (200, S::REST), (0, S::REST)],
             ),
         ];
         for (row, commands, expected) in cases {
@@ -1707,8 +1658,7 @@ mod tests {
             for command in commands {
                 state = update(state, &mut universes, &mut holds, &mut [], command);
             }
-            let mut channels = Box::new(Channels::NEW);
-            frame(&state, &universes, &holds, &lit, &writers, &mut channels);
+            let channels = grab_frame(&state, (&universes, &holds), &offers, &shutter);
             let seen = [(1, 1), (1, 2), (2, 512)].map(|(universe, address)| {
                 let at = channel(universe, address);
                 let byte = channels.values()[usize::from(universe - 1)].0[usize::from(address - 1)];
