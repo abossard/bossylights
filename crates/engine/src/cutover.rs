@@ -163,77 +163,73 @@ impl Machine {
 mod tests {
     use super::{Effect as F, Event as E, State as S, transition};
 
+    const STATES: [S; 6] = [
+        S::Serving,
+        S::Preparing,
+        S::Published,
+        S::Switched,
+        S::Returned,
+        S::Stopped,
+    ];
+    const EVENTS: [E; 10] = [
+        E::Begin,
+        E::Wake,
+        E::FrameBack,
+        E::Refuse,
+        E::Publish,
+        E::Cutoff,
+        E::DeviceReturned,
+        E::SendFailed,
+        E::AdapterAvailable,
+        E::Stop,
+    ];
+
+    /// The written row for a pair; `None` is "any other pair": same state, nothing.
+    fn row(state: S, event: E) -> Option<(&'static str, S, F)> {
+        let live = state != S::Stopped;
+        Some(match event {
+            E::Stop => ("T13", S::Stopped, F::Stop),
+            E::Begin if state == S::Serving => ("T1", S::Preparing, F::Open),
+            E::Begin if live => ("T12", state, F::Wait),
+            E::Wake if matches!(state, S::Serving | S::Preparing) => ("T2", state, F::SendOld),
+            E::FrameBack if live => ("T3", state, F::CountOld),
+            E::Refuse if state == S::Preparing => ("T4", S::Serving, F::FreePrepared),
+            E::Publish if state == S::Preparing => ("T5", S::Published, F::DrainOld),
+            E::Cutoff if state == S::Published => ("T6", S::Switched, F::SwitchLane),
+            E::Wake if state == S::Switched => ("T7", S::Switched, F::SendNew),
+            E::DeviceReturned if matches!(state, S::Published | S::Switched) => {
+                ("T8", S::Returned, F::ReleaseAndAccept)
+            }
+            E::Wake if state == S::Returned => ("T9", S::Serving, F::ShowNew),
+            E::SendFailed if live => ("T10", state, F::RecordFailure),
+            E::AdapterAvailable if live => ("T11", state, F::RecordAvailable),
+            E::Begin
+            | E::Wake
+            | E::FrameBack
+            | E::Refuse
+            | E::Publish
+            | E::Cutoff
+            | E::DeviceReturned
+            | E::SendFailed
+            | E::AdapterAvailable => return None,
+        })
+    }
+
     #[test]
-    fn a_cutover_follows_every_row_of_the_written_machine() {
-        let cases = [
-            ("T1", S::Serving, E::Begin, S::Preparing, F::Open),
-            ("T2", S::Preparing, E::Wake, S::Preparing, F::SendOld),
-            ("T3", S::Preparing, E::FrameBack, S::Preparing, F::CountOld),
-            ("T3", S::Published, E::FrameBack, S::Published, F::CountOld),
-            ("T3", S::Switched, E::FrameBack, S::Switched, F::CountOld),
-            ("T4", S::Preparing, E::Refuse, S::Serving, F::FreePrepared),
-            ("T5", S::Preparing, E::Publish, S::Published, F::DrainOld),
-            ("T6", S::Published, E::Cutoff, S::Switched, F::SwitchLane),
-            ("T7", S::Switched, E::Wake, S::Switched, F::SendNew),
-            (
-                "T8",
-                S::Published,
-                E::DeviceReturned,
-                S::Returned,
-                F::ReleaseAndAccept,
-            ),
-            (
-                "T8",
-                S::Switched,
-                E::DeviceReturned,
-                S::Returned,
-                F::ReleaseAndAccept,
-            ),
-            ("T9", S::Returned, E::Wake, S::Serving, F::ShowNew),
-            (
-                "T10",
-                S::Published,
-                E::SendFailed,
-                S::Published,
-                F::RecordFailure,
-            ),
-            (
-                "T10",
-                S::Switched,
-                E::SendFailed,
-                S::Switched,
-                F::RecordFailure,
-            ),
-            (
-                "T11",
-                S::Serving,
-                E::AdapterAvailable,
-                S::Serving,
-                F::RecordAvailable,
-            ),
-        ];
-        for (row, state, event, next, effect) in cases {
-            assert_eq!(transition(state, event), (next, effect), "{row} {state:?}");
+    fn a_cutover_follows_every_pair_of_the_written_machine() {
+        let mut written = 0;
+        for state in STATES {
+            for event in EVENTS {
+                let (name, next, effect) =
+                    row(state, event).unwrap_or(("other", state, F::Nothing));
+                written += usize::from(name != "other");
+                assert_eq!(
+                    transition(state, event),
+                    (next, effect),
+                    "{name} {state:?} {event:?}"
+                );
+            }
         }
-        for state in [S::Preparing, S::Published, S::Switched, S::Returned] {
-            assert_eq!(
-                transition(state, E::Begin),
-                (state, F::Wait),
-                "T12 {state:?}"
-            );
-        }
-        for state in [
-            S::Serving,
-            S::Preparing,
-            S::Published,
-            S::Switched,
-            S::Returned,
-        ] {
-            assert_eq!(
-                transition(state, E::Stop),
-                (S::Stopped, F::Stop),
-                "T13 {state:?}"
-            );
-        }
+        assert_eq!(written, 35, "rows of the doc's table, pair by pair");
     }
 }

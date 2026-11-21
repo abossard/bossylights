@@ -26,3 +26,5 @@ test-support = ["engine-core/test-support"]
 [[test]]
 name = "no_alloc"
 harness = false
+# Its stepped clock and trace walk the cutover and health paths: never skipped quietly.
+required-features = ["test-support"]

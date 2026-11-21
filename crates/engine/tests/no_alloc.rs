@@ -101,11 +101,8 @@ fn place(n: u16) -> ChannelNumbers {
 }
 
 fn main() {
-    #[cfg(feature = "test-support")]
-    {
-        output_health();
-        output_cutover();
-    }
+    output_health();
+    output_cutover();
     let universes = Universes::new(UNIVERSES).expect("4 universes");
     let (mut engine, mut sender) = Engine::start(universes).expect("the tick thread starts");
     let run = RunNumbers { first: 1, count: 1 };
@@ -598,12 +595,10 @@ fn main() {
         new_tick_frees, 0,
         "{ticks} ticks made {new_tick_frees} frees on the tick thread"
     );
-    #[cfg(feature = "test-support")]
     linked_ends();
 }
 
 /// With reclamation held, a free anywhere (including on either output thread) fails.
-#[cfg(feature = "test-support")]
 fn output_health() {
     use engine::{Device, Outcome, OutputNumber, Route, Span, Status};
     use engine_core::health::HealthSample;
@@ -791,7 +786,6 @@ fn output_health() {
 
 /// Keep a write in flight across six due wakes. This fixes the order of T2, T3,
 /// T6, T7 and T9 independently of how the system schedules the output worker.
-#[cfg(feature = "test-support")]
 fn output_cutover() {
     use engine::{Device, Outcome, OutputNumber};
     use std::sync::Arc;
@@ -958,7 +952,6 @@ fn output_cutover() {
 }
 
 /// Queue two replacement revisions while every once-use crosses its end between wakes.
-#[cfg(feature = "test-support")]
 fn linked_ends() {
     use engine_core::{PLAYS, PlayState, Repeat, Sequence, SequenceItem, Use, When};
     use std::sync::Arc;

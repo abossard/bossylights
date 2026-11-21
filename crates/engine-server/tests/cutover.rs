@@ -725,3 +725,64 @@ fn a_pending_explicit_route_streams_no_patched_fixture_until_t9() {
     wakes.wake().unwrap(); // T9 of both
     assert_eq!(sender.send(edge()), Ok(()));
 }
+
+/// F1 of #257. The old run's counters end at the last snapshot before T9: the frame
+/// and press T9's wake collects are counted on the old run and leave with it. No reader
+/// sees them, and the new run starts without them.
+#[test]
+fn the_old_runs_counters_end_at_the_last_snapshot_before_t9() {
+    use engine::{Begun, ChannelNumbers, Command, Event, OutputNumber, Rate, RunNumbers, Status};
+    use engine_core::health::HealthSample;
+
+    let (wire, kind) = stream::receiver(Color::Rgb);
+    let (mut engine, mut sender, mut wakes) =
+        Engine::start_stepped(Universes::new(2).unwrap(), Box::new(outputs::open)).unwrap();
+    let output = OutputNumber::try_from(1).unwrap();
+    let set = |first| Command::SetOutput {
+        output,
+        kind,
+        universes: RunNumbers { first, count: 1 },
+        rate: Some(Rate::Sixty),
+    };
+    wakes.hold().unwrap();
+    sender.send(set(1)).unwrap();
+    let at = wakes.wake().unwrap();
+    read(&wire, 510);
+    let Begun::Opening(opening) = sender.begin(set(2), &[]).unwrap() else {
+        panic!("the shifted run needs a new lane");
+    };
+    wakes.wake_at(at).unwrap();
+    let opened = opening.open();
+    let press = Command::SetChannel {
+        channel: ChannelNumbers {
+            universe: 1,
+            address: 1,
+        },
+        value: 77,
+    };
+    sender.send(press).unwrap();
+    engine.latest(); // asks for the next wake's snapshot
+    // The old lane sends the press; only T9's wake collects it.
+    wakes.wake().unwrap();
+    assert_eq!(read(&wire, 510), 77);
+    let mut before = HealthSample::new(Duration::ZERO, 0, Status::NotFound);
+    assert!(engine.latest().health_sample(output, &mut before));
+    assert!(sender.publish_output(opened).unwrap().unwrap().wait());
+    wakes.events();
+    wakes.wake().unwrap(); // T9
+    assert!(
+        wakes
+            .events()
+            .iter()
+            .any(|event| matches!(event, Event::Counted { output: o } if *o == output)),
+        "T9 counts the old frame"
+    );
+    let mut after = HealthSample::new(Duration::ZERO, 0, Status::NotFound);
+    assert!(engine.latest().health_sample(output, &mut after));
+    let presses = |sample: &HealthSample| sample.press.iter().sum::<u64>();
+    assert_eq!(
+        (presses(&before), after.generation, presses(&after)),
+        (0, before.generation + 1, 0),
+        "the press collected at T9 left with the old run"
+    );
+}
