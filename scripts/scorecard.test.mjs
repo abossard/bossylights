@@ -242,7 +242,10 @@ esac
     assert.equal(status, expectedExit, `${seconds} s, missed=${missed}: ${stderr}`);
     const rigs = new Set(stdout.split("\n").map((line) => rigRow.exec(line)?.[1]).filter(Boolean));
     assert.deepEqual([...rigs], ["normal show", "biggest show", "biggest show plus burst"]);
-    assert.doesNotMatch(stdout, /\bM[23]\b|earlier/);
+    // The machine line names the CPU, and "Apple M2 Pro" is a machine, not a milestone.
+    const machineLine = /^Measured on .*$/m;
+    assert.match(stdout, machineLine);
+    assert.doesNotMatch(stdout.replace(machineLine, ""), /\bM[23]\b|earlier/);
     for (const row of ["| normal show | 1 | 44 | 2 |", "| biggest show | 1 | 44 | 3 |", "| biggest show plus burst | 1 | 44 | 4 |"]) {
       assert.ok(stdout.includes(row), row);
     }
