@@ -1,0 +1,10 @@
+[package]
+name = "audio-in"
+description = "Find level, tempo and beats in timed audio samples."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

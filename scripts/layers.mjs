@@ -24,6 +24,7 @@ export const CRATES = {
   "rt-thread": { kind: "tick", deps: ["engine-core", "libc"] }, // the only unsafe: asks for real-time priority
   outputs: { kind: "tick", deps: ["engine-core", "nix", "rtrb", "serialport"] }, // opens devices, takes frames: only it knows bytes
   engine: { kind: "tick", deps: ["engine-core", "rt-thread", "outputs", "rig", "looks", "fixture-library", "rtrb"] }, // the front owns the patch: it checks a patch against the library and compiles writers
+  "audio-in": { kind: "action", deps: [] }, // turns timed samples into levels and beats
   "engine-server": { kind: "action", deps: ["engine", "engine-core", "fixture-library", "looks", "show-file"] }, // reads the fixture folder, answers the library, opens and saves the show file
   shell: { kind: "action", deps: ["engine-core"] }, // knows the API version it speaks, nothing more
 };
