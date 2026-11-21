@@ -89,7 +89,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
         step += 1;
         thread::sleep(Duration::from_millis(25));
     }
-    let state = engine.fresh().state;
+    let state = engine.fresh().unwrap().state;
     let sent = state
         .outputs
         .first()

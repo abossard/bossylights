@@ -73,7 +73,7 @@ pub async fn serve(
     let first = Moment::of(&sender);
     // A snapshot of a wake after every command queued so far: taken under `first`.
     let requested_at = Instant::now();
-    let snapshot = engine.fresh();
+    let snapshot = engine.fresh().map_err(io::Error::other)?;
     let mut health = health::Reader::new();
     health.observe(|output, sample| snapshot.health_sample(output, sample));
     let picture = Picture::of(
@@ -805,7 +805,7 @@ mod tests {
         };
         // revision A: look 1 green, its play takes the new plan. A's snapshot is taken
         change(step(1, green));
-        let a = engine.fresh().clone();
+        let a = engine.fresh().unwrap().clone();
         // revision B overtakes it before it is painted: the play released, look 1
         // removed, look 2 saved
         change(Command::ReleaseHold { play });
@@ -815,7 +815,7 @@ mod tests {
         let a = front
             .picture(&a, Instant::now(), &health)
             .expect("A's moment is kept");
-        let b = engine.fresh().clone();
+        let b = engine.fresh().unwrap().clone();
         let b = front
             .picture(&b, Instant::now(), &health)
             .expect("B's moment is kept");
@@ -872,7 +872,7 @@ mod tests {
         sender.send(step(1, Rgb::BLACK)).unwrap();
         let plan = Arc::downgrade(&sender.looks().plan(1).unwrap());
         let delivered = Picture::of(
-            engine.fresh().clone(),
+            engine.fresh().unwrap().clone(),
             Instant::now(),
             &Moment::of(&sender),
             &library::start(None),

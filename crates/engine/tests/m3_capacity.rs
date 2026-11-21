@@ -4,6 +4,7 @@
 
 mod mock;
 
+use engine::Unsent;
 use engine::{
     Begun, ChannelNumbers, Color, Command, Engine, Light, PLAN_BYTES, Rank, Rate, Refusal, Rgb,
     RunNumbers, Sender, Target, Text, Universes, When,
@@ -115,7 +116,7 @@ fn retired_plan_bytes_refuse_the_next_live_edit_until_reclaimed() {
     let last = sender.looks();
     let sent = sender.sent();
     let refused = step(1, u16::MAX);
-    assert_eq!(sender.send(refused), Err(Refusal::WorkLimit));
+    assert_eq!(sender.send(refused), Err(Unsent::Refused(Refusal::WorkLimit)));
     assert_eq!(sent, sender.sent());
     assert!(Arc::ptr_eq(&last, &sender.looks()));
 
@@ -138,7 +139,7 @@ fn retired_plan_bytes_refuse_the_next_live_edit_until_reclaimed() {
     let sent = sender.sent();
     assert_eq!(
         sender.send(Command::Blackout { on: true }),
-        Err(Refusal::QueueFull)
+        Err(Unsent::Refused(Refusal::QueueFull))
     );
     assert_eq!(sender.sent(), sent);
     engine.latest();
@@ -151,7 +152,7 @@ fn retired_plan_bytes_refuse_the_next_live_edit_until_reclaimed() {
     let picture = engine.latest();
     assert_eq!(picture.applied(), sent);
     assert!(picture.state.plays.iter().any(|p| p.play == play));
-    assert_eq!(sender.send(refused), Err(Refusal::WorkLimit));
+    assert_eq!(sender.send(refused), Err(Unsent::Refused(Refusal::WorkLimit)));
 
     engine.stall_reclamation(false);
     mock::wait_until("the oldest plan never returned", || {
@@ -160,7 +161,7 @@ fn retired_plan_bytes_refuse_the_next_live_edit_until_reclaimed() {
     mock::wait_until("the refused edit never fits again", || {
         match sender.send(refused) {
             Ok(()) => true,
-            Err(Refusal::WorkLimit) => false,
+            Err(Unsent::Refused(Refusal::WorkLimit)) => false,
             Err(other) => panic!("retry: {other:?}"),
         }
     });
@@ -226,7 +227,7 @@ fn each_live_plan_swap_reserves_a_return_and_release_keeps_its_place() {
         when: When::Now,
     };
     for refused in [step(u16::MAX), restart] {
-        assert_eq!(sender.send(refused), Err(Refusal::QueueFull));
+        assert_eq!(sender.send(refused), Err(Unsent::Refused(Refusal::QueueFull)));
         assert_eq!(sender.sent(), sent);
         assert!(Arc::ptr_eq(&project, &sender.looks()));
     }
@@ -238,13 +239,13 @@ fn each_live_plan_swap_reserves_a_return_and_release_keeps_its_place() {
     assert_eq!(idle.state.plays.iter().count(), 0);
     assert_eq!(idle.lights()[0].intensity, None);
     // The released plan still occupies its return entry until the free thread runs.
-    assert_eq!(sender.send(restart), Err(Refusal::QueueFull));
+    assert_eq!(sender.send(restart), Err(Unsent::Refused(Refusal::QueueFull)));
     engine.stall_reclamation(false);
     mock::wait_until(
         "no return entry reclaimed for the next start",
         || match sender.send(restart) {
             Ok(()) => true,
-            Err(Refusal::QueueFull) => false,
+            Err(Unsent::Refused(Refusal::QueueFull)) => false,
             Err(other) => panic!("restart: {other:?}"),
         },
     );

@@ -19,7 +19,7 @@
 //! next. Without the feature the stepped parts are not compiled: the tick pays nothing.
 
 use engine_core::{Outcome, OutputNumber};
-use std::sync::atomic::AtomicBool;
+use crate::life::EngineLife;
 use std::time::{Duration, Instant};
 use std::{hint, thread};
 
@@ -59,7 +59,7 @@ impl Clock {
         not(feature = "test-support"),
         expect(unused_variables, reason = "only a stepped clock waits for the test")
     )]
-    pub(crate) fn wait(&self, sleep: Duration, spin: Option<Duration>, stop: &AtomicBool) {
+    pub(crate) fn wait(&self, sleep: Duration, spin: Option<Duration>, stop: &EngineLife) {
         #[cfg(feature = "test-support")]
         if let Some(steps) = &self.stepped {
             steps.wait(
@@ -81,7 +81,7 @@ impl Clock {
         not(feature = "test-support"),
         expect(unused_variables, reason = "only a stepped clock holds at the cutoff")
     )]
-    pub(crate) fn cutoff(&self, stop: &AtomicBool) -> Duration {
+    pub(crate) fn cutoff(&self, stop: &EngineLife) -> Duration {
         #[cfg(feature = "test-support")]
         if let Some(steps) = &self.stepped {
             steps.cutoff(stop);
@@ -152,11 +152,11 @@ impl Trace {
 /// A clock the test steps, and the trace it reads. Only with the feature `test-support`.
 #[cfg(feature = "test-support")]
 mod stepped {
-    use super::{Clock, Instant, Trace};
+    use super::{Clock, EngineLife, Instant, Trace};
     use engine_core::{Outcome, OutputNumber};
     use std::io;
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering::SeqCst};
+    use std::sync::atomic::{AtomicU8, AtomicU64, Ordering::SeqCst};
     use std::thread;
     use std::time::Duration;
 
@@ -240,11 +240,11 @@ mod stepped {
         }
 
         /// The tick's wait until its next wake at `until`.
-        pub(super) fn wait(&self, until: Duration, stop: &AtomicBool) {
+        pub(super) fn wait(&self, until: Duration, stop: &EngineLife) {
             let wait = self.waits.fetch_add(1, SeqCst) + 1;
             let entered = Instant::now();
             let rest = until.saturating_sub(self.now());
-            while !stop.load(SeqCst) {
+            while !stop.get().over() {
                 match self.mode() {
                     Mode::Hold => {
                         self.held.store(wait, SeqCst);
@@ -271,13 +271,13 @@ mod stepped {
         }
 
         /// The tick at the cutoff of its wake: held there if the test asked.
-        pub(super) fn cutoff(&self, stop: &AtomicBool) {
+        pub(super) fn cutoff(&self, stop: &EngineLife) {
             let wake = self.woke.load(SeqCst);
             if self.cut.load(SeqCst) != wake {
                 return;
             }
             self.at_cut.store(wake, SeqCst);
-            while self.released.load(SeqCst) < wake && !stop.load(SeqCst) {
+            while self.released.load(SeqCst) < wake && !stop.get().over() {
                 thread::sleep(LOOK);
             }
         }

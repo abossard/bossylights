@@ -2,6 +2,7 @@
 
 mod mock;
 
+use engine::Unsent;
 use engine::{
     ChannelNumbers, Color, Command, Engine, Light, Rank, Rate, Rgb, RunNumbers, Target, Text,
     Universes, When,
@@ -141,7 +142,7 @@ fn a_saved_rgb_wave_leaves_room_to_light_its_first_pixel() {
                 target: Target::Light { light: 2 },
                 intensity: u16::MAX,
             };
-            assert_eq!(sender.send(another), Err(engine::Refusal::WorkLimit));
+            assert_eq!(sender.send(another), Err(Unsent::Refused(engine::Refusal::WorkLimit)));
         }
         wakes.wake_at(second_at).unwrap();
         mock::wait_until("the second command's frame did not arrive", || {
@@ -217,7 +218,7 @@ fn direct_grabs_reserve_their_end_and_release_before_they_are_accepted() {
         grabs.push(grab);
     }
     let tail = sender.sent();
-    assert_eq!(sender.send(press(13)), Err(engine::Refusal::WorkLimit));
+    assert_eq!(sender.send(press(13)), Err(Unsent::Refused(engine::Refusal::WorkLimit)));
     assert_eq!(sender.sent(), tail);
 
     // EndGrab keeps the even-indexed grabs. Releasing the whole fixture

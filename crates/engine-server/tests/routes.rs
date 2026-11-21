@@ -7,6 +7,7 @@ use stream::receiver as ddp;
 #[path = "../../outputs/tests/common/mod.rs"]
 mod usb;
 
+use engine::Unsent;
 use engine::{
     Adapter, Begun, ChannelNumbers, Color, Command, Engine, Event, Open, Outcome, Output,
     OutputKind, OutputNumber, Rate, Refusal, Route, RunNumbers, Sender, Span, Status, Text,
@@ -612,10 +613,10 @@ fn resizing_and_shifting_a_run_restart_its_lane_on_the_same_device() {
     let Begun::Opening(opening) = sender.begin(set(1, 2), &[]).unwrap() else {
         panic!("a changed length needs a new lane");
     };
-    assert_eq!(sender.send(set(2, 2)), Err(Refusal::Opening));
+    assert_eq!(sender.send(set(2, 2)), Err(Unsent::Refused(Refusal::Opening)));
     assert_eq!(
         sender.send(Command::RemoveOutput { output: one }),
-        Err(Refusal::Opening)
+        Err(Unsent::Refused(Refusal::Opening))
     );
     wakes.wake().unwrap();
     assert_eq!(packet(&socket, 0x41, 0x0B, 0, 510).2, vec![0; 510]);
@@ -1056,7 +1057,7 @@ fn a_refused_restart_keeps_the_only_stream_for_a_patched_strip() {
     let result = sender.finish(restart.open());
     engine.stall_reclamation(false);
 
-    assert_eq!(result, Err(Refusal::CannotOpen));
+    assert_eq!(result, Err(Unsent::Refused(Refusal::CannotOpen)));
     let after = sender.project();
     assert_eq!(
         (after.output(one), sender.patch().unstreamed(&after)),
@@ -1570,7 +1571,7 @@ async fn accepting_a_reroute_does_not_hide_the_adapters_existing_outage() {
 fn state_until(engine: &mut Engine, ready: impl Fn(Output) -> bool) -> Output {
     let started = Instant::now();
     loop {
-        let state = engine.fresh().state.outputs[0];
+        let state = engine.fresh().unwrap().state.outputs[0];
         if let Some(state) = state.filter(|state| ready(*state)) {
             return state;
         }
@@ -1628,7 +1629,7 @@ fn an_accepted_usb_reroute_stays_reconnecting_until_the_lost_port_returns() {
         state.universes.first() == 2 && state.counters.failed > 0
     });
     let mut health = HealthSample::new(Duration::ZERO, 0, Status::NotFound);
-    assert!(engine.fresh().health_sample(output(1), &mut health));
+    assert!(engine.fresh().unwrap().health_sample(output(1), &mut health));
     assert!(
         matches!(
             (after.status, health.status),
@@ -1726,7 +1727,7 @@ fn a_resize_that_will_be_refused_keeps_sending_the_old_run_while_it_opens() {
     release.send(()).unwrap();
     assert_eq!(
         sender.finish(worker.join().unwrap()),
-        Err(Refusal::CannotOpen)
+        Err(Unsent::Refused(Refusal::CannotOpen))
     );
     engine.stall_reclamation(false);
     wakes.wake().unwrap();

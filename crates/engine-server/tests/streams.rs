@@ -2,6 +2,7 @@
 //! them all as one run. The front refuses what would break it, both ways: a patch or a
 //! move, and a change of the outputs. On a refusal nothing changes.
 
+use engine::Unsent;
 use engine::{
     ChannelNumbers, Color, Command, Device, Engine, Outcome, OutputKind, OutputNumber, Rate,
     Refusal, RunNumbers, Sender, Universes,
@@ -155,7 +156,11 @@ fn a_patch_and_the_outputs_never_leave_a_fixture_over_universes_no_output_stream
         }
         let (project, patch) = (sender.project(), sender.patch());
         let taken = take(&mut sender, step);
-        assert_eq!(taken, expected, "{step:?} after {before:?}");
+        assert_eq!(
+            taken,
+            expected.map_err(Unsent::Refused),
+            "{step:?} after {before:?}"
+        );
         if taken.is_err() {
             assert_eq!(sender.project(), project, "{step:?}: the outputs stay");
             assert_eq!(sender.patch(), patch, "{step:?}: the patch stays");
@@ -163,7 +168,7 @@ fn a_patch_and_the_outputs_never_leave_a_fixture_over_universes_no_output_stream
     }
 }
 
-fn take(sender: &mut Sender, step: Step) -> Result<(), Refusal> {
+fn take(sender: &mut Sender, step: Step) -> Result<(), Unsent> {
     match step {
         Step::Send(command) => sender.send(command),
         Step::Attach {
@@ -174,7 +179,9 @@ fn take(sender: &mut Sender, step: Step) -> Result<(), Refusal> {
             let run = RunNumbers { first, count }
                 .check(Universes::new(4).unwrap())
                 .unwrap();
-            sender.attach(output(number), Box::new(Taker), run, Rate::Thirty)
+            sender
+                .attach(output(number), Box::new(Taker), run, Rate::Thirty)
+                .map_err(Unsent::Refused)
         }
     }
 }

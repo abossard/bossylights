@@ -87,7 +87,7 @@ fn baseline(duration: Duration) -> ExitCode {
         }
     }
     thread::sleep(Duration::from_millis(100)); // the last frame
-    match engine.fresh().send_to_frame_p95() {
+    match engine.fresh().unwrap().send_to_frame_p95() {
         Some(p95) => {
             println!("{}", p95.as_micros());
             ExitCode::SUCCESS
@@ -343,7 +343,7 @@ fn measure(
     }
     workload::prepare(&mut sender, profile)?;
     let setup = sender.sent();
-    let picture = engine.fresh();
+    let picture = engine.fresh().unwrap();
     let mut last_frame = picture.state.frame;
     if picture.applied() != setup {
         return Err("setup did not reach the tick".into());
@@ -685,8 +685,8 @@ mod workload {
         Ok(())
     }
 
-    fn check_worst(visits: usize, probe: Result<(), Refusal>) -> Result<(), String> {
-        if visits != 65_536 || probe != Err(Refusal::WorkLimit) {
+    fn check_worst(visits: usize, probe: Result<(), engine::Unsent>) -> Result<(), String> {
+        if visits != 65_536 || probe != Err(engine::Unsent::Refused(Refusal::WorkLimit)) {
             return Err(format!(
                 "expected a full work budget, booked {visits} and two-light grab gave {probe:?}"
             ));
@@ -939,7 +939,7 @@ mod workload {
                 (65_536, Err(Refusal::QueueFull), false),
             ] {
                 assert_eq!(
-                    check_worst(visits, probe).is_ok(),
+                    check_worst(visits, probe.map_err(engine::Unsent::Refused)).is_ok(),
                     valid,
                     "{visits}, {probe:?}"
                 );
@@ -955,7 +955,7 @@ mod workload {
             // Two spare visits are still too few for the two-light grab.
             let (wave, sequence, background) = mode.strips();
             let result = prepare_strips(&mut sender, mode, (wave, sequence, background - 1));
-            assert_eq!(result, Err("expected a full work budget, booked 65534 and two-light grab gave Err(WorkLimit)".into()));
+            assert_eq!(result, Err("expected a full work budget, booked 65534 and two-light grab gave Err(Refused(WorkLimit))".into()));
         }
 
         #[test]
@@ -986,7 +986,7 @@ mod workload {
             stream(&mut sender, universes);
             prepare(&mut sender, Workload::Burst).unwrap();
             let looks = sender.looks();
-            let picture = engine.fresh();
+            let picture = engine.fresh().unwrap();
             assert_eq!(picture.state.plays.iter().count(), 32);
             assert_eq!(
                 picture
@@ -1024,7 +1024,7 @@ mod workload {
                 assert_eq!(sender.sent() - before, 256);
                 assert_eq!(
                     sender.send(Command::Blackout { on: true }),
-                    Err(Refusal::QueueFull)
+                    Err(engine::Unsent::Refused(Refusal::QueueFull))
                 );
                 engine.latest();
                 wakes.wake().unwrap();
@@ -1086,14 +1086,14 @@ mod workload {
                         .sum::<u16>(),
                     pixels
                 );
-                assert_eq!(engine.fresh().state.plays.iter().count(), roots);
+                assert_eq!(engine.fresh().unwrap().state.plays.iter().count(), roots);
                 let target = Target::Light { light: 1 };
                 send(&mut sender, colour(target, RED)).unwrap();
-                assert_eq!(engine.fresh().lights()[0].colour, Some(RED));
+                assert_eq!(engine.fresh().unwrap().lights()[0].colour, Some(RED));
                 send(&mut sender, Command::ReleaseColour { target }).unwrap();
                 // Exercise both clients' command paths at the admitted edge.
                 send(&mut sender, wave_group(true)).unwrap();
-                assert_eq!(engine.fresh().state.plays.iter().count(), roots);
+                assert_eq!(engine.fresh().unwrap().state.plays.iter().count(), roots);
             }
         }
     }

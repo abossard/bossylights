@@ -46,6 +46,61 @@ A pending open or device handoff refuses another `SetOutput` or `RemoveOutput` o
 
 If the old device is lost after a refused open, health records `OutputLost` and the reopen worker restores it on the old run. An adapter already `Reconnecting` keeps its failure count across an accepted reroute and returns to `Running` when it sends on the new run.
 
+## Engine life
+
+One state for the whole engine (`crates/engine/src/life.rs`), read by the tick, every output's thread and every opener. It never goes back.
+
+```mermaid
+stateDiagram-v2
+  direction LR
+  [*] --> Running
+  Running --> OutputsStopped: stop_outputs
+  Running --> Ended: the engine is dropped
+  OutputsStopped --> Ended: the engine is dropped
+  Running --> TickFailed: the tick thread unwinds
+  OutputsStopped --> TickFailed: the tick thread unwinds
+  Ended --> TickFailed: the tick thread unwinds
+```
+
+| Life \ event | StopOutputs | Drop | TickPanicked |
+|---|---|---|---|
+| Running | OutputsStopped | Ended | TickFailed |
+| OutputsStopped | same | Ended | TickFailed |
+| Ended | same | same | TickFailed |
+| TickFailed | same | same | same |
+
+| Life | Tick | Outputs send | An output switch | `fresh()` |
+|---|---|---|---|---|
+| Running | wakes, serves | yes | as in [output-cutover.md](design/output-cutover.md) | the next picture |
+| OutputsStopped | wakes, serves nothing: the final report | no, also a lane on its way out (T13) | refused, the writer gets `Stopping` | the next picture |
+| Ended | ends | no | refused | (no engine to ask) |
+| TickFailed | gone | no | refused | `Err(TickFailed)`: the server exits non-zero |
+
+The tick's wake phase is the parity of its wake count:
+
+| Phase | Set by | Means | An opener completing a switch |
+|---|---|---|---|
+| Between (even) | the tick, once every due frame is handed | no cutoff open | goes on |
+| Handing (odd) | the tick, just before it counts the commands | a wake took its commands, its frames are not all handed | waits for the count to move, at most one wake, or until the life leaves Running |
+
+## What the front reserves for a play
+
+The front admits a command only when the tick's work and memory for it fit (`WorkLimit`, `PlayFull`). For each play it keeps one fact: its `Hold`, what to reserve. The tick's play states (`Waiting`, `Playing`, `Kept`, `engine-core/src/playback.rs`) stay the tick's; the front never reads them, only the tick's report of a kept or ended play. Code: `Hold` and `next_hold` in `crates/engine/src/lib.rs`, a test walks every pair.
+
+| Hold | Reserves per wake |
+|---|---|
+| (free) | nothing |
+| Playing | the play's work, as the look plays it (`looks::play_work`) |
+| Kept | the plan's work: the last frame, held |
+
+| Hold \ event | Start (`StartLook` admitted) | KeepSent (`StopLook`, the rules keep it) | KeptRead (`reap` reads the tick's kept version) | Released |
+|---|---|---|---|---|
+| (free) | Playing | (free) | (free) | (free) |
+| Playing | Playing (a fresh start takes the slot) | Kept | Kept | (free) |
+| Kept | Playing (a fresh start takes the slot) | Kept | Kept | (free) |
+
+Released comes from: `ReleaseHold`, `EndFlash` of a Manual play, `StopLook` when the rules remove it, `ReleaseAll` (every Manual play), `SetMixRules` (every play the new rules do not keep), and `reap` reading that the tick ended the play. A once-use play released while playing still books its last sample in the queue before it.
+
 ## API
 
 Version 11. `GET /version` returns the API version. `GET /health` returns `ok` while the engine runs. Clients send commands on the WebSocket at `GET /api`. Generate the TypeScript types in `ui/src/engine-api.ts` with `UPDATE_TS=1 cargo test -p engine-core`.

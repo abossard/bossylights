@@ -554,7 +554,10 @@ fn patch_and_sequence_edits_share_the_bytes_above_the_step_reserve() {
         (json!({"PutSequence": sequence("run")}), Ok(())),
         (json!({"Rename": {"fixture": 1, "name": "PARs"}}), Ok(())),
     ] {
-        assert_eq!(sender.send(serde_json::from_value(edit).unwrap()), reply);
+        assert_eq!(
+            sender.send(serde_json::from_value(edit).unwrap()),
+            reply.map_err(engine::Unsent::Refused)
+        );
     }
 }
 
@@ -663,7 +666,7 @@ async fn mix_rules_must_fit_before_the_next_frame_or_save() {
         };
         assert_eq!(
             sender.send(Command::SetMixRules { rules }),
-            reply,
+            reply.map_err(engine::Unsent::Refused),
             "{length}"
         );
         assert_eq!(sender.project(), project);

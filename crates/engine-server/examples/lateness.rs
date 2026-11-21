@@ -142,7 +142,7 @@ fn run(setup: &Setup) -> Result<String, String> {
     set_outputs(&mut sender)?;
     patch(&mut sender, setup.lights)?;
     set_outputs(&mut sender)?;
-    engine.fresh();
+    engine.fresh().unwrap();
     // A reader on every frame: it asks again as soon as a picture is back.
     let (started, mut seen, mut pictures) = (Instant::now(), 0, 0_u64);
     while started.elapsed() < setup.run {
@@ -153,7 +153,7 @@ fn run(setup: &Setup) -> Result<String, String> {
         thread::sleep(Duration::from_millis(1));
     }
     eprintln!("snapshots read: {pictures}, frames: {seen}");
-    let picture = engine.fresh().clone();
+    let picture = engine.fresh().unwrap().clone();
     let state = picture.state;
     stop.store(true, Ordering::Relaxed);
     let (mut p99, mut worst, mut off) = (Duration::ZERO, Duration::ZERO, 0);

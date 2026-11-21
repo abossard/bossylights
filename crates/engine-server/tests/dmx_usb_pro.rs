@@ -97,7 +97,7 @@ fn unplugged_it_reconnects_and_runs_again_by_itself() {
     );
     status_until(&mut engine, |s| s == Status::Running);
 
-    let state = engine.fresh().state;
+    let state = engine.fresh().unwrap().state;
     let pro = state.outputs[0].unwrap().counters;
     let other = state.outputs[1].unwrap().counters;
     assert!(pro.failed > 0 && pro.accepted > 0, "{pro:?}");
@@ -239,7 +239,12 @@ fn remove(output: u8) -> Command {
 fn send_all(sender: &mut Sender, commands: &[Command]) -> Vec<Result<(), Refusal>> {
     commands
         .iter()
-        .map(|command| sender.send(*command))
+        .map(|command| {
+            sender.send(*command).map_err(|unsent| match unsent {
+                engine::Unsent::Refused(reason) => reason,
+                engine::Unsent::Stopping => panic!("the outputs never stop here"),
+            })
+        })
         .collect()
 }
 

@@ -69,10 +69,14 @@ mod cutover;
 use cutover::{Effect as CutoverEffect, Event as CutoverEvent, State as CutoverState};
 mod lane;
 use lane::Lane;
+mod life;
+mod recovery;
+pub use life::TickFailed;
+use life::{EngineLife, LifeEvent, TickGuard};
 pub use lane::Route;
 #[cfg(feature = "test-support")]
 pub use snapshot::timing::{Timing, Timings};
-use snapshot::{Hand, Reader};
+use snapshot::{Hand, Reader, Times};
 pub use snapshot::{Lateness, Snapshot};
 mod wake;
 use std::io;
@@ -163,6 +167,9 @@ pub struct Engine {
 pub struct Sender {
     /// `None` while an [`Opening`] has it: one device opens at a time.
     open: Option<Opener>,
+    /// An opening dropped unfinished sends its opener back here ([`Lease`]).
+    abandon: Abandon,
+    abandoned: Abandoned,
     lanes: [Option<lane::Control>; MAX_OUTPUTS],
     generations: [u64; MAX_OUTPUTS],
     previous_outputs: [Option<PriorOutput>; MAX_OUTPUTS],
@@ -201,7 +208,8 @@ pub struct Sender {
     shared: Arc<Shared>,
     free: Thread,
     clock: Clock,
-    /// Bounds for devices brought through the attachment door.
+    /// Bounds for devices brought through the attachment door (tests only).
+    #[cfg(any(test, feature = "test-support"))]
     universes: Universes,
 }
 
@@ -233,14 +241,14 @@ impl Opener {
 
 /// A device to open for `SetOutput`: [`Opening::open`] blocks, so it runs where it may,
 /// then [`Sender::finish`] puts the device on the tick thread.
+#[must_use = "an opening holds the one opener: open it and finish it"]
 pub struct Opening {
     retry: Retry,
-    previous: Option<lane::Control>,
+    lease: Lease,
     output: OutputNumber,
     kind: OutputKind,
     universes: Run,
     rate: Rate,
-    open: Opener,
     shared: Arc<Shared>,
     free: Thread,
     /// The devices sent away before this one opens: a port they hold must be free.
@@ -282,21 +290,80 @@ fn open_action(port: DeviceSource<bool>, reclaiming: bool, elapsed: Duration) ->
 }
 
 /// What came of an [`Opening`]. It brings the `open` back.
+#[must_use = "an opened output holds the one opener: finish it"]
 pub struct Opened {
-    open: Opener,
+    /// The opener and, when the open succeeded, the new lane.
+    lease: Lease,
     output: OutputNumber,
     kind: OutputKind,
     universes: Run,
     rate: Rate,
-    lane: io::Result<Box<Lane>>,
+    opened: io::Result<()>,
     reuse: bool,
+}
+
+/// The one opener, lent to an output edit with what the edit holds. Finished by
+/// [`Sender::publish_output`]. Dropped unfinished (the caller let go of an [`Opening`]
+/// or an [`Opened`]), it goes back to the front, which undoes the edit like a failed
+/// open (output-cutover T4): the opener back, the old lane serving again, the project
+/// as before. A new lane it held is freed off the caller's thread.
+struct Lease {
+    open: Opener,
+    output: OutputNumber,
+    previous: Option<lane::Control>,
+    lane: Option<Box<Lane>>,
+    back: Abandon,
+    finished: bool,
+}
+
+/// What an unfinished [`Lease`] brings back to the front.
+struct Unfinished {
+    open: Opener,
+    output: OutputNumber,
+    previous: Option<lane::Control>,
+    lane: Option<Box<Lane>>,
+}
+
+#[expect(
+    clippy::disallowed_types,
+    reason = "only a dropped opening sends, off the tick, and only the front receives"
+)]
+type Abandon = std::sync::mpsc::Sender<Unfinished>;
+#[expect(
+    clippy::disallowed_types,
+    reason = "only a dropped opening sends, off the tick, and only the front receives"
+)]
+type Abandoned = std::sync::mpsc::Receiver<Unfinished>;
+
+impl Lease {
+    /// The opener and the new lane, for publication.
+    fn finish(mut self) -> (Opener, Option<Box<Lane>>) {
+        self.finished = true;
+        (self.open.clone(), self.lane.take())
+    }
+}
+
+impl Drop for Lease {
+    fn drop(&mut self) {
+        if !self.finished {
+            let _ = self.back.send(Unfinished {
+                open: self.open.clone(),
+                output: self.output,
+                previous: self.previous.take(),
+                lane: self.lane.take(),
+            });
+        }
+    }
 }
 
 /// Completes the transfer of an accepted output, outside the publisher lock.
 /// Dropping the receipt also completes the handoff if the caller is cancelled.
 pub struct Handoff {
+    /// The engine's outputs stopped before the switch was published (T13): nothing to
+    /// complete, the writer gets `Stopping`.
+    stopped: bool,
     previous: Option<lane::Control>,
-    next: Recovery,
+    next: Option<Recovery>,
     retry: Retry,
     reuse: bool,
     shared: Arc<Shared>,
@@ -311,15 +378,15 @@ impl Handoff {
     }
 
     fn complete(&mut self) -> bool {
-        let Some(previous) = self.previous.take() else {
-            return true;
+        let (Some(previous), Some(next)) = (self.previous.take(), self.next.take()) else {
+            return !self.stopped;
         };
         self.shared.finish_wake(self.unfinished_wake);
         previous.publish();
-        match previous.finish_handoff(&self.next.lane, self.reuse, &self.shared.outputs_stopped) {
+        match previous.finish_handoff(&next.lane, self.reuse) {
             Some(watch) => {
-                if watch {
-                    let _ = self.retry.send(self.next.clone());
+                if watch && let Err(request) = self.retry.send(next) {
+                    request.0.lane.worker_gone();
                 }
                 true
             }
@@ -393,6 +460,20 @@ enum Retired {
     Device(Box<Lane>),
     Writers(Vec<Writer>),
     Plan(Arc<Plan>),
+}
+
+/// Why a command was not queued: refused, or the engine's outputs stopped (T13).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Unsent {
+    Refused(Refusal),
+    /// The outputs stopped ([`Sender::stop_outputs`]): an output switch is not published.
+    Stopping,
+}
+
+impl From<Refusal> for Unsent {
+    fn from(reason: Refusal) -> Self {
+        Self::Refused(reason)
+    }
 }
 
 /// What came of [`Sender::begin`].
@@ -903,12 +984,63 @@ struct Version {
     usage: Use,
 }
 
+/// What the front reserves for a play: its own fact, never the tick's play state.
+/// Table in `docs/engine.md` ("What the front reserves for a play").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Hold {
+    Playing,
+    Kept,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum HoldEvent {
+    Start,
+    KeepSent,
+    KeptRead,
+    Released,
+}
+
+/// The transition function, a calculation. `None` is a free slot.
+const fn next_hold(hold: Option<Hold>, event: HoldEvent) -> Option<Hold> {
+    match (hold, event) {
+        (_, HoldEvent::Start) => Some(Hold::Playing),
+        (Some(Hold::Playing | Hold::Kept), HoldEvent::KeepSent | HoldEvent::KeptRead) => {
+            Some(Hold::Kept)
+        }
+        (None, HoldEvent::KeepSent | HoldEvent::KeptRead) | (_, HoldEvent::Released) => None,
+    }
+}
+
+impl Hold {
+    /// The play state the core's rules ask about (`unkept`).
+    const fn state(self) -> PlayState {
+        match self {
+            Self::Playing => PlayState::Playing,
+            Self::Kept => PlayState::Kept,
+        }
+    }
+}
+
+/// Applies `event` to the play in `slot`. A hold that becomes free frees the slot and
+/// returns the play it held.
+fn apply_hold(slot: &mut Option<Live>, event: HoldEvent) -> Option<Live> {
+    match next_hold(slot.as_ref().map(|live| live.hold), event) {
+        Some(hold) => {
+            if let Some(live) = slot {
+                live.hold = hold;
+            }
+            None
+        }
+        None => slot.take(),
+    }
+}
+
 #[derive(Clone)]
 struct Live {
     play: PlayId,
     look: u16,
     rank: Rank,
-    state: PlayState,
+    hold: Hold,
     current: Version,
     /// A once-use can finish just before a pending plan swap. The tick publishes
     /// the version it kept before acknowledging that FIFO prefix.
@@ -935,7 +1067,7 @@ impl Live {
     /// Once released, only a possible natural end before the release can still sample.
     /// An explicit stop books its terminal sample when the Keep command is queued.
     fn work_before_release(&self) -> usize {
-        if self.state == PlayState::Playing && self.current.usage.repeat == Repeat::Once {
+        if self.hold == Hold::Playing && self.current.usage.repeat == Repeat::Once {
             self.work()
         } else {
             0
@@ -943,17 +1075,17 @@ impl Live {
     }
 
     fn wake_work(&self) -> usize {
-        match self.state {
-            PlayState::Kept => self.work(),
-            PlayState::Playing | PlayState::Waiting { .. } => looks::play_work(self.work()),
+        match self.hold {
+            Hold::Kept => self.work(),
+            Hold::Playing => looks::play_work(self.work()),
         }
     }
 }
 
 /// Between the threads of the engine. Atomics only.
 struct Shared {
-    stop: AtomicBool,
-    outputs_stopped: AtomicBool,
+    /// The engine's life ([`life::Life`]): lanes send only while it runs.
+    life: Arc<EngineLife>,
     /// Odd from just before the FIFO cutoff until this wake has handed all due frames.
     wake: AtomicU64,
     /// Boxes the free thread freed, so far.
@@ -984,16 +1116,14 @@ impl Shared {
     /// update this same atomic so a later cutoff sees the published command.
     fn published(&self) -> Option<u64> {
         let wake = self.wake.fetch_add(0, Ordering::AcqRel);
-        (!wake.is_multiple_of(2)).then_some(wake)
+        (life::phase(wake) == life::Phase::Handing).then_some(wake)
     }
 
     /// A wake already past its cutoff may still owe the old lane a frame.
     /// Only the thread completing the handoff waits, never the tick or publisher.
     fn finish_wake(&self, unfinished: Option<u64>) {
         let Some(wake) = unfinished else { return };
-        while self.wake.load(Ordering::Acquire) == wake
-            && !self.outputs_stopped.load(Ordering::Acquire)
-        {
+        while self.wake.load(Ordering::Acquire) == wake && self.life.get().sends() {
             thread::sleep(Duration::from_millis(1));
         }
     }
@@ -1056,8 +1186,7 @@ impl Engine {
         #[cfg(feature = "test-support")] timings: Option<snapshot::timing::TimingWriter>,
     ) -> io::Result<(Self, Sender)> {
         let shared = Arc::new(Shared {
-            stop: AtomicBool::new(false),
-            outputs_stopped: AtomicBool::new(false),
+            life: Arc::new(EngineLife::new()),
             wake: AtomicU64::new(0),
             freed: AtomicU64::new(0),
             plan_bytes_freed: AtomicU64::new(0),
@@ -1123,9 +1252,16 @@ impl Engine {
             #[cfg(feature = "test-support")]
             timings,
         };
-        let (tick, priority) = rt_thread::spawn("tick", move |priority| ticker.run(priority))?;
+        let life = Arc::clone(&shared.life);
+        let (tick, priority) = rt_thread::spawn("tick", move |priority| {
+            let _unwinds = TickGuard(&life);
+            ticker.run(priority)
+        })?;
+        let (abandon, abandoned) = std::sync::mpsc::channel();
         let sender = Sender {
             open: Some(Opener(Arc::new(open.into()))),
+            abandon,
+            abandoned,
             lanes: std::array::from_fn(|_| None),
             generations: [0; MAX_OUTPUTS],
             previous_outputs: [None; MAX_OUTPUTS],
@@ -1156,6 +1292,7 @@ impl Engine {
             shared: Arc::clone(&shared),
             free: free.thread().clone(),
             clock,
+            #[cfg(any(test, feature = "test-support"))]
             universes,
         };
         let engine = Self {
@@ -1180,9 +1317,9 @@ impl Engine {
     }
 
     /// A picture that carries every command sent before this call. Waits for it, about
-    /// two wakes.
-    pub fn fresh(&mut self) -> &Snapshot {
-        self.reader.fresh()
+    /// two wakes. [`TickFailed`] once the tick thread is gone: no picture comes again.
+    pub fn fresh(&mut self) -> Result<&Snapshot, TickFailed> {
+        self.reader.fresh(&self.shared.life)
     }
 }
 
@@ -1204,7 +1341,7 @@ impl Sender {
     /// refusal. `SetOutput` opens its device here and waits for it: a caller that must
     /// not wait uses [`Sender::begin`], [`Opening::open`] and [`Sender::finish`]. With no
     /// library: `Patch` is refused (`NoSuchFixture`), use [`Sender::begin`] for it.
-    pub fn send(&mut self, command: Command) -> Result<(), Refusal> {
+    pub fn send(&mut self, command: Command) -> Result<(), Unsent> {
         match self.begin(command, &[])? {
             Begun::Queued
             | Begun::Patched { .. }
@@ -1220,6 +1357,7 @@ impl Sender {
     /// one step: a caller that shares the front behind a lock prepares without it
     /// ([`Sender::base`], [`Base::prepare`], [`Sender::admit`]).
     pub fn begin(&mut self, command: Command, library: &[Fixture]) -> Result<Begun, Refusal> {
+        self.take_back_abandoned();
         let prepared = self.base().prepare(command, library)?;
         self.admit(prepared)
     }
@@ -1246,6 +1384,8 @@ impl Sender {
             project,
             change,
         } = prepared;
+        // An abandoned opening undoes its edit: a base from before that is stale.
+        self.take_back_abandoned();
         if !(base.project == self.project
             && Arc::ptr_eq(&base.routed, &self.routed)
             && Arc::ptr_eq(&base.patch, &self.patch)
@@ -1314,11 +1454,24 @@ impl Sender {
                     self.commands.reserved = true;
                 }
                 let previous = self.lanes.get(output.slot()).cloned().flatten();
-                if let Some(old) = &previous {
-                    old.cutover().apply(CutoverEvent::Begin);
+                match previous.as_ref().map(|old| old.cutover().apply(CutoverEvent::Begin)) {
+                    // T1, or a new output; T12 after T8: the opener begins after T9
+                    None | Some(CutoverEffect::Open | CutoverEffect::Wait) => {}
+                    // stopped (T13): no switch begins
+                    Some(_) => {
+                        self.commands.reserved = false;
+                        return Err(Refusal::Opening);
+                    }
                 }
                 Begun::Opening(Opening {
-                    previous,
+                    lease: Lease {
+                        open: self.open.take().ok_or(Refusal::Opening)?,
+                        output,
+                        previous,
+                        lane: None,
+                        back: self.abandon.clone(),
+                        finished: false,
+                    },
                     retry: self.retry.clone(),
                     #[cfg(feature = "test-support")]
                     lane_pause: self
@@ -1329,7 +1482,6 @@ impl Sender {
                     kind,
                     universes,
                     rate,
-                    open: self.open.take().ok_or(Refusal::Opening)?,
                     shared: Arc::clone(&self.shared),
                     free: self.free.clone(),
                     devices: self.devices,
@@ -1434,27 +1586,33 @@ impl Sender {
                         self.prefix_work
                             .push_back((self.sent, PrefixWork::Plan(old.wake_work())));
                     }
-                    *live = Some(Live {
-                        play,
-                        look,
-                        rank,
-                        state: PlayState::Playing,
-                        current: version,
-                        earlier: None,
-                    });
+                    if let Some(hold) =
+                        next_hold(live.as_ref().map(|l| l.hold), HoldEvent::Start)
+                    {
+                        *live = Some(Live {
+                            play,
+                            look,
+                            rank,
+                            hold,
+                            current: version,
+                            earlier: None,
+                        });
+                    }
                 }
                 Begun::Started { play }
             }
             Change::StopLook { play } => {
                 match self.live(play) {
-                    Some(live) if live.state == PlayState::Playing => {
+                    Some(live) if live.hold == Hold::Playing => {
                         match stops(live.rank, self.looks.rules()) {
                             End::Keep => {
                                 self.push(EngineCommand::Keep { play }, Brings::Nothing)?;
-                                if let Some(Some(live)) = self.plays.get_mut(play.slot()) {
-                                    self.prefix_work
-                                        .push_back((self.sent, PrefixWork::Plan(live.work())));
-                                    live.state = PlayState::Kept;
+                                if let Some(slot) = self.plays.get_mut(play.slot()) {
+                                    if let Some(live) = slot {
+                                        self.prefix_work
+                                            .push_back((self.sent, PrefixWork::Plan(live.work())));
+                                    }
+                                    apply_hold(slot, HoldEvent::KeepSent);
                                 }
                             }
                             End::Remove => self.release(play)?,
@@ -1522,7 +1680,7 @@ impl Sender {
             Change::Rules { looks } => {
                 let rules = looks.rules();
                 self.push(EngineCommand::Rules { rules }, Brings::Nothing)?;
-                self.forget(|live| unkept(live.rank, live.state, rules));
+                self.forget(|live| unkept(live.rank, live.hold.state(), rules));
                 if unkept(Rank::Manual, PlayState::Kept, rules) {
                     self.grabs.clear_kept();
                 }
@@ -1576,7 +1734,11 @@ impl Sender {
     /// Ends `play`, which is live: its plan goes back.
     fn release(&mut self, play: PlayId) -> Result<(), Refusal> {
         self.push(EngineCommand::Release { play }, Brings::Nothing)?;
-        if let Some(old) = self.plays.get_mut(play.slot()).and_then(Option::take) {
+        if let Some(old) = self
+            .plays
+            .get_mut(play.slot())
+            .and_then(|slot| apply_hold(slot, HoldEvent::Released))
+        {
             let terminal = old.work_before_release();
             if terminal > 0 {
                 self.prefix_work
@@ -1604,7 +1766,7 @@ impl Sender {
         {
             let Some(live) = slot else { continue };
             if live.play.generation == ended.load(Ordering::Acquire) {
-                *slot = None;
+                apply_hold(slot, HoldEvent::Released);
                 self.retired += 1;
                 continue;
             }
@@ -1613,7 +1775,7 @@ impl Sender {
             if let Some(version) = version {
                 live.current = version;
                 live.earlier = None;
-                live.state = PlayState::Kept;
+                apply_hold(slot, HoldEvent::KeptRead);
             } else if live.current.sent <= applied {
                 live.earlier = None;
             } else if let Some(history) = &mut live.earlier {
@@ -1630,7 +1792,7 @@ impl Sender {
     fn forget(&mut self, ends: impl Fn(&Live) -> bool) {
         for slot in &mut self.plays {
             if slot.as_ref().is_some_and(&ends)
-                && let Some(old) = slot.take()
+                && let Some(old) = apply_hold(slot, HoldEvent::Released)
             {
                 let terminal = old.work_before_release();
                 if terminal > 0 {
@@ -1696,7 +1858,7 @@ impl Sender {
                 .plays
                 .iter()
                 .flatten()
-                .filter(|p| p.state == PlayState::Playing)
+                .filter(|p| p.hold == Hold::Playing)
             {
                 let plan = looks.plan(live.look)?;
                 if !Arc::ptr_eq(&plan, &live.current.plan) {
@@ -1833,25 +1995,73 @@ impl Sender {
         self.lane_pause = Some((output, lane::StartPause { reached, release }));
     }
 
+    /// Undoes each output edit whose opening was dropped unfinished, as a failed open
+    /// (output-cutover T4): the opener is back, the old lane serves on, the project is
+    /// as before, a new lane goes to be freed.
+    fn take_back_abandoned(&mut self) {
+        while let Ok(Unfinished {
+            open,
+            output,
+            previous,
+            lane,
+        }) = self.abandoned.try_recv()
+        {
+            self.open = Some(open);
+            self.commands.reserved = false;
+            if let Some(lane) = lane {
+                free_elsewhere(Brings::Device(lane));
+            }
+            if let Some(old) = previous {
+                old.cutover().apply(CutoverEvent::Refuse);
+            }
+            if let Ok((project, _)) = self.project.update(ProjectEvent::OpenFailed { output }) {
+                self.project = project;
+            }
+        }
+    }
+
     /// Publishes the prepared output and waits for the old adapter's last write.
-    pub fn finish(&mut self, opened: Opened) -> Result<(), Refusal> {
-        self.publish_output(opened).map(drop)
+    /// `Stopping` once the outputs stopped: nothing was queued (T13).
+    pub fn finish(&mut self, opened: Opened) -> Result<(), Unsent> {
+        match self.publish_output(opened)?.map(Handoff::wait) {
+            Some(false) => Err(Unsent::Stopping),
+            Some(true) | None => Ok(()),
+        }
     }
 
     /// Queues the switch in one step. A shared front completes the returned handoff
-    /// outside its publisher lock before it answers the command.
+    /// outside its publisher lock before it answers the command. Once the outputs
+    /// stopped nothing is queued, the project goes back to what it was, and the
+    /// handoff's [`Handoff::wait`] says `false` (T13).
     pub fn publish_output(&mut self, opened: Opened) -> Result<Option<Handoff>, Refusal> {
         let Opened {
-            open,
+            lease,
             output,
             kind,
             universes,
             rate,
-            lane,
+            opened,
             reuse,
         } = opened;
+        let (open, lane) = lease.finish();
+        let lane = opened.and_then(|()| lane.ok_or_else(|| io::Error::other("no lane")));
         self.open = Some(open.clone());
         self.commands.reserved = false;
+        if !self.shared.life.get().sends() {
+            if let Ok(lane) = lane {
+                free_elsewhere(Brings::Device(lane));
+            }
+            self.project = self.project.update(ProjectEvent::OpenFailed { output })?.0;
+            return Ok(Some(Handoff {
+                stopped: true,
+                previous: None,
+                next: None,
+                retry: self.retry.clone(),
+                reuse,
+                shared: Arc::clone(&self.shared),
+                unfinished_wake: None,
+            }));
+        }
         let command = EngineCommand::Attach {
             output,
             universes,
@@ -1872,13 +2082,14 @@ impl Sender {
                     previous.publish();
                 }
                 Handoff {
+                    stopped: false,
                     previous: Some(previous.clone()),
-                    next: Recovery {
+                    next: Some(Recovery {
                         output,
                         kind,
                         open,
                         lane: next,
-                    },
+                    }),
                     retry: self.retry.clone(),
                     reuse,
                     shared: Arc::clone(&self.shared),
@@ -1899,7 +2110,9 @@ impl Sender {
         sent
     }
 
-    /// Attaches a test device which takes every channel in the wire run.
+    /// Attaches a test device which takes every channel in the wire run. Tests only:
+    /// the product opens every device from the project (`publish_output`).
+    #[cfg(any(test, feature = "test-support"))]
     pub fn attach(
         &mut self,
         output: OutputNumber,
@@ -1919,6 +2132,8 @@ impl Sender {
     }
 
     /// Attaches a device with its validated route. The project shows the route bounds.
+    /// Tests only, as [`Engine::attach`].
+    #[cfg(any(test, feature = "test-support"))]
     pub fn attach_route(
         &mut self,
         output: OutputNumber,
@@ -1940,6 +2155,7 @@ impl Sender {
         )
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     fn attach_device(
         &mut self,
         output: OutputNumber,
@@ -1973,6 +2189,7 @@ impl Sender {
             Some(device),
             route,
             self.clock.clone(),
+            Arc::clone(&self.shared.life),
             previous.as_ref(),
             #[cfg(feature = "test-support")]
             None,
@@ -2005,7 +2222,7 @@ impl Sender {
         if let Some(previous) = previous {
             self.shared.finish_wake(self.shared.published());
             previous.publish();
-            previous.finish_handoff(&next, false, &self.shared.outputs_stopped);
+            previous.finish_handoff(&next, false);
         }
         self.set_attached_route(output, explicit);
         self.project = project;
@@ -2073,9 +2290,9 @@ impl Sender {
 
     /// Cancel pending transfers and stop sending. The tick can still supply a final report.
     pub fn stop_outputs(&self) {
-        self.shared.outputs_stopped.store(true, Ordering::Release);
+        self.shared.life.apply(LifeEvent::StopOutputs);
         for lane in self.lanes.iter().flatten() {
-            lane.cutover().apply(CutoverEvent::Stop);
+            lane.cutover().stop();
         }
     }
 
@@ -2289,19 +2506,21 @@ impl Opening {
     /// are freed (one may hold the port this opens), then for as long as opening takes.
     pub fn open(self) -> Opened {
         let started = Instant::now();
-        let prior_visible = self.previous.as_ref().is_none_or(|old| {
+        let mut lease = self.lease;
+        let prior_visible = lease.previous.as_ref().is_none_or(|old| {
             while old.waits_to_serve() {
-                if self.shared.outputs_stopped.load(Ordering::Acquire)
+                if !self.shared.life.get().sends()
                     || started.elapsed() >= FREE_WITHIN
                 {
                     return false;
                 }
                 thread::sleep(Duration::from_millis(1));
             }
-            if old.cutover().state() == CutoverState::Serving {
-                old.cutover().apply(CutoverEvent::Begin);
-            }
-            true
+            // T1 once T9 showed the run this waited for; T12 when admission began it
+            matches!(
+                old.cutover().apply(CutoverEvent::Begin),
+                CutoverEffect::Open | CutoverEffect::Wait
+            )
         });
         let reuse = loop {
             let port = match &self.source {
@@ -2323,19 +2542,20 @@ impl Opening {
         // Opening the device and starting the thread may both fail. The accepted
         // lane keeps sending until finish publishes a fully prepared replacement.
         let lane = (|| {
-            if !prior_visible || self.shared.outputs_stopped.load(Ordering::Acquire) {
+            if !prior_visible || !self.shared.life.get().sends() {
                 return Err(io::Error::other("output unavailable"));
             }
             let device = if reuse {
                 None
             } else {
-                Some(self.open.device(self.kind)?)
+                Some(lease.open.device(self.kind)?)
             };
             let lane = Lane::start(
                 device,
                 self.route,
                 self.clock,
-                self.previous.as_ref(),
+                Arc::clone(&self.shared.life),
+                lease.previous.as_ref(),
                 #[cfg(feature = "test-support")]
                 self.lane_pause,
             )?;
@@ -2343,23 +2563,28 @@ impl Opening {
         })();
         if lane.is_err()
             && !matches!(self.source, DeviceSource::Fresh)
-            && let Some(previous) = self.previous
+            && let Some(previous) = lease.previous.clone()
         {
             previous.watch_loss();
-            let _ = self.retry.send(Recovery {
+            if let Err(request) = self.retry.send(Recovery {
                 output: self.output,
                 kind: self.kind,
-                open: self.open.clone(),
+                open: lease.open.clone(),
                 lane: previous,
-            });
+            }) {
+                request.0.lane.worker_gone();
+            }
         }
+        let opened = lane.map(|lane| {
+            lease.lane = Some(lane);
+        });
         Opened {
-            open: self.open,
+            lease,
             output: self.output,
             kind: self.kind,
             universes: self.universes,
             rate: self.rate,
-            lane,
+            opened,
             reuse,
         }
     }
@@ -2397,7 +2622,7 @@ type Retry = std::sync::mpsc::Sender<Recovery>;
 )]
 fn recover(requests: std::sync::mpsc::Receiver<Recovery>, shared: &Shared) {
     let mut pending: [Option<Recovery>; MAX_OUTPUTS] = std::array::from_fn(|_| None);
-    while !shared.stop.load(Ordering::Acquire) {
+    while !shared.life.get().over() {
         match requests.recv_timeout(FREE_EVERY) {
             Ok(request) => {
                 if !request.lane.closed()
@@ -2431,7 +2656,7 @@ fn free(mut retired: rtrb::Consumer<Retired>, shared: &Shared) {
     loop {
         while let Ok(back) = retired.pop() {
             #[cfg(any(test, feature = "test-support"))]
-            while shared.stalled.load(Ordering::Acquire) && !shared.stop.load(Ordering::Relaxed) {
+            while shared.stalled.load(Ordering::Acquire) && !shared.life.get().over() {
                 thread::park_timeout(Duration::from_millis(1));
             }
             let device = matches!(back, Retired::Device(_));
@@ -2452,7 +2677,7 @@ fn free(mut retired: rtrb::Consumer<Retired>, shared: &Shared) {
                 shared.devices_freed.fetch_add(1, Ordering::Release);
             }
         }
-        if shared.stop.load(Ordering::Relaxed) {
+        if shared.life.get().over() {
             return; // what comes back later is freed with the tick thread's queue end
         }
         thread::park_timeout(FREE_EVERY);
@@ -2461,8 +2686,7 @@ fn free(mut retired: rtrb::Consumer<Retired>, shared: &Shared) {
 
 impl Drop for Engine {
     fn drop(&mut self) {
-        self.shared.outputs_stopped.store(true, Ordering::Release);
-        self.shared.stop.store(true, Ordering::Release);
+        self.shared.life.apply(LifeEvent::Drop);
         if let Some(tick) = self.tick.take() {
             drop(tick.join()); // the devices are freed here, not on the tick thread
         }
@@ -2522,8 +2746,7 @@ struct Switch {
     reuse: bool,
     presses: u64,
     handed: u64,
-    lateness: Histogram<LATENESS_BUCKETS>,
-    worst: Duration,
+    lateness: Times<LATENESS_BUCKETS>,
 }
 
 /// Capacity of each send-time history. Overwritten press stamps count as missing.
@@ -2655,11 +2878,11 @@ impl Ticker {
     /// block, log or call out. Returns itself, so its devices are freed by whoever joins it.
     fn run(mut self, priority: Priority) -> Self {
         self.now.state = State::new(priority);
-        while !self.shared.stop.load(Ordering::Relaxed) {
+        while !self.shared.life.get().over() {
             // Sleep, then spin the last millisecond before an output: a sleep can wake
             // late, a spin cannot. A beat with no output only sleeps.
             let (sleep, spin) = wait(&self.scheduled(), self.clock.now());
-            self.clock.wait(sleep, spin, &self.shared.stop);
+            self.clock.wait(sleep, spin, &self.shared.life);
             // The cutoff (`wake.rs`): the picture asked for and the commands published
             // so far belong to this wake, then the frame time is read. A command
             // published after it waits for the next wake.
@@ -2675,7 +2898,7 @@ impl Ticker {
             // commands in this wake, or its moment's commands are more than applied
             self.now
                 .revised(self.shared.revision.load(Ordering::Acquire));
-            let now = self.clock.cutoff(&self.shared.stop);
+            let now = self.clock.cutoff(&self.shared.life);
             self.apply(EngineCommand::Tick { now });
 
             // Apply them right before the frame: a press is in the next one.
@@ -2685,6 +2908,10 @@ impl Ticker {
                 };
                 // in time order: what the grid reached before it was sent comes first
                 self.settle(sent.at);
+                let rerouted = match (sent.command, &sent.brings) {
+                    (EngineCommand::Attach { output, .. }, Brings::Reroute(_, _)) => Some(output),
+                    _ => None,
+                };
                 match (sent.command, &sent.brings) {
                     (EngineCommand::Keep { play }, _) => self.stop(play),
                     (_, Brings::Reroute(_, _) | Brings::Probe(_)) => {}
@@ -2697,9 +2924,6 @@ impl Ticker {
                         Brings::Device(lane) => {
                             *action = lane.control.cutover().effect(CutoverEvent::Wake)
                         }
-                        Brings::Reroute(_, _) if *action != CutoverEffect::ShowNew => {
-                            *action = CutoverEffect::SendNew
-                        }
                         Brings::Nothing
                         | Brings::Reroute(_, _)
                         | Brings::Probe(_)
@@ -2709,6 +2933,18 @@ impl Ticker {
                     }
                 }
                 self.swap(sent.command, sent.brings);
+                // T6 decided: frames go to the new lane (T7) or T9 shows it
+                if let Some(output) = rerouted
+                    && let Some(action) = wake_actions.get_mut(output.slot())
+                {
+                    *action = self
+                        .devices
+                        .get(output.slot())
+                        .and_then(Option::as_ref)
+                        .map_or(CutoverEffect::Nothing, |old| {
+                            old.control.cutover().effect(CutoverEvent::Wake)
+                        });
+                }
                 self.carried.applied(&sent.command, sent.at);
                 self.now.applied_one();
                 #[cfg(feature = "test-support")]
@@ -2786,7 +3022,7 @@ impl Ticker {
             }
         }
         for lane in self.devices.iter().flatten() {
-            lane.control.cutover().apply(CutoverEvent::Stop);
+            lane.control.cutover().stop();
         }
         self
     }
@@ -2913,7 +3149,12 @@ impl Ticker {
                         .flatten()
                 {
                     old.control.publish();
-                    old.control.cutover().apply(CutoverEvent::Cutoff);
+                    if old.control.cutover().apply(CutoverEvent::Cutoff) != CutoverEffect::SwitchLane
+                    {
+                        // stopped (T13): no switch
+                        let _ = self.retired.push(Retired::Device(next));
+                        return;
+                    }
                     *place = Some(Switch {
                         next,
                         schedule: Output {
@@ -2923,8 +3164,7 @@ impl Ticker {
                         reuse,
                         presses: self.carried.presses.total,
                         handed: 0,
-                        lateness: [0; LATENESS_BUCKETS],
-                        worst: Duration::ZERO,
+                        lateness: Times::ZERO,
                     });
                 } else {
                     let _ = self.retired.push(Retired::Device(next));
@@ -2977,7 +3217,7 @@ impl Ticker {
     /// While a transfer drains, the held lane's rate owns the scheduler.
     fn scheduled(&self) -> State {
         let mut scheduled = self.now.state;
-        if self.shared.outputs_stopped.load(Ordering::Acquire) {
+        if !self.shared.life.get().sends() {
             scheduled.outputs.fill(None);
             return scheduled;
         }
@@ -3027,12 +3267,13 @@ impl Ticker {
                 switch.reuse,
                 switch.handed,
                 &switch.lateness,
-                switch.worst,
             );
             if let Some(prefix) = self.carried.last_accepted.get_mut(slot) {
                 *prefix = switch.presses;
             }
             if let Some(new) = installed {
+                // T9 commits: the serving lane number moves to the new lane. Stopped since
+                // the peek (T13), each lane ends by the engine's life instead.
                 new.control.cutover().apply(CutoverEvent::Wake);
             }
         }
@@ -3043,7 +3284,7 @@ impl Ticker {
     /// box, the device is still on older frames: this one is dropped and counted now.
     fn serve(&mut self, number: OutputNumber, action: CutoverEffect) {
         let slot = number.slot();
-        if self.shared.outputs_stopped.load(Ordering::Acquire) {
+        if !self.shared.life.get().sends() {
             return;
         }
         let at = self.clock.now();
@@ -3124,11 +3365,7 @@ impl Ticker {
             }
             if let Some(Some(switch)) = self.switching.get_mut(slot) {
                 switch.schedule = switch.schedule.sent(outcome, at);
-                let late = at.saturating_sub(due);
-                if let Some(count) = switch.lateness.get_mut(bucket::<LATENESS_BUCKETS>(late)) {
-                    *count += 1;
-                }
-                switch.worst = switch.worst.max(late);
+                switch.lateness.count(at.saturating_sub(due));
             } else {
                 self.now.late(slot, at.saturating_sub(due));
                 self.now.sent(number, outcome, at, prefix.generation);
@@ -3215,6 +3452,138 @@ impl Ticker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// docs/engine.md, "What the front reserves for a play", one row per pair.
+    #[test]
+    fn every_hold_and_event_pair_follows_the_front_table() {
+        use Hold::{Kept, Playing};
+        use HoldEvent::{KeepSent, KeptRead, Released, Start};
+        for (hold, event, expected) in [
+            (None, Start, Some(Playing)),
+            (None, KeepSent, None),
+            (None, KeptRead, None),
+            (None, Released, None),
+            (Some(Playing), Start, Some(Playing)),
+            (Some(Playing), KeepSent, Some(Kept)),
+            (Some(Playing), KeptRead, Some(Kept)),
+            (Some(Playing), Released, None),
+            (Some(Kept), Start, Some(Playing)),
+            (Some(Kept), KeepSent, Some(Kept)),
+            (Some(Kept), KeptRead, Some(Kept)),
+            (Some(Kept), Released, None),
+        ] {
+            assert_eq!(next_hold(hold, event), expected, "{hold:?} + {event:?}");
+        }
+    }
+
+    /// docs/engine.md, Released: new mix rules that no longer keep a stopped play free
+    /// its hold.
+    #[cfg(feature = "test-support")]
+    #[test]
+    #[expect(
+        clippy::unwrap_used,
+        clippy::panic,
+        reason = "a test whose set-up fails fails"
+    )]
+    fn new_mix_rules_release_a_kept_hold_they_no_longer_keep() {
+        let (_engine, mut sender, wakes) =
+            Engine::start_stepped(Universes::ONE, Box::new(outputs::open)).unwrap();
+        wakes.hold().unwrap();
+        sender
+            .send(Command::PatchStrip {
+                name: Text::new("strip").unwrap(),
+                pixels: engine_core::Pixels::try_from(1).unwrap(),
+                color: Color::Rgb,
+                at: ChannelNumbers {
+                    universe: 1,
+                    address: 1,
+                },
+            })
+            .unwrap();
+        sender
+            .send(Command::PutStep {
+                look: 1,
+                name: Text::new("s").unwrap(),
+                step: engine_core::Step {
+                    target: Target::Light { light: 1 },
+                    values: Light::DARK,
+                },
+            })
+            .unwrap();
+        let rules = |other_end| Command::SetMixRules {
+            rules: MixRules {
+                other_end,
+                ..MixRules::default()
+            },
+        };
+        sender.send(rules(OtherEnd::Stay)).unwrap();
+        let start = Command::StartLook {
+            look: 1,
+            rank: Rank::Show,
+            when: When::Now,
+        };
+        let Ok(Begun::Started { play }) = sender.begin(start, &[]) else {
+            panic!("look 1 starts");
+        };
+        sender.send(Command::StopLook { play }).unwrap();
+        let hold = |sender: &Sender| {
+            sender
+                .plays
+                .get(play.slot())
+                .and_then(|live| live.as_ref().map(|live| live.hold))
+        };
+        assert_eq!(hold(&sender), Some(Hold::Kept), "Stay keeps the stopped play");
+        sender.send(rules(OtherEnd::Reveal)).unwrap();
+        assert_eq!(hold(&sender), None, "Reveal releases it");
+    }
+
+    /// output-cutover.md, Lane recovery: a lost lane whose restart is refused after the
+    /// recovery worker ended is Stranded (Opening::open's request cannot be sent).
+    #[cfg(feature = "test-support")]
+    #[test]
+    #[expect(
+        clippy::unwrap_used,
+        clippy::panic,
+        reason = "a test whose set-up fails fails"
+    )]
+    fn a_refused_restart_with_the_recovery_worker_gone_strands_the_lost_lane() {
+        use crate::recovery::State as RecoveryState;
+        struct Lost;
+        impl Device for Lost {
+            fn take(&mut self, _: &[u8]) -> Outcome {
+                Outcome::Failed
+            }
+        }
+
+        let (engine, mut sender, wakes) = Engine::start_stepped(
+            Universes::new(2).unwrap(),
+            Box::new(|_| Ok(Box::new(Lost) as Box<dyn Device>)),
+        )
+        .unwrap();
+        wakes.hold().unwrap();
+        let output = OutputNumber::try_from(1).unwrap();
+        let set = |count| Command::SetOutput {
+            output,
+            kind: engine_core::TEST_STREAM_KIND,
+            universes: RunNumbers { first: 1, count },
+            rate: None,
+        };
+        sender.send(set(1)).unwrap();
+        let lane = sender.lanes.get(output.slot()).cloned().flatten().unwrap();
+        let started = Instant::now();
+        while lane.recovery_state() != RecoveryState::Lost {
+            assert!(started.elapsed() < Duration::from_secs(10), "never lost");
+            wakes.wake().unwrap();
+        }
+        let Ok(Begun::Opening(opening)) = sender.begin(set(2), &[]) else {
+            panic!("the larger route needs a new lane");
+        };
+        wakes.wake().unwrap();
+        drop(engine); // the recovery worker ends with the engine
+        let opened = opening.open();
+        assert_eq!(lane.recovery_state(), RecoveryState::Stranded);
+        drop(opened);
+    }
 
     #[test]
     fn opening_uses_the_reserved_device_or_waits_for_reclamation() {
@@ -4307,18 +4676,19 @@ mod tests {
 
     /// Sends `command` until it is not refused for a full command queue: waits for the
     /// tick to drain it. What came of it once the queue had room.
+    #[expect(clippy::unwrap_used, reason = "a test whose tick failed fails")]
     fn once_drained(
         engine: &mut Engine,
         sender: &mut Sender,
         command: Command,
-    ) -> Result<(), Refusal> {
+    ) -> Result<(), Unsent> {
         loop {
             let refused = sender.send(command);
-            if refused != Err(Refusal::QueueFull) {
+            if refused != Err(Unsent::Refused(Refusal::QueueFull)) {
                 return refused;
             }
             let started = Instant::now();
-            while engine.fresh().applied() < sender.sent() {
+            while engine.fresh().unwrap().applied() < sender.sent() {
                 assert!(
                     started.elapsed() < Duration::from_secs(5),
                     "the tick drains"
@@ -4350,9 +4720,10 @@ mod tests {
 
     impl Heard {
         /// The channels of a frame made after every command sent so far was applied.
+        #[expect(clippy::unwrap_used, reason = "a test whose tick failed fails")]
         fn after(&self, engine: &mut Engine, sender: &Sender) -> [u8; 9] {
             let started = Instant::now();
-            while engine.fresh().applied() < sender.sent() {
+            while engine.fresh().unwrap().applied() < sender.sent() {
                 assert!(
                     started.elapsed() < Duration::from_secs(5),
                     "the tick applies"
@@ -4560,7 +4931,7 @@ mod tests {
             while once_drained(&mut engine, &mut sender, restart).is_ok() {}
             assert_eq!(
                 sender.send(restart),
-                Err(Refusal::QueueFull),
+                Err(Unsent::Refused(Refusal::QueueFull)),
                 "{case}: the returns are full"
             );
             *plays.first_mut().unwrap() = PlayId::new(0, sender.generation).unwrap();
@@ -4592,7 +4963,7 @@ mod tests {
                 );
             }
             assert_eq!(heard.after(&mut engine, &sender), expected, "{case}: after");
-            let state = &engine.fresh().state;
+            let state = &engine.fresh().unwrap().state;
             let left = (0..PLAYS).filter(|&slot| state.plays.has(slot)).count();
             assert_eq!(left, plays_after, "{case}: plays");
             engine.shared.stalled.store(false, Ordering::Release);
@@ -4637,7 +5008,7 @@ mod tests {
             Ok(Begun::Started { .. })
         ));
         let started = Instant::now();
-        while engine.fresh().applied() < sender.sent() {
+        while engine.fresh().unwrap().applied() < sender.sent() {
             assert!(
                 started.elapsed() < Duration::from_secs(5),
                 "the tick applies"
@@ -4645,9 +5016,9 @@ mod tests {
         }
         assert_eq!(
             sender.send(Command::RemoveLook { look: 1 }),
-            Err(Refusal::LookInUse { look: 1 })
+            Err(Unsent::Refused(Refusal::LookInUse { look: 1 }))
         );
-        assert!(engine.fresh().state.plays.has(0));
+        assert!(engine.fresh().unwrap().state.plays.has(0));
     }
 
     #[cfg(feature = "test-support")]
@@ -4764,7 +5135,7 @@ mod tests {
         sender.send(Command::RemoveLook { look: 10 }).unwrap();
         assert_eq!(
             sender.send(Command::RemoveLook { look: 11 }),
-            Err(Refusal::LookInUse { look: 11 })
+            Err(Unsent::Refused(Refusal::LookInUse { look: 11 }))
         );
         for play in ids {
             sender.send(Command::ReleaseHold { play }).unwrap();
@@ -4862,7 +5233,7 @@ mod tests {
             };
             // Hold the tick until the original device's hand-back times out. The fallback
             // opener then fails without ever obtaining the original, working device.
-            assert_eq!(sender.finish(restart.open()), Err(Refusal::CannotOpen));
+            assert_eq!(sender.finish(restart.open()), Err(Unsent::Refused(Refusal::CannotOpen)));
             sender.send(hold(73)).unwrap();
             engine.latest();
             wakes.wake().unwrap();
@@ -4937,7 +5308,10 @@ mod tests {
     #[expect(clippy::unwrap_used, clippy::panic, reason = "test setup must succeed")]
     fn a_restart_with_a_full_fifo_commits_only_a_working_replacement() {
         // (the fresh open succeeds, finish answers, accepted universe count)
-        let cases = [(true, Ok(()), 3), (false, Err(Refusal::CannotOpen), 2)];
+        let cases = [
+            (true, Ok(()), 3),
+            (false, Err(Unsent::Refused(Refusal::CannotOpen)), 2),
+        ];
         for (fresh, answer, count) in cases {
             let universes = Universes::new(3).unwrap();
             let opens = Arc::new(AtomicU32::new(0));
@@ -5287,7 +5661,7 @@ mod tests {
                 },
             ),
         ] {
-            assert_eq!(sender.send(command), Err(Refusal::WorkLimit), "{case}");
+            assert_eq!(sender.send(command), Err(Unsent::Refused(Refusal::WorkLimit)), "{case}");
             assert_eq!(sender.sent(), tail, "{case}");
             assert_eq!(sender.looks().all(), saved, "{case}");
             assert_eq!(picture(&mut engine), before, "{case}");
@@ -5308,7 +5682,7 @@ mod tests {
                 break;
             }
         }
-        assert_eq!(refusal, Some(Refusal::WorkLimit));
+        assert_eq!(refusal, Some(Unsent::Refused(Refusal::WorkLimit)));
         for play in ids {
             if repeat == Repeat::Loop {
                 sender.send(Command::StopLook { play }).unwrap();
@@ -5317,7 +5691,7 @@ mod tests {
         }
         // A loop stopped under Stay and a once-use can sample before release.
         // Together with the queued group writes, a larger root still cannot fit.
-        assert_eq!(sender.send(start(6, Rank::Manual)), Err(Refusal::WorkLimit));
+        assert_eq!(sender.send(start(6, Rank::Manual)), Err(Unsent::Refused(Refusal::WorkLimit)));
         assert_eq!(picture(&mut engine), (vec![], vec![None; 100]));
         let retry = started(&mut sender, start(6, Rank::Manual));
         sender.send(leaf(22)).unwrap();
@@ -5428,7 +5802,7 @@ mod tests {
         let saved = sender.looks().all();
         let tail = sender.sent();
         for command in [start(2), wave(3, WaveTarget::Group { group: name })] {
-            assert_eq!(sender.send(command), Err(Refusal::WorkLimit));
+            assert_eq!(sender.send(command), Err(Unsent::Refused(Refusal::WorkLimit)));
             assert_eq!(sender.sent(), tail);
             assert_eq!(sender.looks().all(), saved);
             assert_eq!(applying_frame(&mut engine), before);
@@ -5461,7 +5835,7 @@ mod tests {
         // the headroom to write the same light property again.
         assert_eq!(sender.send(intensity), Ok(()));
         sender.send(Command::ReleaseHold { play }).unwrap();
-        assert_eq!(sender.send(start(1)), Err(Refusal::WorkLimit));
+        assert_eq!(sender.send(start(1)), Err(Unsent::Refused(Refusal::WorkLimit)));
         assert_eq!(applying_frame(&mut engine), (vec![], None));
         sender.send(start(1)).unwrap();
         assert_eq!(applying_frame(&mut engine).0.len(), 1);
@@ -5548,7 +5922,7 @@ mod tests {
         for look in [1, 3] {
             assert_eq!(
                 sender.send(Command::RemoveLook { look }),
-                Err(Refusal::LookInUse { look: 4 })
+                Err(Unsent::Refused(Refusal::LookInUse { look: 4 }))
             );
         }
         sender.send(Command::ReleaseHold { play }).unwrap();

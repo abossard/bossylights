@@ -25,6 +25,7 @@
 mod counting;
 mod mock;
 
+use engine::Unsent;
 use engine::{
     Begun, Brightness, ChannelNumbers, Color, Command, Engine, Fixture, Light, ManualEnd, Member,
     MemberList, Members, MixRules, OtherEnd, PlayId, Property, Rank, Rate, Refusal, Rgb,
@@ -749,7 +750,7 @@ fn output_health() {
         // Count both the refusal and the accepted switch through the next press.
         engine.stall_reclamation(true);
         let before = counts();
-        assert_eq!(sender.finish(opened), result);
+        assert_eq!(sender.finish(opened), result.map_err(Unsent::Refused));
         sender
             .send(Command::SetChannel { channel, value: 73 })
             .unwrap();
@@ -1177,11 +1178,11 @@ fn linked_ends() {
             "a once-end plan swap never returned its place",
             || match sender.send(restart) {
                 Ok(()) => true,
-                Err(Refusal::QueueFull) => false,
+                Err(Unsent::Refused(Refusal::QueueFull)) => false,
                 Err(reason) => panic!("restart refused: {reason:?}"),
             },
         );
     }
-    assert_eq!(sender.send(restart), Err(Refusal::QueueFull));
+    assert_eq!(sender.send(restart), Err(Unsent::Refused(Refusal::QueueFull)));
     wakes.run();
 }

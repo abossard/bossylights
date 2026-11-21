@@ -1,3 +1,4 @@
+use engine::Unsent;
 use engine::{
     Begun, ChannelNumbers, Color, Command, Engine, OutputNumber, ProjectOutput, QUEUE, Rate,
     Refusal, Route, RunNumbers, Span, Target, Text, Universes, Value,
@@ -39,7 +40,7 @@ fn a_failed_first_open_leaves_the_output_free_for_a_retry() {
         (Err(Refusal::CannotOpen), None, 0),
         (Ok(()), Some(opened), 1),
     ] {
-        assert_eq!(sender.send(set), answer);
+        assert_eq!(sender.send(set), answer.map_err(Unsent::Refused));
         assert_eq!(sender.project().output(output), project);
         assert_eq!(sender.sent(), sent);
     }
@@ -110,7 +111,7 @@ fn a_grab_update_can_fill_the_last_place_left_by_an_output_resize() {
     // One place belongs to finish. From an empty FIFO the other QUEUE - 1
     // places must fit QUEUE - 2 single commands and the grab update's chunk.
     mock::wait_until("a wake drained every burst before the queue filled", || {
-        engine.fresh();
+        engine.fresh().unwrap();
         for _ in 2..QUEUE {
             sender.send(filler).unwrap();
         }
@@ -120,13 +121,13 @@ fn a_grab_update_can_fill_the_last_place_left_by_an_output_resize() {
         [update(4321), filler]
             .into_iter()
             .all(|command| match sender.send(command) {
-                Err(Refusal::QueueFull) => true,
+                Err(Unsent::Refused(Refusal::QueueFull)) => true,
                 Ok(()) => false,
                 Err(other) => panic!("unexpected refusal: {other:?}"),
             })
     });
     sender.finish(opened).unwrap();
-    let snapshot = engine.fresh();
+    let snapshot = engine.fresh().unwrap();
     assert_eq!(snapshot.applied(), sender.sent());
     assert_eq!(snapshot.lights()[0].intensity, Some(1234));
     assert_eq!(

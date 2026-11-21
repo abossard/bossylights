@@ -80,7 +80,7 @@ fn a_fresh_picture_carries_every_command_sent_before() {
         for command in &commands {
             assert_eq!(sender.send(*command), Ok(()), "{commands:?}");
         }
-        let picture = engine.fresh();
+        let picture = engine.fresh().unwrap();
         assert_eq!(picture.universes()[0].0[0], held, "{commands:?}");
         assert_eq!(picture.state.blackout, on, "{commands:?}");
     }

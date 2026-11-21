@@ -61,6 +61,9 @@ fn transition(state: State, event: Event) -> (State, Effect) {
         (Preparing, Event::Refuse) => (Serving, Effect::FreePrepared), // T4
         (Preparing, Event::Publish) => (Published, Effect::DrainOld),  // T5
         (Published, Event::Cutoff) => (Switched, Effect::SwitchLane),  // T6
+        // T6 after T8: the old lane returned before the cutoff carried the switch, so the
+        // switch is applied now and T9 shows it (T9, step 1)
+        (Returned, Event::Cutoff) => (Returned, Effect::SwitchLane),
         (Switched, Event::Wake) => (Switched, Effect::SendNew),        // T7
         (Published | Switched, Event::DeviceReturned) => (Returned, Effect::ReleaseAndAccept), // T8
         (Returned, Event::Wake) => (Serving, Effect::ShowNew),         // T9
@@ -140,6 +143,12 @@ impl Machine {
         }
     }
 
+    /// T13. Its effect is the same from every state (the lanes stop by the engine's
+    /// life), so there is nothing to return.
+    pub(crate) fn stop(&self) {
+        self.apply(Event::Stop);
+    }
+
     pub(super) fn waiting_for_visibility(&self, lane: u64) -> bool {
         lane > self.0.load(Ordering::Acquire) >> PHASE_BITS
     }
@@ -196,6 +205,7 @@ mod tests {
             E::Refuse if state == S::Preparing => ("T4", S::Serving, F::FreePrepared),
             E::Publish if state == S::Preparing => ("T5", S::Published, F::DrainOld),
             E::Cutoff if state == S::Published => ("T6", S::Switched, F::SwitchLane),
+            E::Cutoff if state == S::Returned => ("T6 after T8", S::Returned, F::SwitchLane),
             E::Wake if state == S::Switched => ("T7", S::Switched, F::SendNew),
             E::DeviceReturned if matches!(state, S::Published | S::Switched) => {
                 ("T8", S::Returned, F::ReleaseAndAccept)
@@ -230,6 +240,6 @@ mod tests {
                 );
             }
         }
-        assert_eq!(written, 35, "rows of the doc's table, pair by pair");
+        assert_eq!(written, 36, "rows of the doc's table, pair by pair");
     }
 }

@@ -6,6 +6,7 @@ mod mock;
 #[path = "../../outputs/tests/common/stream.rs"]
 mod stream;
 
+use engine::Unsent;
 use engine::{
     Begun, ChannelNumbers, Color, Command, Engine, Levels, MAX_OUTPUTS, OutputNumber, QUEUE, Rate,
     Refusal, RunNumbers, Sender, Snapshot, Status, Universes,
@@ -77,7 +78,7 @@ fn a_command_reaches_the_frame_and_the_state() {
         }
         first.took_everything_sent(&mut engine, &sender);
         assert_eq!(first.level(universe, address), out, "{commands:?} out");
-        let picture = engine.fresh();
+        let picture = engine.fresh().unwrap();
         let level = picture.universes()[usize::from(universe - 1)].0[usize::from(address - 1)];
         assert_eq!(level, held, "{commands:?} held");
         assert!(picture.send_to_frame_p95().is_some(), "the send was timed");
@@ -95,11 +96,15 @@ fn a_command_that_cannot_be_right_is_refused_and_changes_nothing() {
         (set(1, 513, 9), Refusal::NoSuchAddress),
     ];
     let (mut engine, mut sender, _first) = start();
-    let before = engine.fresh().state;
+    let before = engine.fresh().unwrap().state;
     for (command, reason) in cases {
-        assert_eq!(sender.send(command), Err(reason), "{command:?}");
+        assert_eq!(
+            sender.send(command),
+            Err(Unsent::Refused(reason)),
+            "{command:?}"
+        );
     }
-    let picture = engine.fresh();
+    let picture = engine.fresh().unwrap();
     let state = picture.state;
     assert_eq!(picture.universes(), [Levels::ZERO; 2]);
     assert!(!state.blackout);
@@ -151,7 +156,7 @@ fn outputs_are_attached_changed_and_removed() {
                 engine.latest().state.outputs[2].is_some_and(|o| o.status == Status::Running)
             });
         }
-        let picture = engine.fresh();
+        let picture = engine.fresh().unwrap();
         let state = picture.state;
         let third = state.outputs[2];
         assert_eq!(third.map(|o| o.rate), rate, "{steps:?}");
@@ -176,7 +181,7 @@ fn a_full_queue_refuses_and_says_so() {
     // cannot all fit.
     let refused = (0..4 * QUEUE)
         .map(|_| sender.send(set(1, 1, 1)))
-        .filter(|sent| *sent == Err(Refusal::QueueFull))
+        .filter(|sent| *sent == Err(Unsent::Refused(Refusal::QueueFull)))
         .count();
     assert!(refused > 0, "nothing was refused");
 }
@@ -261,7 +266,7 @@ fn a_device_the_full_queue_refuses_is_freed_without_holding_up_the_sender() {
         let run = run(1, 1).check(Universes::ONE).unwrap();
         let (let_go, hold) = mpsc::channel();
         let device = Box::new(SlowToFree(hold));
-        while sender.send(set(1, 1, 1)) != Err(Refusal::QueueFull) {}
+        while sender.send(set(1, 1, 1)) != Err(Unsent::Refused(Refusal::QueueFull)) {}
         let (done, answered) = mpsc::channel();
         let attaching = thread::spawn(move || {
             let _ = done.send(sender.attach(output(1), device, run, Rate::Sixty));
@@ -316,11 +321,11 @@ fn removing_an_output_needs_a_free_return_only_if_it_has_a_device() {
     let patch = sender.patch();
     for n in 0..QUEUE + MAX_OUTPUTS - 3 {
         if n % (QUEUE / 2) == 0 {
-            engine.fresh();
+            engine.fresh().unwrap();
         }
         sender.load((*patch).clone()).unwrap();
     }
-    engine.fresh();
+    engine.fresh().unwrap();
     let Begun::Opening(restart) = sender.begin(set(2), &[]).unwrap() else {
         panic!("the longer route needs to reopen");
     };
@@ -331,10 +336,14 @@ fn removing_an_output_needs_a_free_return_only_if_it_has_a_device() {
         let remove = Command::RemoveOutput {
             output: output(number),
         };
-        assert_eq!(sender.send(remove), expected, "output {number}");
+        assert_eq!(
+            sender.send(remove),
+            expected.map_err(Unsent::Refused),
+            "output {number}"
+        );
         assert_eq!(sender.sent(), sent + u64::from(expected.is_ok()));
         assert_eq!(sender.project(), project);
-        assert_eq!(engine.fresh().applied(), sender.sent());
+        assert_eq!(engine.fresh().unwrap().applied(), sender.sent());
     }
     drop(closing);
     sender.finish(restart.open()).unwrap();
@@ -357,7 +366,7 @@ fn a_reopen_gives_a_closing_port_its_full_second_before_trying_again() {
         rate: None,
     };
     let before = Instant::now();
-    assert_eq!(sender.send(reopen), Err(Refusal::CannotOpen));
+    assert_eq!(sender.send(reopen), Err(Unsent::Refused(Refusal::CannotOpen)));
     let attempted = attempts.try_recv().unwrap();
     assert!(attempted.duration_since(before) >= Duration::from_secs(1));
 }

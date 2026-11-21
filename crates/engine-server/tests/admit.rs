@@ -9,6 +9,7 @@
 mod common;
 
 use common::{Heard, Socket, answer, command, connect, open, send, serve};
+use engine::Unsent;
 use engine::{
     Adapter, Begun, ChannelNumbers, Color, Command, Engine, Event, Fixture, Light, Member,
     MemberList, Members, Outcome, OutputKind, OutputNumber, PlayId, QUEUE, Refusal, Rgb,
@@ -227,7 +228,7 @@ impl Front {
             value: 0,
         };
         for _ in 0..=QUEUE {
-            if self.sender.send(press) == Err(Refusal::QueueFull) {
+            if self.sender.send(press) == Err(Unsent::Refused(Refusal::QueueFull)) {
                 return;
             }
         }
@@ -392,6 +393,9 @@ fn a_refused_admission_keeps_the_project_the_looks_and_the_next_frame() {
     for (name, command, before, refusal) in cases {
         let (mut front, play) = Front::start();
         let command = command(play);
+        // An opening dropped unfinished is undone by the next edit (output-cutover T4):
+        // the admitted edit stays only while its opening is held.
+        let mut opening = None;
         let prepared = match before {
             Before::Nothing => front.sender.base().prepare(command, &front.library),
             Before::Saved(edits) => {
@@ -410,13 +414,14 @@ fn a_refused_admission_keeps_the_project_the_looks_and_the_next_frame() {
             }
             Before::Admitted(edit) => {
                 let base = front.sender.base();
-                front.begin(edit()).unwrap();
+                opening = Some(front.begin(edit()).unwrap());
                 base.prepare(command, &front.library)
             }
         };
         let kept = front.kept();
         let admitted = prepared.and_then(|prepared| front.sender.admit(prepared));
         assert_eq!(admitted.err(), Some(refusal), "{name}");
+        drop(opening);
         assert_eq!(
             front.kept(),
             kept,

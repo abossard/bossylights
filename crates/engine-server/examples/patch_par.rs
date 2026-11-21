@@ -110,7 +110,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
     send(&mut sender, Command::Unpatch { fixture }, &library)?;
     println!("\x07unpatched: dark now");
     thread::sleep(Duration::from_secs(2));
-    let state = engine.fresh().state;
+    let state = engine.fresh().unwrap().state;
     if let Some(output) = state.outputs.first().copied().flatten() {
         println!("output 1: {:?}, {:?}", output.status, output.counters);
     }

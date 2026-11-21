@@ -12,7 +12,7 @@
 
 #![forbid(unsafe_code)]
 
-use engine::{Counters, Engine, Lateness, MAX_OUTPUTS, OutputNumber, State, Universes};
+use engine::{Counters, Engine, Lateness, MAX_OUTPUTS, OutputNumber, State, TickFailed, Universes};
 use std::fs::{File, TryLockError};
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -87,7 +87,13 @@ async fn main() {
                 eprintln!("bossylights-engine: {error}");
                 exit(1);
             });
-    eprint!("{}", report(&mut engine));
+    match report(&mut engine) {
+        Ok(report) => eprint!("{report}"),
+        Err(error) => {
+            eprintln!("bossylights-engine: {error}");
+            exit(1);
+        }
+    }
 }
 
 /// Holds the lock of `port` for as long as the process runs, or says who has it. Waits up
@@ -117,8 +123,8 @@ fn lock(port: u16) -> Result<File, String> {
 }
 
 /// What the engine measured, one line each: the frames, then every output's lateness.
-fn report(engine: &mut Engine) -> String {
-    let picture = engine.fresh();
+fn report(engine: &mut Engine) -> Result<String, TickFailed> {
+    let picture = engine.fresh()?;
     let State { frame, outputs, .. } = picture.state;
     let lines = (1..=MAX_OUTPUTS).filter_map(|n| {
         let number = OutputNumber::try_from(u8::try_from(n).ok()?).ok()?;
@@ -126,7 +132,7 @@ fn report(engine: &mut Engine) -> String {
         let lateness = picture.lateness(number)?;
         Some(line(n, output.counters, lateness))
     });
-    format!("bossylights-engine stopped at frame {frame}\n") + &lines.collect::<String>()
+    Ok(format!("bossylights-engine stopped at frame {frame}\n") + &lines.collect::<String>())
 }
 
 /// One output's line.

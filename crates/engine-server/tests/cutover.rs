@@ -5,7 +5,7 @@ mod common;
 #[path = "../../outputs/tests/common/stream.rs"]
 mod stream;
 
-use engine::{Color, Device, Engine, Outcome, OutputKind, Universes};
+use engine::{Color, Device, Engine, Outcome, OutputKind, Universes, Unsent};
 use serde_json::{Value, json};
 use std::io;
 use std::net::UdpSocket;
@@ -289,7 +289,10 @@ fn an_old_retry_in_flight_at_cutover_recovers_the_reused_adapter() {
     assert_eq!(read(&wire, 510), 11);
     // Force a failed fresh open, then a failed old send and a blocked retry.
     engine.stall_reclamation(true);
-    assert_eq!(sender.send(set(2)), Err(Refusal::CannotOpen));
+    assert_eq!(
+        sender.send(set(2)),
+        Err(Unsent::Refused(Refusal::CannotOpen))
+    );
     let at = wakes.wake().unwrap();
     assert_eq!(attempts.recv_timeout(GUARD).unwrap(), 3);
     engine.stall_reclamation(false);
@@ -368,7 +371,7 @@ fn a_removal_after_acceptance_cannot_bring_back_the_accepted_lane() {
     let removed = sender.send(remove);
     engine.latest();
     wakes.wake().unwrap();
-    if removed == Err(Refusal::Opening) {
+    if removed == Err(Unsent::Refused(Refusal::Opening)) {
         assert_eq!(
             engine.latest().state.outputs[0].unwrap().universes.first(),
             2
@@ -666,7 +669,11 @@ fn an_open_begun_before_t9_waits_for_it_or_is_refused() {
             .expect("the open ends within its bound");
         assert!(sender.cutover_pending(output), "shown {shown}");
         assert_eq!(opens.load(Ordering::Acquire), opened, "shown {shown}");
-        assert_eq!(sender.finish(third), answer, "shown {shown}");
+        assert_eq!(
+            sender.finish(third),
+            answer.map_err(Unsent::Refused),
+            "shown {shown}"
+        );
     }
 }
 
@@ -720,7 +727,7 @@ fn a_pending_explicit_route_streams_no_patched_fixture_until_t9() {
         .unwrap();
     assert_eq!(
         sender.send(edge()),
-        Err(Refusal::NotStreamed { first: 1, last: 2 })
+        Err(Unsent::Refused(Refusal::NotStreamed { first: 1, last: 2 }))
     );
     wakes.wake().unwrap(); // T9 of both
     assert_eq!(sender.send(edge()), Ok(()));

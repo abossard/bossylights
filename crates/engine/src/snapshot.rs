@@ -18,6 +18,7 @@ use crate::{
 };
 use engine_core::health::{HealthSample, press_is_under_target};
 use engine_core::{ChannelSet, Claims, Entry, Held, Light, show};
+use crate::life::{EngineLife, Life, TickFailed};
 use std::thread;
 use std::time::Duration;
 
@@ -298,8 +299,7 @@ impl Snapshot {
         output: usize,
         reuse: bool,
         handed: u64,
-        lateness: &Histogram<LATENESS_BUCKETS>,
-        worst: Duration,
+        lateness: &Times<LATENESS_BUCKETS>,
     ) {
         let prior = self.output_health.get(output).filter(|_| reuse).map(|old| {
             (
@@ -311,8 +311,7 @@ impl Snapshot {
         if let Some(health) = self.output_health.get_mut(output) {
             (health.prior_runs, health.prior_outages) = prior.unwrap_or_default();
             health.handed = handed;
-            health.lateness.counts.copy_from_slice(lateness);
-            health.lateness.worst = worst;
+            health.lateness = *lateness;
         }
     }
 
@@ -373,7 +372,7 @@ impl OutputHealth {
 /// Times counted in a histogram, and the latest one exactly: the histogram's last bucket
 /// holds everything later.
 #[derive(Clone, Copy)]
-struct Times<const N: usize> {
+pub(crate) struct Times<const N: usize> {
     counts: Histogram<N>,
     worst: Duration,
 }
@@ -409,12 +408,12 @@ fn only_a_frame_of_the_current_generation_counts_an_outage() {
 }
 
 impl<const N: usize> Times<N> {
-    const ZERO: Self = Self {
+    pub(crate) const ZERO: Self = Self {
         counts: [0; N],
         worst: Duration::ZERO,
     };
 
-    fn count(&mut self, time: Duration) {
+    pub(crate) fn count(&mut self, time: Duration) {
         if let Some(count) = self.counts.get_mut(bucket::<N>(time)) {
             *count += 1;
         }
@@ -497,20 +496,25 @@ impl Reader {
 
     /// A picture of a wake that took the ask after this call: it carries every command
     /// sent before. Waits for it, about two wakes.
-    pub(crate) fn fresh(&mut self) -> &Snapshot {
+    /// [`TickFailed`] once the tick thread is gone: the box never comes back.
+    pub(crate) fn fresh(&mut self, life: &EngineLife) -> Result<&Snapshot, TickFailed> {
         // A box asked for before may come back from an older wake: wait for it first.
-        self.wait_for_the_spare();
+        self.wait_for_the_spare(life)?;
         self.ask();
-        self.wait_for_the_spare();
-        &self.latest
+        self.wait_for_the_spare(life)?;
+        Ok(&self.latest)
     }
 
-    fn wait_for_the_spare(&mut self) {
+    fn wait_for_the_spare(&mut self, life: &EngineLife) -> Result<(), TickFailed> {
         while self.spare.is_none() {
             if !self.take_back() {
+                if life.get() == Life::TickFailed {
+                    return Err(TickFailed);
+                }
                 thread::sleep(Duration::from_millis(1)); // poll: the tick thread never calls out
             }
         }
+        Ok(())
     }
 
     /// Takes a picture that came back as the newest. Says whether one did.
@@ -618,5 +622,43 @@ pub(crate) mod timing {
                 self.lost.store(true, Ordering::Release);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Reader, Snapshot, hand_over};
+    use crate::life::{EngineLife, LifeEvent, TickFailed, TickGuard};
+    use crate::{Priority, Universes};
+    use std::time::{Duration, Instant};
+
+    /// Rule 6 (`docs/coding.md`): a tick that unwound is a state the reader ends on.
+    #[test]
+    #[expect(clippy::panic, reason = "the tick thread this test stands for unwinds")]
+    fn a_fresh_picture_ends_when_the_tick_thread_unwound() {
+        let (_hand, queues) = hand_over();
+        let mut reader = Reader::new(queues, Snapshot::new(Universes::ONE, Priority::RealTime));
+        let life = EngineLife::new();
+        // The tick thread: the guard sees it unwind, nobody fills the asked box.
+        let unwound = std::thread::scope(|threads| {
+            threads
+                .spawn(|| {
+                    let _unwinds = TickGuard(&life);
+                    panic!("a tick that fails");
+                })
+                .join()
+        });
+        assert!(unwound.is_err());
+        let started = Instant::now();
+        assert_eq!(reader.fresh(&life).err(), Some(TickFailed));
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn a_tick_that_ends_without_unwinding_is_no_failure() {
+        let life = EngineLife::new();
+        life.apply(LifeEvent::Drop);
+        drop(TickGuard(&life));
+        assert_eq!(life.get(), crate::life::Life::Ended);
     }
 }

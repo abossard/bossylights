@@ -28,3 +28,41 @@ name = "no_alloc"
 harness = false
 # Its stepped clock and trace walk the cutover and health paths: never skipped quietly.
 required-features = ["test-support"]
+
+# These open their devices through tests/mock, which attaches them: test-support only.
+
+[[test]]
+name = "channel_core"
+required-features = ["test-support"]
+
+[[test]]
+name = "commands"
+required-features = ["test-support"]
+
+[[test]]
+name = "m3_capacity"
+required-features = ["test-support"]
+
+[[test]]
+name = "patch"
+required-features = ["test-support"]
+
+[[test]]
+name = "routes"
+required-features = ["test-support"]
+
+[[test]]
+name = "sequence_admission"
+required-features = ["test-support"]
+
+[[test]]
+name = "snapshot"
+required-features = ["test-support"]
+
+[[test]]
+name = "t7_review_realtime"
+required-features = ["test-support"]
+
+[[test]]
+name = "tick"
+required-features = ["test-support"]

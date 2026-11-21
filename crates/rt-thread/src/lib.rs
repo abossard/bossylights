@@ -28,8 +28,21 @@ use std::thread::{self, JoinHandle};
 
 /// Starts a thread named `name` that wakes when it has work, asks for real-time
 /// priority on it, then runs `run` with the answer. Returns once the answer is known.
-/// Fails only when the system refuses a thread.
+/// Fails when the system refuses a thread, or the thread ends before it answers.
 pub fn spawn<F, T>(name: &str, run: F) -> io::Result<(JoinHandle<T>, Priority)>
+where
+    F: FnOnce(Priority) -> T + Send + 'static,
+    T: Send + 'static,
+{
+    spawn_asking(name, ask, run)
+}
+
+/// The question to the system: its answer code, or `None` when there is none to ask.
+type Ask = fn() -> Option<i32>;
+
+/// [`spawn`] with the question to the system as an input, so a test can make the
+/// thread end before it answers.
+fn spawn_asking<F, T>(name: &str, ask: Ask, run: F) -> io::Result<(JoinHandle<T>, Priority)>
 where
     F: FnOnce(Priority) -> T + Send + 'static,
     T: Send + 'static,
@@ -44,9 +57,13 @@ where
         }
     })?;
     loop {
-        // The thread stores its answer before anything else, and asking cannot fail.
+        // Read the finish first: an answer stored before the thread ended is still read.
+        let finished = thread.is_finished();
         if let Some(priority) = from_bits(answer.load(Ordering::Acquire)) {
             return Ok((thread, priority));
+        }
+        if finished {
+            return Err(io::Error::other("the thread ended before it answered"));
         }
         thread::yield_now();
     }
@@ -210,6 +227,41 @@ mod tests {
                 Some(state),
                 "{state:?} survives the hand-over"
             );
+        }
+    }
+
+    #[test]
+    fn a_thread_that_ends_before_it_answers_is_an_error_and_one_that_answers_is_not() {
+        #[expect(clippy::panic, reason = "the thread unwinds before it answers")]
+        fn unwinds() -> Option<i32> {
+            panic!("asking unwound");
+        }
+        fn granted() -> Option<i32> {
+            Some(0)
+        }
+        // (the system's answer, spawn's result: the priority, or None for an error)
+        let cases: [(Ask, Option<Priority>); 2] =
+            [(unwinds, None), (granted, Some(Priority::RealTime))];
+        // A spawn that never returns fails here instead of hanging the test run.
+        const NEVER: std::time::Duration = std::time::Duration::from_secs(10);
+        for (ask, expected) in cases {
+            let (answer, answered) = std::sync::mpsc::channel();
+            thread::spawn(move || {
+                let spawned = spawn_asking("rt-test", ask, |priority| priority);
+                let joined = spawned.map(|(thread, priority)| (thread.join().ok(), priority));
+                let _ = answer.send(joined.ok());
+            });
+            let got = answered.recv_timeout(NEVER);
+            assert!(got.is_ok(), "spawn never returned");
+            let got = got.ok().flatten();
+            assert_eq!(got.map(|(_, priority)| priority), expected);
+            if let Some((ran, priority)) = got {
+                assert_eq!(
+                    ran,
+                    Some(priority),
+                    "the thread ran with the reported priority"
+                );
+            }
         }
     }
 

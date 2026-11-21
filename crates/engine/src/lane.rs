@@ -43,6 +43,8 @@
 //! worker finishes its last send, gives up the device and parks until reclamation.
 
 use crate::cutover::{Effect, Event, Machine, Work};
+use crate::life::EngineLife;
+use crate::recovery::{self, Event as RecoveryEvent, Recovery, State as RecoveryState, Watch};
 use crate::wake::Clock;
 use crate::{Device, Levels, Outcome, Run};
 use engine_core::{RouteFault, Span, bounds, gather};
@@ -98,6 +100,7 @@ impl Route {
         self.bounds
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn spans(&self) -> &[Span] {
         &self.spans
     }
@@ -185,49 +188,138 @@ fn step(work: Work, waiting: usize, stop: bool, now: Duration, next: Duration) -
 /// The new worker can be held for arbitrarily many due frames. Two preallocated
 /// buffers let the tick write one while the opener seals the other at T8. There
 /// is one producer; it never waits for a reader or for a frame box to come back.
+/// The published word is a machine ([`held`], table in `docs/design/output-cutover.md`).
 struct Held {
     buffers: [Box<[AtomicU8]>; 2],
     published: AtomicU8,
 }
 
-impl Held {
-    const EMPTY: u8 = 2;
-    const SEALED: u8 = 4;
-    const TAKEN: u8 = 8;
+/// Which frame a held lane keeps: the word in [`Held::published`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Word {
+    Empty,
+    /// The newest frame is in this buffer.
+    Published(u8),
+    /// T8 sealed it before any frame came.
+    SealedEmpty,
+    /// T8 sealed it: the new lane sends this buffer.
+    Sealed(u8),
+    /// The new lane took its frame.
+    Taken,
+}
 
+#[derive(Clone, Copy, Debug)]
+enum HeldEvent {
+    /// The tick hands a frame (tick).
+    Write,
+    /// T8 seals the newest frame (opener).
+    Seal,
+    /// The released new lane takes the sealed frame (new lane).
+    Take,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HeldEffect {
+    /// Write the frame into this buffer, then publish it.
+    WriteInto(u8),
+    /// No more writes: the frame goes on the ordinary queue, after the sealed one.
+    Queue,
+    /// Send this buffer.
+    Send(u8),
+    Nothing,
+}
+
+/// The transition function of the held word, a calculation.
+const fn held(word: Word, event: HeldEvent) -> (Word, HeldEffect) {
+    use HeldEffect::{Nothing, Queue, Send, WriteInto};
+    use Word::{Empty, Published, Sealed, SealedEmpty, Taken};
+    match (word, event) {
+        (Empty, HeldEvent::Write) => (Published(0), WriteInto(0)),
+        (Published(0), HeldEvent::Write) => (Published(1), WriteInto(1)),
+        (Published(_), HeldEvent::Write) => (Published(0), WriteInto(0)),
+        (Empty, HeldEvent::Seal) => (SealedEmpty, Nothing),
+        (Published(buffer), HeldEvent::Seal) => (Sealed(buffer), Nothing),
+        (Sealed(buffer), HeldEvent::Take) => (Taken, Send(buffer)),
+        (SealedEmpty | Sealed(_) | Taken, HeldEvent::Write) => (word, Queue),
+        (SealedEmpty | Sealed(_) | Taken, HeldEvent::Seal)
+        | (Empty | Published(_) | SealedEmpty | Taken, HeldEvent::Take) => (word, Nothing),
+    }
+}
+
+impl Word {
+    const fn encode(self) -> u8 {
+        match self {
+            Self::Published(buffer) => buffer,
+            Self::Empty => 2,
+            Self::Sealed(buffer) => 4 | buffer,
+            Self::SealedEmpty => 6,
+            Self::Taken => 8,
+        }
+    }
+
+    const fn decode(word: u8) -> Self {
+        match word {
+            0 | 1 => Self::Published(word),
+            2 => Self::Empty,
+            4 | 5 => Self::Sealed(word & 1),
+            6 => Self::SealedEmpty,
+            _ => Self::Taken,
+        }
+    }
+}
+
+impl Held {
     fn new(length: usize) -> Self {
         Self {
             buffers: std::array::from_fn(|_| (0..length).map(|_| AtomicU8::new(0)).collect()),
-            published: AtomicU8::new(Self::EMPTY),
+            published: AtomicU8::new(Word::Empty.encode()),
         }
     }
 
     fn write(&self, bytes: &[u8]) -> bool {
+        self.begin_write(bytes)
+            .is_some_and(|(previous, next)| self.commit(previous, next))
+    }
+
+    /// Write, first half: the frame into the free buffer. The word it saw and the next.
+    fn begin_write(&self, bytes: &[u8]) -> Option<(u8, Word)> {
         let previous = self.published.load(Ordering::Acquire);
-        let [first, second] = &self.buffers;
-        let (buffer, index) = match previous {
-            0 => (second, 1),
-            1 | Self::EMPTY => (first, 0),
-            _ => return false,
+        let (next, HeldEffect::WriteInto(index)) = held(Word::decode(previous), HeldEvent::Write)
+        else {
+            return None;
         };
+        let buffer = self.buffers.get(usize::from(index))?;
         for (to, byte) in buffer.iter().zip(bytes) {
             to.store(*byte, Ordering::Relaxed);
         }
-        // If T8 raced this write, the old frame was sealed. Hand this frame
-        // over on the ordinary queue after it, using the already-gathered box.
+        Some((previous, next))
+    }
+
+    /// Write, second half: publish it. If T8 sealed in between, the older frame is
+    /// sealed and this one goes on the ordinary queue after it, in its gathered box.
+    fn commit(&self, previous: u8, next: Word) -> bool {
         self.published
-            .compare_exchange(previous, index, Ordering::Release, Ordering::Relaxed)
+            .compare_exchange(
+                previous,
+                next.encode(),
+                Ordering::Release,
+                Ordering::Relaxed,
+            )
             .is_ok()
     }
 
     fn seal(&self) {
-        self.published.fetch_or(Self::SEALED, Ordering::AcqRel);
+        let _ = self
+            .published
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |word| {
+                Some(held(Word::decode(word), HeldEvent::Seal).0.encode())
+            });
     }
 
     /// There is one reader, and it takes the selected frame exactly once.
     fn take(&self, out: &mut [u8]) -> bool {
-        let published = self.published.load(Ordering::Acquire);
-        let Some(index) = published.checked_sub(Self::SEALED) else {
+        let word = Word::decode(self.published.load(Ordering::Acquire));
+        let (next, HeldEffect::Send(index)) = held(word, HeldEvent::Take) else {
             return false;
         };
         let Some(buffer) = self.buffers.get(usize::from(index)) else {
@@ -236,7 +328,7 @@ impl Held {
         for (byte, from) in out.iter_mut().zip(buffer) {
             *byte = from.load(Ordering::Relaxed);
         }
-        self.published.store(Self::TAKEN, Ordering::Relaxed);
+        self.published.store(next.encode(), Ordering::Relaxed);
         true
     }
 }
@@ -254,11 +346,12 @@ struct HeldReader {
 /// Between the tick's end and the output's thread. Atomics only.
 struct Shared {
     stop: AtomicBool,
+    /// The engine's life: this lane sends only while it runs (T13).
+    life: Arc<EngineLife>,
     /// The thread is in its loop: whatever its start-up allocated is done.
     ready: AtomicBool,
-    failed: AtomicBool,
-    /// A refused restart registered this device with the recovery worker.
-    watch_loss: AtomicBool,
+    /// Whether the device sends, and whether the recovery worker watches it.
+    recovery: Recovery,
     /// All lanes of this output observe the same cutover. Only T9 advances the
     /// number of the serving lane. A future lane holds its boxes until T8.
     cutover: Arc<Machine>,
@@ -337,20 +430,30 @@ impl Control {
         delivery.install(device);
     }
 
+    /// A refused restart or a carried loss registers this lane with the recovery worker.
     pub(crate) fn watch_loss(&self) {
-        self.0.shared.watch_loss.store(true, Ordering::Release);
+        self.0.shared.recovery.watch();
     }
 
     pub(crate) fn watching_loss(&self) -> bool {
-        self.0.shared.watch_loss.load(Ordering::Acquire)
+        self.0.shared.recovery.get().1 == Watch::Watched
+    }
+
+    #[cfg(all(test, feature = "test-support"))]
+    pub(crate) fn recovery_state(&self) -> RecoveryState {
+        self.0.shared.recovery.get().0
+    }
+
+    /// The recovery worker could not be asked: this lane's loss stays.
+    pub(crate) fn worker_gone(&self) {
+        self.0.shared.recovery.apply(RecoveryEvent::WorkerGone);
     }
 
     pub(crate) fn needs_open(&self) -> bool {
         let mut delivery = self.0.port.lock().unwrap_or_else(|e| e.into_inner());
         drop(delivery.old.pop());
-        !delivery.reconnects_itself
-            && !delivery.next.is_full()
-            && self.0.shared.failed.load(Ordering::Acquire)
+        !delivery.next.is_full()
+            && recovery::opens(self.0.shared.recovery.get().0, delivery.reconnects_itself)
     }
 
     pub(crate) fn cutover(&self) -> &Machine {
@@ -372,14 +475,10 @@ impl Control {
     /// T8 runs on the opener. The old worker acknowledges an empty frame queue
     /// by moving its device into the return slot, even when the device is absent.
     /// The old worker stays parked so reclamation happens on the free thread.
-    pub(crate) fn finish_handoff(
-        &self,
-        next: &Self,
-        reuse: bool,
-        stopping: &AtomicBool,
-    ) -> Option<bool> {
+    pub(crate) fn finish_handoff(&self, next: &Self, reuse: bool) -> Option<bool> {
+        let stopping = || !self.0.shared.life.get().sends();
         let returned = loop {
-            if stopping.load(Ordering::Acquire) {
+            if stopping() {
                 return None;
             }
             {
@@ -396,7 +495,7 @@ impl Control {
         };
 
         let returned = returned.and_then(Adapter::finish);
-        let missing = returned.is_none();
+        let carried = returned.is_some();
         if let Some(device) = returned {
             if reuse {
                 // T8 is the only producer until the new lane is released.
@@ -410,22 +509,16 @@ impl Control {
                     .retired = Some(device);
             }
         }
-        let watch = reuse && (missing || self.watching_loss());
-        if watch {
-            next.watch_loss();
-        }
-        if reuse {
-            next.0.shared.failed.store(
-                missing || self.0.shared.failed.load(Ordering::Acquire),
-                Ordering::Release,
-            );
-        }
+        let watch = reuse && {
+            let (state, watch) = self.0.shared.recovery.get();
+            let carry = recovery::carry(state, watch, carried);
+            next.0.shared.recovery.set(carry);
+            carry.1 == Watch::Watched
+        };
         if let Some(held) = &next.0.shared.held {
             held.seal();
         }
-        if stopping.load(Ordering::Acquire)
-            || self.cutover().apply(Event::DeviceReturned) != Effect::ReleaseAndAccept
-        {
+        if stopping() || self.cutover().apply(Event::DeviceReturned) != Effect::ReleaseAndAccept {
             return None;
         }
         next.0.wake.unpark();
@@ -435,6 +528,7 @@ impl Control {
     pub(crate) fn closed(&self) -> bool {
         let shared = &self.0.shared;
         shared.stop.load(Ordering::Acquire)
+            || !shared.life.get().sends()
             || matches!(shared.cutover.work(shared.number), Work::Drain | Work::Stop)
     }
 
@@ -487,14 +581,20 @@ struct Devices {
 }
 
 impl Devices {
-    fn receive(&mut self, failed: &AtomicBool) {
+    /// Only the worker knows when a delivered device actually takes ownership.
+    fn receive(&mut self, recovery: &Recovery) {
         if !self.old.is_full()
             && let Ok(device) = self.next.pop()
-            && let Some(old) = self.current.replace(Adapter::new(device))
         {
-            let _ = self.old.push(old);
-            // Only the worker knows when a replacement actually takes ownership.
-            failed.store(false, Ordering::Release);
+            match self.current.replace(Adapter::new(device)) {
+                Some(old) => {
+                    let _ = self.old.push(old);
+                    recovery.apply(RecoveryEvent::Replaced);
+                }
+                None => {
+                    recovery.apply(RecoveryEvent::Filled);
+                }
+            }
         }
     }
 }
@@ -528,6 +628,7 @@ impl Lane {
         device: Option<Box<dyn Device>>,
         route: Route,
         clock: Clock,
+        life: Arc<EngineLife>,
         previous: Option<&Control>,
         #[cfg(feature = "test-support")] pause: Option<StartPause>,
     ) -> io::Result<Self> {
@@ -540,9 +641,13 @@ impl Lane {
         let (done, back) = rtrb::RingBuffer::new(BOXES);
         let shared = Arc::new(Shared {
             stop: AtomicBool::new(false),
+            life,
             ready: AtomicBool::new(false),
-            failed: AtomicBool::new(false),
-            watch_loss: AtomicBool::new(false),
+            recovery: Recovery::new(if device.is_some() {
+                RecoveryState::Healthy
+            } else {
+                RecoveryState::Missing
+            }),
             cutover: previous.map_or_else(
                 || Arc::new(Machine::new()),
                 |old| Arc::clone(&old.0.shared.cutover),
@@ -728,7 +833,7 @@ fn run(
     shared.ready.store(true, Ordering::Release);
     let mut next = Duration::ZERO;
     loop {
-        let stop = shared.stop.load(Ordering::Acquire);
+        let stop = shared.stop.load(Ordering::Acquire) || !shared.life.get().sends();
         // Acquire the phase before counting frames. Publication orders the last
         // old handover before this queue read, including a box behind a write.
         let work = shared.cutover.work(shared.number);
@@ -752,7 +857,7 @@ fn run(
         }
         match action {
             Step::Return => {
-                devices.receive(&shared.failed);
+                devices.receive(&shared.recovery);
                 let _ = devices.returning.push(devices.current.take());
                 // The queues and clock stay alive until reclamation.
                 while !shared.stop.load(Ordering::Acquire) {
@@ -761,7 +866,7 @@ fn run(
                 return (None, held_reader);
             }
             Step::Stop => {
-                devices.receive(&shared.failed);
+                devices.receive(&shared.recovery);
                 return (devices.current, held_reader);
             }
             Step::Hold { .. } => thread::park(),
@@ -780,20 +885,20 @@ fn run(
 }
 
 fn send(devices: &mut Devices, shared: &Shared, bytes: &[u8]) -> Outcome {
-    devices.receive(&shared.failed);
+    devices.receive(&shared.recovery);
     let outcome = devices
         .current
         .as_mut()
         .map_or(Outcome::Failed, |device| device.take(bytes));
     match outcome {
         Outcome::Failed if shared.cutover.apply(Event::SendFailed) == Effect::RecordFailure => {
-            shared.failed.store(true, Ordering::Release);
+            shared.recovery.apply(RecoveryEvent::SendFailed);
         }
         Outcome::Accepted
-            if shared.failed.load(Ordering::Acquire)
+            if shared.recovery.get().0 != RecoveryState::Healthy
                 && shared.cutover.apply(Event::AdapterAvailable) == Effect::RecordAvailable =>
         {
-            shared.failed.store(false, Ordering::Release);
+            shared.recovery.apply(RecoveryEvent::SendAccepted);
         }
         Outcome::Failed | Outcome::Accepted | Outcome::Dropped => {}
     }
@@ -811,6 +916,7 @@ fn back(done: &mut rtrb::Producer<Frame>, mut frame: Frame, outcome: Outcome, at
 #[expect(clippy::unwrap_used, reason = "a test that cannot set itself up fails")]
 mod tests {
     use super::*;
+    use crate::life::LifeEvent;
     use std::sync::atomic::AtomicUsize;
     use std::time::Instant;
 
@@ -925,11 +1031,22 @@ mod tests {
     }
 
     fn start(device: Option<Outcome>, previous: Option<&Control>) -> Lane {
+        start_with(
+            device.map(|outcome| Box::new(Constant(outcome)) as DeviceBox),
+            previous,
+        )
+    }
+
+    fn start_with(device: Option<DeviceBox>, previous: Option<&Control>) -> Lane {
         let route = Route::new(Limits::RAW, &[Span { start: 0, len: 1 }]).unwrap();
         Lane::start(
-            device.map(|outcome| Box::new(Constant(outcome)) as DeviceBox),
+            device,
             route,
             Clock::wall(),
+            previous.map_or_else(
+                || Arc::new(EngineLife::new()),
+                |old| Arc::clone(&old.0.shared.life),
+            ),
             previous,
             #[cfg(feature = "test-support")]
             None,
@@ -956,7 +1073,8 @@ mod tests {
         // Old device, watched, reuse, watch after T8, outcome after T8, needs reopen.
         for (device, watched, reuse, watch, outcome, needs_open) in [
             (Some(Accepted), false, true, false, Accepted, false),
-            (Some(Failed), false, true, false, Failed, true),
+            // A carried loss is watched (output-cutover.md, "Lane recovery", carry).
+            (Some(Failed), false, true, true, Failed, true),
             (Some(Failed), true, true, true, Failed, true),
             (None, false, true, true, Failed, true),
             (Some(Failed), true, false, false, Accepted, false),
@@ -978,13 +1096,13 @@ mod tests {
             let prior = old.control.clone();
             let prepared = next.control.clone();
             let (answer, finished) = std::sync::mpsc::channel();
-            let stopping = Arc::new(AtomicBool::new(false));
-            let stop = Arc::clone(&stopping);
             thread::spawn(move || {
-                let _ = answer.send(prior.finish_handoff(&prepared, reuse, &stop));
+                let _ = answer.send(prior.finish_handoff(&prepared, reuse));
             });
             let result = finished.recv_timeout(Duration::from_secs(10));
-            stopping.store(true, Ordering::Release);
+            if result.is_err() {
+                old.control.0.shared.life.apply(LifeEvent::StopOutputs);
+            }
             assert_eq!(result.unwrap(), Some(watch));
             assert_eq!(next.control.watching_loss(), watch);
             assert_eq!(next.control.needs_open(), reuse && device.is_none());
@@ -1021,14 +1139,65 @@ mod tests {
         old.control.publish();
         let (prior, prepared) = (old.control.clone(), next.control.clone());
         let (answer, finished) = std::sync::mpsc::channel();
-        let stopping = Arc::new(AtomicBool::new(false));
-        let stop = Arc::clone(&stopping);
         thread::spawn(move || {
-            let _ = answer.send(prior.finish_handoff(&prepared, true, &stop));
+            let _ = answer.send(prior.finish_handoff(&prepared, true));
         });
         let result = finished.recv_timeout(Duration::from_secs(10));
-        stopping.store(true, Ordering::Release);
+        if result.is_err() {
+            old.control.0.shared.life.apply(LifeEvent::StopOutputs);
+        }
         assert_eq!(result.unwrap(), Some(false), "T8 waited for the hour");
+    }
+
+    /// The held word's table (output-cutover.md, "Held new lane"), every pair.
+    #[test]
+    fn the_held_word_follows_every_pair_of_its_table() {
+        use HeldEffect::{Nothing, Queue, Send, WriteInto};
+        use HeldEvent::{Seal, Take, Write};
+        use Word::{Empty, Published, Sealed, SealedEmpty, Taken};
+        let table = [
+            (Empty, Write, Published(0), WriteInto(0)),
+            (Empty, Seal, SealedEmpty, Nothing),
+            (Empty, Take, Empty, Nothing),
+            (Published(0), Write, Published(1), WriteInto(1)),
+            (Published(0), Seal, Sealed(0), Nothing),
+            (Published(0), Take, Published(0), Nothing),
+            (Published(1), Write, Published(0), WriteInto(0)),
+            (Published(1), Seal, Sealed(1), Nothing),
+            (Published(1), Take, Published(1), Nothing),
+            (Sealed(0), Write, Sealed(0), Queue),
+            (Sealed(0), Seal, Sealed(0), Nothing),
+            (Sealed(0), Take, Taken, Send(0)),
+            (Sealed(1), Write, Sealed(1), Queue),
+            (Sealed(1), Seal, Sealed(1), Nothing),
+            (Sealed(1), Take, Taken, Send(1)),
+            (SealedEmpty, Write, SealedEmpty, Queue),
+            (SealedEmpty, Seal, SealedEmpty, Nothing),
+            (SealedEmpty, Take, SealedEmpty, Nothing),
+            (Taken, Write, Taken, Queue),
+            (Taken, Seal, Taken, Nothing),
+            (Taken, Take, Taken, Nothing),
+        ];
+        for (word, event, next, effect) in table {
+            assert_eq!(held(word, event), (next, effect), "{word:?} {event:?}");
+            assert_eq!(Word::decode(word.encode()), word);
+        }
+    }
+
+    /// The race row: T8 seals between the tick's write and its publication. The
+    /// older frame is sent, the newer goes on the queue (R1).
+    #[test]
+    fn a_seal_between_write_and_publish_keeps_the_older_frame_and_queues_the_newer() {
+        let held = Held::new(1);
+        assert!(held.write(&[71]));
+        let (previous, next) = held.begin_write(&[72]).unwrap();
+        held.seal();
+        assert!(!held.commit(previous, next), "the newer frame is refused");
+        let mut out = [0];
+        assert!(held.take(&mut out));
+        assert_eq!(out, [71]);
+        assert!(!held.take(&mut out), "taken once");
+        assert!(!held.write(&[73]), "no write after the seal");
     }
 
     #[test]
@@ -1046,8 +1215,7 @@ mod tests {
 
         for count in [6_u8, 7] {
             let marker = Arc::new(AtomicU8::new(0));
-            let old = start(None, None);
-            old.control.install(Box::new(Record(Arc::clone(&marker))));
+            let old = start_with(Some(Box::new(Record(Arc::clone(&marker)))), None);
             old.control.cutover().apply(Event::Begin);
             let mut new = start(None, Some(&old.control));
             old.control.publish();
@@ -1073,11 +1241,7 @@ mod tests {
                 }
             }
             assert_eq!(marker.load(Ordering::Acquire), 0);
-            assert_eq!(
-                old.control
-                    .finish_handoff(&new.control, true, &AtomicBool::new(false)),
-                Some(false)
-            );
+            assert_eq!(old.control.finish_handoff(&new.control, true), Some(false));
             assert_eq!(
                 wait_back(&mut new, 1),
                 [(Outcome::Accepted, Duration::ZERO, prefix(count))]
@@ -1103,14 +1267,78 @@ mod tests {
         old.control.cutover().apply(Event::Begin);
         let mut new = start(None, Some(&old.control));
         old.control.publish();
-        assert_eq!(
-            old.control
-                .finish_handoff(&new.control, true, &AtomicBool::new(false)),
-            Some(true)
-        );
+        assert_eq!(old.control.finish_handoff(&new.control, true), Some(true));
         assert!(new.control.needs_open());
         new.control.install(Box::new(Constant(Outcome::Accepted)));
         assert_eq!(take(&mut new), Outcome::Accepted);
+    }
+
+    /// R6: T8 waits for the old lane's write in flight and one more, its newest frame.
+    #[test]
+    fn t8_waits_for_the_write_in_flight_and_the_newest_frame_only() {
+        struct Held {
+            entered: Arc<AtomicUsize>,
+            open: Arc<AtomicBool>,
+        }
+        impl Device for Held {
+            fn take(&mut self, _: &[u8]) -> Outcome {
+                self.entered.fetch_add(1, Ordering::AcqRel);
+                while !self.open.load(Ordering::Acquire) {
+                    thread::sleep(Duration::from_millis(1)); // poll
+                }
+                Outcome::Accepted
+            }
+        }
+
+        let entered = Arc::new(AtomicUsize::new(0));
+        let open = Arc::new(AtomicBool::new(false));
+        let mut old = start_with(
+            Some(Box::new(Held {
+                entered: Arc::clone(&entered),
+                open: Arc::clone(&open),
+            })),
+            None,
+        );
+        let hand = |lane: &mut Lane, press: u8| {
+            let prefix = Prefix {
+                presses: u64::from(press),
+                generation: 1,
+            };
+            assert_eq!(
+                lane.hand(&levels(press), Duration::ZERO, Duration::ZERO, prefix),
+                Hand::Handed
+            );
+        };
+        hand(&mut old, 1);
+        let started = Instant::now();
+        while entered.load(Ordering::Acquire) == 0 {
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "never in flight"
+            );
+            thread::sleep(Duration::from_millis(1)); // poll
+        }
+        for press in 2..=BOXES as u8 {
+            hand(&mut old, press);
+        }
+        old.control.cutover().apply(Event::Begin);
+        let new = start(None, Some(&old.control));
+        old.control.publish();
+        open.store(true, Ordering::Release);
+        assert_eq!(old.control.finish_handoff(&new.control, true), Some(false));
+        assert_eq!(
+            entered.load(Ordering::Acquire),
+            2,
+            "in flight, then the newest"
+        );
+        let came: Vec<_> = wait_back(&mut old, BOXES)
+            .into_iter()
+            .map(|(outcome, _, prefix)| (outcome, prefix.presses))
+            .collect();
+        let mut expected = vec![(Outcome::Accepted, 1)];
+        expected.extend((2..BOXES as u64).map(|press| (Outcome::Dropped, press)));
+        expected.push((Outcome::Accepted, BOXES as u64));
+        assert_eq!(came, expected);
     }
 
     #[test]
@@ -1135,11 +1363,8 @@ mod tests {
         old.control.cutover().apply(Event::Begin);
         let mut new = start(None, Some(&old.control));
         old.control.publish();
-        assert_eq!(
-            old.control
-                .finish_handoff(&new.control, true, &AtomicBool::new(false)),
-            Some(false)
-        );
+        // The carried loss is watched (output-cutover.md, "Lane recovery", carry).
+        assert_eq!(old.control.finish_handoff(&new.control, true), Some(true));
         assert_eq!(take(&mut new), Outcome::Dropped);
         assert!(new.control.needs_open());
     }
@@ -1158,6 +1383,7 @@ mod tests {
             Some(Box::new(gate)),
             route,
             Clock::wall(),
+            Arc::new(EngineLife::new()),
             None,
             #[cfg(feature = "test-support")]
             None,
