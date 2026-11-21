@@ -1,22 +1,40 @@
 //! The beat clock: one continuous count of elapsed beats drives every play, and a grid
-//! of beats and bars, which a tap may move, schedules launches. Data and calculations:
-//! the tick thread settles it in time order, a tap or a tempo change at the time it was
-//! sent (`update`).
+//! of beats and bars, which a tap or a heard beat may move, schedules launches. Data and
+//! calculations: the tick thread settles it in time order, each event at the time it was
+//! sent or heard (`update`).
+//!
+//! Who sets the tempo:
 //!
 //! ```text
 //! Feed   --tap: aligns the grid-------------------------------------> OneTap
 //! OneTap --a second tap, 200 ms to 2 s on: its interval------------> Tapped
-//! OneTap --2 s with no tap (lapse), ReleaseTempo-------------------> Feed
+//! OneTap --2 s with no tap (lapse), ReleaseTempo, a new list--------> Feed
 //! Tapped --tap: a valid interval sets the tempo, every tap aligns---> Tapped
-//! Tapped --ReleaseTempo: the feed's tempo at the grid's phase-------> Feed
+//! Tapped --ReleaseTempo, a new list: the list's driver--------------> Feed
 //! ```
+//!
+//! How the beat moves (the pace):
+//!
+//! ```text
+//! Free    --taps end and Tap does not drive: anchor on the beat reached--> Heard
+//! Heard   --the grid passes anchor + 1 with no heard beat: half tempo---> Slowing
+//! Slowing --the grid reaches anchor + 2: stands on it, not taken--------> Stopped
+//! any     --a beat from the driving feed: anchor on its nearest beat----> Heard
+//! any     --Tap drives, or taps hold-----------------------------------> Free
+//! ```
+//!
+//! The feed list holds 1 to 5 feeds in order, Tap only last. The first with a lock
+//! drives; Tap always has one, the internal tempo. A heard beat moves the grid only
+//! when it comes from the driving feed and no taps hold, never back past a beat already
+//! reached; otherwise it only records its feed's lock.
 //!
 //! A tap under 200 ms after the last is a bounce: ignored. A tap more than 2 s after the
 //! last starts a fresh interval at the current tempo. Intervals and the lapse count from
 //! the time each tap was sent, even when it missed a frame. A tap marks a beat: at an
-//! exact beat the grid keeps its number, otherwise it moves on to the next one. The
-//! elapsed count never jumps; only its rate changes. A tempo is kept exactly (124 BPM is
-//! 124 beats a minute), and every decision on the grid is made by [`Clock::crossing`].
+//! exact beat the grid keeps its number, otherwise it moves on to the next one. A heard
+//! beat marks the nearest beat. The elapsed count never jumps; only its rate changes. A
+//! tempo is kept exactly (124 BPM is 124 beats a minute), and every decision on the grid
+//! is made by [`Clock::crossing`].
 
 use core::time::Duration;
 use serde::{Deserialize, Serialize, Serializer};
@@ -63,12 +81,29 @@ impl Bpm {
 
 /// How fast the clock counts: `beats` beats in `span` nanoseconds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Tempo {
+pub struct Tempo {
     span: u64,
     beats: u64,
 }
 
 impl Tempo {
+    /// A measured tempo of 1 to 1000 beats, each between 100 ms and 4 s inclusive.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "the tick takes measured tempos in ticket D, #242")
+    )]
+    pub const fn new(span: u64, beats: u64) -> Option<Self> {
+        if beats >= 1
+            && beats <= 1000
+            && span >= 100_000_000 * beats
+            && span <= 4_000_000_000 * beats
+        {
+            Some(Self { span, beats })
+        } else {
+            None
+        }
+    }
+
     /// One beat in `gap`, a tap's interval: 200 ms to 2 s.
     fn every(gap: Duration) -> Self {
         Self {
@@ -82,6 +117,94 @@ impl Tempo {
         u128::from(self.span) * u128::from(other.beats)
             == u128::from(other.span) * u128::from(self.beats)
     }
+
+    fn rate(self) -> u128 {
+        u128::from(ONE) * u128::from(self.beats)
+    }
+
+    fn travel(self, time: Duration) -> u128 {
+        time.as_nanos().saturating_mul(self.rate())
+    }
+}
+
+/// A possible source of beats, in the order chosen by the feed list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "external feeds reach the tick in ticket D, #242")
+)]
+pub enum TempoFeed {
+    Tap,
+    Audio,
+    MidiClock,
+    VirtualDJ,
+    Timecode,
+}
+
+/// The feeds to try in order. Unused slots always hold Tap.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FeedList {
+    slots: [TempoFeed; 5],
+    len: u8,
+}
+
+/// The first entry that makes a feed list invalid, or an empty list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "ticket C adds the feed list command")
+)]
+pub enum FeedListError {
+    Empty,
+    Repeated { feed: TempoFeed },
+    TapNotLast,
+}
+
+impl FeedList {
+    pub const TAP: Self = Self {
+        slots: [TempoFeed::Tap; 5],
+        len: 1,
+    };
+
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "ticket C adds the feed list command")
+    )]
+    pub fn new(feeds: &[TempoFeed]) -> Result<Self, FeedListError> {
+        if feeds.is_empty() {
+            return Err(FeedListError::Empty);
+        }
+        let mut list = Self {
+            len: 0,
+            ..Self::TAP
+        };
+        for (i, &feed) in feeds.iter().enumerate() {
+            if list.feeds().contains(&feed) {
+                return Err(FeedListError::Repeated { feed });
+            }
+            if feed == TempoFeed::Tap && i + 1 != feeds.len() {
+                return Err(FeedListError::TapNotLast);
+            }
+            if let Some(slot) = list.slots.get_mut(i) {
+                *slot = feed;
+                list.len += 1;
+            }
+        }
+        Ok(list)
+    }
+
+    pub fn feeds(&self) -> &[TempoFeed] {
+        self.slots.get(..usize::from(self.len)).unwrap_or_default()
+    }
+}
+
+/// How fast the grid and elapsed beats advance at the settled time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Pace {
+    Free,
+    Heard,
+    Slowing,
+    Stopped,
 }
 
 impl TryFrom<u16> for Bpm {
@@ -109,6 +232,17 @@ pub enum Source {
     Feed,
     OneTap { at: Duration },
     Tapped { at: Duration },
+}
+
+impl Source {
+    fn lapse(self, by: Duration) -> Option<Duration> {
+        match self {
+            Self::OneTap { at } if by.saturating_sub(at) > LAPSE => {
+                Some(at + LAPSE + Duration::from_nanos(1))
+            }
+            Self::Feed | Self::OneTap { .. } | Self::Tapped { .. } => None,
+        }
+    }
 }
 
 impl Serialize for Source {
@@ -148,6 +282,25 @@ struct Count {
 impl Count {
     const fn whole(whole: u64) -> Self {
         Self { whole, part: 0 }
+    }
+
+    fn beat(beat: u64) -> Self {
+        Self::whole(beat.saturating_mul(ONE))
+    }
+
+    fn parts(self, tempo: Tempo) -> u128 {
+        u128::from(self.whole) * u128::from(tempo.span) + u128::from(self.part)
+    }
+
+    fn advance(self, parts: u128, tempo: Tempo) -> Self {
+        let total = parts.saturating_add(u128::from(self.part));
+        let span = u128::from(tempo.span);
+        Self {
+            whole: self
+                .whole
+                .saturating_add(u64::try_from(total / span).unwrap_or(u64::MAX)),
+            part: (total % span) as u64,
+        }
     }
 
     fn at_tempo(self, from: Tempo, to: Tempo) -> Self {
@@ -211,12 +364,20 @@ pub struct Clock {
     /// The time the last settle asked for: when the event it comes before was sent.
     /// Earlier than `at` for an event sent before a frame it missed.
     sent: Duration,
-    /// From this time on the clock advances both counts at `tempo`.
+    /// Both counts start here. Keeping this origin preserves fractional crossings.
     from: Duration,
+    /// The last change of the grid, the tempo, the list or the taps: a beat heard
+    /// before it moves nothing (spec 5b, step 4). Kept apart from `from`, which a beat on
+    /// its own crossing leaves alone so that no crossing moves.
+    changed: Duration,
     elapsed: Count,
     grid: Count,
     tempo: Tempo,
     feed: Bpm,
+    feeds: FeedList,
+    locks: [Option<Tempo>; 5],
+    /// The whole beat we listen from. Taps and the internal driver run freely.
+    anchor: Option<u64>,
     /// A one tap that lapsed stays here: [`Clock::source`] tells it as the feed.
     source: Source,
 }
@@ -227,18 +388,23 @@ impl Clock {
         at: Duration::ZERO,
         sent: Duration::ZERO,
         from: Duration::ZERO,
+        changed: Duration::ZERO,
         elapsed: Count::whole(0),
         grid: Count::whole(0),
         tempo: Bpm::FEED.tempo(),
         feed: Bpm::FEED,
+        feeds: FeedList::TAP,
+        locks: [None; 5],
+        anchor: None,
         source: Source::Feed,
     };
 
     /// Who sets the tempo now: one tap lapses 2 s after it was sent.
     pub fn source(&self) -> Source {
-        match self.source {
-            Source::OneTap { at: tap } if self.at.saturating_sub(tap) > LAPSE => Source::Feed,
-            source @ (Source::Feed | Source::OneTap { .. } | Source::Tapped { .. }) => source,
+        if self.source.lapse(self.at).is_some() {
+            Source::Feed
+        } else {
+            self.source
         }
     }
 
@@ -254,17 +420,36 @@ impl Clock {
 
     /// The clock at `t`, if that is later, for an event sent at `t`.
     pub fn settle(self, t: Duration) -> Self {
+        let at = self.at.max(t);
         Self {
-            at: self.at.max(t),
+            at,
             sent: t,
-            ..self
+            ..self.after_lapse(at)
         }
+    }
+
+    /// A single tap lapses on the first nanosecond past two seconds. A frame can
+    /// skip that instant entirely. Keep the tap time for a second tap sent in time.
+    fn after_lapse(self, t: Duration) -> Self {
+        if self.anchor.is_none()
+            && let Some(lapse) = self.source.lapse(t)
+            && self.driving() != Some(TempoFeed::Tap)
+        {
+            let lapse = lapse.max(self.from);
+            return Self {
+                anchor: Some(self.position_at(lapse).whole / ONE),
+                changed: lapse.max(self.changed),
+                ..self
+            };
+        }
+        self
     }
 
     /// The elapsed position at `t`, including the fraction of a Q32 count.
     pub fn beat_at(&self, t: Duration) -> BeatTime {
+        let clock = self.after_lapse(t);
         BeatTime {
-            count: self.count(self.elapsed, t),
+            count: clock.elapsed.advance(clock.advance(t).1, clock.tempo),
             span: self.tempo.span,
         }
     }
@@ -281,16 +466,16 @@ impl Clock {
 
     /// Where the grid is now, in [`ONE`]s.
     pub fn grid(&self) -> u64 {
-        self.position().whole
+        self.position_at(self.at).whole
     }
 
     /// Where the grid is now: whole [`ONE`]s, and the part of one in `tempo.span`ths. On
     /// a beat's crossing, exactly on that beat: the grid is there all that nanosecond.
-    fn position(&self) -> Count {
-        let grid = self.count(self.grid, self.at);
+    fn position_at(&self, t: Duration) -> Count {
+        let grid = self.grid.advance(self.advance(t).1, self.tempo);
         let below = grid.whole / ONE;
-        let beat = Count::whole(below.saturating_mul(ONE));
-        if self.grid <= beat && self.crossing(below) == self.at {
+        let beat = Count::beat(below);
+        if self.grid <= beat && self.crossing(below) == t {
             beat
         } else {
             grid
@@ -311,7 +496,7 @@ impl Clock {
     /// The first beat whose crossing is now or later: the one the grid is on, else the
     /// next. Decided by [`Clock::crossing`], as a launch is.
     fn first_beat(&self) -> u64 {
-        match self.position() {
+        match self.position_at(self.at) {
             Count { whole, part: 0 } if whole.is_multiple_of(ONE) => whole / ONE,
             count => (count.whole / ONE).saturating_add(1),
         }
@@ -319,22 +504,22 @@ impl Clock {
 
     /// When the grid reaches beat `beat`: the last change if it was there already.
     pub fn crossing(&self, beat: u64) -> Duration {
-        let span = u128::from(self.tempo.span);
-        let at = u128::from(self.grid.whole)
-            .saturating_mul(span)
-            .saturating_add(u128::from(self.grid.part));
-        let to = u128::from(beat.saturating_mul(ONE))
-            .saturating_mul(span)
-            .saturating_sub(at);
-        let nanos = to.div_ceil(u128::from(ONE) * u128::from(self.tempo.beats.max(1)));
+        if self.waits_for_beat(beat) {
+            return Duration::MAX;
+        }
+        let nanos = self.distance_to(beat).div_ceil(self.tempo.rate());
         self.from.saturating_add(Duration::from_nanos(
             u64::try_from(nanos).unwrap_or(u64::MAX),
         ))
     }
 
+    fn waits_for_beat(&self, beat: u64) -> bool {
+        self.anchor.is_some_and(|anchor| beat >= anchor + 2)
+    }
+
     /// Whether the grid reached beat `beat` by now.
     pub fn reached(&self, beat: u64) -> bool {
-        self.crossing(beat) <= self.at
+        !self.waits_for_beat(beat) && self.crossing(beat) <= self.at
     }
 
     /// A tap, sent when the last settle asked for: its interval counts from the time it
@@ -359,30 +544,193 @@ impl Clock {
         };
         let beat = self.first_beat();
         Self {
-            grid: Count::whole(beat.saturating_mul(ONE)),
+            grid: Count::beat(beat),
+            anchor: None,
             source,
             ..self.rebase(tempo)
         }
+        .after_lapse(self.at)
     }
 
-    /// The tempo goes back to the feed, at the grid's phase now.
+    /// Release the taps and follow the list at the current grid phase.
     pub fn release(self) -> Self {
-        Self {
-            source: Source::Feed,
-            ..self.at_tempo(self.feed.tempo())
+        self.set_feeds(self.feeds)
+    }
+
+    /// The internal tempo follows this setting even while another feed drives.
+    pub fn set_feed(self, bpm: Bpm) -> Self {
+        let clock = Self { feed: bpm, ..self };
+        if clock.driving() == Some(TempoFeed::Tap)
+            && !matches!(self.source(), Source::Tapped { .. })
+        {
+            clock.at_tempo(bpm.tempo())
+        } else {
+            clock
         }
     }
 
-    /// The internal feed takes `bpm`: the tempo now, unless taps set it.
-    pub fn set_feed(self, bpm: Bpm) -> Self {
-        let tempo = match self.source {
-            Source::Feed | Source::OneTap { .. } => bpm.tempo(),
-            Source::Tapped { .. } => self.tempo,
-        };
-        Self {
-            feed: bpm,
-            ..self.at_tempo(tempo)
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "ticket C publishes the feed list")
+    )]
+    pub fn feeds(&self) -> FeedList {
+        self.feeds
+    }
+
+    /// The first feed with a lock, even while taps override its grid.
+    pub fn driving(&self) -> Option<TempoFeed> {
+        self.feeds
+            .feeds()
+            .iter()
+            .copied()
+            .find(|&feed| self.locked(feed).is_some())
+    }
+
+    fn locked(&self, feed: TempoFeed) -> Option<Tempo> {
+        if feed == TempoFeed::Tap {
+            Some(self.feed.tempo())
+        } else {
+            self.locks.get(feed as usize).copied().flatten()
         }
+    }
+
+    pub fn set_feeds(self, feeds: FeedList) -> Self {
+        let previous = self.driving();
+        let changed = if feeds != self.feeds || self.source() != Source::Feed {
+            self.at
+        } else {
+            self.changed
+        };
+        let released = Self {
+            feeds,
+            source: Source::Feed,
+            changed,
+            ..self
+        };
+        let driver = released.driving();
+        if self.anchor.is_some() && driver == previous {
+            released
+        } else {
+            released.follow(driver)
+        }
+    }
+
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "the tick takes beats and locks in ticket D, #242")
+    )]
+    pub fn lock(self, feed: TempoFeed, tempo: Option<Tempo>) -> Self {
+        self.record_lock(feed, tempo).follow_lock(self.driving())
+    }
+
+    fn record_lock(mut self, feed: TempoFeed, tempo: Option<Tempo>) -> Self {
+        if feed != TempoFeed::Tap
+            && let Some(slot) = self.locks.get_mut(feed as usize)
+        {
+            *slot = tempo;
+        }
+        self
+    }
+
+    /// Keeping the same driver only updates its row, even if a one tap just lapsed.
+    fn follow_lock(self, previous: Option<TempoFeed>) -> Self {
+        let driver = self.driving();
+        if self.source() != Source::Feed || driver == previous {
+            self
+        } else {
+            self.follow(driver)
+        }
+    }
+
+    /// Apply a release or a change of driver (4a). A new estimate from the same
+    /// external driver takes effect with its next beat.
+    fn follow(self, driver: Option<TempoFeed>) -> Self {
+        let tempo = driver
+            .and_then(|feed| self.locked(feed))
+            .unwrap_or(self.tempo);
+        match (driver, self.anchor) {
+            (Some(TempoFeed::Tap), _) => {
+                let clock = match self.pace() {
+                    Pace::Slowing | Pace::Stopped => self.rebase(tempo),
+                    Pace::Free | Pace::Heard => self.at_tempo(tempo),
+                };
+                Self {
+                    anchor: None,
+                    changed: if self.anchor.is_some() {
+                        self.at
+                    } else {
+                        clock.changed
+                    },
+                    ..clock
+                }
+            }
+            (_, None) => Self {
+                anchor: Some(self.grid() / ONE),
+                changed: self.at,
+                ..self.at_tempo(tempo)
+            },
+            (_, Some(_)) => self.at_tempo(tempo),
+        }
+    }
+
+    /// Align an external driver's beat on the grid it heard (5b). A rejected beat
+    /// can still supply the first lock in the list.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "the tick takes beats and locks in ticket D, #242")
+    )]
+    pub fn beat(self, feed: TempoFeed, heard: Duration, tempo: Tempo) -> Self {
+        let old = self.settle(self.at.max(heard));
+        let locked = old.record_lock(feed, Some(tempo));
+        if feed != TempoFeed::Tap
+            && old.source() == Source::Feed
+            && locked.driving() == Some(feed)
+            && heard >= old.changed
+            && let Some(aligned) = locked.align(heard, tempo)
+        {
+            return aligned;
+        }
+        locked.follow_lock(old.driving())
+    }
+
+    /// The lock has been recorded, but the grid still follows its old trajectory.
+    fn align(self, heard: Duration, tempo: Tempo) -> Option<Self> {
+        let heard_grid = self.position_at(heard);
+        let beat = heard_grid.whole / ONE + u64::from(heard_grid.whole % ONE >= ONE / 2);
+        let on_crossing = self.crossing(beat) == heard
+            && heard_grid == Count::beat(beat)
+            && self.tempo.same(tempo)
+            && !self.waits_for_beat(beat);
+        if on_crossing
+            && matches!(self.pace(), Pace::Free | Pace::Heard)
+            && self.at <= self.crossing(beat + 1)
+        {
+            // The old origin retains the fraction of a nanosecond at this crossing.
+            return Some(Self {
+                anchor: Some(beat),
+                changed: self.at,
+                ..self
+            });
+        }
+        let grid_at_beat = if on_crossing {
+            self.grid
+                .advance(self.advance(heard).1, self.tempo)
+                .at_tempo(self.tempo, tempo)
+        } else {
+            Count::beat(beat)
+        };
+        let since = self.at - heard;
+        let grid = grid_at_beat.advance(tempo.travel(since), tempo);
+        let whole = self.grid() / ONE;
+        let reached = self.anchor.map_or(whole, |anchor| whole.min(anchor + 1));
+        if (grid.whole / ONE).min(beat + 1) < reached {
+            return None;
+        }
+        Some(Self {
+            grid: grid.min(Count::beat(beat + 2)),
+            anchor: Some(beat),
+            ..self.rebase(tempo)
+        })
     }
 
     /// The same clock at `tempo` from now on. The same rate changes nothing: a count
@@ -398,28 +746,48 @@ impl Clock {
     fn rebase(self, tempo: Tempo) -> Self {
         Self {
             from: self.at,
+            changed: self.at,
             elapsed: self
-                .count(self.elapsed, self.at)
+                .elapsed
+                .advance(self.advance(self.at).1, self.tempo)
                 .at_tempo(self.tempo, tempo),
-            grid: self.position().at_tempo(self.tempo, tempo),
+            grid: self.position_at(self.at).at_tempo(self.tempo, tempo),
             tempo,
             ..self
         }
     }
 
-    /// Advance a count from the last change to `t`, in parts of a Q32 count.
-    fn count(&self, start: Count, t: Duration) -> Count {
-        let span = u128::from(self.tempo.span.max(1));
-        let total = t
-            .saturating_sub(self.from)
-            .as_nanos()
-            .saturating_mul(u128::from(ONE) * u128::from(self.tempo.beats))
-            .saturating_add(u128::from(start.part));
-        Count {
-            whole: start
-                .whole
-                .saturating_add(u64::try_from(total / span).unwrap_or(u64::MAX)),
-            part: (total % span) as u64,
+    pub fn pace(&self) -> Pace {
+        self.advance(self.at).0
+    }
+
+    /// Distance from the stored grid to a whole beat, in tempo.span parts.
+    fn distance_to(&self, beat: u64) -> u128 {
+        Count::beat(beat)
+            .parts(self.tempo)
+            .saturating_sub(self.grid.parts(self.tempo))
+    }
+
+    /// The pace and distance travelled by both counts (4d). Run at full tempo
+    /// through the crossing nanosecond, then at half tempo up to the stopped beat.
+    fn advance(&self, t: Duration) -> (Pace, u128) {
+        let since = t.saturating_sub(self.from);
+        let full = self.tempo.travel(since);
+        let Some(anchor) = self.anchor else {
+            return (Pace::Free, full);
+        };
+        let pivot = anchor + 1;
+        let on_time = self.distance_to(pivot);
+        let until_slow = on_time.div_ceil(self.tempo.rate());
+        if self.grid <= Count::beat(pivot) && since.as_nanos() <= until_slow {
+            return (Pace::Heard, full);
+        }
+        let advance = on_time + (full - on_time) / 2;
+        let remaining = self.distance_to(anchor + 2);
+        if advance >= remaining {
+            (Pace::Stopped, remaining)
+        } else {
+            (Pace::Slowing, advance)
         }
     }
 
@@ -942,5 +1310,539 @@ mod tests {
     fn the_clock_never_goes_back() {
         let clock = run(&[Settle(2000), Settle(1000)]);
         assert_eq!(beats(clock.elapsed_now()), 4.0);
+    }
+}
+
+/// The feed list, the driving feed, a heard beat and the pace: spec
+/// `docs/design/tempo-feeds.md` 4a, 4d and 5b (#241). Every clock starts at 120 BPM
+/// (500 ms a beat) on beat 0 at 0 ms, then takes its feed list at 0 ms.
+#[cfg(test)]
+mod feeds {
+    use super::*;
+    use TempoFeed::{Audio, MidiClock, Timecode, VirtualDJ};
+
+    /// The Tap feed: `Tap` is a step here.
+    const TAP: TempoFeed = TempoFeed::Tap;
+
+    const fn ms(ms: u64) -> Duration {
+        Duration::from_millis(ms)
+    }
+
+    fn bpm(bpm: u16) -> Bpm {
+        Bpm::new(bpm).unwrap()
+    }
+
+    /// One beat in `period` ms.
+    fn every(period: u64) -> Tempo {
+        Tempo::new(period * 1_000_000, 1).unwrap()
+    }
+
+    fn list(feeds: &[TempoFeed]) -> FeedList {
+        FeedList::new(feeds).unwrap()
+    }
+
+    /// What happens, each at its time in ms. Each step settles the clock to its time first.
+    #[derive(Clone, Copy, Debug)]
+    enum Step {
+        /// Time passes, with nothing sent.
+        Settle(u64),
+        /// A beat of `feed`, heard at the first time, taken at the second (a frame at or
+        /// after it), one beat in the third ms.
+        Beat(TempoFeed, u64, u64, u64),
+        /// `feed` gains a lock of one beat in that many ms, or loses it.
+        Lock(u64, TempoFeed, Option<u64>),
+        /// A new feed list.
+        List(u64, &'static [TempoFeed]),
+        Tap(u64),
+        Release(u64),
+        /// `SetInternalTempo`.
+        Internal(u64, u16),
+    }
+
+    impl Step {
+        /// The time the clock is settled to before the step.
+        const fn at(self) -> u64 {
+            match self {
+                Self::Settle(t)
+                | Self::Beat(_, _, t, _)
+                | Self::Lock(t, ..)
+                | Self::List(t, _)
+                | Self::Tap(t)
+                | Self::Release(t)
+                | Self::Internal(t, _) => t,
+            }
+        }
+
+        /// The step on a clock already settled to its time.
+        fn on(self, clock: Clock) -> Clock {
+            match self {
+                Self::Settle(_) => clock,
+                Self::Beat(feed, heard, _, period) => clock.beat(feed, ms(heard), every(period)),
+                Self::Lock(_, feed, period) => clock.lock(feed, period.map(every)),
+                Self::List(_, feeds) => clock.set_feeds(list(feeds)),
+                Self::Tap(_) => clock.tap(),
+                Self::Release(_) => clock.release(),
+                Self::Internal(_, b) => clock.set_feed(bpm(b)),
+            }
+        }
+    }
+
+    fn start(feeds: &[TempoFeed]) -> Clock {
+        Clock::START.set_feed(bpm(120)).set_feeds(list(feeds))
+    }
+
+    fn run(feeds: &[TempoFeed], steps: &[Step]) -> Clock {
+        steps.iter().fold(start(feeds), |clock, step| {
+            step.on(clock.settle(ms(step.at())))
+        })
+    }
+
+    use Step::{Beat, Internal, List, Lock, Release, Settle, Tap};
+
+    /// (name, feed list at 0 ms, steps, pace, driving feed, grid in beats, period in ms,
+    /// beats and their crossings in ms, `None` for never)
+    type Row = (
+        &'static str,
+        &'static [TempoFeed],
+        &'static [Step],
+        Pace,
+        Option<TempoFeed>,
+        f64,
+        u64,
+        &'static [(u64, Option<u64>)],
+    );
+
+    #[rustfmt::skip]
+    /// One beat on time, one at half the tempo, then it stands on the next without
+    /// taking it (4d). Anchor 0: beat 1 at 500 ms, beat 2 is never crossed.
+    const SILENCE: [Row; 8] = [
+        ("silence, at the start", &[Audio], &[], Pace::Heard, None, 0.0, 500, &[(0, Some(0)), (1, Some(500)), (2, None)]),
+        ("silence, 1 ms before anchor + 1", &[Audio], &[Settle(499)], Pace::Heard, None, 0.998, 500, &[(1, Some(500)), (2, None)]),
+        ("silence, on anchor + 1: taken on time", &[Audio], &[Settle(500)], Pace::Heard, None, 1.0, 500, &[(1, Some(500)), (2, None)]),
+        ("silence, 1 ms past anchor + 1: half the tempo", &[Audio], &[Settle(501)], Pace::Slowing, None, 1.001, 500, &[(2, None)]),
+        ("silence, half way to anchor + 2", &[Audio], &[Settle(1000)], Pace::Slowing, None, 1.5, 500, &[(2, None)]),
+        ("silence, 1 ms before anchor + 2", &[Audio], &[Settle(1499)], Pace::Slowing, None, 1.999, 500, &[(2, None)]),
+        ("silence, on anchor + 2: stands on it, not taken", &[Audio], &[Settle(1500)], Pace::Stopped, None, 2.0, 500, &[(2, None), (3, None)]),
+        ("silence, a minute on: still standing", &[Audio], &[Settle(60_000)], Pace::Stopped, None, 2.0, 500, &[(2, None), (3, None)]),
+    ];
+
+    #[rustfmt::skip]
+    /// A heard beat moves the grid like a tap that brings its tempo (5b), and every
+    /// cell of 4a.
+    const BEATS: [Row; 39] = [
+        ("a beat on its crossing", &[Audio], &[Beat(Audio, 500, 500, 500)], Pace::Heard, Some(Audio), 1.0, 500, &[(1, Some(500)), (2, Some(1000)), (3, None)]),
+        ("heard 2 ms before its crossing, taken in a frame 10 ms later", &[Audio], &[Beat(Audio, 498, 510, 500)], Pace::Heard, Some(Audio), 1.024, 500, &[(2, Some(998)), (3, None)]),
+        ("heard 2 ms after its crossing: the nearest beat, not counted twice", &[Audio], &[Beat(Audio, 502, 502, 500)], Pace::Heard, Some(Audio), 1.0, 500, &[(2, Some(1002)), (3, None)]),
+        ("heard half way while slowing: the tie goes to the later beat", &[Audio], &[Settle(1000), Beat(Audio, 1000, 1000, 500)], Pace::Heard, Some(Audio), 2.0, 500, &[(2, Some(1000)), (3, Some(1500)), (4, None)]),
+        ("heard while stopped: takes the beat it stands on", &[Audio], &[Settle(2000), Beat(Audio, 2000, 2000, 500)], Pace::Heard, Some(Audio), 2.0, 500, &[(2, Some(2000)), (3, Some(2500)), (4, None)]),
+        ("a beat brings its tempo", &[Audio], &[Beat(Audio, 500, 500, 640)], Pace::Heard, Some(Audio), 1.0, 640, &[(2, Some(1140)), (3, None)]),
+        ("a late beat that would go back past a reached beat: its row only", &[Audio], &[Beat(Audio, 500, 500, 500), Settle(1010), Beat(Audio, 740, 1010, 640)], Pace::Slowing, Some(Audio), 2.01, 500, &[(3, None)]),
+        ("a beat heard before the last beat that moved the grid: its row only", &[Audio], &[Beat(Audio, 500, 500, 500), Beat(Audio, 450, 520, 640)], Pace::Heard, Some(Audio), 1.04, 500, &[(2, Some(1000)), (3, None)]),
+        ("a beat heard while one tap held, taken after it lapsed: its row only", &[Audio], &[Tap(100), Beat(Audio, 2050, 2150, 500)], Pace::Heard, Some(Audio), 5.1, 500, &[(6, Some(2600)), (7, None)]),
+        ("a beat heard before a new list, same driver: its row only", &[Audio], &[Beat(Audio, 500, 500, 500), List(600, &[Audio, TAP]), Beat(Audio, 550, 610, 640)], Pace::Heard, Some(Audio), 1.22, 500, &[(2, Some(1000)), (3, None)]),
+        ("a beat heard before its feed took over from Tap at the same tempo: its row only", &[Audio, TAP], &[Lock(1000, Audio, Some(500)), Beat(Audio, 900, 1010, 640)], Pace::Heard, Some(Audio), 2.02, 500, &[(3, Some(1500)), (4, None)]),
+        ("a beat heard before its feed took over from another: its row only", &[MidiClock, Audio], &[Beat(Audio, 500, 500, 500), Lock(600, MidiClock, Some(640)), Beat(MidiClock, 550, 610, 640)], Pace::Heard, Some(MidiClock), 1.215625, 640, &[(2, Some(1112)), (3, None)]),
+        ("a release with no taps changes nothing: a beat heard before it still counts", &[Audio], &[Beat(Audio, 500, 500, 500), Release(600), Beat(Audio, 550, 610, 640)], Pace::Heard, Some(Audio), 1.09375, 640, &[(2, Some(1190)), (3, None)]),
+        ("a beat of a feed that does not drive: its row only", &[MidiClock, Audio], &[Lock(0, MidiClock, Some(500)), Beat(Audio, 300, 300, 640)], Pace::Heard, Some(MidiClock), 0.6, 500, &[(1, Some(500)), (2, None)]),
+        ("a beat while two taps hold: its row only", &[Audio], &[Tap(100), Tap(700), Beat(Audio, 1000, 1000, 640)], Pace::Free, Some(Audio), 3.5, 600, &[(4, Some(1300)), (5, Some(1900))]),
+        ("release after taps: the driving feed's tempo at the grid's phase, anchor now", &[Audio], &[Tap(100), Tap(700), Beat(Audio, 1000, 1000, 640), Release(1000)], Pace::Heard, Some(Audio), 3.5, 640, &[(4, Some(1320)), (5, None)]),
+        ("release after taps, no lock: the tapped tempo, anchor now", &[Audio], &[Tap(100), Tap(700), Release(1000)], Pace::Heard, None, 3.5, 600, &[(4, Some(1300)), (5, None)]),
+        ("release after taps, no lock, then silence: slows and stops", &[Audio], &[Tap(100), Tap(700), Release(1000), Settle(2500)], Pace::Stopped, None, 5.0, 600, &[(5, None)]),
+        ("Tap last drives while Audio has no lock: it never stops", &[Audio, TAP], &[Settle(60_000)], Pace::Free, Some(TAP), 120.0, 500, &[(121, Some(60_500))]),
+        ("Audio's first beat takes over from Tap last", &[Audio, TAP], &[Beat(Audio, 500, 500, 640)], Pace::Heard, Some(Audio), 1.0, 640, &[(2, Some(1140)), (3, None)]),
+        ("Audio's first beat, then silence: slows and stops", &[Audio, TAP], &[Beat(Audio, 500, 500, 640), Settle(3000)], Pace::Stopped, Some(Audio), 3.0, 640, &[(3, None)]),
+        ("stopped, Audio loses its lock: Tap last takes the beat it stands on at once", &[Audio, TAP], &[Beat(Audio, 500, 500, 640), Settle(3000), Lock(3000, Audio, None)], Pace::Free, Some(TAP), 3.0, 500, &[(3, Some(3000)), (4, Some(3500))]),
+        ("stopped, Audio at the internal tempo loses its lock: Tap last takes the beat it stands on", &[Audio, TAP], &[Beat(Audio, 500, 500, 500), Settle(3000), Lock(3000, Audio, None)], Pace::Free, Some(TAP), 3.0, 500, &[(3, Some(3000)), (4, Some(3500))]),
+        ("Audio locks while Tap last drives: its tempo at the grid's phase, anchor now", &[Audio, TAP], &[Lock(1100, Audio, Some(640))], Pace::Heard, Some(Audio), 2.2, 640, &[(3, Some(1612)), (4, None)]),
+        ("Audio locks while Tap last drives, then silence: slows and stops", &[Audio, TAP], &[Lock(1100, Audio, Some(640)), Settle(2892)], Pace::Stopped, Some(Audio), 4.0, 640, &[(4, None)]),
+        ("a lost lock with nothing after it: slows from the anchor it had", &[Audio], &[Beat(Audio, 500, 500, 500), Lock(500, Audio, None), Settle(1500)], Pace::Slowing, None, 2.5, 500, &[(3, None)]),
+        ("a new lock tempo of the driving feed waits for its beat", &[Audio], &[Beat(Audio, 500, 500, 500), Lock(600, Audio, Some(640))], Pace::Heard, Some(Audio), 1.2, 500, &[(2, Some(1000)), (3, None)]),
+        ("a new list while stopped, nothing drives: stays stopped", &[Audio], &[Settle(2000), List(2000, &[MidiClock])], Pace::Stopped, None, 2.0, 500, &[(2, None)]),
+        ("a new list while slowing, a feed drives: its tempo, still slowing", &[Audio], &[Lock(0, MidiClock, Some(640)), List(1000, &[MidiClock])], Pace::Slowing, Some(MidiClock), 1.5, 640, &[(2, None)]),
+        ("the same list again is a release", &[Audio], &[Tap(100), Tap(700), List(1000, &[Audio])], Pace::Heard, None, 3.5, 600, &[(4, Some(1300)), (5, None)]),
+        ("a new list releases the taps", &[Audio], &[Tap(100), Tap(700), List(1000, &[Audio, TAP])], Pace::Free, Some(TAP), 3.5, 500, &[(4, Some(1250)), (5, Some(1750))]),
+        ("the internal tempo while Audio drives is not the tempo", &[Audio], &[Beat(Audio, 500, 500, 640), Internal(600, 60)], Pace::Heard, Some(Audio), 1.15625, 640, &[(2, Some(1140)), (3, None)]),
+        ("the internal tempo while Tap last drives is the tempo", &[Audio, TAP], &[Internal(500, 60)], Pace::Free, Some(TAP), 1.0, 1000, &[(2, Some(1500))]),
+        ("Tap's lock cannot be taken away", &[Audio, TAP], &[Lock(0, TAP, None), Settle(1000)], Pace::Free, Some(TAP), 2.0, 500, &[(3, Some(1500))]),
+        ("one tap runs free for its 2 s", &[Audio], &[Tap(100), Settle(2100)], Pace::Free, None, 5.0, 500, &[(6, Some(2600))]),
+        ("one tap lapsed: anchor at the beat reached at the lapse", &[Audio], &[Tap(100), Settle(2101)], Pace::Heard, None, 5.002, 500, &[(6, Some(2600)), (7, None)]),
+        ("one tap lapsed, then silence: slows and stops", &[Audio], &[Tap(100), Settle(3600)], Pace::Stopped, None, 7.0, 500, &[(7, None)]),
+        ("two taps never stop", &[Audio], &[Tap(100), Tap(700), Settle(60_100)], Pace::Free, None, 102.0, 600, &[(103, Some(60_700))]),
+        ("a bar: a grid stopped on beat 4 takes it from the next heard beat", &[Audio], &[Beat(Audio, 500, 500, 500), Beat(Audio, 1000, 1000, 500), Settle(2500), Beat(Audio, 2600, 2600, 500)], Pace::Heard, Some(Audio), 4.0, 500, &[(4, Some(2600)), (5, Some(3100)), (6, None)]),
+    ];
+
+    fn check((name, feeds, steps, pace, driving, grid, period, crossings): Row) {
+        let clock = run(feeds, steps);
+        assert_eq!(
+            (clock.pace(), clock.driving(), clock.period()),
+            (pace, driving, ms(period)),
+            "{name}"
+        );
+        assert!(
+            (beats(clock.grid()) - grid).abs() < 1e-6,
+            "{name}: grid {}",
+            beats(clock.grid())
+        );
+        for &(beat, at) in crossings {
+            assert_eq!(
+                clock.crossing(beat),
+                at.map_or(Duration::MAX, ms),
+                "{name}: the crossing of beat {beat}"
+            );
+            assert_eq!(
+                clock.reached(beat),
+                at.is_some_and(|at| ms(at) <= clock.at()),
+                "{name}: beat {beat} reached"
+            );
+        }
+    }
+
+    #[test]
+    fn in_silence_the_beat_slows_and_stops() {
+        SILENCE.into_iter().for_each(check);
+    }
+
+    #[test]
+    fn a_heard_beat_moves_the_grid_and_the_feed_list_picks_who_drives() {
+        BEATS.into_iter().for_each(check);
+    }
+
+    #[test]
+    fn the_elapsed_count_slows_and_stands_with_the_grid() {
+        // (settled to, elapsed in beats)
+        let cases = [(400, 0.8), (500, 1.0), (1000, 1.5), (1500, 2.0), (2600, 2.0), (60_000, 2.0)];
+        for (at, elapsed) in cases {
+            let clock = run(&[Audio], &[Settle(at)]);
+            assert!(
+                (beats(clock.elapsed_now()) - elapsed).abs() < 1e-6,
+                "settled to {at}: elapsed {}",
+                beats(clock.elapsed_now())
+            );
+        }
+        // and looked at ahead of the clock, from 400 ms
+        let clock = run(&[Audio], &[Settle(400)]);
+        for (at, elapsed) in [(1000, 1.5), (2000, 2.0)] {
+            assert!(
+                (clock.beat_at(ms(at)).beats() - elapsed).abs() < 1e-6,
+                "at {at}: elapsed {}",
+                clock.beat_at(ms(at)).beats()
+            );
+        }
+    }
+
+    #[test]
+    fn the_elapsed_count_never_jumps() {
+        for (name, feeds, steps, ..) in SILENCE.into_iter().chain(BEATS) {
+            let mut clock = start(feeds);
+            for step in steps {
+                let settled = clock.settle(ms(step.at()));
+                clock = step.on(settled);
+                let (before, after) = (settled.beat_at(settled.at()), clock.beat_at(clock.at()));
+                assert!(
+                    (after.beats() - before.beats()).abs() < 1e-9,
+                    "{name}, {step:?}: elapsed {} then {}",
+                    before.beats(),
+                    after.beats()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_stopped_grid_waits_on_the_beat_it_stands_on() {
+        let clock = run(&[Audio], &[Settle(1500)]);
+        // (asked, waits for)
+        let cases = [(When::Now, None), (When::Beat, Some(2)), (When::Bar, Some(4))];
+        for (when, beat) in cases {
+            assert_eq!(clock.next(when), beat, "{when:?}");
+        }
+    }
+
+    #[test]
+    fn a_beat_on_its_crossing_at_the_same_tempo_moves_no_crossing() {
+        // 124 BPM: no beat is a whole nanosecond
+        let free = Clock::START;
+        let heard = free.crossing(1);
+        let clock = Clock::START
+            .set_feeds(list(&[Audio]))
+            .settle(heard)
+            .beat(Audio, heard, Tempo::new(60_000_000_000, 124).unwrap());
+        assert_eq!(clock.crossing(1), heard);
+        assert_eq!(clock.crossing(2), free.crossing(2));
+        assert_eq!(clock.crossing(3), Duration::MAX);
+    }
+
+    #[test]
+    fn a_new_engine_has_tap_alone_and_runs_free() {
+        assert_eq!(
+            (Clock::START.feeds(), Clock::START.driving(), Clock::START.pace()),
+            (FeedList::TAP, Some(TAP), Pace::Free)
+        );
+    }
+
+    #[test]
+    fn a_feed_list_is_1_to_5_feeds_no_repeats_tap_only_last() {
+        let five: &[TempoFeed] = &[VirtualDJ, Audio, MidiClock, Timecode, TAP];
+        // (name, feeds, what comes back)
+        let cases: [(&str, &[TempoFeed], Result<(), FeedListError>); 13] = [
+            ("Tap", &[TAP], Ok(())),
+            ("Audio, then none", &[Audio], Ok(())),
+            ("Audio, then Tap", &[Audio, TAP], Ok(())),
+            ("five", five, Ok(())),
+            ("four, then none", &[VirtualDJ, Audio, MidiClock, Timecode], Ok(())),
+            ("empty", &[], Err(FeedListError::Empty)),
+            ("a repeat", &[Audio, Audio], Err(FeedListError::Repeated { feed: Audio })),
+            ("a repeat later", &[Audio, MidiClock, Audio, TAP], Err(FeedListError::Repeated { feed: Audio })),
+            ("six: one repeats", &[Audio, MidiClock, VirtualDJ, Timecode, Audio, TAP], Err(FeedListError::Repeated { feed: Audio })),
+            ("Tap first", &[TAP, Audio], Err(FeedListError::TapNotLast)),
+            ("Tap twice: the first is not last", &[TAP, TAP], Err(FeedListError::TapNotLast)),
+            ("Tap in the middle comes before the repeat", &[Audio, TAP, Audio], Err(FeedListError::TapNotLast)),
+            ("the repeat comes before Tap", &[Audio, Audio, TAP, MidiClock], Err(FeedListError::Repeated { feed: Audio })),
+        ];
+        for (name, feeds, want) in cases {
+            assert_eq!(
+                FeedList::new(feeds).map(|list| list.feeds() == feeds),
+                want.map(|()| true),
+                "{name}"
+            );
+        }
+        // the same feeds in the same order are the same list
+        assert_eq!(list(&[Audio, TAP]), list(&[Audio, TAP]));
+        assert_ne!(list(&[Audio, TAP]), list(&[Audio]));
+        assert_ne!(list(&[Audio, MidiClock]), list(&[MidiClock, Audio]));
+        assert_eq!(list(&[TAP]), FeedList::TAP);
+        assert_eq!(run(&[Audio], &[List(10, &[Audio, TAP])]).feeds(), list(&[Audio, TAP]));
+    }
+
+    #[test]
+    fn a_tempo_is_1_to_1000_beats_of_100_ms_to_4_s() {
+        // (span ns, beats, made)
+        let cases = [
+            (500_000_000, 1, true),
+            (0, 1, false),
+            (500_000_000, 0, false),
+            (100_000_000, 1, true),
+            (99_999_999, 1, false),
+            (4_000_000_000, 1, true),
+            (4_000_000_001, 1, false),
+            (60_000_000_000, 300, true),
+            (60_000_000_000, 15, true),
+            (60_000_000_000, 601, false),
+            (500_000_000_000, 1000, true),
+            (500_500_000_000, 1001, false),
+        ];
+        for (span, beats, made) in cases {
+            assert_eq!(Tempo::new(span, beats).is_some(), made, "{span} ns, {beats} beats");
+        }
+    }
+
+    #[test]
+    fn equivalent_tempos_keep_each_fractional_crossing_and_its_stale_beat_cutoff() {
+        let mut clock = Clock::START.set_feeds(list(&[Audio]));
+        let tempo = Tempo::new(15_000_000_000, 31).unwrap();
+        for beat in 1..=4 {
+            let heard = Clock::START.crossing(beat);
+            assert_eq!(clock.crossing(beat), heard);
+            clock = clock.beat(Audio, heard, tempo);
+            assert_eq!(clock.next(When::Beat), Some(beat));
+            clock = clock.beat(Audio, heard - Duration::from_nanos(1), every(640));
+            assert_eq!(clock.period(), Clock::START.period());
+        }
+    }
+
+    #[test]
+    fn beats_locks_and_taps_on_a_moving_or_stopped_grid() {
+        let cases: &[Row] = &[
+            (
+                "a delayed beat restores the full grid",
+                &[Audio],
+                &[Beat(Audio, 500, 800, 500)],
+                Pace::Heard,
+                Some(Audio),
+                1.6,
+                500,
+                &[(2, Some(1000)), (3, None)],
+            ),
+            (
+                "half speed continues at the new driver's tempo",
+                &[Audio],
+                &[
+                    Lock(0, MidiClock, Some(640)),
+                    List(1000, &[MidiClock]),
+                    Settle(1639),
+                ],
+                Pace::Slowing,
+                Some(MidiClock),
+                1.99921875,
+                640,
+                &[(2, None)],
+            ),
+            (
+                "a tap takes the stopped beat",
+                &[Audio],
+                &[
+                    Lock(0, MidiClock, Some(640)),
+                    List(1000, &[MidiClock]),
+                    Tap(1800),
+                ],
+                Pace::Free,
+                Some(MidiClock),
+                2.0,
+                640,
+                &[(2, Some(1800)), (3, Some(2440))],
+            ),
+            (
+                "one tap lapses with its own tempo despite a feed lock",
+                &[Audio],
+                &[Tap(100), Lock(1000, Audio, Some(640)), Settle(2101)],
+                Pace::Heard,
+                Some(Audio),
+                5.002,
+                500,
+                &[(6, Some(2600)), (7, None)],
+            ),
+        ];
+        cases.iter().copied().for_each(check);
+    }
+
+    #[test]
+    fn a_stale_first_beat_still_locks_at_the_current_phase() {
+        let clock = run(
+            &[Audio, TAP],
+            &[
+                List(400, &[MidiClock, Audio, TAP]),
+                Beat(Audio, 350, 420, 640),
+            ],
+        );
+        assert_eq!(clock.driving(), Some(Audio));
+        assert_eq!(clock.crossing(1), Duration::from_micros(522_400));
+        assert_eq!(clock.crossing(2), Duration::MAX);
+    }
+
+    #[test]
+    fn time_alone_takes_elapsed_through_a_lapse_and_never_takes_the_stopped_beat() {
+        let tapped = run(&[Audio], &[Tap(100)]);
+        for (at, elapsed) in [(ms(2100), 4.2), (ms(3100), 5.7), (Duration::MAX, 6.2)] {
+            assert!((tapped.beat_at(at).beats() - elapsed).abs() < 1e-9);
+            assert_eq!(tapped.beat_at(at), tapped.settle(at).beat_at(at));
+        }
+        let stopped = tapped.settle(Duration::MAX);
+        assert_eq!(stopped.next(When::Beat), Some(7));
+        assert!(!stopped.reached(7));
+    }
+
+    #[test]
+    fn a_late_first_beat_keeps_elapsed_and_every_beat_already_taken() {
+        for (delivery, grid, pace, next_crossing) in [
+            (750, 1.5, Pace::Slowing, None),
+            (1750, 3.5, Pace::Heard, Some(2000)),
+        ] {
+            let free = start(&[Audio, TAP]).settle(ms(delivery));
+            let clock = free.beat(Audio, ms(0), every(500));
+            assert_eq!(
+                clock.beat_at(clock.at()).beats(),
+                free.beat_at(free.at()).beats()
+            );
+            assert_eq!(beats(clock.grid()), grid);
+            assert_eq!(clock.pace(), pace);
+            assert!(clock.reached(grid as u64));
+            assert_eq!(
+                clock.crossing(grid as u64 + 1),
+                next_crossing.map_or(Duration::MAX, ms)
+            );
+        }
+    }
+
+    #[test]
+    fn a_beat_heard_before_tap_took_over_only_supplies_a_lock() {
+        let clock = run(
+            &[Audio, TAP],
+            &[
+                Beat(Audio, 500, 500, 500),
+                Lock(700, Audio, None),
+                Beat(Audio, 600, 800, 700),
+            ],
+        );
+        assert_eq!(clock.driving(), Some(Audio));
+        assert_eq!(clock.crossing(2), ms(1080));
+    }
+
+    #[test]
+    fn unrelated_locks_keep_the_lapsed_tap_tempo() {
+        let clock = run(
+            &[Audio, TAP],
+            &[
+                Beat(Audio, 500, 500, 640),
+                Tap(600),
+                Lock(700, Audio, None),
+                Settle(2700),
+            ],
+        );
+        for (feed, tempo) in [(TAP, None), (MidiClock, Some(every(700)))] {
+            assert_eq!(clock.lock(feed, tempo).period(), ms(640));
+        }
+        assert_eq!(clock.release().period(), ms(500));
+    }
+
+    #[test]
+    fn fractional_beats_slow_and_stop_at_the_crossing_nanosecond() {
+        let clock = Clock::START.set_feeds(list(&[Audio]));
+        for (nanos, pace) in [
+            (483_870_967, Pace::Heard),
+            (483_870_968, Pace::Heard),
+            (483_870_969, Pace::Slowing),
+            (1_451_612_903, Pace::Slowing),
+            (1_451_612_904, Pace::Stopped),
+        ] {
+            assert_eq!(
+                clock.settle(Duration::from_nanos(nanos)).pace(),
+                pace,
+                "{nanos}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_external_feed_keeps_its_lock_until_it_drives() {
+        let periods = [
+            (Timecode, 400),
+            (VirtualDJ, 480),
+            (MidiClock, 600),
+            (Audio, 640),
+        ];
+        let mut clock = start(&[TAP]);
+        for (feed, period) in periods {
+            clock = clock.lock(feed, Some(every(period)));
+            assert_eq!(clock.driving(), Some(TAP));
+        }
+        clock = clock.set_feeds(list(&[Timecode, VirtualDJ, MidiClock, Audio, TAP]));
+        for (feed, period) in periods {
+            assert_eq!((clock.driving(), clock.period()), (Some(feed), ms(period)));
+            clock = clock.lock(feed, None);
+        }
+        assert_eq!((clock.driving(), clock.period()), (Some(TAP), ms(500)));
+    }
+
+    #[test]
+    fn a_rejected_beat_keeps_its_tempo_for_the_next_driver_change() {
+        let clock = run(
+            &[MidiClock, Audio],
+            &[
+                Beat(Audio, 500, 500, 500),
+                Beat(Audio, 450, 520, 640),
+                Lock(600, MidiClock, Some(1000)),
+                Lock(700, MidiClock, None),
+            ],
+        );
+        assert_eq!(clock.crossing(2), ms(1148));
+        for (at, pace) in [
+            (700, Pace::Heard),
+            (1300, Pace::Slowing),
+            (2500, Pace::Stopped),
+        ] {
+            let clock = clock.settle(ms(at));
+            assert_eq!(clock.pace(), pace);
+            assert_eq!(clock.reading().bpm, 93.75);
+        }
     }
 }

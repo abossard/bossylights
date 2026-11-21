@@ -350,7 +350,7 @@ struct Times<const N: usize> {
 #[cfg(all(test, target_pointer_width = "64"))]
 #[test]
 fn snapshot_has_one_press_histogram_and_four_counts_per_output() {
-    const BEFORE: usize = 76_992; // Inline bytes with the existing lateness and global latency.
+    const BEFORE: usize = 77_144; // Inline bytes with the existing lateness and global latency.
     let added = MAX_OUTPUTS * (size_of::<Times<LATENCY_BUCKETS>>() + 4 * size_of::<u64>());
     assert_eq!(size_of::<Snapshot>(), BEFORE + added);
 }
