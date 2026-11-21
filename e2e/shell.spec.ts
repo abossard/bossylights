@@ -135,6 +135,11 @@ test("the window shows the engine on the test port", async ({ baseURL }) => {
   try {
     await expect.poll(window.lines, WAIT).toContain("connected");
     expect(window.lines()).toContain(`engine on ${ADDRESS}`);
+  } catch (cause) {
+    throw new Error(
+      `Shell output:\n${shell.said() || "(none)"}\nLast window lines: ${JSON.stringify(window.lines())}`,
+      { cause },
+    );
   } finally {
     await kill(shell);
     await window.close();

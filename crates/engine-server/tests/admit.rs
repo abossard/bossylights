@@ -11,8 +11,8 @@ mod common;
 use common::{Heard, Socket, answer, command, connect, open, send, serve};
 use engine::{
     Adapter, Begun, ChannelNumbers, Color, Command, Engine, Event, Fixture, Light, Member,
-    MemberList, Members, OutputKind, OutputNumber, PlayId, QUEUE, Refusal, Rgb, RunNumbers, Sender,
-    Target, Text, Universes, Wakes,
+    MemberList, Members, Outcome, OutputKind, OutputNumber, PlayId, QUEUE, Refusal, Rgb,
+    RunNumbers, Sender, Target, Text, Universes, Wakes,
 };
 use engine_core::{PLAYS, Step};
 use serde_json::{Value, json};
@@ -522,8 +522,10 @@ struct Served {
     socket: Socket,
     wakes: Wakes,
     heard: Heard,
-    /// The frames handed to the adapter so far.
-    handed: usize,
+    /// Frames handed to the adapter whose outcome is still due.
+    out: usize,
+    /// Frames the adapter accepted. The fake port hears them in order.
+    accepted: usize,
     play: PlayId,
     stop: Arc<AtomicBool>,
 }
@@ -591,39 +593,84 @@ impl Served {
             socket,
             wakes,
             heard,
-            handed: 0,
+            out: 0,
+            accepted: 0,
             play,
             stop,
         };
+        served.count_frames();
+        // wake_at never goes back, so zero keeps the clock at the last free wake.
+        served.settle(Duration::ZERO);
         assert_eq!(served.first_frame(), [255, 0, 0], "look 1 plays red");
         served
     }
 
-    /// Lets wakes through until one hands the adapter a frame: its bytes at 1:1 to 1:3,
-    /// once on the wire. Every command admitted before is in it.
-    fn first_frame(&mut self) -> [u8; 3] {
-        let before = self.handed;
-        while self.handed == before {
-            self.wakes.wake().unwrap();
-            let events = self.wakes.events();
-            self.handed += events
-                .iter()
-                .filter(|event| matches!(event, Event::Handed { .. }))
-                .count();
-        }
-        let started = Instant::now();
-        loop {
-            let frames = self.heard.lock().unwrap();
-            if let Some(frame) = frames.get(self.handed - 1) {
-                return [frame[0], frame[1], frame[2]];
+    /// Counts the outcomes and returns how many frames were handed over since the last read.
+    fn count_frames(&mut self) -> usize {
+        let mut handed = 0;
+        for event in self.wakes.events() {
+            match event {
+                Event::Handed { .. } => {
+                    self.out += 1;
+                    handed += 1;
+                }
+                Event::Came { outcome, .. } => {
+                    self.out -= 1;
+                    self.accepted += usize::from(outcome == Outcome::Accepted);
+                }
+                Event::Counted { .. } => {}
             }
-            drop(frames);
+        }
+        handed
+    }
+
+    /// Collects outcomes without advancing the clock, then waits to hear every accepted frame.
+    fn settle(&mut self, at: Duration) {
+        let started = Instant::now();
+        while self.out != 0 {
             assert!(
                 started.elapsed() < Duration::from_secs(10),
-                "no frame heard"
+                "no frame outcome"
+            );
+            self.wakes.wake_at(at).unwrap();
+            assert_eq!(self.count_frames(), 0, "an early wake handed a frame");
+        }
+        let started = Instant::now();
+        while self.heard.lock().unwrap().len() != self.accepted {
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "waiting to hear {} accepted frames",
+                self.accepted
             );
             std::thread::yield_now();
         }
+    }
+
+    /// Reads slots 1 to 3 of the very next frame. The port is idle before each press.
+    fn first_frame(&mut self) -> [u8; 3] {
+        let before = self.accepted;
+        let started = Instant::now();
+        let at = loop {
+            let at = self.wakes.wake().unwrap();
+            let handed = self.count_frames();
+            if handed != 0 {
+                assert_eq!(handed, 1, "one frame at the first due wake");
+                break at;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "no frame handed"
+            );
+        };
+        self.settle(at);
+        assert_eq!(
+            self.accepted,
+            before + 1,
+            "the adapter must accept the first frame"
+        );
+        let frames = self.heard.lock().unwrap();
+        let frame = &frames[self.accepted - 1];
+        [frame[0], frame[1], frame[2]]
     }
 }
 
