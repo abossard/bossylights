@@ -27,7 +27,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use engine::{
     API_VERSION, Begun, ChannelLevel, Command, Engine, Grouped, Looks, Patch, Patched, Project,
-    Refusal, Reply, Request, SavedLook, Sender, Snapshot, changes,
+    ProjectView, Refusal, Reply, Request, SavedLook, Sender, Snapshot, changes,
 };
 use engine_core::{HeldLight, Library, ShowFile, held_lights, light_changes};
 use library::Shelf;
@@ -173,12 +173,13 @@ impl Picture {
         show: &watch::Receiver<ShowFile>,
         health: &health::View,
     ) -> Self {
+        let project = moment.project.at(&snapshot);
         Self {
             snapshot,
             requested_at,
             health: health.clone(),
             library: shelf.borrow().library(),
-            project: moment.project,
+            project,
             patch: Arc::clone(&moment.patch),
             looks: Arc::clone(moment.rows.get_or_init(|| moment.looks.all().into())),
             source: Arc::downgrade(&moment.looks),
@@ -195,7 +196,7 @@ struct Moment {
     /// Pays for the preceding revision until the reader passes it.
     credit: Option<OwnedSemaphorePermit>,
     revision: u64,
-    project: Project,
+    project: ProjectView,
     patch: Arc<Patch>,
     looks: Arc<Looks>,
     /// Materialize one plan-free copy for all pictures taken under this revision.
@@ -209,7 +210,7 @@ impl Moment {
             through: Arc::new(AtomicU64::new(sender.sent())),
             credit: None,
             revision: sender.revision(),
-            project: sender.project(),
+            project: sender.project_for_snapshot(),
             patch: sender.patch(),
             looks: sender.looks(),
             rows: OnceLock::new(),
@@ -425,6 +426,10 @@ struct Publisher {
 /// before the client is told `Stale`.
 const PREPARES: usize = 3;
 
+/// An output writer may wait for its previous route to finish. Other writers
+/// keep using the front, including a performer sending a press to either run.
+const CUTOVER_WAIT: Duration = Duration::from_secs(10);
+
 /// Even an edit which shares all its plans needs a place in snapshot history.
 const REVISION_BYTES: usize = engine::PLAN_BYTES.div_ceil(engine::QUEUE);
 
@@ -459,21 +464,29 @@ async fn send(api: &Arc<Api>, command: Command) -> Result<Reply<'static>, Refusa
         None => Ok(Reply::Stopping),
         Some(Ok(Begun::Opening(opening))) => {
             let api = Arc::clone(api);
+            let mut stopped = api.stop.subscribe();
             // Keep the opener through the handoff. A busy blocking pool cannot
             // put another job between publication and delivery of the device.
-            tokio::task::spawn_blocking(move || {
+            let worker = tokio::task::spawn_blocking(move || {
                 let opened = opening.open();
                 let publish = api.changing(&mut credit, |sender| sender.publish_output(opened));
                 let Some(result) = tokio::runtime::Handle::current().block_on(publish) else {
                     return Ok(Reply::Stopping);
                 };
-                if let Some(handoff) = result? {
-                    handoff.wait();
+                if let Some(handoff) = result?
+                    && !handoff.wait()
+                {
+                    return Ok(Reply::Stopping);
                 }
                 Ok(Reply::Accepted)
-            })
-            .await
-            .unwrap_or(Ok(Reply::Stopping))
+            });
+            // T13 answers the writer while the opener still owns and drains
+            // the old device. The worker finishes cleanup when the driver returns.
+            tokio::select! {
+                biased;
+                _ = stopped.wait_for(|stop| *stop) => Ok(Reply::Stopping),
+                answer = worker => answer.unwrap_or(Ok(Reply::Stopping)),
+            }
         }
         Some(Ok(Begun::Queued)) => Ok(Reply::Accepted),
         Some(Ok(Begun::Patched { fixture })) => Ok(Reply::Patched { fixture }),
@@ -492,13 +505,33 @@ async fn edit(
     opening_credit: &mut Option<OwnedSemaphorePermit>,
 ) -> Option<Result<Begun, Refusal>> {
     let mut begun = Some(Err(Refusal::Stale));
+    let waiting_since = Instant::now();
     for _ in 0..PREPARES {
+        // T12. Read the base and the state of this output under the same lock.
+        // Refusal and stop can both end the wait while the engine clock is held.
+        let base = loop {
+            let front = api.sender.lock().await;
+            if *api.stop.borrow() {
+                return None;
+            }
+            if !matches!(
+                command,
+                Command::SetOutput { output, .. } | Command::RemoveOutput { output }
+                    if front.sender.cutover_pending(output)
+            ) {
+                break front.sender.base();
+            }
+            drop(front);
+            if waiting_since.elapsed() >= CUTOVER_WAIT {
+                return Some(Err(Refusal::Opening));
+            }
+            tokio::time::sleep(engine::BEAT).await;
+        };
         // Bound in-flight edits too. A full history refuses before compiling.
         let mut credit = match reserve(&api.history, REVISION_BYTES) {
             Ok(credit) => credit,
             Err(reason) => return Some(Err(reason)),
         };
-        let base = api.sender.lock().await.sender.base();
         let shelf = Arc::clone(shelf);
         let history = Arc::clone(&api.history);
         let prepared = tokio::task::spawn_blocking(move || {
@@ -552,10 +585,10 @@ impl Api {
             return None;
         }
         let sender = &mut publisher.sender;
-        let outputs = sender.project().outputs;
+        let before = sender.project_for_snapshot();
         let changed = change(sender);
         let edited = self.patch.send_if_modified(|kept| kept.follow(sender));
-        if edited || outputs != sender.project().outputs {
+        if edited || !before.same_outputs(&sender.project_for_snapshot()) {
             sender.revise();
             let mut moment = Moment::of(sender);
             moment.credit = credit.take();
@@ -573,7 +606,8 @@ impl Api {
     /// Stops the engine: under the front, so every change admitted before is one the
     /// last save has, and none is admitted after.
     async fn stopping(&self) {
-        let _front = self.sender.lock().await;
+        let front = self.sender.lock().await;
+        front.sender.stop_outputs();
         self.stop.send_replace(true);
     }
 }

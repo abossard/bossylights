@@ -198,19 +198,20 @@ impl Tracker {
             at_ms: u64::try_from(at.as_millis()).unwrap_or(u64::MAX),
             event: event.into(),
         };
+        // A reused adapter can return between two reads of different routes.
+        // Compare its device edges before discarding the old timing windows.
+        for event in status_events(self.previous.as_ref(), Some(sample))
+            .into_iter()
+            .flatten()
+        {
+            events_at_read.push(entry(sample.at, event));
+        }
         if self
             .previous
             .as_ref()
             .is_none_or(|p| p.generation != sample.generation)
         {
             self.reset(HealthInput::NewGeneration);
-        } else {
-            for event in status_events(self.previous.as_ref(), Some(sample))
-                .into_iter()
-                .flatten()
-            {
-                events_at_read.push(entry(sample.at, event));
-            }
         }
 
         let (coverage, step) = Coverage::observe(self.coverage, sample.generation, sample.at);
@@ -725,6 +726,47 @@ mod tests {
             assert_eq!(window(&reader), (first_window, 160));
             assert_eq!(row(&reader).state, OutputHealthState::Measuring);
             assert_eq!(reader.view().events_since(0), (vec![], 0));
+        }
+    }
+
+    #[test]
+    fn a_slow_reader_reports_the_edges_of_only_the_adapter_that_was_reused() {
+        let lost = HealthEvent::OutputLost;
+        let back = HealthEvent::Recovered {
+            reason: RecoveredReason::OutputAvailable,
+        };
+        let down = Status::Reconnecting { failures: 3 };
+        // The reader skips a complete intermediate generation. A replacement
+        // can have the very same status and outage count as the reused port.
+        for (was, runs, outages_before, expected) in [
+            (Status::Running, 2, 1, vec![lost, back]),
+            (down, 2, 1, vec![back]),
+            (Status::Running, 0, 0, vec![]),
+            (down, 1, 1, vec![]),
+        ] {
+            let mut reader = Reader::new();
+            let mut before = sample(0, 2);
+            before.status = was;
+            before.outages = u64::from(was == down);
+            observe(&mut reader, Some(&before));
+            let mut after = HealthSample::new(Duration::from_secs(6), 3, Status::Running);
+            after.prior_runs = runs;
+            after.prior_outages = outages_before;
+            observe(&mut reader, Some(&after));
+            observe(&mut reader, Some(&after));
+            let entries: Vec<_> = expected
+                .into_iter()
+                .map(|edge| OutputHealthEvent {
+                    generation: 3,
+                    ..event(6_000, edge)
+                })
+                .collect();
+            assert_eq!(
+                reader.view().events_since(0),
+                (entries, 0),
+                "{was:?}, {runs} reroutes"
+            );
+            assert_eq!(row(&reader).measurement, OutputMeasurement::Measuring);
         }
     }
 

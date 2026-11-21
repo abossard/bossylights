@@ -102,7 +102,10 @@ fn place(n: u16) -> ChannelNumbers {
 
 fn main() {
     #[cfg(feature = "test-support")]
-    output_health();
+    {
+        output_health();
+        output_cutover();
+    }
     let universes = Universes::new(UNIVERSES).expect("4 universes");
     let (mut engine, mut sender) = Engine::start(universes).expect("the tick thread starts");
     let run = RunNumbers { first: 1, count: 1 };
@@ -783,6 +786,174 @@ fn output_health() {
         counts(),
         before,
         "allocation or free during the device handoff"
+    );
+}
+
+/// Keep a write in flight across six due wakes. This fixes the order of T2, T3,
+/// T6, T7 and T9 independently of how the system schedules the output worker.
+#[cfg(feature = "test-support")]
+fn output_cutover() {
+    use engine::{Device, Outcome, OutputNumber};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+
+    struct Adapter {
+        byte: Arc<AtomicU8>,
+        release: Arc<AtomicBool>,
+    }
+    impl Device for Adapter {
+        fn take(&mut self, frame: &[u8]) -> Outcome {
+            self.byte.store(frame[0], Ordering::Release);
+            if frame[0] == 17 {
+                mock::wait_until("release the old write", || {
+                    self.release.load(Ordering::Acquire)
+                });
+            }
+            Outcome::Accepted
+        }
+    }
+    let byte = Arc::new(AtomicU8::new(0));
+    let release = Arc::new(AtomicBool::new(false));
+    let open = {
+        let byte = Arc::clone(&byte);
+        let release = Arc::clone(&release);
+        Box::new(move |_| {
+            Ok(Box::new(Adapter {
+                byte: Arc::clone(&byte),
+                release: Arc::clone(&release),
+            }) as Box<dyn Device>)
+        })
+    };
+    let (mut engine, mut sender, wakes) =
+        Engine::start_stepped(Universes::new(2).unwrap(), open).unwrap();
+    wakes.hold().unwrap();
+    let output = OutputNumber::try_from(1).unwrap();
+    let set = |first| Command::SetOutput {
+        output,
+        kind: engine_core::TEST_STREAM_KIND,
+        universes: RunNumbers { first, count: 1 },
+        rate: Some(Rate::Sixty),
+    };
+    let press = |universe, value| Command::SetChannel {
+        channel: ChannelNumbers {
+            universe,
+            address: 1,
+        },
+        value,
+    };
+    let counts = || (counting::allocations(), counting::frees());
+    sender.send(press(1, 11)).unwrap();
+    sender.send(set(1)).unwrap();
+    let at = wakes.wake().unwrap();
+    mock::wait_until("the first run sends", || byte.load(Ordering::Acquire) == 11);
+    let Begun::Opening(opening) = sender.begin(set(2), &[]).unwrap() else {
+        panic!("a changed run needs a new lane");
+    };
+    wakes.wake_at(at).unwrap();
+    let prepared = opening.open();
+    engine.stall_reclamation(true);
+
+    // T2 and T3: the old run sends and then counts the new byte before publication.
+    let before = counts();
+    sender.send(press(1, 12)).unwrap();
+    let at = wakes.wake().unwrap();
+    mock::wait_until("the old run counts its second frame", || {
+        engine.latest();
+        wakes.wake_at(at).unwrap();
+        engine.latest().state.outputs[output.slot()]
+            .is_some_and(|out| out.universes.first() == 1 && out.counters.accepted == 2)
+    });
+    assert_eq!(byte.load(Ordering::Acquire), 12);
+    assert_eq!(counts(), before, "T2 and T3");
+
+    sender.send(press(1, 17)).unwrap();
+    wakes.wake().unwrap();
+    mock::wait_until("the old write is in flight", || {
+        byte.load(Ordering::Acquire) == 17
+    });
+    let handoff = sender.publish_output(prepared).unwrap().unwrap();
+    // T6 and T7: more frames than boxes on the held lane, only the old run visible.
+    let before = counts();
+    for marker in 26..=31 {
+        sender.send(press(2, marker)).unwrap();
+        engine.latest();
+        wakes.wake().unwrap();
+        assert_eq!(
+            engine.latest().state.outputs[output.slot()]
+                .unwrap()
+                .universes
+                .first(),
+            1
+        );
+        assert_eq!(byte.load(Ordering::Acquire), 17);
+    }
+    assert_eq!(counts(), before, "T6 and T7");
+    release.store(true, Ordering::Release);
+    assert!(handoff.wait(), "T8 accepts the new run");
+    mock::wait_until("the new lane sends the newest held frame", || {
+        byte.load(Ordering::Acquire) == 31
+    });
+
+    // T9: the first wake after the device returns collects and publishes the new run.
+    let before = counts();
+    engine.latest();
+    wakes.wake().unwrap();
+    assert_eq!(
+        engine.latest().state.outputs[output.slot()]
+            .unwrap()
+            .universes
+            .first(),
+        2
+    );
+    assert_eq!(counts(), before, "T9");
+
+    // T13: stop while a second cutover holds a due frame. Thread exit can
+    // free on the worker or reclaimer; count all allocations and tick frees.
+    engine.stall_reclamation(false);
+    let Begun::Opening(opening) = sender.begin(set(1), &[]).unwrap() else {
+        panic!("returning to the first run needs a new lane");
+    };
+    let at = wakes.wake().unwrap();
+    let prepared = opening.open();
+    engine.stall_reclamation(true);
+    release.store(false, Ordering::Release);
+    sender.send(press(2, 17)).unwrap();
+    wakes.wake_at(at + Rate::Sixty.period()).unwrap();
+    mock::wait_until("the last write is in flight", || {
+        byte.load(Ordering::Acquire) == 17
+    });
+    let handoff = sender.publish_output(prepared).unwrap().unwrap();
+    wakes.wake().unwrap();
+    let tick_counts = || (counting::allocations(), counting::tick_frees());
+    let before = tick_counts();
+    sender.stop_outputs();
+    release.store(true, Ordering::Release);
+    assert!(!handoff.wait(), "T13 cancels the new run");
+    wakes.wake().unwrap();
+    assert_eq!(
+        byte.load(Ordering::Acquire),
+        17,
+        "a held frame went after stop"
+    );
+    assert_eq!(tick_counts(), before, "T13");
+
+    // Joining runs the tick's terminal transition. The runtime releases its
+    // thread bookkeeping even for an empty desk. Compare the two joins.
+    let joined = |engine| {
+        let before = tick_counts();
+        counting::uncounted(|| drop(engine));
+        let after = tick_counts();
+        (after.0 - before.0, after.1 - before.1)
+    };
+    let stopping_cutover = joined(engine);
+    let (idle, _sender, held) =
+        Engine::start_stepped(Universes::new(2).unwrap(), Box::new(outputs::open)).unwrap();
+    held.hold().unwrap();
+    held.wake().unwrap();
+    assert_eq!(
+        stopping_cutover,
+        joined(idle),
+        "T13 on the joined tick thread"
     );
 }
 

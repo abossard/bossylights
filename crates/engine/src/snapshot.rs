@@ -118,6 +118,8 @@ impl Snapshot {
             press_under_target: health.press_under_target,
             press_missing: health.press_missing,
             outages: health.outages,
+            prior_runs: health.prior_runs,
+            prior_outages: health.prior_outages,
             frames_handed: health.handed,
             dropped: device.counters.dropped,
             failed: device.counters.failed,
@@ -289,6 +291,31 @@ impl Snapshot {
         }
     }
 
+    /// T9. Old results were counted before this reset. Carry the device's outage
+    /// history on reuse and install the new lane's pre-switch measurements.
+    pub(crate) fn cutover(
+        &mut self,
+        output: usize,
+        reuse: bool,
+        handed: u64,
+        lateness: &Histogram<LATENESS_BUCKETS>,
+        worst: Duration,
+    ) {
+        let prior = self.output_health.get(output).filter(|_| reuse).map(|old| {
+            (
+                old.prior_runs.wrapping_add(1),
+                old.prior_outages.wrapping_add(old.outages),
+            )
+        });
+        self.attached(output);
+        if let Some(health) = self.output_health.get_mut(output) {
+            (health.prior_runs, health.prior_outages) = prior.unwrap_or_default();
+            health.handed = handed;
+            health.lateness.counts.copy_from_slice(lateness);
+            health.lateness.worst = worst;
+        }
+    }
+
     pub(crate) fn generation(&self, output: usize) -> u64 {
         self.output_health.get(output).map_or(0, |h| h.generation)
     }
@@ -325,6 +352,8 @@ struct OutputHealth {
     press_under_target: u64,
     press_missing: u64,
     outages: u64,
+    prior_runs: u64,
+    prior_outages: u64,
 }
 
 impl OutputHealth {
@@ -336,6 +365,8 @@ impl OutputHealth {
         press_under_target: 0,
         press_missing: 0,
         outages: 0,
+        prior_runs: 0,
+        prior_outages: 0,
     };
 }
 
@@ -349,9 +380,9 @@ struct Times<const N: usize> {
 
 #[cfg(all(test, target_pointer_width = "64"))]
 #[test]
-fn snapshot_has_one_press_histogram_and_four_counts_per_output() {
+fn snapshot_has_one_press_histogram_and_six_counts_per_output() {
     const BEFORE: usize = 77_208; // Inline bytes with the existing lateness and global latency.
-    let added = MAX_OUTPUTS * (size_of::<Times<LATENCY_BUCKETS>>() + 4 * size_of::<u64>());
+    let added = MAX_OUTPUTS * (size_of::<Times<LATENCY_BUCKETS>>() + 6 * size_of::<u64>());
     assert_eq!(size_of::<Snapshot>(), BEFORE + added);
 }
 

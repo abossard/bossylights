@@ -65,6 +65,8 @@ use looks::Plan;
 use rig::{PatchEffect, Whole};
 
 pub use outputs::Device;
+mod cutover;
+use cutover::{Effect as CutoverEffect, Event as CutoverEvent, State as CutoverState};
 mod lane;
 use lane::Lane;
 pub use lane::Route;
@@ -162,6 +164,8 @@ pub struct Sender {
     /// `None` while an [`Opening`] has it: one device opens at a time.
     open: Option<Opener>,
     lanes: [Option<lane::Control>; MAX_OUTPUTS],
+    generations: [u64; MAX_OUTPUTS],
+    previous_outputs: [Option<PriorOutput>; MAX_OUTPUTS],
     retry: Retry,
     #[cfg(feature = "test-support")]
     lane_pause: Option<(OutputNumber, lane::StartPause)>,
@@ -251,10 +255,30 @@ pub struct Opening {
 
 /// An exclusive port moves at admission. A socket can also be opened afresh if
 /// the previous attachment has not passed through the tick and reclaimer in time.
-enum DeviceSource {
+enum DeviceSource<Probe = Arc<AtomicBool>> {
     Fresh,
     Exclusive,
-    Reusable(Arc<AtomicBool>),
+    Reusable(Probe),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OpenAction {
+    Wait,
+    Open,
+    Reuse,
+}
+
+/// A socket can fall back to a fresh open at the limit. An exclusive device
+/// is already reserved for this output and transfers at T8.
+fn open_action(port: DeviceSource<bool>, reclaiming: bool, elapsed: Duration) -> OpenAction {
+    match port {
+        DeviceSource::Exclusive | DeviceSource::Reusable(true) => OpenAction::Reuse,
+        DeviceSource::Fresh if !reclaiming => OpenAction::Open,
+        DeviceSource::Fresh | DeviceSource::Reusable(false) if elapsed >= FREE_WITHIN => {
+            OpenAction::Open
+        }
+        DeviceSource::Fresh | DeviceSource::Reusable(false) => OpenAction::Wait,
+    }
 }
 
 /// What came of an [`Opening`]. It brings the `open` back.
@@ -271,28 +295,42 @@ pub struct Opened {
 /// Completes the transfer of an accepted output, outside the publisher lock.
 /// Dropping the receipt also completes the handoff if the caller is cancelled.
 pub struct Handoff {
-    previous: lane::Control,
+    previous: Option<lane::Control>,
     next: Recovery,
     retry: Retry,
     reuse: bool,
     shared: Arc<Shared>,
-    wake: u64,
+    unfinished_wake: Option<u64>,
 }
 
 impl Handoff {
-    /// Wait for the old adapter's last write before acknowledging the new route.
-    pub fn wait(self) {
-        drop(self);
+    /// T5 waits only for a cutoff already in progress. T8 completes on this thread.
+    /// Returns false if stopping cancelled the switch.
+    pub fn wait(mut self) -> bool {
+        self.complete()
+    }
+
+    fn complete(&mut self) -> bool {
+        let Some(previous) = self.previous.take() else {
+            return true;
+        };
+        self.shared.finish_wake(self.unfinished_wake);
+        previous.publish();
+        match previous.finish_handoff(&self.next.lane, self.reuse, &self.shared.outputs_stopped) {
+            Some(watch) => {
+                if watch {
+                    let _ = self.retry.send(self.next.clone());
+                }
+                true
+            }
+            None => false,
+        }
     }
 }
 
 impl Drop for Handoff {
     fn drop(&mut self) {
-        self.shared.finish_wake(self.wake);
-        self.previous.handoff();
-        if self.previous.finish_handoff(&self.next.lane, self.reuse) {
-            let _ = self.retry.send(self.next.clone());
-        }
+        self.complete();
     }
 }
 
@@ -334,7 +372,7 @@ enum Brings {
     /// An opened device on its own thread, for `Attach`.
     Device(Box<Lane>),
     /// An accepted route change to the same adapter, in its new lane.
-    Reroute(Box<Lane>),
+    Reroute(Box<Lane>, bool),
     /// Tell the opener when prior attachments passed the tick and reclaimer.
     Probe(Arc<AtomicBool>),
     /// The writers of the patch, for `Writers`.
@@ -382,6 +420,7 @@ pub enum Begun {
 pub struct Base {
     reservations: [Option<Live>; PLAYS],
     project: Project,
+    pending: [Option<PriorOutput>; MAX_OUTPUTS],
     routed: Arc<AttachedRoutes>,
     patch: Arc<Patch>,
     looks: Arc<Looks>,
@@ -392,15 +431,14 @@ pub struct Base {
 struct AttachedRoutes([Option<Arc<[Span]>>; MAX_OUTPUTS]);
 
 impl AttachedRoutes {
-    /// Whether replacing this route changes its byte stream. Refuse if it would
-    /// move or discard a physical byte belonging to a patched fixture.
+    /// Refuse a route edit that moves or discards a byte belonging to a patched fixture.
     fn check_edit(
         &self,
         patch: &Patch,
         project: &Project,
         output: OutputNumber,
         after: &[Span],
-    ) -> Result<bool, Refusal> {
+    ) -> Result<(), Refusal> {
         let run;
         let before = match project.output(output) {
             Some(ProjectOutput::Kind { kind, universes }) => {
@@ -414,10 +452,10 @@ impl AttachedRoutes {
                     .and_then(Option::as_deref)
                     .unwrap_or(std::slice::from_ref(&run))
             }
-            None => return Ok(false),
+            None => return Ok(()),
         };
         if before == after {
-            return Ok(false);
+            return Ok(());
         }
         let mut patched: Vec<_> = patch
             .fixtures()
@@ -431,13 +469,11 @@ impl AttachedRoutes {
         // Patched fixtures do not overlap, so their ends are also in address order.
         patched.sort_unstable_by_key(|(range, _)| range.start);
         let mut next = after.iter().copied().peekable();
-        let mut changed = false;
         for mut old in before.iter().copied() {
             while old.len > 0 {
                 // Walk the two streams in step, stopping at each span boundary.
                 let len = next.peek().map_or(old.len, |new| old.len.min(new.len));
                 if next.peek().is_none_or(|new| old.start != new.start) {
-                    changed = true;
                     let first = patched.partition_point(|(range, _)| range.end <= old.start);
                     if let Some((range, fixture)) = patched.get(first)
                         && range.start < old.start + len
@@ -456,7 +492,7 @@ impl AttachedRoutes {
                 }
             }
         }
-        Ok(changed || next.peek().is_some())
+        Ok(())
     }
 
     /// A patch added during an open must fit both the current and requested routes.
@@ -475,6 +511,70 @@ impl AttachedRoutes {
             }
         }
         Ok(())
+    }
+}
+
+#[derive(Clone, Copy)]
+struct PriorOutput {
+    number: OutputNumber,
+    generation: u64,
+    descriptor: ProjectOutput,
+    explicit: bool,
+}
+
+impl PriorOutput {
+    /// Restore both the visible descriptor and whether its bounds guarantee a stream.
+    fn restore(self, mut project: Project) -> Project {
+        let output = self.number;
+        let universes = match self.descriptor {
+            ProjectOutput::Attached { universes } | ProjectOutput::Kind { universes, .. } => {
+                universes
+            }
+        };
+        let event = if self.explicit {
+            ProjectEvent::Routed {
+                output,
+                bounds: universes,
+            }
+        } else {
+            ProjectEvent::Attached { output, universes }
+        };
+        if let Ok((cleared, _)) = project.update(ProjectEvent::OpenFailed { output })
+            && let Ok((restored, _)) = cleared.update(event)
+        {
+            project = restored;
+            if let Some(slot) = project.outputs.get_mut(output.slot()) {
+                *slot = Some(self.descriptor);
+            }
+        }
+        project
+    }
+}
+
+/// An immutable project revision. A published cutover becomes visible at the
+/// same output generation in both the project and the sampled engine state.
+#[derive(Clone, Copy)]
+pub struct ProjectView {
+    project: Project,
+    previous: [Option<PriorOutput>; MAX_OUTPUTS],
+}
+
+impl ProjectView {
+    /// Whether publishing these two revisions changes an output descriptor.
+    pub fn same_outputs(&self, other: &Self) -> bool {
+        self.project.outputs == other.project.outputs
+    }
+
+    pub fn at(&self, snapshot: &Snapshot) -> Project {
+        let mut project = self.project;
+        for (slot, prior) in self.previous.iter().enumerate() {
+            if let Some(old) = prior
+                && snapshot.generation(slot) == old.generation
+            {
+                project = old.restore(project);
+            }
+        }
+        project
     }
 }
 
@@ -563,6 +663,52 @@ impl Prepared {
     }
 }
 
+/// Keep the old stream in the patch checks until T9, including overlap with
+/// independent switches on other outputs. Project already checks both sides of
+/// a pending SetOutput. Explicit routes cannot guarantee a cross-universe stream.
+fn check_pending_patch(
+    patch: &Patch,
+    mut project: Project,
+    pending: &[Option<PriorOutput>; MAX_OUTPUTS],
+    routed: &AttachedRoutes,
+) -> Result<(), Refusal> {
+    routed.check_patch(patch, &project)?;
+    for (slot, old) in pending.iter().enumerate() {
+        let Some(old) = old else { continue };
+        let output = old.number;
+        let next = project.output(output);
+        project = old.restore(project);
+        match next {
+            Some(ProjectOutput::Kind { kind, universes }) => {
+                project = project
+                    .update(ProjectEvent::Client(Command::SetOutput {
+                        output,
+                        kind,
+                        universes: RunNumbers {
+                            first: universes.first(),
+                            count: universes.count(),
+                        },
+                        rate: None,
+                    }))?
+                    .0;
+            }
+            Some(ProjectOutput::Attached { .. }) | None => {
+                if routed.0.get(slot).is_some_and(Option::is_some) {
+                    project = PriorOutput {
+                        explicit: true,
+                        ..*old
+                    }
+                    .restore(project);
+                }
+            }
+        }
+    }
+    if pending.iter().any(Option::is_some) {
+        routed.check_patch(patch, &project)?;
+    }
+    Ok(())
+}
+
 impl Base {
     /// Checks `command` against this base and makes what it changes: a calculation,
     /// which may take long (a patch measures its show file, a look compiles). `library`
@@ -625,7 +771,7 @@ impl Base {
                         .update_with_looks(command, library, self.looks.rows())?;
                 // and a change of the patch that would make one is refused
                 if let Some(patch) = &patch {
-                    self.routed.check_patch(patch, &project)?;
+                    check_pending_patch(patch, project, &self.pending, &self.routed)?;
                 }
                 // as is one that would leave a saved look naming nothing
                 let rebound = patch
@@ -807,6 +953,7 @@ impl Live {
 /// Between the threads of the engine. Atomics only.
 struct Shared {
     stop: AtomicBool,
+    outputs_stopped: AtomicBool,
     /// Odd from just before the FIFO cutoff until this wake has handed all due frames.
     wake: AtomicU64,
     /// Boxes the free thread freed, so far.
@@ -835,17 +982,19 @@ struct Shared {
 impl Shared {
     /// Order FIFO publication against the tick's next cutoff. Both operations
     /// update this same atomic so a later cutoff sees the published command.
-    fn published(&self) -> u64 {
-        self.wake.fetch_add(0, Ordering::AcqRel)
+    fn published(&self) -> Option<u64> {
+        let wake = self.wake.fetch_add(0, Ordering::AcqRel);
+        (!wake.is_multiple_of(2)).then_some(wake)
     }
 
     /// A wake already past its cutoff may still owe the old lane a frame.
     /// Only the thread completing the handoff waits, never the tick or publisher.
-    fn finish_wake(&self, wake: u64) {
-        if wake % 2 == 1 {
-            while self.wake.load(Ordering::Acquire) == wake && !self.stop.load(Ordering::Acquire) {
-                thread::sleep(Duration::from_millis(1));
-            }
+    fn finish_wake(&self, unfinished: Option<u64>) {
+        let Some(wake) = unfinished else { return };
+        while self.wake.load(Ordering::Acquire) == wake
+            && !self.outputs_stopped.load(Ordering::Acquire)
+        {
+            thread::sleep(Duration::from_millis(1));
         }
     }
 }
@@ -908,6 +1057,7 @@ impl Engine {
     ) -> io::Result<(Self, Sender)> {
         let shared = Arc::new(Shared {
             stop: AtomicBool::new(false),
+            outputs_stopped: AtomicBool::new(false),
             wake: AtomicU64::new(0),
             freed: AtomicU64::new(0),
             plan_bytes_freed: AtomicU64::new(0),
@@ -942,6 +1092,7 @@ impl Engine {
             commands: incoming,
             retired: outgoing,
             devices: std::array::from_fn(|_| None),
+            switching: Box::new(std::array::from_fn(|_| None)),
             writers: Vec::new(),
             plans: std::array::from_fn(|_| None),
             scratch: {
@@ -976,6 +1127,8 @@ impl Engine {
         let sender = Sender {
             open: Some(Opener(Arc::new(open.into()))),
             lanes: std::array::from_fn(|_| None),
+            generations: [0; MAX_OUTPUTS],
+            previous_outputs: [None; MAX_OUTPUTS],
             retry,
             #[cfg(feature = "test-support")]
             lane_pause: None,
@@ -1040,7 +1193,7 @@ impl Sender {
             .lanes
             .get(output.slot())
             .and_then(Option::as_ref)
-            .is_some_and(lane::Control::awaiting_device)
+            .is_some_and(lane::Control::waits_to_serve)
         {
             return Err(Refusal::Opening);
         }
@@ -1077,6 +1230,7 @@ impl Sender {
         Base {
             reservations: self.plays.clone(),
             project: self.project,
+            pending: self.pending_outputs(),
             routed: Arc::clone(&self.routed),
             patch: Arc::clone(&self.patch),
             looks: Arc::clone(&self.looks),
@@ -1121,7 +1275,16 @@ impl Sender {
                 universes,
                 rate,
             } => {
-                self.check_handoff(output)?;
+                // A receipt may be accepted while its visible switch still awaits
+                // T9. The opener waits off the publisher before starting that lane.
+                if self
+                    .lanes
+                    .get(output.slot())
+                    .and_then(Option::as_ref)
+                    .is_none_or(|old| old.cutover().state() != CutoverState::Returned)
+                {
+                    self.check_handoff(output)?;
+                }
                 if self.open.is_none() {
                     return Err(Refusal::Opening);
                 }
@@ -1150,8 +1313,12 @@ impl Sender {
                     self.room(1, 1)?;
                     self.commands.reserved = true;
                 }
+                let previous = self.lanes.get(output.slot()).cloned().flatten();
+                if let Some(old) = &previous {
+                    old.cutover().apply(CutoverEvent::Begin);
+                }
                 Begun::Opening(Opening {
-                    previous: self.lanes.get(output.slot()).cloned().flatten(),
+                    previous,
                     retry: self.retry.clone(),
                     #[cfg(feature = "test-support")]
                     lane_pause: self
@@ -1690,34 +1857,42 @@ impl Sender {
             universes,
             rate,
         };
-        let restarting = self.project.restarting(output);
         let previous = self.lanes.get(output.slot()).cloned().flatten();
         let sent = lane.map_err(|_| Refusal::CannotOpen).and_then(|lane| {
             let next = lane.control.clone();
-            let brings = if restarting {
-                Brings::Reroute(lane)
+            let brings = if previous.is_some() {
+                Brings::Reroute(lane, reuse)
             } else {
                 Brings::Device(lane)
             };
             self.push(command, brings)?;
-            Ok(previous.map(|previous| Handoff {
-                previous,
-                next: Recovery {
-                    output,
-                    kind,
-                    open,
-                    lane: next,
-                },
-                retry: self.retry.clone(),
-                reuse,
-                shared: Arc::clone(&self.shared),
-                wake: self.shared.published(),
+            Ok(previous.as_ref().map(|previous| {
+                let unfinished_wake = self.shared.published();
+                if unfinished_wake.is_none() {
+                    previous.publish();
+                }
+                Handoff {
+                    previous: Some(previous.clone()),
+                    next: Recovery {
+                        output,
+                        kind,
+                        open,
+                        lane: next,
+                    },
+                    retry: self.retry.clone(),
+                    reuse,
+                    shared: Arc::clone(&self.shared),
+                    unfinished_wake,
+                }
             }))
         });
         let event = if sent.is_ok() {
             self.set_attached_route(output, None);
             ProjectEvent::Opened { output, kind }
         } else {
+            if let Some(old) = previous {
+                old.cutover().apply(CutoverEvent::Refuse);
+            }
             ProjectEvent::OpenFailed { output }
         };
         self.project = self.project.update(event)?.0;
@@ -1781,49 +1956,56 @@ impl Sender {
         }
         .check(self.universes)?;
         let (project, _) = self.project.update(event)?;
-        let changed = self
-            .routed
+        self.routed
             .check_edit(&self.patch, &self.project, output, route.spans())?;
         if let Some((fixture, _)) = self.patch.unstreamed(&project) {
             return Err(Refusal::StreamsFixture { fixture });
         }
-        // This sender is the only queue producer. Once the new lane is ready,
-        // it can finish the old send and publish without a subsequent refusal.
-        if changed {
-            self.room(1, 1)?;
-        }
         let explicit =
             matches!(event, ProjectEvent::Routed { .. }).then(|| Arc::from(route.spans()));
+        let previous = self.lanes.get(output.slot()).cloned().flatten();
+        if let Some(old) = &previous
+            && old.cutover().apply(CutoverEvent::Begin) != CutoverEffect::Open
+        {
+            return Err(Refusal::Opening);
+        }
         let lane = Lane::start(
             Some(device),
             route,
             self.clock.clone(),
+            previous.as_ref(),
             #[cfg(feature = "test-support")]
             None,
         )
-        .map_err(|_| Refusal::CannotOpen)?;
-        let previous = self
-            .lanes
-            .get(output.slot())
-            .cloned()
-            .flatten()
-            .filter(|_| changed);
+        .map_err(|_| {
+            if let Some(old) = &previous {
+                old.cutover().apply(CutoverEvent::Refuse);
+            }
+            Refusal::CannotOpen
+        })?;
         let next = lane.control.clone();
-        if previous.is_some() {
-            next.hold_for_handoff();
-        }
-        self.push(
+        let brings = if previous.is_some() {
+            Brings::Reroute(Box::new(lane), false)
+        } else {
+            Brings::Device(Box::new(lane))
+        };
+        if let Err(reason) = self.push(
             EngineCommand::Attach {
                 output,
                 universes,
                 rate,
             },
-            Brings::Device(Box::new(lane)),
-        )?;
+            brings,
+        ) {
+            if let Some(old) = previous {
+                old.cutover().apply(CutoverEvent::Refuse);
+            }
+            return Err(reason);
+        }
         if let Some(previous) = previous {
             self.shared.finish_wake(self.shared.published());
-            previous.handoff();
-            previous.finish_handoff(&next, false);
+            previous.publish();
+            previous.finish_handoff(&next, false, &self.shared.outputs_stopped);
         }
         self.set_attached_route(output, explicit);
         self.project = project;
@@ -1843,15 +2025,58 @@ impl Sender {
     /// [`Sender::patch`], so it has this engine's universes and lights. Its writers go to
     /// the tick thread. Refused as a change of the patch is: nothing changes.
     pub fn load(&mut self, patch: Patch) -> Result<(), Refusal> {
-        self.routed.check_patch(&patch, &self.project)?;
+        check_pending_patch(&patch, self.project, &self.pending_outputs(), &self.routed)?;
         self.publish(vec![PatchEffect::Writers(patch.writers().to_vec())], None)?;
         self.patch = Arc::new(patch);
         Ok(())
     }
 
-    /// What the engine was asked to be: its outputs and what each sends to.
+    /// The project with each route as of its last visible switch.
     pub fn project(&self) -> Project {
-        self.project
+        let mut project = self.project;
+        for (prior, lane) in self.previous_outputs.iter().zip(&self.lanes) {
+            if let Some(old) = prior
+                && lane.as_ref().is_some_and(lane::Control::waits_to_serve)
+            {
+                project = old.restore(project);
+            }
+        }
+        project
+    }
+
+    fn pending_outputs(&self) -> [Option<PriorOutput>; MAX_OUTPUTS] {
+        std::array::from_fn(|slot| {
+            let prior = self.previous_outputs.get(slot).copied().flatten()?;
+            self.lanes
+                .get(slot)?
+                .as_ref()?
+                .waits_to_serve()
+                .then_some(prior)
+        })
+    }
+
+    /// Capture the descriptors that can be visible in a snapshot of this revision.
+    pub fn project_for_snapshot(&self) -> ProjectView {
+        ProjectView {
+            project: self.project,
+            previous: self.previous_outputs,
+        }
+    }
+
+    /// A second client must prepare its output change against the next visible run.
+    pub fn cutover_pending(&self, output: OutputNumber) -> bool {
+        self.lanes
+            .get(output.slot())
+            .and_then(Option::as_ref)
+            .is_some_and(|lane| lane.cutover().effect(CutoverEvent::Begin) == CutoverEffect::Wait)
+    }
+
+    /// Cancel pending transfers and stop sending. The tick can still supply a final report.
+    pub fn stop_outputs(&self) {
+        self.shared.outputs_stopped.store(true, Ordering::Release);
+        for lane in self.lanes.iter().flatten() {
+            lane.cutover().apply(CutoverEvent::Stop);
+        }
     }
 
     /// The patch as it is now.
@@ -1888,7 +2113,7 @@ impl Sender {
         let (changes, sends_back) = match command {
             EngineCommand::Attach { output, .. } => (
                 Some(output),
-                matches!(brings, Brings::Device(_) | Brings::Reroute(_)),
+                matches!(brings, Brings::Device(_) | Brings::Reroute(_, _)),
             ),
             EngineCommand::RemoveOutput { output } => (Some(output), true),
             EngineCommand::Tick { .. }
@@ -1939,11 +2164,13 @@ impl Sender {
             free_elsewhere(brings);
             return Err(reason);
         }
-        let next = if let Brings::Device(lane) | Brings::Reroute(lane) = &brings {
+        let next = if let Brings::Device(lane) | Brings::Reroute(lane, _) = &brings {
             Some(Some(lane.control.clone()))
         } else {
             matches!(command, EngineCommand::RemoveOutput { .. }).then_some(None)
         };
+        let cutover = matches!(brings, Brings::Reroute(_, _));
+        let next_is_keep = matches!(brings, Brings::Nothing);
         let at = self.clock.now();
         if let Err(rtrb::PushError::Full(refused)) = self.commands.fifo.push(Sent {
             command,
@@ -1958,6 +2185,28 @@ impl Sender {
             next,
         ) {
             *slot = next;
+        }
+        if let Some(output) = changes
+            && !matches!(command, EngineCommand::RemoveOutput { .. })
+            && let Some(generation) = self.generations.get_mut(output.slot())
+            && let Some(prior) = self.previous_outputs.get_mut(output.slot())
+            && (sends_back || next_is_keep)
+        {
+            *prior = self
+                .project
+                .output(output)
+                .filter(|_| cutover)
+                .map(|descriptor| PriorOutput {
+                    number: output,
+                    generation: *generation,
+                    descriptor,
+                    explicit: self
+                        .routed
+                        .0
+                        .get(output.slot())
+                        .is_some_and(Option::is_some),
+                });
+            *generation = generation.wrapping_add(1);
         }
         if back {
             self.retired += 1;
@@ -2026,7 +2275,7 @@ fn places(effect: &PatchEffect) -> usize {
 /// own: closing a port can take long, and the sender may be shared behind a lock. Without
 /// a thread from the system, it is freed here after all. Writers are freed here.
 fn free_elsewhere(brings: Brings) {
-    if let Brings::Device(lane) | Brings::Reroute(lane) = brings {
+    if let Brings::Device(lane) | Brings::Reroute(lane, _) = brings {
         drop(
             thread::Builder::new()
                 .name("free a refused device".into())
@@ -2040,15 +2289,32 @@ impl Opening {
     /// are freed (one may hold the port this opens), then for as long as opening takes.
     pub fn open(self) -> Opened {
         let started = Instant::now();
+        let prior_visible = self.previous.as_ref().is_none_or(|old| {
+            while old.waits_to_serve() {
+                if self.shared.outputs_stopped.load(Ordering::Acquire)
+                    || started.elapsed() >= FREE_WITHIN
+                {
+                    return false;
+                }
+                thread::sleep(Duration::from_millis(1));
+            }
+            if old.cutover().state() == CutoverState::Serving {
+                old.cutover().apply(CutoverEvent::Begin);
+            }
+            true
+        });
         let reuse = loop {
-            match &self.source {
-                DeviceSource::Exclusive => break true,
-                DeviceSource::Reusable(ready) if ready.load(Ordering::Acquire) => break true,
-                DeviceSource::Fresh if !waits(&self.shared, self.devices) => break false,
-                DeviceSource::Fresh | DeviceSource::Reusable(_) => {
-                    if started.elapsed() >= FREE_WITHIN {
-                        break false;
-                    }
+            let port = match &self.source {
+                DeviceSource::Fresh => DeviceSource::Fresh,
+                DeviceSource::Exclusive => DeviceSource::Exclusive,
+                DeviceSource::Reusable(ready) => {
+                    DeviceSource::Reusable(ready.load(Ordering::Acquire))
+                }
+            };
+            match open_action(port, waits(&self.shared, self.devices), started.elapsed()) {
+                OpenAction::Reuse => break true,
+                OpenAction::Open => break false,
+                OpenAction::Wait => {
                     self.free.unpark();
                     thread::sleep(Duration::from_millis(1));
                 }
@@ -2056,8 +2322,10 @@ impl Opening {
         };
         // Opening the device and starting the thread may both fail. The accepted
         // lane keeps sending until finish publishes a fully prepared replacement.
-        let reuse = reuse && self.previous.as_ref().is_some_and(|old| !old.closed());
         let lane = (|| {
+            if !prior_visible || self.shared.outputs_stopped.load(Ordering::Acquire) {
+                return Err(io::Error::other("output unavailable"));
+            }
             let device = if reuse {
                 None
             } else {
@@ -2067,12 +2335,10 @@ impl Opening {
                 device,
                 self.route,
                 self.clock,
+                self.previous.as_ref(),
                 #[cfg(feature = "test-support")]
                 self.lane_pause,
             )?;
-            if self.previous.is_some() {
-                lane.control.hold_for_handoff();
-            }
             Ok(Box::new(lane))
         })();
         if lane.is_err()
@@ -2195,7 +2461,8 @@ fn free(mut retired: rtrb::Consumer<Retired>, shared: &Shared) {
 
 impl Drop for Engine {
     fn drop(&mut self) {
-        self.shared.stop.store(true, Ordering::Relaxed);
+        self.shared.outputs_stopped.store(true, Ordering::Release);
+        self.shared.stop.store(true, Ordering::Release);
         if let Some(tick) = self.tick.take() {
             drop(tick.join()); // the devices are freed here, not on the tick thread
         }
@@ -2223,6 +2490,7 @@ struct Ticker {
     retired: rtrb::Producer<Retired>,
     /// Each output's own thread, by output number, beside `State::outputs`.
     devices: [Option<Box<Lane>>; MAX_OUTPUTS],
+    switching: Box<[Option<Switch>; MAX_OUTPUTS]>,
     /// The patch's writers: lights to bytes, every frame.
     writers: Vec<Writer>,
     /// Each play's plan, by slot, beside `State::plays`.
@@ -2244,6 +2512,18 @@ struct Ticker {
     trace: Trace,
     #[cfg(feature = "test-support")]
     timings: Option<snapshot::timing::TimingWriter>,
+}
+
+/// The tick owns both lanes from T6 until T9. The pending output has its own
+/// deadline and press prefix, so its frames never advance the visible old run.
+struct Switch {
+    next: Box<Lane>,
+    schedule: Output,
+    reuse: bool,
+    presses: u64,
+    handed: u64,
+    lateness: Histogram<LATENESS_BUCKETS>,
+    worst: Duration,
 }
 
 /// Capacity of each send-time history. Overwritten press stamps count as missing.
@@ -2378,7 +2658,7 @@ impl Ticker {
         while !self.shared.stop.load(Ordering::Relaxed) {
             // Sleep, then spin the last millisecond before an output: a sleep can wake
             // late, a spin cannot. A beat with no output only sleeps.
-            let (sleep, spin) = wait(&self.now.state, self.clock.now());
+            let (sleep, spin) = wait(&self.scheduled(), self.clock.now());
             self.clock.wait(sleep, spin, &self.shared.stop);
             // The cutoff (`wake.rs`): the picture asked for and the commands published
             // so far belong to this wake, then the frame time is read. A command
@@ -2386,6 +2666,11 @@ impl Ticker {
             let asked = self.hand.asked();
             self.shared.wake.fetch_add(1, Ordering::AcqRel);
             let published = self.commands.slots().min(QUEUE);
+            let mut wake_actions = self.devices.each_ref().map(|lane| {
+                lane.as_ref().map_or(CutoverEffect::Nothing, |old| {
+                    old.control.cutover().effect(CutoverEvent::Wake)
+                })
+            });
             // read after the commands are counted: a change it counts has all its
             // commands in this wake, or its moment's commands are more than applied
             self.now
@@ -2402,18 +2687,26 @@ impl Ticker {
                 self.settle(sent.at);
                 match (sent.command, &sent.brings) {
                     (EngineCommand::Keep { play }, _) => self.stop(play),
-                    (
-                        EngineCommand::Attach {
-                            output,
-                            universes,
-                            rate,
-                        },
-                        Brings::Reroute(_),
-                    ) => {
-                        self.now.state = self.now.state.reroute(output, universes, rate);
-                    }
-                    (_, Brings::Probe(_)) => {}
+                    (_, Brings::Reroute(_, _) | Brings::Probe(_)) => {}
                     (command, _) => self.apply(command),
+                }
+                if let EngineCommand::Attach { output, .. } = sent.command
+                    && let Some(action) = wake_actions.get_mut(output.slot())
+                {
+                    match &sent.brings {
+                        Brings::Device(lane) => {
+                            *action = lane.control.cutover().effect(CutoverEvent::Wake)
+                        }
+                        Brings::Reroute(_, _) if *action != CutoverEffect::ShowNew => {
+                            *action = CutoverEffect::SendNew
+                        }
+                        Brings::Nothing
+                        | Brings::Reroute(_, _)
+                        | Brings::Probe(_)
+                        | Brings::Writers(_)
+                        | Brings::Runs(_)
+                        | Brings::Plan(_) => {}
+                    }
                 }
                 self.swap(sent.command, sent.brings);
                 self.carried.applied(&sent.command, sent.at);
@@ -2465,12 +2758,15 @@ impl Ticker {
                 &mut self.channels,
             );
             self.back();
+            self.show_returned(&wake_actions);
             let mut serve = [None; MAX_OUTPUTS];
-            for (slot, number) in serve.iter_mut().zip(due(&self.now.state, now)) {
+            for (slot, number) in serve.iter_mut().zip(due(&self.scheduled(), now)) {
                 *slot = Some(number);
             }
             for number in serve.into_iter().flatten() {
-                self.serve(number);
+                if let Some(action) = wake_actions.get(number.slot()) {
+                    self.serve(number, *action);
+                }
                 let (handed, now) = (self.clock.now(), &mut self.now);
                 self.carried
                     .handed(number.slot(), handed, |time| now.carried(time));
@@ -2478,7 +2774,7 @@ impl Ticker {
             self.shared.wake.fetch_add(1, Ordering::Release);
             // Each lane returns frames in order. Across its accepted prefixes this
             // wake, at most CARRY surviving send times can be visited.
-            for frame in self.staged.iter_mut().map_while(Option::take) {
+            for frame in self.staged.iter_mut().filter_map(Option::take) {
                 self.carried.accepted(frame, &mut self.now);
                 self.trace.counted(frame.output);
             }
@@ -2488,6 +2784,9 @@ impl Ticker {
             if let Some(asked) = asked {
                 self.hand.fill(asked, &self.now);
             }
+        }
+        for lane in self.devices.iter().flatten() {
+            lane.control.cutover().apply(CutoverEvent::Stop);
         }
         self
     }
@@ -2596,7 +2895,43 @@ impl Ticker {
                 }
                 return;
             }
-            Brings::Device(device) | Brings::Reroute(device) => Some(device),
+            Brings::Reroute(next, reuse) => {
+                if let EngineCommand::Attach {
+                    output,
+                    universes,
+                    rate,
+                } = command
+                    && let Some(Some(old)) = self.devices.get(output.slot())
+                    && let Some(place) = self.switching.get_mut(output.slot())
+                    && let Some(schedule) = self
+                        .now
+                        .state
+                        .reroute(output, universes, rate)
+                        .outputs
+                        .get(output.slot())
+                        .copied()
+                        .flatten()
+                {
+                    old.control.publish();
+                    old.control.cutover().apply(CutoverEvent::Cutoff);
+                    *place = Some(Switch {
+                        next,
+                        schedule: Output {
+                            status: Status::NotFound,
+                            ..schedule
+                        },
+                        reuse,
+                        presses: self.carried.presses.total,
+                        handed: 0,
+                        lateness: [0; LATENESS_BUCKETS],
+                        worst: Duration::ZERO,
+                    });
+                } else {
+                    let _ = self.retired.push(Retired::Device(next));
+                }
+                return;
+            }
+            Brings::Device(device) => Some(device),
             Brings::Probe(probe) => {
                 let _ = self.retired.push(Retired::Probe(probe));
                 return;
@@ -2632,13 +2967,6 @@ impl Ticker {
             return;
         };
         self.carried.attached(output.slot(), false);
-        if device
-            .as_ref()
-            .is_some_and(|lane| lane.control.awaiting_device())
-            && let Some(old) = slot
-        {
-            old.control.handoff();
-        }
         if let Some(old) = std::mem::replace(slot, device) {
             // The queue has room for every device a wake can retire (see `start`).
             let _ = self.retired.push(Retired::Device(old));
@@ -2646,16 +2974,111 @@ impl Ticker {
         self.now.attached(output.slot());
     }
 
+    /// While a transfer drains, the held lane's rate owns the scheduler.
+    fn scheduled(&self) -> State {
+        let mut scheduled = self.now.state;
+        if self.shared.outputs_stopped.load(Ordering::Acquire) {
+            scheduled.outputs.fill(None);
+            return scheduled;
+        }
+        for (out, switch) in scheduled.outputs.iter_mut().zip(self.switching.iter()) {
+            if let Some(switch) = switch {
+                *out = Some(switch.schedule);
+            }
+        }
+        scheduled
+    }
+
+    /// T9. back() has counted the old boxes. Finish their press prefix before
+    /// retiring the old lane or advancing its generation in the snapshot.
+    fn show_returned(&mut self, actions: &[CutoverEffect; MAX_OUTPUTS]) {
+        for (slot, action) in actions.iter().enumerate() {
+            if *action != CutoverEffect::ShowNew {
+                continue;
+            }
+            let Some(switch) = self.switching.get_mut(slot).and_then(Option::take) else {
+                continue;
+            };
+            let Some(installed) = self.devices.get_mut(slot) else {
+                continue;
+            };
+            for staged in &mut *self.staged {
+                if staged.is_some_and(|sent| sent.output.slot() == slot)
+                    && let Some(sent) = staged.take()
+                {
+                    self.carried.accepted(sent, &mut self.now);
+                    self.trace.counted(sent.output);
+                }
+            }
+            if let Some(old) = installed.replace(switch.next) {
+                let _ = self.retired.push(Retired::Device(old));
+            }
+            let mut schedule = switch.schedule;
+            if let Some(visible) = self.now.state.outputs.get_mut(slot) {
+                if let Some(old) = *visible
+                    && switch.reuse
+                {
+                    schedule.status = old.status;
+                }
+                *visible = Some(schedule);
+            }
+            self.now.cutover(
+                slot,
+                switch.reuse,
+                switch.handed,
+                &switch.lateness,
+                switch.worst,
+            );
+            if let Some(prefix) = self.carried.last_accepted.get_mut(slot) {
+                *prefix = switch.presses;
+            }
+            if let Some(new) = installed {
+                new.control.cutover().apply(CutoverEvent::Wake);
+            }
+        }
+    }
+
     /// Gathers a due output's route, and when its next is due, on to its own
     /// thread. What comes of it is counted when its thread hands the box back ([`Ticker::back`]). With no spare
     /// box, the device is still on older frames: this one is dropped and counted now.
-    fn serve(&mut self, number: OutputNumber) {
+    fn serve(&mut self, number: OutputNumber, action: CutoverEffect) {
         let slot = number.slot();
-        let Some(Some(output)) = self.now.state.outputs.get(slot).copied() else {
+        if self.shared.outputs_stopped.load(Ordering::Acquire) {
             return;
-        };
+        }
         let at = self.clock.now();
-        self.apply(EngineCommand::Handed { output: number, at });
+        let (output, next, lane, generation) = if action == CutoverEffect::SendNew {
+            let Some(switch) = self.switching.get_mut(slot).and_then(Option::as_mut) else {
+                return;
+            };
+            let output = switch.schedule;
+            switch.schedule = output.handed(at);
+            (
+                output,
+                switch.schedule.due,
+                &mut switch.next,
+                self.now.generation(slot).wrapping_add(1),
+            )
+        } else {
+            if !matches!(action, CutoverEffect::SendOld | CutoverEffect::ShowNew) {
+                return;
+            }
+            let Some(Some(output)) = self.now.state.outputs.get(slot).copied() else {
+                return;
+            };
+            self.apply(EngineCommand::Handed { output: number, at });
+            let Some(lane) = self.devices.get_mut(slot).and_then(Option::as_mut) else {
+                return;
+            };
+            let next = self
+                .now
+                .state
+                .outputs
+                .get(slot)
+                .and_then(|o| *o)
+                .map_or(at, |o| o.due);
+            (output, next, lane, self.now.generation(slot))
+        };
         self.trace.handed(number, output.due, at);
         #[cfg(feature = "test-support")]
         if let Some(timings) = &mut self.timings {
@@ -2665,42 +3088,51 @@ impl Ticker {
                 applied: self.now.applied(),
             });
         }
-        let next = match self.now.state.outputs.get(slot) {
-            Some(Some(handed)) => handed.due,
-            _ => at,
-        };
         let frame = self.channels.values();
         let prefix = lane::Prefix {
             presses: self.carried.presses.total,
-            generation: self.now.generation(slot),
+            generation,
         };
-        let dropped = match self.devices.get_mut(slot) {
-            Some(Some(lane)) => match lane.hand(frame, output.due, next, prefix) {
-                lane::Hand::Handed => {
-                    self.now.handed_one(slot);
-                    #[cfg(all(test, feature = "test-support"))]
-                    self.shared
-                        .presses_at_handoff
-                        .store(self.now.presses_in_first_bucket(), Ordering::Relaxed);
-                    None
-                }
-                lane::Hand::Full => Some(Outcome::Dropped),
-            },
-            _ => Some(Outcome::Dropped),
+        let handed = lane.hand(frame, output.due, next, prefix);
+        if handed != lane::Hand::Full {
+            if let Some(Some(switch)) = self.switching.get_mut(slot) {
+                switch.handed = switch.handed.wrapping_add(1);
+            } else {
+                self.now.handed_one(slot);
+            }
+            #[cfg(all(test, feature = "test-support"))]
+            self.shared
+                .presses_at_handoff
+                .store(self.now.presses_in_first_bucket(), Ordering::Relaxed);
+        }
+        let dropped = match handed {
+            lane::Hand::Replaced(sent) => Some((sent.due, sent.at)),
+            lane::Hand::Full => Some((output.due, at)),
+            lane::Hand::Handed => None,
         };
-        if let Some(outcome) = dropped {
-            self.trace.came(number, outcome, output.due);
+        if let Some((due, at)) = dropped {
+            let outcome = Outcome::Dropped;
+            self.trace.came(number, outcome, due);
             #[cfg(feature = "test-support")]
             if let Some(timings) = &mut self.timings {
                 timings.write(Timing::Finished {
                     output: number,
-                    due: output.due,
+                    due,
                     at,
                     outcome,
                 });
             }
-            self.now.late(slot, at.saturating_sub(output.due));
-            self.now.sent(number, outcome, at, prefix.generation);
+            if let Some(Some(switch)) = self.switching.get_mut(slot) {
+                switch.schedule = switch.schedule.sent(outcome, at);
+                let late = at.saturating_sub(due);
+                if let Some(count) = switch.lateness.get_mut(bucket::<LATENESS_BUCKETS>(late)) {
+                    *count += 1;
+                }
+                switch.worst = switch.worst.max(late);
+            } else {
+                self.now.late(slot, at.saturating_sub(due));
+                self.now.sent(number, outcome, at, prefix.generation);
+            }
         }
     }
 
@@ -2721,6 +3153,9 @@ impl Ticker {
             let (Some(lane), Ok(output)) = (lane, OutputNumber::try_from(number)) else {
                 continue;
             };
+            if lane.control.cutover().apply(CutoverEvent::FrameBack) != CutoverEffect::CountOld {
+                continue;
+            }
             let watching_loss = lane.control.watching_loss();
             lane.back(|sent| {
                 trace.came(output, sent.outcome, sent.due);
@@ -2780,6 +3215,25 @@ impl Ticker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn opening_uses_the_reserved_device_or_waits_for_reclamation() {
+        use DeviceSource::{Exclusive, Fresh, Reusable};
+        use OpenAction::{Open, Reuse, Wait};
+        let before = FREE_WITHIN - Duration::from_nanos(1);
+        for (port, reclaiming, elapsed, expected) in [
+            (Exclusive, true, before, Reuse),
+            (Fresh, false, before, Open),
+            (Fresh, true, before, Wait),
+            (Fresh, true, FREE_WITHIN, Open),
+            (Reusable(true), true, before, Reuse),
+            (Reusable(true), true, FREE_WITHIN, Reuse),
+            (Reusable(false), false, before, Wait),
+            (Reusable(false), false, FREE_WITHIN, Open),
+        ] {
+            assert_eq!(open_action(port, reclaiming, elapsed), expected);
+        }
+    }
 
     #[cfg(feature = "test-support")]
     #[expect(
@@ -4533,9 +4987,18 @@ mod tests {
                 kind: engine_core::TEST_STREAM_KIND,
                 universes: run,
             });
-            assert_eq!(sender.project().output(output), expected, "fresh {fresh}");
+            let before_cutover = RunNumbers { first: 1, count: 2 }.check(universes).unwrap();
+            assert_eq!(
+                sender.project().output(output),
+                Some(ProjectOutput::Kind {
+                    kind: engine_core::TEST_STREAM_KIND,
+                    universes: before_cutover,
+                }),
+                "the old run is visible before T9"
+            );
             engine.latest();
             wakes.wake().unwrap();
+            assert_eq!(sender.project().output(output), expected, "fresh {fresh}");
             let snapshot = engine.latest();
             assert_eq!(snapshot.applied(), sender.sent());
             let state = snapshot.state.outputs.get(output.slot()).copied().flatten();

@@ -3,7 +3,7 @@
 use crate::{Histogram, LATENCY_BUCKETS, LATENESS_BUCKETS, Rate, Status, bucket, edge};
 use core::time::Duration;
 
-/// One output's counters at an engine time, all counted since this generation attached.
+/// One run's counters at an engine time and the outage history of its reused adapter.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HealthSample {
     pub at: Duration,
@@ -16,6 +16,11 @@ pub struct HealthSample {
     pub press_under_target: u64,
     pub press_missing: u64,
     pub outages: u64,
+    /// Consecutive reroutes that kept this adapter. Subtract from generation
+    /// to identify it even when the reader missed several route changes.
+    pub prior_runs: u64,
+    /// Outages counted in those earlier runs of this adapter.
+    pub prior_outages: u64,
     pub frames_handed: u64,
     pub dropped: u64,
     pub failed: u64,
@@ -36,6 +41,8 @@ impl HealthSample {
             press_under_target: 0,
             press_missing: 0,
             outages: 0,
+            prior_runs: 0,
+            prior_outages: 0,
             frames_handed: 0,
             dropped: 0,
             failed: 0,
@@ -275,7 +282,7 @@ pub fn next(
     }
 }
 
-/// Device edges between two reader samples of one generation. Several outages
+/// Device edges between two reader samples of the same adapter. Several outages
 /// collapse into one loss and, if the output is available again, one return.
 pub fn status_events(
     before: Option<&HealthSample>,
@@ -284,10 +291,12 @@ pub fn status_events(
     let (Some(before), Some(after)) = (before, after) else {
         return [None; 2];
     };
-    if before.generation != after.generation {
+    let adapter = |sample: &HealthSample| sample.generation.wrapping_sub(sample.prior_runs);
+    if adapter(before) != adapter(after) {
         return [None; 2];
     }
-    let lost = after.outages.wrapping_sub(before.outages) != 0;
+    let outages = |sample: &HealthSample| sample.prior_outages.wrapping_add(sample.outages);
+    let lost = outages(before) != outages(after);
     let available = Some(HealthEvent::Recovered(RecoveredReason::OutputAvailable));
     match (lost, after.status) {
         (true, Status::Reconnecting { .. }) => [Some(HealthEvent::OutputLost), None],

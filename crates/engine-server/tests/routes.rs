@@ -403,12 +403,13 @@ fn a_fresh_device_waits_for_the_last_old_send_before_accepting_a_reroute() {
     let (entered, taking) = mpsc::channel();
     let (release, resume) = mpsc::channel();
     let (fresh, reopened) = mpsc::channel();
-    let mut first = Some((entered, resume));
-    let (engine, mut sender, wakes) = start(Box::new(move |kind| {
+    let (record, completed) = mpsc::sync_channel(2);
+    let mut first = Some((entered, resume, record));
+    let (mut engine, mut sender, mut wakes) = start(Box::new(move |kind| {
         let ddp = outputs::open(kind)?;
-        if let Some((entered, resume)) = first.take() {
+        if let Some((entered, resume, record)) = first.take() {
             Ok(Box::new(HoldFirstFrame {
-                ddp,
+                ddp: Box::new(RecordSend { ddp, record }),
                 gate: Some((entered, resume)),
             }))
         } else {
@@ -428,17 +429,39 @@ fn a_fresh_device_waits_for_the_last_old_send_before_accepting_a_reroute() {
     sender.send(set(1)).unwrap();
     wakes.wake().unwrap();
     taking.recv_timeout(usb::NEVER).unwrap();
+    wakes.events();
 
     // Keep the device on its way back while the blocking worker opens a fresh socket.
     engine.stall_reclamation(true);
     let Begun::Opening(restart) = sender.begin(set(2), &[]).unwrap() else {
         panic!("a shifted run needs a new lane");
     };
-    wakes.wake().unwrap();
+    hold(&mut sender, 0, 73); // the probe wake queues one old frame behind 11
+    engine.latest();
+    let due = wakes.wake().unwrap();
+    assert_eq!(
+        engine.latest().applied(),
+        sender.sent(),
+        "the probe wake applied 73"
+    );
+    let hands: Vec<_> = wakes
+        .events()
+        .into_iter()
+        .filter_map(|event| match event {
+            Event::Handed {
+                output: number,
+                due,
+                ..
+            } if number == output(1) => Some(due),
+            Event::Handed { .. } | Event::Came { .. } | Event::Counted { .. } => None,
+        })
+        .collect();
+    assert_eq!(hands, [due], "the probe wake handed one old frame");
     old_send_at_acceptance(
         &socket,
         release,
-        520,
+        completed,
+        &[11, 73],
         || sender.finish(restart.open()).unwrap(),
         || reopened.recv_timeout(usb::NEVER).unwrap(),
     );
@@ -447,33 +470,50 @@ fn a_fresh_device_waits_for_the_last_old_send_before_accepting_a_reroute() {
     assert_eq!(packet(&socket, 0x41, 0x0B, 0, 510).2[0], 91);
 }
 
-/// Complete a reroute while its first send is held inside the adapter. At acceptance
-/// the old packet must already be on the wire, even when the old lane takes time to stop.
+/// Record the result after the real adapter has sent and before its worker returns.
+struct RecordSend {
+    ddp: Box<dyn engine::Device>,
+    record: mpsc::SyncSender<(u8, Outcome)>,
+}
+
+impl engine::Device for RecordSend {
+    fn take(&mut self, frame: &[u8]) -> Outcome {
+        let result = self.ddp.take(frame);
+        self.record.try_send((frame[0], result)).unwrap();
+        result
+    }
+}
+
 fn old_send_at_acceptance(
     socket: &UdpSocket,
     release: mpsc::Sender<()>,
-    length: usize,
+    completed: mpsc::Receiver<(u8, Outcome)>,
+    old_markers: &[u8],
     complete: impl FnOnce() + Send,
     ready: impl FnOnce(),
 ) {
-    socket.set_nonblocking(true).unwrap();
     let (finished, accepted) = mpsc::channel();
     thread::scope(|threads| {
-        threads.spawn(|| {
+        threads.spawn(move || {
             complete();
-            let mut packet = [0; 1500];
+            // Take only sends that have already completed when the writer returns.
             finished
-                .send(socket.recv(&mut packet).map(|n| (n, packet[10])))
+                .send(completed.try_iter().collect::<Vec<_>>())
                 .unwrap();
         });
         ready();
-        // Give a premature acceptance a chance to report the missing datagram.
         let early = accepted.recv_timeout(Duration::from_secs(1));
         release.send(()).unwrap();
-        let old = early.unwrap_or_else(|_| accepted.recv_timeout(usb::NEVER).unwrap());
-        assert_eq!(old.unwrap(), (length, 11));
+        let sent = early.unwrap_or_else(|_| accepted.recv_timeout(usb::NEVER).unwrap());
+        let expected: Vec<_> = old_markers
+            .iter()
+            .map(|&marker| (marker, Outcome::Accepted))
+            .collect();
+        assert_eq!(sent, expected, "completed adapter writes at acceptance");
     });
-    socket.set_nonblocking(false).unwrap();
+    for marker in old_markers {
+        assert_eq!(packet(socket, 0x41, 0x0B, 0, 510).2[0], *marker);
+    }
 }
 
 #[test]
@@ -481,10 +521,14 @@ fn an_explicit_reroute_waits_for_the_last_send_in_the_old_lane() {
     let (socket, kind) = ddp(Color::Rgb);
     let (entered, taking) = mpsc::channel();
     let (release, resume) = mpsc::channel();
+    let (record, completed) = mpsc::sync_channel(1);
     let mut gate = Some((entered, resume));
     let (_engine, mut sender, wakes) = start(Box::new(move |kind| {
         Ok(Box::new(HoldFirstFrame {
-            ddp: outputs::open(kind)?,
+            ddp: Box::new(RecordSend {
+                ddp: outputs::open(kind)?,
+                record: record.clone(),
+            }),
             gate: gate.take(),
         }))
     }));
@@ -507,7 +551,8 @@ fn an_explicit_reroute_waits_for_the_last_send_in_the_old_lane() {
     old_send_at_acceptance(
         &socket,
         release,
-        520,
+        completed,
+        &[11],
         || {
             started.send(()).unwrap();
             attach_ddp(&mut sender, kind, &[span(15, 3)]);
@@ -1246,7 +1291,7 @@ impl engine::Device for HoldFirstFrame {
 }
 
 #[test]
-fn an_accepted_reroute_does_not_send_queued_old_route_bytes() {
+fn an_accepted_reroute_sends_only_the_newest_queued_old_frame_first() {
     let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
     let timeout = Duration::from_secs(10);
     socket.set_read_timeout(Some(timeout)).unwrap();
@@ -1260,13 +1305,17 @@ fn an_accepted_reroute_does_not_send_queued_old_route_bytes() {
     let (entered, taking) = mpsc::channel();
     let (release, wait) = mpsc::channel();
     let mut gate = Some((entered, wait));
+    let (record, completed) = mpsc::sync_channel(3);
     let open = Box::new(move |kind| {
         Ok(Box::new(HoldFirstFrame {
-            ddp: outputs::open(kind)?,
+            ddp: Box::new(RecordSend {
+                ddp: outputs::open(kind)?,
+                record: record.clone(),
+            }),
             gate: gate.take(),
         }) as Box<dyn engine::Device>)
     });
-    let (_engine, mut sender, wakes) =
+    let (_engine, mut sender, mut wakes) =
         Engine::start_stepped(Universes::new(2).unwrap(), open).unwrap();
     wakes.hold().unwrap();
     let set = |first| Command::SetOutput {
@@ -1291,6 +1340,7 @@ fn an_accepted_reroute_does_not_send_queued_old_route_bytes() {
     sender.send(hold(2, 91)).unwrap();
     sender.send(set(1)).unwrap();
     let mut at = wakes.wake().unwrap();
+    let first = at;
     taking.recv_timeout(timeout).unwrap();
     // Occupy both remaining lane boxes while the first send is in progress.
     let period = Rate::Sixty.period();
@@ -1299,19 +1349,51 @@ fn an_accepted_reroute_does_not_send_queued_old_route_bytes() {
         at = wakes.wake_at(at + period).unwrap();
     }
 
-    let move_run = sender.begin(set(2), &[]).unwrap();
-    at = wakes.wake_at(at + period).unwrap();
+    let Begun::Opening(opening) = sender.begin(set(2), &[]).unwrap() else {
+        panic!("the shifted run needs a lane");
+    };
+    at = wakes.wake_at(at + period).unwrap(); // all three old boxes are occupied
+    let handoff = sender.publish_output(opening.open()).unwrap().unwrap();
+    wakes.wake_at(at).unwrap();
     release.send(()).unwrap();
+    assert!(handoff.wait());
+    assert_eq!(
+        completed.try_iter().collect::<Vec<_>>(),
+        [(11, Outcome::Accepted), (33, Outcome::Accepted)],
+        "only the in-flight and newest old writes completed at acceptance"
+    );
     assert_eq!(read(), 11, "the frame already inside the device finishes");
-    if let Begun::Opening(opening) = move_run {
-        sender.finish(opening.open()).unwrap();
-        // Earlier frames may have finished before this branch accepted the edit.
-        socket.set_nonblocking(true).unwrap();
-        while socket.recv(&mut [0; 1500]).is_ok() {}
-        socket.set_nonblocking(false).unwrap();
-        wakes.wake_at(at + period).unwrap();
-    }
+    assert_eq!(
+        read(),
+        33,
+        "the newest queued old frame finishes before acceptance"
+    );
+
+    wakes.wake_at(at + period).unwrap();
     assert_eq!(read(), 91, "the first new send after accepting the edit");
+
+    let events = wakes.events();
+    for (due, outcome) in [
+        (first, Outcome::Accepted),
+        (first + period, Outcome::Dropped),
+        (first + 2 * period, Outcome::Accepted),
+        (at, Outcome::Dropped),
+    ] {
+        let finished: Vec<_> = events
+            .iter()
+            .filter_map(|event| match *event {
+                Event::Came {
+                    due: when, outcome, ..
+                } if when == due => Some(outcome),
+                Event::Handed { .. } | Event::Came { .. } | Event::Counted { .. } => None,
+            })
+            .collect();
+        assert_eq!(
+            finished,
+            [outcome],
+            "one outcome for old frame due at {due:?}"
+        );
+    }
 }
 
 #[test]
@@ -1815,4 +1897,177 @@ async fn a_lost_adapter_reports_one_loss_and_one_return_across_a_reroute() {
     events.retain(|event| *event == lost || *event == returned);
     assert_eq!(events, [lost, returned]);
     common::send(&mut desk, &json!("Stop")).await;
+}
+
+#[test]
+fn a_press_already_due_on_the_old_run_reaches_the_wire_before_reroute_acceptance() {
+    for publish in [false, true] {
+        let (socket, kind) = ddp(Color::Rgb);
+        let (entered, taking) = mpsc::channel();
+        let (release, resume) = mpsc::channel();
+        let mut gate = Some((entered, resume));
+        let (_engine, mut sender, wakes) = start(Box::new(move |kind| {
+            Ok(Box::new(HoldFirstFrame {
+                ddp: outputs::open(kind)?,
+                gate: gate.take(),
+            }))
+        }));
+        let set = |first| Command::SetOutput {
+            output: output(1),
+            kind,
+            universes: RunNumbers { first, count: 1 },
+            rate: Some(Rate::Sixty),
+        };
+        hold(&mut sender, 0, 11);
+        hold(&mut sender, 512, 91);
+        sender.send(set(1)).unwrap();
+        let first = wakes.wake().unwrap();
+        taking.recv_timeout(usb::NEVER).unwrap();
+
+        let Begun::Opening(opening) = sender.begin(set(2), &[]).unwrap() else {
+            panic!("a shifted run needs a new lane");
+        };
+        wakes.wake_at(first).unwrap();
+        let ready = opening.open();
+        hold(&mut sender, 0, 73);
+        // The only waiting frame is the press, due before publication. Keep the
+        // previous datagram inside take until this cutover has reached the old lane.
+        wakes.wake().unwrap();
+        let handoff = publish.then(|| {
+            let handoff = sender.publish_output(ready).unwrap().unwrap();
+            wakes.wake().unwrap();
+            handoff
+        });
+        release.send(()).unwrap();
+        if let Some(handoff) = handoff {
+            handoff.wait();
+        }
+
+        let (peer, _, in_flight) = packet(&socket, 0x41, 0x0B, 0, 510);
+        let (next_peer, _, next) = packet(&socket, 0x41, 0x0B, 0, 510);
+        assert_eq!(
+            (in_flight[0], next[0], next_peer),
+            (11, 73, peer),
+            "publish={publish}: the single press frame due before the cutover"
+        );
+    }
+}
+
+#[test]
+fn a_reroute_keeps_the_old_lanes_last_completed_failure() {
+    struct FailsOnMarker(Box<dyn engine::Device>, mpsc::Sender<u8>);
+
+    impl engine::Device for FailsOnMarker {
+        fn take(&mut self, frame: &[u8]) -> Outcome {
+            match frame[0] {
+                marker @ (73 | 91) => {
+                    self.1.send(marker).unwrap();
+                    Outcome::Failed
+                }
+                _ => self.0.take(frame),
+            }
+        }
+    }
+
+    let (socket, kind) = ddp(Color::Rgb);
+    let (failed, failures) = mpsc::channel();
+    let (mut engine, mut sender, wakes) = start(Box::new(move |kind| {
+        Ok(Box::new(FailsOnMarker(
+            outputs::open(kind)?,
+            failed.clone(),
+        )))
+    }));
+    let set = |first| Command::SetOutput {
+        output: output(1),
+        kind,
+        universes: RunNumbers { first, count: 1 },
+        rate: Some(Rate::Sixty),
+    };
+    hold(&mut sender, 0, 11);
+    hold(&mut sender, 512, 91);
+    sender.send(set(1)).unwrap();
+    let first = wakes.wake().unwrap();
+    assert_eq!(packet(&socket, 0x41, 0x0B, 0, 510).2[0], 11);
+
+    let Begun::Opening(opening) = sender.begin(set(2), &[]).unwrap() else {
+        panic!("a shifted run needs a new lane");
+    };
+    wakes.wake_at(first).unwrap();
+    let ready = opening.open();
+    let mut read = |at, first, failed| {
+        let started = Instant::now();
+        loop {
+            engine.latest();
+            wakes.wake_at(at).unwrap();
+            let snapshot = engine.latest();
+            if let Some(out) = snapshot.state.outputs[0]
+                && out.universes.first() == first
+                && out.counters.failed == failed
+            {
+                let mut health = HealthSample::new(Duration::ZERO, 0, Status::NotFound);
+                assert!(snapshot.health_sample(output(1), &mut health));
+                break (out.status, health.status);
+            }
+            assert!(
+                started.elapsed() < usb::NEVER,
+                "last state: {:?}",
+                snapshot.state.outputs[0]
+            ); // guard
+        }
+    };
+    hold(&mut sender, 0, 73);
+    let due = wakes.wake().unwrap();
+    assert_eq!(failures.recv_timeout(usb::NEVER).unwrap(), 73);
+    let reconnecting = Status::Reconnecting { failures: 1 };
+    assert_eq!(read(due, 1, 1), (reconnecting, reconnecting));
+
+    // The old send completes before finish returns, but there is no intervening
+    // tick to collect its result. The first new-route send then fails as well.
+    wakes.wake().unwrap();
+    sender.finish(ready).unwrap();
+    assert_eq!(failures.recv_timeout(usb::NEVER).unwrap(), 73);
+    let due = wakes.wake().unwrap();
+    assert_eq!(failures.recv_timeout(usb::NEVER).unwrap(), 91);
+    let status = read(due, 2, 1);
+    hold(&mut sender, 512, 21);
+    wakes.wake().unwrap();
+    assert_eq!(packet(&socket, 0x41, 0x0B, 0, 510).2[0], 21);
+    let expected = Status::Reconnecting { failures: 3 };
+    assert_eq!(status, (expected, expected));
+}
+
+#[test]
+fn stopping_at_an_unfinished_cutoff_returns_the_writer_without_another_wake() {
+    let (socket, kind) = ddp(Color::Rgb);
+    let (_engine, mut sender, wakes) = start(Box::new(outputs::open));
+    let set = |first| Command::SetOutput {
+        output: output(1),
+        kind,
+        universes: RunNumbers { first, count: 1 },
+        rate: Some(Rate::Sixty),
+    };
+    hold(&mut sender, 0, 11);
+    sender.send(set(1)).unwrap();
+    let at = wakes.wake().unwrap();
+    assert_eq!(packet(&socket, 0x41, 0x0B, 0, 510).2[0], 11);
+    let Begun::Opening(opening) = sender.begin(set(2), &[]).unwrap() else {
+        panic!("rerouting needs another lane");
+    };
+    wakes.wake_at(at).unwrap();
+    let opened = opening.open();
+    wakes.cut().unwrap();
+    let handoff = sender.publish_output(opened).unwrap().unwrap();
+    let (finished, answer) = mpsc::channel();
+    thread::scope(|scope| {
+        scope.spawn(move || finished.send(handoff.wait()).unwrap());
+        sender.stop_outputs();
+        let result = answer.recv_timeout(usb::NEVER);
+        wakes.finish().unwrap();
+        assert_eq!(result, Ok(false), "T13 cancels the writer waiting at T5");
+    });
+    socket.set_nonblocking(true).unwrap();
+    assert_eq!(
+        socket.recv(&mut [0]).unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
 }
