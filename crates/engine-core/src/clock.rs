@@ -1,38 +1,39 @@
-//! The beat clock: one continuous count of elapsed beats drives every play, and a grid
-//! of beats and bars, which a tap or a heard beat may move, schedules launches. Data and
-//! calculations: the tick thread settles it in time order, each event at the time it was
-//! sent or heard (`update`).
+//! Playing looks follow a continuous count of elapsed beats. Waiting looks start on a
+//! grid of beats and bars. A tap or a heard beat can move the grid while elapsed beats
+//! keep counting from the same position.
 //!
-//! Who sets the tempo:
+//! Who sets the tempo
 //!
 //! ```text
 //! Feed   --tap: aligns the grid-------------------------------------> OneTap
 //! OneTap --a second tap, 200 ms to 2 s on: its interval------------> Tapped
-//! OneTap --2 s with no tap (lapse), ReleaseTempo, a new list--------> Feed
+//! OneTap --first nanosecond past 2 s, release, or set the list------> Feed
 //! Tapped --tap: a valid interval sets the tempo, every tap aligns---> Tapped
 //! Tapped --ReleaseTempo, a new list: the list's driver--------------> Feed
 //! ```
 //!
-//! How the beat moves (the pace):
+//! How the beat moves
 //!
 //! ```text
 //! Free    --taps end and Tap does not drive: anchor on the beat reached--> Heard
-//! Heard   --the grid passes anchor + 1 with no heard beat: half tempo---> Slowing
+//! Heard   --the grid reaches anchor + 1 unheard: half tempo-------------> Slowing
 //! Slowing --the grid reaches anchor + 2: stands on it, not taken--------> Stopped
-//! any     --a beat from the driving feed: anchor on its nearest beat----> Heard
+//! any     --a beat aligns the grid: anchor on its nearest beat----------> Heard
 //! any     --Tap drives, or taps hold-----------------------------------> Free
 //! ```
 //!
 //! The feed list holds 1 to 5 feeds in order, Tap only last. The first with a lock
-//! drives; Tap always has one, the internal tempo. A heard beat moves the grid only
-//! when it comes from the driving feed and no taps hold, never back past a beat already
-//! reached; otherwise it only records its feed's lock.
+//! drives. Tap always has a lock at the internal tempo. When one tap lapses, the
+//! clock releases it at that instant and follows the current driver. Each heard beat
+//! records its feed's lock. The driver can move the grid by up to half a beat when taps
+//! are released, the beat was heard since the last change and it keeps every beat
+//! already reached.
 //!
 //! A tap under 200 ms after the last is a bounce: ignored. A tap more than 2 s after the
 //! last starts a fresh interval at the current tempo. Intervals and the lapse count from
 //! the time each tap was sent, even when it missed a frame. A tap marks a beat: at an
 //! exact beat the grid keeps its number, otherwise it moves on to the next one. A heard
-//! beat marks the nearest beat. The elapsed count never jumps; only its rate changes. A
+//! beat marks the nearest beat. The elapsed count never jumps. Only its rate changes. A
 //! tempo is kept exactly (124 BPM is 124 beats a minute), and every decision on the grid
 //! is made by [`Clock::crossing`].
 
@@ -306,8 +307,7 @@ impl Count {
     fn at_tempo(self, from: Tempo, to: Tempo) -> Self {
         // All internal feeds share one span, so changing BPM carries the part exactly.
         // A tap can use another span. Round up to its next part as for a grid crossing.
-        let part =
-            (u128::from(self.part) * u128::from(to.span)).div_ceil(u128::from(from.span.max(1)));
+        let (_, part) = self.part_at_tempo(from, to);
         if part >= u128::from(to.span) {
             Self::whole(self.whole.saturating_add(1))
         } else {
@@ -316,6 +316,13 @@ impl Count {
                 part: part as u64,
             }
         }
+    }
+
+    /// The fraction of a Q32 count in the new tempo's parts, rounded down and up.
+    fn part_at_tempo(self, from: Tempo, to: Tempo) -> (u128, u128) {
+        let scaled = u128::from(self.part) * u128::from(to.span);
+        let span = u128::from(from.span);
+        (scaled / span, scaled.div_ceil(span))
     }
 }
 
@@ -424,33 +431,31 @@ impl Clock {
         Self {
             at,
             sent: t,
-            ..self.after_lapse(at)
+            ..self.lapse_between(self.at, at).unwrap_or(self)
         }
     }
 
-    /// A single tap lapses on the first nanosecond past two seconds. A frame can
-    /// skip that instant entirely. Keep the tap time for a second tap sent in time.
-    fn after_lapse(self, t: Duration) -> Self {
-        if self.anchor.is_none()
-            && let Some(lapse) = self.source.lapse(t)
-            && self.driving() != Some(TempoFeed::Tap)
-        {
-            let lapse = lapse.max(self.from);
-            return Self {
-                anchor: Some(self.position_at(lapse).whole / ONE),
-                changed: lapse.max(self.changed),
-                ..self
-            };
+    /// Follow the driver at the lapse, even when the frame skips over it. Keep the
+    /// tap's send time so a second tap sent within the interval still counts.
+    fn lapse_between(self, since: Duration, by: Duration) -> Option<Self> {
+        let lapse = self.source.lapse(by)?;
+        if lapse <= since {
+            return None;
         }
-        self
+        // A tap delivered after its own lapse first marks the grid at delivery.
+        let clock = Self {
+            at: lapse.max(self.from),
+            ..self
+        };
+        Some(clock.follow())
     }
 
     /// The elapsed position at `t`, including the fraction of a Q32 count.
     pub fn beat_at(&self, t: Duration) -> BeatTime {
-        let clock = self.after_lapse(t);
+        let clock = self.lapse_between(self.at, t).unwrap_or(*self);
         BeatTime {
             count: clock.elapsed.advance(clock.advance(t).1, clock.tempo),
-            span: self.tempo.span,
+            span: clock.tempo.span,
         }
     }
 
@@ -475,7 +480,7 @@ impl Clock {
         let grid = self.grid.advance(self.advance(t).1, self.tempo);
         let below = grid.whole / ONE;
         let beat = Count::beat(below);
-        if self.grid <= beat && self.crossing(below) == t {
+        if self.grid <= beat && self.grid_crossing(below) == t {
             beat
         } else {
             grid
@@ -504,6 +509,13 @@ impl Clock {
 
     /// When the grid reaches beat `beat`: the last change if it was there already.
     pub fn crossing(&self, beat: u64) -> Duration {
+        let crossing = self.grid_crossing(beat);
+        self.lapse_between(self.at, crossing)
+            .map_or(crossing, |released| released.grid_crossing(beat))
+    }
+
+    /// The crossing on this grid, before any pending release.
+    fn grid_crossing(&self, beat: u64) -> Duration {
         if self.waits_for_beat(beat) {
             return Duration::MAX;
         }
@@ -543,18 +555,26 @@ impl Clock {
             }
         };
         let beat = self.first_beat();
-        Self {
+        let clock = Self {
             grid: Count::beat(beat),
             anchor: None,
             source,
             ..self.rebase(tempo)
-        }
-        .after_lapse(self.at)
+        };
+        clock.lapse_between(sent, self.at).unwrap_or(clock)
     }
 
     /// Release the taps and follow the list at the current grid phase.
     pub fn release(self) -> Self {
-        self.set_feeds(self.feeds)
+        let released = Self {
+            source: Source::Feed,
+            ..self
+        };
+        if self.source() == Source::Feed {
+            released
+        } else {
+            released.follow()
+        }
     }
 
     /// The internal tempo follows this setting even while another feed drives.
@@ -595,24 +615,15 @@ impl Clock {
     }
 
     pub fn set_feeds(self, feeds: FeedList) -> Self {
-        let previous = self.driving();
-        let changed = if feeds != self.feeds || self.source() != Source::Feed {
-            self.at
-        } else {
-            self.changed
-        };
-        let released = Self {
+        if feeds == self.feeds {
+            return self.release();
+        }
+        Self {
             feeds,
             source: Source::Feed,
-            changed,
             ..self
-        };
-        let driver = released.driving();
-        if self.anchor.is_some() && driver == previous {
-            released
-        } else {
-            released.follow(driver)
         }
+        .follow()
     }
 
     #[cfg_attr(
@@ -632,44 +643,44 @@ impl Clock {
         self
     }
 
-    /// Keeping the same driver only updates its row, even if a one tap just lapsed.
+    /// Keeping the same driver only updates its row.
     fn follow_lock(self, previous: Option<TempoFeed>) -> Self {
-        let driver = self.driving();
-        if self.source() != Source::Feed || driver == previous {
+        if self.driving() == previous {
             self
         } else {
-            self.follow(driver)
+            self.follow()
         }
     }
 
     /// Apply a release or a change of driver (4a). A new estimate from the same
     /// external driver takes effect with its next beat.
-    fn follow(self, driver: Option<TempoFeed>) -> Self {
+    fn follow(self) -> Self {
+        let clock = Self {
+            changed: self.at,
+            ..self
+        };
+        if clock.source() != Source::Feed {
+            return clock;
+        }
+        let driver = clock.driving();
         let tempo = driver
-            .and_then(|feed| self.locked(feed))
-            .unwrap_or(self.tempo);
-        match (driver, self.anchor) {
-            (Some(TempoFeed::Tap), _) => {
-                let clock = match self.pace() {
-                    Pace::Slowing | Pace::Stopped => self.rebase(tempo),
-                    Pace::Free | Pace::Heard => self.at_tempo(tempo),
-                };
-                Self {
-                    anchor: None,
-                    changed: if self.anchor.is_some() {
-                        self.at
-                    } else {
-                        clock.changed
-                    },
-                    ..clock
-                }
+            .and_then(|feed| clock.locked(feed))
+            .unwrap_or(clock.tempo);
+        if driver == Some(TempoFeed::Tap) {
+            let free = if clock.at_full_tempo() {
+                clock.at_tempo(tempo)
+            } else {
+                clock.rebase(tempo)
+            };
+            Self {
+                anchor: None,
+                ..free
             }
-            (_, None) => Self {
-                anchor: Some(self.grid() / ONE),
-                changed: self.at,
-                ..self.at_tempo(tempo)
-            },
-            (_, Some(_)) => self.at_tempo(tempo),
+        } else {
+            Self {
+                anchor: clock.anchor.or_else(|| Some(clock.grid() / ONE)),
+                ..clock.at_tempo(tempo)
+            }
         }
     }
 
@@ -701,10 +712,7 @@ impl Clock {
             && heard_grid == Count::beat(beat)
             && self.tempo.same(tempo)
             && !self.waits_for_beat(beat);
-        if on_crossing
-            && matches!(self.pace(), Pace::Free | Pace::Heard)
-            && self.at <= self.crossing(beat + 1)
-        {
+        if on_crossing && self.at_full_tempo() && self.at <= self.crossing(beat + 1) {
             // The old origin retains the fraction of a nanosecond at this crossing.
             return Some(Self {
                 anchor: Some(beat),
@@ -720,12 +728,22 @@ impl Clock {
             Count::beat(beat)
         };
         let since = self.at - heard;
-        let grid = grid_at_beat.advance(tempo.travel(since), tempo);
-        let whole = self.grid() / ONE;
+        let candidate = grid_at_beat.advance(tempo.travel(since), tempo);
+        let old = self.position_at(self.at);
+        let whole = old.whole / ONE;
         let reached = self.anchor.map_or(whole, |anchor| whole.min(anchor + 1));
-        if (grid.whole / ONE).min(beat + 1) < reached {
+        if (candidate.whole / ONE).min(beat + 1) < reached {
             return None;
         }
+        // Round both limits inward when the old phase falls between two new parts.
+        let (down, up) = old.part_at_tempo(self.tempo, tempo);
+        let whole_parts = Count::whole(old.whole).parts(tempo);
+        let half = Count::whole(ONE / 2).parts(tempo);
+        let parts = candidate.parts(tempo).clamp(
+            (whole_parts + up).saturating_sub(half),
+            whole_parts + down + half,
+        );
+        let grid = Count::whole(0).advance(parts, tempo);
         Some(Self {
             grid: grid.min(Count::beat(beat + 2)),
             anchor: Some(beat),
@@ -761,6 +779,12 @@ impl Clock {
         self.advance(self.at).0
     }
 
+    /// Both counts still have their full-tempo phase on the crossing nanosecond.
+    fn at_full_tempo(&self) -> bool {
+        self.anchor
+            .is_none_or(|anchor| self.at <= self.grid_crossing(anchor + 1))
+    }
+
     /// Distance from the stored grid to a whole beat, in tempo.span parts.
     fn distance_to(&self, beat: u64) -> u128 {
         Count::beat(beat)
@@ -768,8 +792,8 @@ impl Clock {
             .saturating_sub(self.grid.parts(self.tempo))
     }
 
-    /// The pace and distance travelled by both counts (4d). Run at full tempo
-    /// through the crossing nanosecond, then at half tempo up to the stopped beat.
+    /// The pace and distance travelled by both counts (4d). Take the first unheard
+    /// beat on time, including its crossing nanosecond, then count at half tempo.
     fn advance(&self, t: Duration) -> (Pace, u128) {
         let since = t.saturating_sub(self.from);
         let full = self.tempo.travel(since);
@@ -778,11 +802,14 @@ impl Clock {
         };
         let pivot = anchor + 1;
         let on_time = self.distance_to(pivot);
-        let until_slow = on_time.div_ceil(self.tempo.rate());
-        if self.grid <= Count::beat(pivot) && since.as_nanos() <= until_slow {
+        if full < on_time {
             return (Pace::Heard, full);
         }
-        let advance = on_time + (full - on_time) / 2;
+        let advance = if since.as_nanos() == on_time.div_ceil(self.tempo.rate()) {
+            full
+        } else {
+            on_time + (full - on_time) / 2
+        };
         let remaining = self.distance_to(anchor + 2);
         if advance >= remaining {
             (Pace::Stopped, remaining)
@@ -1418,7 +1445,7 @@ mod feeds {
     const SILENCE: [Row; 8] = [
         ("silence, at the start", &[Audio], &[], Pace::Heard, None, 0.0, 500, &[(0, Some(0)), (1, Some(500)), (2, None)]),
         ("silence, 1 ms before anchor + 1", &[Audio], &[Settle(499)], Pace::Heard, None, 0.998, 500, &[(1, Some(500)), (2, None)]),
-        ("silence, on anchor + 1: taken on time", &[Audio], &[Settle(500)], Pace::Heard, None, 1.0, 500, &[(1, Some(500)), (2, None)]),
+        ("silence, on anchor + 1: taken on time", &[Audio], &[Settle(500)], Pace::Slowing, None, 1.0, 500, &[(1, Some(500)), (2, None)]),
         ("silence, 1 ms past anchor + 1: half the tempo", &[Audio], &[Settle(501)], Pace::Slowing, None, 1.001, 500, &[(2, None)]),
         ("silence, half way to anchor + 2", &[Audio], &[Settle(1000)], Pace::Slowing, None, 1.5, 500, &[(2, None)]),
         ("silence, 1 ms before anchor + 2", &[Audio], &[Settle(1499)], Pace::Slowing, None, 1.999, 500, &[(2, None)]),
@@ -1692,14 +1719,14 @@ mod feeds {
                 &[(2, Some(1800)), (3, Some(2440))],
             ),
             (
-                "one tap lapses with its own tempo despite a feed lock",
+                "one tap lapses at the locked feed's tempo",
                 &[Audio],
                 &[Tap(100), Lock(1000, Audio, Some(640)), Settle(2101)],
                 Pace::Heard,
                 Some(Audio),
-                5.002,
-                500,
-                &[(6, Some(2600)), (7, None)],
+                5.001_562_500_437_5,
+                640,
+                &[(6, Some(2740)), (7, None)],
             ),
         ];
         cases.iter().copied().for_each(check);
@@ -1768,7 +1795,7 @@ mod feeds {
     }
 
     #[test]
-    fn unrelated_locks_keep_the_lapsed_tap_tempo() {
+    fn unrelated_locks_keep_the_tap_fallback_at_the_internal_tempo() {
         let clock = run(
             &[Audio, TAP],
             &[
@@ -1779,7 +1806,7 @@ mod feeds {
             ],
         );
         for (feed, tempo) in [(TAP, None), (MidiClock, Some(every(700)))] {
-            assert_eq!(clock.lock(feed, tempo).period(), ms(640));
+            assert_eq!(clock.lock(feed, tempo).period(), ms(500));
         }
         assert_eq!(clock.release().period(), ms(500));
     }
@@ -1789,7 +1816,7 @@ mod feeds {
         let clock = Clock::START.set_feeds(list(&[Audio]));
         for (nanos, pace) in [
             (483_870_967, Pace::Heard),
-            (483_870_968, Pace::Heard),
+            (483_870_968, Pace::Slowing),
             (483_870_969, Pace::Slowing),
             (1_451_612_903, Pace::Slowing),
             (1_451_612_904, Pace::Stopped),
@@ -1799,6 +1826,22 @@ mod feeds {
                 pace,
                 "{nanos}"
             );
+        }
+    }
+
+    #[test]
+    fn tap_taking_over_on_a_fractional_crossing_keeps_the_grid() {
+        let free = Clock::START;
+        let locked = free
+            .set_feeds(list(&[Audio, TAP]))
+            .lock(Audio, Tempo::new(60_000_000_000, 124));
+        assert_eq!(
+            locked.beat_at(free.crossing(1)),
+            free.beat_at(free.crossing(1))
+        );
+        let clock = locked.settle(free.crossing(1)).lock(Audio, None);
+        for beat in 1..=4 {
+            assert_eq!(clock.crossing(beat), free.crossing(beat), "beat {beat}");
         }
     }
 
@@ -1844,5 +1887,323 @@ mod feeds {
             assert_eq!(clock.pace(), pace);
             assert_eq!(clock.reading().bpm, 93.75);
         }
+    }
+
+    #[test]
+    fn a_delayed_beat_moves_the_grid_by_at_most_half_a_beat() {
+        let cases = [
+            (
+                "missed beat, 20 ms late",
+                run(&[Audio], &[Beat(Audio, 500, 500, 500), Settle(1520)]),
+                1500,
+                500,
+                3,
+                true,
+            ),
+            (
+                "missed beat, 10 ms late",
+                run(&[Audio], &[Beat(Audio, 0, 0, 500), Settle(1010)]),
+                1000,
+                500,
+                2,
+                true,
+            ),
+            (
+                "slower first beat",
+                run(&[Audio, TAP], &[Settle(450)]),
+                200,
+                1000,
+                0,
+                false,
+            ),
+        ];
+        for (name, before, heard, period, reached, forward) in cases {
+            let after = before.beat(Audio, ms(heard), every(period));
+            let expected = if forward {
+                before.grid() + ONE / 2
+            } else {
+                before.grid() - ONE / 2
+            };
+            assert_eq!(after.grid(), expected, "{name}");
+            assert!(after.reached(reached), "{name}");
+            assert_eq!(after.elapsed_now(), before.elapsed_now(), "{name}");
+        }
+    }
+
+    #[test]
+    fn the_half_beat_limit_includes_fractions_between_grid_counts() {
+        // 139_687_244 × 2 × ONE leaves a remainder of 500_000_016 in the old span.
+        let old = start(&[Audio])
+            .lock(Audio, Tempo::new(500_000_017, 2))
+            .settle(Duration::from_nanos(139_687_244));
+        for (heard, period, grid) in [
+            (0, 100, old.grid() + ONE / 2),
+            (120, 400, old.grid() - ONE / 2 + 1),
+        ] {
+            assert_eq!(old.beat(Audio, ms(heard), every(period)).grid(), grid);
+        }
+    }
+
+    #[test]
+    fn a_delayed_beat_on_its_crossing_preserves_that_crossing() {
+        let clock = run(&[Audio, TAP], &[Beat(Audio, 500, 750, 500)]);
+        assert_eq!(clock.crossing(1), ms(500));
+        assert_eq!(clock.crossing(2), ms(1000));
+    }
+
+    #[test]
+    fn a_candidate_below_a_reached_beat_only_supplies_a_lock() {
+        // The candidate is 0.675. Clamping first would hide that it fell below beat 1.
+        let clock = run(&[Audio, TAP], &[Beat(Audio, 200, 875, 1000)]);
+        assert_eq!(clock.driving(), Some(Audio));
+        assert_eq!(beats(clock.grid()), 1.75);
+        assert_eq!(clock.crossing(2), ms(1125));
+    }
+
+    #[test]
+    fn one_tap_lapses_to_the_current_driver() {
+        let fallback = run(
+            &[Audio, TAP],
+            &[
+                Beat(Audio, 500, 500, 640),
+                Tap(600),
+                Lock(700, Audio, None),
+                Settle(2600),
+            ],
+        );
+        let promoted = run(
+            &[MidiClock, Audio],
+            &[
+                Beat(Audio, 500, 500, 640),
+                Tap(600),
+                Lock(700, MidiClock, Some(1000)),
+                Settle(2600),
+            ],
+        );
+        let locked = run(
+            &[Audio],
+            &[Tap(100), Lock(1000, Audio, Some(640)), Settle(2100)],
+        );
+        for (held, old_period, at, driver, period, reached_six) in [
+            (fallback, 640, 2700, TAP, 500, false),
+            (promoted, 640, 2700, MidiClock, 1000, false),
+            (fallback, 640, 3100, TAP, 500, true),
+            (locked, 500, 2650, Audio, 640, false),
+        ] {
+            assert!(matches!(held.source(), Source::OneTap { .. }));
+            assert_eq!(held.period(), ms(old_period));
+            let clock = held.settle(ms(at));
+            assert_eq!(clock.source(), Source::Feed);
+            assert_eq!(clock.driving(), Some(driver));
+            assert_eq!(clock.period(), ms(period), "{driver:?} at {at} ms");
+            assert_eq!(clock.reached(6), reached_six, "{driver:?} at {at} ms");
+        }
+    }
+
+    #[test]
+    fn a_one_tap_lapse_matches_release_at_that_nanosecond() {
+        let ns = Duration::from_nanos(1);
+        let sent = ms(100);
+        let frame = sent + ns;
+        let lapse = ms(2100) + ns;
+        let measured = Tempo::new(1_900_000_000, 3).unwrap();
+        let audio_drives = start(&[Audio, TAP]).lock(Audio, Some(every(640)));
+        let cases = [
+            ("Tap", Clock::START, None),
+            (
+                "Audio locks",
+                start(&[Audio]),
+                Some((Audio, Some(measured))),
+            ),
+            ("Audio loses its lock", audio_drives, Some((Audio, None))),
+            ("no driver", start(&[Audio]), None),
+        ];
+        for (name, clock, lock) in cases {
+            // Both taps take effect in the same frame. The second was sent one ns
+            // later and still holds when we explicitly release it at the first's lapse.
+            let tap = |sent| {
+                let held = clock.settle(frame).settle(sent).tap().settle(ms(1000));
+                match lock {
+                    Some((feed, tempo)) => held.lock(feed, tempo),
+                    None => held,
+                }
+            };
+            let held = tap(sent);
+            assert_eq!(
+                held.settle(lapse - ns).source(),
+                Source::OneTap { at: sent }
+            );
+            let later = tap(frame).settle(lapse);
+            assert_eq!(later.source(), Source::OneTap { at: frame });
+            let released = later.release();
+            assert_eq!(held.crossing(2), frame + clock.crossing(1), "{name}");
+            if clock.feeds() == FeedList::TAP {
+                // Tap keeps the 124 BPM grid's origin, even for its past crossings.
+                assert_eq!(held.settle(lapse).crossing(2), held.crossing(2));
+            }
+            for beat in 5..=8 {
+                assert_eq!(
+                    held.crossing(beat),
+                    released.crossing(beat),
+                    "{name}: predict beat {beat}"
+                );
+            }
+            for at in [lapse, lapse + ns, ms(2900), ms(4000), Duration::MAX] {
+                let actual = held.settle(at);
+                let expected = released.settle(at);
+                assert_eq!(actual.reading(), expected.reading(), "{name} at {at:?}");
+                assert_eq!(
+                    (actual.pace(), actual.grid()),
+                    (expected.pace(), expected.grid()),
+                    "{name}"
+                );
+                assert_eq!(held.beat_at(at), expected.beat_at(at), "{name}");
+                assert_eq!(held.elapsed_at(at), expected.elapsed_now(), "{name}");
+                for when in [When::Beat, When::Bar] {
+                    assert_eq!(actual.next(when), expected.next(when), "{name} at {at:?}");
+                }
+                for beat in 5..=8 {
+                    assert_eq!(actual.crossing(beat), expected.crossing(beat), "{name}");
+                    assert_eq!(actual.reached(beat), expected.reached(beat), "{name}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_beat_heard_before_a_driver_change_or_lapse_keeps_its_phase() {
+        let cases = [
+            (
+                "higher priority feed gained its lock",
+                MidiClock,
+                run(
+                    &[MidiClock, Audio],
+                    &[
+                        Beat(Audio, 500, 500, 500),
+                        Lock(600, MidiClock, Some(500)),
+                        Settle(610),
+                    ],
+                ),
+                550,
+                640,
+                None,
+            ),
+            (
+                "higher priority feed lost its lock",
+                Audio,
+                run(
+                    &[MidiClock, Audio],
+                    &[
+                        Lock(0, Audio, Some(500)),
+                        Beat(MidiClock, 500, 500, 500),
+                        Lock(600, MidiClock, None),
+                        Settle(610),
+                    ],
+                ),
+                550,
+                640,
+                None,
+            ),
+            (
+                "one tap lapsed while Tap was the fallback",
+                Audio,
+                run(&[Audio, TAP], &[Tap(100), Settle(2110)]),
+                2050,
+                640,
+                None,
+            ),
+            (
+                "one tap lapsed and the beat supplies a same-rate lock",
+                Audio,
+                run(&[Audio, TAP], &[Tap(100), Settle(2150)]),
+                2050,
+                500,
+                Some((6, 2600)),
+            ),
+        ];
+        for (name, feed, old, heard, period, crossing) in cases {
+            let clock = old.beat(feed, ms(heard), every(period));
+            assert_eq!(clock.driving(), Some(feed), "{name}");
+            assert_eq!(clock.grid(), old.grid(), "{name}");
+            if let Some((beat, at)) = crossing {
+                assert_eq!(old.crossing(beat), ms(at), "{name}");
+                assert_eq!(clock.crossing(beat), ms(at), "{name}");
+            }
+        }
+    }
+
+    #[test]
+    fn internal_tempo_during_one_tap_changes_the_rate_only_if_tap_drives() {
+        let cases: [(&[TempoFeed], &[Step], u64); 2] = [
+            (&[TAP], &[Tap(100), Internal(200, 60)], 1000),
+            (
+                &[Audio, TAP],
+                &[Lock(0, Audio, Some(500)), Tap(100), Internal(200, 60)],
+                500,
+            ),
+        ];
+        for (feeds, steps, period) in cases {
+            let clock = run(feeds, steps);
+            assert!(matches!(clock.source(), Source::OneTap { .. }));
+            assert_eq!(clock.reading().feed, bpm(60));
+            assert_eq!(clock.period(), ms(period), "{feeds:?}");
+        }
+    }
+
+    #[test]
+    fn a_beat_heard_after_one_tap_lapses_aligns_the_grid() {
+        let clock = run(&[Audio], &[Tap(100), Beat(Audio, 2150, 2150, 640)]);
+        assert_eq!(clock.source(), Source::Feed);
+        assert_eq!(clock.driving(), Some(Audio));
+        assert_eq!(clock.crossing(6), ms(2790));
+    }
+
+    #[test]
+    fn a_new_list_applies_the_current_drivers_lock() {
+        let old = run(
+            &[Audio],
+            &[
+                Beat(Audio, 500, 500, 500),
+                Lock(600, Audio, Some(640)),
+                Settle(700),
+            ],
+        );
+        let clock = old.set_feeds(list(&[Audio, TAP]));
+        assert_eq!(clock.grid(), old.grid());
+        assert_eq!((clock.period(), clock.crossing(2)), (ms(640), ms(1084)));
+    }
+
+    #[test]
+    fn a_beat_while_one_tap_holds_only_records_its_lock() {
+        let old = run(&[Audio], &[Tap(100), Settle(300)]);
+        let clock = old.beat(Audio, ms(300), every(640));
+        assert_eq!(clock.driving(), Some(Audio));
+        assert_eq!(
+            (clock.pace(), clock.period(), beats(clock.grid())),
+            (Pace::Free, old.period(), beats(old.grid()))
+        );
+    }
+
+    #[test]
+    fn a_lock_updated_at_the_lapse_does_not_release_the_tap_again() {
+        let lapse = ms(2100) + Duration::from_nanos(1);
+        let held = run(&[Audio], &[Tap(100), Lock(1000, Audio, Some(640))]);
+        let released = held.settle(lapse).lock(Audio, Some(every(1000)));
+        for at in [lapse, lapse + Duration::from_nanos(1)] {
+            assert_eq!(released.settle(at).period(), ms(640), "at {at:?}");
+        }
+    }
+
+    #[test]
+    fn a_beat_heard_before_the_last_beat_was_taken_moves_nothing() {
+        let taken = run(
+            &[Audio],
+            &[Beat(Audio, 500, 500, 500), Beat(Audio, 990, 1100, 500)],
+        );
+        let stale = taken.beat(Audio, ms(1050), every(640));
+        assert_eq!(
+            (stale.grid(), stale.period(), stale.crossing(3)),
+            (taken.grid(), taken.period(), taken.crossing(3))
+        );
     }
 }
