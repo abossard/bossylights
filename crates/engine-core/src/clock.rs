@@ -24,7 +24,8 @@
 //!
 //! The feed list holds 1 to 5 feeds in order, Tap only last. The first with a lock
 //! drives. Tap always has a lock at the internal tempo. When one tap lapses, the
-//! clock releases it at that instant and follows the current driver. Each heard beat
+//! clock releases it at that instant and follows the current driver. A waiting look
+//! keeps the time of a beat crossed before the lapse, even on a later wake. Each heard beat
 //! records its feed's lock. The driver can move the grid by up to half a beat when taps
 //! are released, the beat was heard since the last change and it keeps every beat
 //! already reached.
@@ -363,6 +364,39 @@ impl BeatTime {
     }
 }
 
+/// Both counts at a change of grid or tempo. Their origin preserves fractional crossings.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Origin {
+    from: Duration,
+    elapsed: Count,
+    grid: Count,
+    tempo: Tempo,
+}
+
+impl Origin {
+    fn elapsed_after(&self, parts: u128) -> BeatTime {
+        BeatTime {
+            count: self.elapsed.advance(parts, self.tempo),
+            span: self.tempo.span,
+        }
+    }
+
+    /// When a freely running grid reaches this beat.
+    fn crossing(&self, beat: u64) -> Duration {
+        let nanos = self.distance_to(beat).div_ceil(self.tempo.rate());
+        self.from.saturating_add(Duration::from_nanos(
+            u64::try_from(nanos).unwrap_or(u64::MAX),
+        ))
+    }
+
+    /// Distance from the stored grid to a whole beat, in tempo.span parts.
+    fn distance_to(&self, beat: u64) -> u128 {
+        Count::beat(beat)
+            .parts(self.tempo)
+            .saturating_sub(self.grid.parts(self.tempo))
+    }
+}
+
 /// The beat clock. Every change happens at the time it was settled to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Clock {
@@ -371,15 +405,13 @@ pub struct Clock {
     /// The time the last settle asked for: when the event it comes before was sent.
     /// Earlier than `at` for an event sent before a frame it missed.
     sent: Duration,
-    /// Both counts start here. Keeping this origin preserves fractional crossings.
-    from: Duration,
+    origin: Origin,
+    /// The free-running origin replaced by an automatic release, until the next rebase.
+    before_lapse: Option<Origin>,
     /// The last change of the grid, the tempo, the list or the taps: a beat heard
-    /// before it moves nothing (spec 5b, step 4). Kept apart from `from`, which a beat on
+    /// before it moves nothing (spec 5b, step 4). Kept apart from the origin, which a beat on
     /// its own crossing leaves alone so that no crossing moves.
     changed: Duration,
-    elapsed: Count,
-    grid: Count,
-    tempo: Tempo,
     feed: Bpm,
     feeds: FeedList,
     locks: [Option<Tempo>; 5],
@@ -394,11 +426,14 @@ impl Clock {
     pub const START: Self = Self {
         at: Duration::ZERO,
         sent: Duration::ZERO,
-        from: Duration::ZERO,
+        origin: Origin {
+            from: Duration::ZERO,
+            elapsed: Count::whole(0),
+            grid: Count::whole(0),
+            tempo: Bpm::FEED.tempo(),
+        },
+        before_lapse: None,
         changed: Duration::ZERO,
-        elapsed: Count::whole(0),
-        grid: Count::whole(0),
-        tempo: Bpm::FEED.tempo(),
         feed: Bpm::FEED,
         feeds: FeedList::TAP,
         locks: [None; 5],
@@ -417,7 +452,7 @@ impl Clock {
 
     /// How long a beat lasts now, to the nanosecond below.
     pub fn period(&self) -> Duration {
-        Duration::from_nanos(self.tempo.span / self.tempo.beats.max(1))
+        Duration::from_nanos(self.origin.tempo.span / self.origin.tempo.beats.max(1))
     }
 
     /// The time the clock was settled to.
@@ -444,19 +479,26 @@ impl Clock {
         }
         // A tap delivered after its own lapse first marks the grid at delivery.
         let clock = Self {
-            at: lapse.max(self.from),
+            at: lapse.max(self.origin.from),
             ..self
         };
-        Some(clock.follow())
+        let mut released = clock.follow();
+        if released.origin.from > self.origin.from {
+            released.before_lapse = Some(self.origin);
+        }
+        Some(released)
     }
 
     /// The elapsed position at `t`, including the fraction of a Q32 count.
     pub fn beat_at(&self, t: Duration) -> BeatTime {
-        let clock = self.lapse_between(self.at, t).unwrap_or(*self);
-        BeatTime {
-            count: clock.elapsed.advance(clock.advance(t).1, clock.tempo),
-            span: clock.tempo.span,
+        if t < self.origin.from
+            && let Some(tapped) = self.before_lapse
+        {
+            let since = t.saturating_sub(tapped.from);
+            return tapped.elapsed_after(tapped.tempo.travel(since));
         }
+        let clock = self.lapse_between(self.at, t).unwrap_or(*self);
+        clock.origin.elapsed_after(clock.advance(t).1)
     }
 
     /// The elapsed count at `t`, which is not before the last change, in [`ONE`]s.
@@ -477,10 +519,10 @@ impl Clock {
     /// Where the grid is now: whole [`ONE`]s, and the part of one in `tempo.span`ths. On
     /// a beat's crossing, exactly on that beat: the grid is there all that nanosecond.
     fn position_at(&self, t: Duration) -> Count {
-        let grid = self.grid.advance(self.advance(t).1, self.tempo);
+        let grid = self.origin.grid.advance(self.advance(t).1, self.origin.tempo);
         let below = grid.whole / ONE;
         let beat = Count::beat(below);
-        if self.grid <= beat && self.grid_crossing(below) == t {
+        if self.origin.grid <= beat && self.grid_crossing(below) == t {
             beat
         } else {
             grid
@@ -507,9 +549,15 @@ impl Clock {
         }
     }
 
-    /// When the grid reaches beat `beat`: the last change if it was there already.
+    /// When the grid reaches beat `beat`. An automatic release preserves earlier crossings.
     pub fn crossing(&self, beat: u64) -> Duration {
         let crossing = self.grid_crossing(beat);
+        // The released grid dates every beat already reached to its own origin.
+        if crossing == self.origin.from
+            && let Some(tapped) = self.before_lapse
+        {
+            return tapped.crossing(beat).min(crossing);
+        }
         self.lapse_between(self.at, crossing)
             .map_or(crossing, |released| released.grid_crossing(beat))
     }
@@ -519,10 +567,7 @@ impl Clock {
         if self.waits_for_beat(beat) {
             return Duration::MAX;
         }
-        let nanos = self.distance_to(beat).div_ceil(self.tempo.rate());
-        self.from.saturating_add(Duration::from_nanos(
-            u64::try_from(nanos).unwrap_or(u64::MAX),
-        ))
+        self.origin.crossing(beat)
     }
 
     fn waits_for_beat(&self, beat: u64) -> bool {
@@ -539,7 +584,7 @@ impl Clock {
     pub fn tap(self) -> Self {
         let sent = self.sent;
         let (source, tempo) = match self.source {
-            Source::Feed => (Source::OneTap { at: sent }, self.tempo),
+            Source::Feed => (Source::OneTap { at: sent }, self.origin.tempo),
             Source::OneTap { at: last } | Source::Tapped { at: last } => {
                 let gap = sent.saturating_sub(last);
                 if gap < BOUNCE {
@@ -547,20 +592,20 @@ impl Clock {
                 }
                 match self.source {
                     _ if gap <= LAPSE => (Source::Tapped { at: sent }, Tempo::every(gap)),
-                    Source::Tapped { .. } => (Source::Tapped { at: sent }, self.tempo),
+                    Source::Tapped { .. } => (Source::Tapped { at: sent }, self.origin.tempo),
                     Source::Feed | Source::OneTap { .. } => {
-                        (Source::OneTap { at: sent }, self.tempo)
+                        (Source::OneTap { at: sent }, self.origin.tempo)
                     }
                 }
             }
         };
         let beat = self.first_beat();
-        let clock = Self {
-            grid: Count::beat(beat),
+        let mut clock = Self {
             anchor: None,
             source,
             ..self.rebase(tempo)
         };
+        clock.origin.grid = Count::beat(beat);
         clock.lapse_between(sent, self.at).unwrap_or(clock)
     }
 
@@ -665,7 +710,7 @@ impl Clock {
         let driver = clock.driving();
         let tempo = driver
             .and_then(|feed| clock.locked(feed))
-            .unwrap_or(clock.tempo);
+            .unwrap_or(clock.origin.tempo);
         if driver == Some(TempoFeed::Tap) {
             let free = if clock.at_full_tempo() {
                 clock.at_tempo(tempo)
@@ -710,7 +755,7 @@ impl Clock {
         let beat = heard_grid.whole / ONE + u64::from(heard_grid.whole % ONE >= ONE / 2);
         let on_crossing = self.crossing(beat) == heard
             && heard_grid == Count::beat(beat)
-            && self.tempo.same(tempo)
+            && self.origin.tempo.same(tempo)
             && !self.waits_for_beat(beat);
         if on_crossing && self.at_full_tempo() && self.at <= self.crossing(beat + 1) {
             // The old origin retains the fraction of a nanosecond at this crossing.
@@ -721,9 +766,9 @@ impl Clock {
             });
         }
         let grid_at_beat = if on_crossing {
-            self.grid
-                .advance(self.advance(heard).1, self.tempo)
-                .at_tempo(self.tempo, tempo)
+            self.origin.grid
+                .advance(self.advance(heard).1, self.origin.tempo)
+                .at_tempo(self.origin.tempo, tempo)
         } else {
             Count::beat(beat)
         };
@@ -736,7 +781,7 @@ impl Clock {
             return None;
         }
         // Round both limits inward when the old phase falls between two new parts.
-        let (down, up) = old.part_at_tempo(self.tempo, tempo);
+        let (down, up) = old.part_at_tempo(self.origin.tempo, tempo);
         let whole_parts = Count::whole(old.whole).parts(tempo);
         let half = Count::whole(ONE / 2).parts(tempo);
         let parts = candidate.parts(tempo).clamp(
@@ -744,17 +789,18 @@ impl Clock {
             whole_parts + down + half,
         );
         let grid = Count::whole(0).advance(parts, tempo);
-        Some(Self {
-            grid: grid.min(Count::beat(beat + 2)),
+        let mut aligned = Self {
             anchor: Some(beat),
             ..self.rebase(tempo)
-        })
+        };
+        aligned.origin.grid = grid.min(Count::beat(beat + 2));
+        Some(aligned)
     }
 
     /// The same clock at `tempo` from now on. The same rate changes nothing: a count
     /// taken again rounds, and would move a crossing.
     fn at_tempo(self, tempo: Tempo) -> Self {
-        if self.tempo.same(tempo) {
+        if self.origin.tempo.same(tempo) {
             return self;
         }
         self.rebase(tempo)
@@ -763,14 +809,18 @@ impl Clock {
     /// Take both counts at the change instant, carrying their fractional parts.
     fn rebase(self, tempo: Tempo) -> Self {
         Self {
-            from: self.at,
+            origin: Origin {
+                from: self.at,
+                elapsed: self
+                    .origin
+                    .elapsed_after(self.advance(self.at).1)
+                    .count
+                    .at_tempo(self.origin.tempo, tempo),
+                grid: self.position_at(self.at).at_tempo(self.origin.tempo, tempo),
+                tempo,
+            },
+            before_lapse: None,
             changed: self.at,
-            elapsed: self
-                .elapsed
-                .advance(self.advance(self.at).1, self.tempo)
-                .at_tempo(self.tempo, tempo),
-            grid: self.position_at(self.at).at_tempo(self.tempo, tempo),
-            tempo,
             ..self
         }
     }
@@ -785,32 +835,25 @@ impl Clock {
             .is_none_or(|anchor| self.at <= self.grid_crossing(anchor + 1))
     }
 
-    /// Distance from the stored grid to a whole beat, in tempo.span parts.
-    fn distance_to(&self, beat: u64) -> u128 {
-        Count::beat(beat)
-            .parts(self.tempo)
-            .saturating_sub(self.grid.parts(self.tempo))
-    }
-
     /// The pace and distance travelled by both counts (4d). Take the first unheard
     /// beat on time, including its crossing nanosecond, then count at half tempo.
     fn advance(&self, t: Duration) -> (Pace, u128) {
-        let since = t.saturating_sub(self.from);
-        let full = self.tempo.travel(since);
+        let since = t.saturating_sub(self.origin.from);
+        let full = self.origin.tempo.travel(since);
         let Some(anchor) = self.anchor else {
             return (Pace::Free, full);
         };
         let pivot = anchor + 1;
-        let on_time = self.distance_to(pivot);
+        let on_time = self.origin.distance_to(pivot);
         if full < on_time {
             return (Pace::Heard, full);
         }
-        let advance = if since.as_nanos() == on_time.div_ceil(self.tempo.rate()) {
+        let advance = if since.as_nanos() == on_time.div_ceil(self.origin.tempo.rate()) {
             full
         } else {
             on_time + (full - on_time) / 2
         };
-        let remaining = self.distance_to(anchor + 2);
+        let remaining = self.origin.distance_to(anchor + 2);
         if advance >= remaining {
             (Pace::Stopped, remaining)
         } else {
@@ -821,7 +864,7 @@ impl Clock {
     /// The clock as a picture shows it.
     pub fn reading(&self) -> Reading {
         Reading {
-            bpm: 60e9 * self.tempo.beats as f64 / self.tempo.span.max(1) as f64,
+            bpm: 60e9 * self.origin.tempo.beats as f64 / self.origin.tempo.span.max(1) as f64,
             feed: self.feed,
             source: self.source(),
             beat: beats(self.grid()),
@@ -2205,5 +2248,81 @@ mod feeds {
             (stale.grid(), stale.period(), stale.crossing(3)),
             (taken.grid(), taken.period(), taken.crossing(3))
         );
+    }
+
+    #[test]
+    fn review_a_waiting_play_keeps_its_crossing_when_the_same_wake_passes_the_lapse() {
+        use crate::{EngineCommand, PlayId, PlayState, Priority, Rank, State, update};
+
+        // At 512 ms per beat the tapped grid would cross at 2148 ms. The
+        // release at 2100 ms + 1 ns moves that crossing to 2160 ms.
+        for (tap_period, crossing, late_wake) in
+            [(497, ms(2088), ms(2120)), (512, ms(2160), ms(2200))]
+        {
+            let clock = run(
+                &[Audio],
+                &[
+                    Lock(0, Audio, Some(tap_period)),
+                    Tap(100),
+                    Lock(1000, Audio, Some(640)),
+                    Settle(2080),
+                ],
+            );
+            let state = State {
+                clock,
+                ..State::new(Priority::RealTime)
+            };
+            let apply = |state, command| update(state, &mut [], &mut [], &mut [], command);
+            let waiting = apply(
+                state,
+                EngineCommand::Start {
+                    play: PlayId::new(0, 1).unwrap(),
+                    look: 7,
+                    rank: Rank::Show,
+                    when: When::Beat,
+                },
+            );
+            assert_eq!(
+                waiting.plays.at(0).unwrap().state,
+                PlayState::Waiting { beat: 5 }
+            );
+            assert_eq!(clock.crossing(5), crossing);
+            let expected_start = clock.beat_at(crossing);
+
+            let before = apply(
+                waiting,
+                EngineCommand::Settle {
+                    at: crossing - Duration::from_nanos(1),
+                },
+            );
+            assert_eq!(before.clock.crossing(5), crossing, "period {tap_period} ms");
+            assert_eq!(
+                before.plays.at(0).unwrap().state,
+                PlayState::Waiting { beat: 5 }
+            );
+
+            for (name, settles) in [
+                ("wake on the beat", &[crossing, late_wake][..]),
+                ("wake after the lapse", &[late_wake][..]),
+            ] {
+                let state = settles.iter().fold(waiting, |state, &at| {
+                    apply(state, EngineCommand::Settle { at })
+                });
+                let play = state.plays.at(0).unwrap();
+                assert_eq!(play.state, PlayState::Playing, "{name}");
+                assert_eq!(play.start, expected_start, "{name}, period {tap_period} ms");
+                assert_eq!(state.clock.crossing(5), crossing, "{name}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_next_tap_after_a_lapse_takes_the_stopped_beat_at_its_own_time() {
+        let stopped = run(
+            &[Audio],
+            &[Tap(100), Lock(1000, Audio, Some(640)), Settle(5000)],
+        );
+        assert!(!stopped.reached(7));
+        assert_eq!(stopped.tap().crossing(7), ms(5000));
     }
 }
