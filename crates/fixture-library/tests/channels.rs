@@ -8,7 +8,7 @@ use Function::{
 };
 use fixture_library::{Byte, Channel, Direction, Function, parse};
 
-fn definition(channel: &str) -> Vec<u8> {
+fn definition(channel: &str, kind: &str) -> Vec<u8> {
     let name = channel
         .split("Name=\"")
         .nth(1)
@@ -17,7 +17,7 @@ fn definition(channel: &str) -> Vec<u8> {
     format!(
         r#"<?xml version="1.0"?>
 <FixtureDefinition xmlns="http://www.qlcplus.org/FixtureDefinition">
- <Manufacturer>Acme</Manufacturer><Model>Test</Model><Type>Other</Type>
+ <Manufacturer>Acme</Manufacturer><Model>Test</Model><Type>{kind}</Type>
  {channel}
  <Mode Name="M"><Channel Number="0">{name}</Channel></Mode>
 </FixtureDefinition>"#
@@ -26,7 +26,11 @@ fn definition(channel: &str) -> Vec<u8> {
 }
 
 fn only_channel(channel: &str) -> Channel {
-    let fixture = parse("t.qxf", &definition(channel)).expect("a definition reads");
+    channel_of_kind(channel, "Other")
+}
+
+fn channel_of_kind(channel: &str, kind: &str) -> Channel {
+    let fixture = parse("t.qxf", &definition(channel, kind)).expect("a definition reads");
     fixture
         .modes
         .into_iter()
@@ -126,6 +130,14 @@ fn every_qlc_channel_preset_has_a_function_and_keeps_its_byte() {
         let channel = format!(r#"<Channel Name="C" Preset="{preset}"/>"#);
         let found = only_channel(&channel);
         assert_eq!((&found.function, found.byte), (&function, byte), "{preset}");
+        assert_eq!(found.role(), function, "{preset}");
+        assert_eq!(found.declared.preset.as_deref(), Some(preset));
+        let key = if matches!(function, Other(_)) {
+            other(preset.strip_suffix("Fine").unwrap_or(preset))
+        } else {
+            function
+        };
+        assert_eq!(found.declared.preset_key(), Some(key), "{preset}");
     }
 }
 
@@ -297,23 +309,94 @@ fn a_channel_does_what_its_group_or_name_says() {
 }
 
 #[test]
-fn dimmer_names_that_describe_other_functions_keep_their_name_as_the_role() {
+fn roles_without_a_preset_come_from_the_group() {
     let cases = [
-        ("Amount of Fog", "Intensity", other("Amount of Fog")),
-        ("Haze", "Intensity", other("Haze")),
-        ("Hazer level", "Intensity", other("Hazer level")),
-        ("Smoke-output", "Intensity", other("Smoke-output")),
-        ("FAN speed", "Intensity", other("FAN speed")),
-        ("Aux", "Intensity", other("Aux")),
-        ("Auxiliary", "Intensity", other("Auxiliary")),
-        ("Dimming curve", "Intensity", other("Dimming curve")),
-        ("Foggy dimmer", "Intensity", Dimmer),
+        ("Amount of Fog", "Intensity", other("Intensity")),
+        ("Haze", "Intensity", other("Intensity")),
+        ("Hazer level", "Intensity", other("Intensity")),
+        ("Smoke-output", "Intensity", other("Intensity")),
+        ("FAN speed", "Intensity", other("Intensity")),
+        ("Aux", "Intensity", other("Intensity")),
+        ("Auxiliary", "Intensity", other("Intensity")),
+        ("Dimming curve", "Intensity", other("Intensity")),
+        ("Foggy dimmer", "Intensity", other("Intensity")),
+        ("Dimmer", "Intensity", other("Intensity")),
+        ("Focus", "Beam", other("Beam")),
+        ("Odd", "Sparkle", other("Sparkle")),
+        ("C", "Pan", Pan),
+        ("C", "Tilt", Tilt),
+        ("C", "Colour", ColorWheel),
+        ("C", "Gobo", Gobo),
+        ("C", "Shutter", Shutter),
+        ("C", "Speed", Speed),
         ("Fog", "Effect", Effect),
+        ("C", "Prism", Prism),
+        ("C", "Maintenance", Control),
+        ("C", "Nothing", NoFunction),
     ];
-    for (name, group, role) in cases {
+    let actual = cases.each_ref().map(|(name, group, _)| {
         let channel = format!(r#"<Channel Name="{name}"><Group>{group}</Group></Channel>"#);
-        assert_eq!(only_channel(&channel).role(), role, "{name} in {group}");
-    }
+        let channel = only_channel(&channel);
+        assert_eq!(channel.declared.group.as_deref(), Some(*group));
+        assert_eq!(channel.declared.preset_key(), None);
+        channel.role()
+    });
+    assert_eq!(actual, cases.map(|(_, _, expected)| expected));
+
+    let mut undeclared = only_channel(r#"<Channel Name="Dimmer"/>"#);
+    undeclared.function = Dimmer;
+    assert_eq!(undeclared.role(), other(""));
+}
+
+#[test]
+fn roles_with_a_preset_respect_declared_colour_and_fixture_type() {
+    let cases = [
+        ("Fog", "IntensityRed", "Other", "", Red),
+        (
+            "Pump",
+            "IntensityDimmer",
+            "Smoke",
+            "",
+            other("IntensityDimmer"),
+        ),
+        (
+            "Pump",
+            "IntensityMasterDimmerFine",
+            "Hazer",
+            "",
+            other("IntensityMasterDimmerFine"),
+        ),
+        ("Pump", "IntensityDimmerFine", "Other", "", Dimmer),
+        (
+            "Auxiliary Light Dimmer",
+            "IntensityMasterDimmer",
+            "Moving Head",
+            "",
+            Dimmer,
+        ),
+        ("Fan", "IntensityBlueFine", "Smoke", "", Blue),
+        (
+            "C",
+            "UnknownFine",
+            "Other",
+            "<Group>Effect</Group>",
+            other("UnknownFine"),
+        ),
+        (
+            "C",
+            "IntensityDimmer",
+            "Smoke",
+            "<Colour>White</Colour>",
+            White,
+        ),
+    ];
+    let actual = cases.each_ref().map(|(name, preset, kind, children, _)| {
+        let channel = format!(r#"<Channel Name="{name}" Preset="{preset}">{children}</Channel>"#);
+        let channel = channel_of_kind(&channel, kind);
+        assert_eq!(channel.declared.smoke, matches!(*kind, "Smoke" | "Hazer"));
+        channel.role()
+    });
+    assert_eq!(actual, cases.map(|(_, _, _, _, expected)| expected));
 }
 
 #[test]
@@ -334,7 +417,7 @@ fn a_declared_colour_sets_the_role_and_keeps_the_v11_function() {
         ("Unknown", None),
     ] {
         for (group, function, fallback) in [
-            ("Intensity", Dimmer, other("Fan")),
+            ("Intensity", Dimmer, other("Intensity")),
             ("Effect", Effect, Effect),
         ] {
             let channel = only_channel(&format!(
@@ -342,7 +425,7 @@ fn a_declared_colour_sets_the_role_and_keeps_the_v11_function() {
             ));
             let expected_role = colour.clone().unwrap_or(fallback);
             assert_eq!(
-                (channel.role(), &channel.colour, channel.function),
+                (channel.role(), &channel.declared.colour, channel.function),
                 (expected_role, &colour, function),
                 "{name} in {group}"
             );

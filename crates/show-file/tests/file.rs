@@ -153,6 +153,80 @@ fn lib(command: PatchCommand) -> Step {
 }
 
 #[test]
+fn v6_keeps_the_old_channel_schema_for_tagged_emitters() {
+    let fixture = definition("Cameo-CLBARL10RGBA.qxf");
+    let patch = patched(vec![(
+        PatchCommand::Patch {
+            name: text("Bar"),
+            maker: text(&fixture.maker),
+            model: text(&fixture.model),
+            mode: text("19-Channel"),
+            at: at(1, 37),
+        },
+        vec![fixture],
+    )]);
+    let saved = write(&patch).unwrap();
+    let show: serde_json::Value = serde_json::from_str(&saved).unwrap();
+    assert_eq!(show["version"], 6);
+    let mode = show["modes"].as_object().unwrap().values().next().unwrap();
+    let channels = mode["mode"]["channels"].as_array().unwrap();
+    assert_eq!(channels.len(), 19);
+    for channel in channels {
+        for field in ["colour", "declared"] {
+            assert!(
+                channel.get(field).is_none(),
+                "{field} on {}",
+                channel["name"]
+            );
+        }
+    }
+    assert_eq!(write(&read(&saved, &empty()).unwrap()).unwrap(), saved);
+}
+
+#[test]
+fn a_v6_channel_written_without_declarations_still_opens() {
+    let old = r#"{
+        "version": 6,
+        "patch": [{"fixture":1,"name":"Dimmer","mode":"Generic / Dimmer / 1ch","at":{"universe":1,"address":1},"first":1}],
+        "groups": [], "looks": [],
+        "rules": {"brightness":"Latest","manual_end":"UntilRelease","other_end":"Reveal"},
+        "modes": {"Generic / Dimmer / 1ch": {"maker":"Generic","model":"Dimmer","mode":{
+            "name":"1ch","channels":[{"name":"Dimmer","function":"Dimmer","byte":"Coarse","default":null,"direction":null,"ranges":[]}],
+            "pixels":[],"layout":null,"degrees":null
+        }}}
+    }"#;
+    let restored = read(old, &empty()).unwrap();
+    let channel = &restored.mode(1).unwrap().channels[0];
+    assert_eq!(channel.function, fixture_library::Function::Dimmer);
+    assert_eq!(
+        channel.role(),
+        fixture_library::Function::Other(String::new())
+    );
+    let original: serde_json::Value = serde_json::from_str(old).unwrap();
+    let written: serde_json::Value = serde_json::from_str(&write(&restored).unwrap()).unwrap();
+    assert_eq!(written, original);
+}
+
+/// V6 keeps the mode and all of its v11 writers; declarations first persist in v7.
+fn assert_v6_patch(read: &Patch, original: &Patch) {
+    assert_eq!(read.writers(), original.writers());
+    assert_eq!(read.groups(), original.groups());
+    assert_eq!(read.fixtures(), original.fixtures());
+    for fixture in original.fixtures() {
+        let number = fixture.fixture;
+        let mut mode = original.mode(number).unwrap().clone();
+        for channel in &mut mode.channels {
+            channel.declared = Default::default();
+        }
+        assert_eq!(read.mode(number), Some(&mode));
+        assert_eq!(
+            read.definition_text(number),
+            original.definition_text(number)
+        );
+    }
+}
+
+#[test]
 fn a_patch_written_and_read_back_is_the_same_patch() {
     let cases: Vec<(&str, Vec<Step>)> = vec![
         ("empty", vec![]),
@@ -200,7 +274,7 @@ fn a_patch_written_and_read_back_is_the_same_patch() {
         let patch = patched(commands);
         let file = write(&patch).unwrap();
         let read = read(&file, &empty()).unwrap_or_else(|why| panic!("{case}: {why:?}\n{file}"));
-        assert_eq!(read, patch, "{case}\n{file}");
+        assert_v6_patch(&read, &patch);
         assert_eq!(write(&read).unwrap(), file, "{case}: written again");
     }
 }
@@ -409,7 +483,7 @@ fn a_file_of_the_most_bytes_is_written_and_read_and_one_byte_more_is_neither() {
     };
     // (case, bytes over the most, written, read)
     let cases = [
-        ("at the most", 0, Some(most), Ok(at_most.clone())),
+        ("at the most", 0, Some(most), Ok(())),
         ("one byte over", 1, None, Err(too_big)),
     ];
     for (case, over, written, read) in cases {
@@ -421,7 +495,8 @@ fn a_file_of_the_most_bytes_is_written_and_read_and_one_byte_more_is_neither() {
         );
         // the file at the most, and spaces after it
         let text = format!("{file}{}", " ".repeat(over));
-        assert_eq!(crate::read(&text, &empty()), read, "{case}: read");
+        let opened = crate::read(&text, &empty()).map(|read| assert_v6_patch(&read, &at_most));
+        assert_eq!(opened, read, "{case}: read");
     }
 }
 
@@ -455,7 +530,7 @@ fn a_patch_kept_in_its_file_refuses_the_command_that_would_take_the_file_over_th
             let patch = patch.unwrap();
             let file = write(&patch).unwrap();
             let read = read(&file, &empty()).unwrap();
-            assert_eq!(read.kept_in(show_file::LIMIT), patch, "{case}: read back");
+            assert_v6_patch(&read.kept_in(show_file::LIMIT), &patch);
             file.len()
         });
         assert_eq!(file, bytes, "{case}");
@@ -624,7 +699,9 @@ fn as_version_1(file: &str) -> String {
 fn a_file_of_version_1_has_no_looks() {
     let patch = patched(vec![lib(par("PAR 1", 1))]);
     let v1 = as_version_1(&show_file::write(&patch, &Looks::new()).unwrap());
-    assert_eq!(show_file::read(&v1, &empty()), Ok((patch, Looks::new())));
+    let (read, looks) = show_file::read(&v1, &empty()).unwrap();
+    assert_v6_patch(&read, &patch);
+    assert_eq!(looks, Looks::new());
 }
 
 #[test]

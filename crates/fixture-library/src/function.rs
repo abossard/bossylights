@@ -1,33 +1,53 @@
-//! What a channel does, from a preset, a group or a name. A calculation: strings in, a
-//! closed `Function` out. Anything the list does not know stays as `Other(name)`.
+//! The v11 function of a channel and its declared channel-model role.
+//! Both use the QLC+ preset table. Only v11 interprets a channel name.
 
-use crate::model::{Byte, Channel, Direction, Function};
+use crate::model::{Byte, Channel, Declared, Direction, Function};
 use alloc::string::{String, ToString};
 
 impl Channel {
-    /// The function used by the channel model. A declared colour takes precedence.
-    /// Intensity names that describe other controls keep their names as `Other`.
+    /// The declared colour, else preset, else group. Dimmer presets on a smoke
+    /// fixture and ambiguous groups keep the declaration as their label.
     #[must_use]
     pub fn role(&self) -> Function {
-        if let Some(colour) = &self.colour {
+        let declared = &self.declared;
+        if let Some(colour) = &declared.colour {
             return colour.clone();
         }
-        if self.function == Function::Dimmer
-            && self
-                .name
-                .to_ascii_lowercase()
-                .split(|c: char| !c.is_alphanumeric())
-                .any(|word| {
-                    matches!(
-                        word,
-                        "fog" | "haze" | "hazer" | "smoke" | "fan" | "aux" | "auxiliary" | "curve"
-                    )
-                })
-        {
-            return Function::Other(self.name.clone());
+        if let Some(preset) = &declared.preset {
+            return match from_preset(preset_stem(preset)) {
+                Some(Function::Dimmer) if declared.smoke => Function::Other(preset.clone()),
+                Some(function) => function,
+                None => Function::Other(preset.clone()),
+            };
         }
-        self.function.clone()
+        match declared.group.as_deref().unwrap_or_default() {
+            "Pan" => Function::Pan,
+            "Tilt" => Function::Tilt,
+            "Colour" => Function::ColorWheel,
+            "Gobo" => Function::Gobo,
+            "Shutter" => Function::Shutter,
+            "Speed" => Function::Speed,
+            "Effect" => Function::Effect,
+            "Prism" => Function::Prism,
+            "Maintenance" => Function::Control,
+            "Nothing" => Function::NoFunction,
+            group => Function::Other(group.into()),
+        }
     }
+}
+
+impl Declared {
+    /// The preset's pairing key. Both bytes share the preset function, or the stem
+    /// when the preset is unknown. A channel without a preset pairs by its group.
+    #[must_use]
+    pub fn preset_key(&self) -> Option<Function> {
+        let stem = preset_stem(self.preset.as_deref()?);
+        Some(from_preset(stem).unwrap_or_else(|| Function::Other(stem.into())))
+    }
+}
+
+fn preset_stem(preset: &str) -> &str {
+    preset.strip_suffix("Fine").unwrap_or(preset)
 }
 
 /// The colour named by a QLC+ `<Colour>` child or an `Intensity` colour preset.

@@ -8,8 +8,8 @@
 //! ```
 //!
 //! The channels of a mode are `first`, `first + 1`, … in one flat space: no universe and
-//! no stride. Each channel's defaults, by what it does (cx-3: an unknown channel starts
-//! independent):
+//! no stride. Defaults come from the declared colour, else the preset, else the group.
+//! Group-only Intensity and Beam channels without a declared colour start independent (cx-3).
 //!
 //! | Function | Follows | Dark | Change |
 //! |---|---|---|---|
@@ -18,9 +18,9 @@
 //! | cyan, magenta, yellow | master and blackout, none when a dimmer carries it | 255 | fade |
 //! | shutter | blackout, none without a range marked closed | the first byte of that range | jump |
 //! | hue to colour temperature, pan, tilt, zoom, focus, iris, frost | none | 0 | fade |
-//! | strobe, wheels, gobo, prism, speed, effect, control, nothing, other (including fog, haze, smoke, fan, auxiliary and dimming curves) | none | 0 | jump |
+//! | strobe, wheels, gobo, prism, speed, effect, control, nothing, other (including dimmer presets on Smoke and Hazer fixtures) | none | 0 | jump |
 //!
-//! - Each channel uses its [role](Channel::role), including the colour named by the fixture.
+//! - [Roles](Channel::role) use only declarations. A v6 channel with none starts independent.
 //! - A coarse dimmer carries the emitters in every head that lists it. A dimmer listed in
 //!   no head carries the other emitters, including emitters listed in no head.
 //! - A falling dimmer's dark word is the first Closed byte with a low byte of 0, or the
@@ -29,10 +29,20 @@
 //!   jumps and fades. Otherwise it spans every byte in the channel's direction.
 //! - `rest`: the value that lets light out for a shutter or strobe, the bypass for a colour
 //!   wheel over a colour mix, else the default, else 0. Ties: latest wins.
-//! - Fine bytes pair in channel order. Each takes the nearest unused coarse byte before
-//!   it in its head with the same role, else the first such byte after it. It keeps its
-//!   own rest, takes the low byte of the pair's dark and follows, changes and runs with
-//!   its coarse byte. A fine byte that joins none is a channel of its own.
+//! - Fine bytes take one free coarse byte in channel order. They must share a head if
+//!   the fine belongs to any head. A strict match has the same preset function (unknown
+//!   presets keep their stem), or two equal group-only declarations. A loose match has the
+//!   same QLC+ group with at least one group-only channel.
+//!
+//! | Fine byte, first match wins | Coarse byte |
+//! |---|---|
+//! | 1 | Immediately preceding strict or loose match |
+//! | 2 | First strict match, preferring channels without gobo, colour or prism slots |
+//! | 3 | First loose match with the same preference |
+//! | 4 | No match. The fine stays a single byte. A declared emitter follows its own head's dimmer rules |
+//!
+//! A joined fine keeps its rest, takes the low byte of the pair's dark, and inherits
+//! the coarse byte's follows, change and travel.
 //!
 //! | Compound | One per |
 //! |---|---|
@@ -45,7 +55,6 @@
 
 use crate::capabilities::Wheels;
 use crate::heads;
-use alloc::borrow::Cow;
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec;
@@ -213,47 +222,13 @@ pub fn lower(mode: &Mode, first: u32, space: u32) -> Result<Lowered, PastTheEnd>
     }
     // below `end`, so it fits
     let at = |index: usize| first.saturating_add(u32::try_from(index).unwrap_or(u32::MAX));
-    // Use the channel-model role for every inference, including the existing shutter and
-    // wheel rest calculations. V11 reads the fixture's original function.
-    let role_channels: Vec<_> = mode
-        .channels
-        .iter()
-        .map(|channel| {
-            let role = channel.role();
-            if role == channel.function {
-                Cow::Borrowed(channel)
-            } else {
-                Cow::Owned(Channel {
-                    function: role,
-                    ..channel.clone()
-                })
-            }
-        })
-        .collect();
-    let carried = carried_by_dimmers(&role_channels, &mode.pixels);
+    let carried = carried_by_dimmers(&mode.channels, &mode.pixels);
     let heads = heads(mode);
     let mut groups: BTreeMap<Option<usize>, Vec<(usize, &Channel)>> = BTreeMap::new();
-    for ((index, channel), head) in role_channels.iter().enumerate().zip(&heads) {
+    for ((index, channel), head) in mode.channels.iter().enumerate().zip(&heads) {
         groups.entry(*head).or_default().push((index, channel));
     }
-    // coarse index to fine index, within each head
-    let mut fine_of: BTreeMap<usize, usize> = BTreeMap::new();
-    for group in groups.values() {
-        for (position, &(fine, channel)) in group.iter().enumerate() {
-            if channel.byte != Byte::Fine {
-                continue;
-            }
-            let (before, after) = group.split_at(position);
-            let coarse = before.iter().rev().chain(after).find(|(index, c)| {
-                c.byte == Byte::Coarse
-                    && c.function == channel.function
-                    && !fine_of.contains_key(index)
-            });
-            if let Some(&(coarse, _)) = coarse {
-                fine_of.insert(coarse, fine);
-            }
-        }
-    }
+    let fine_of = pair_bytes(mode);
     let joined: BTreeMap<usize, usize> = fine_of.iter().map(|(&c, &f)| (f, c)).collect();
     let field = |index: usize| match fine_of.get(&index) {
         Some(&fine) => Field::Word(Pair {
@@ -269,26 +244,23 @@ pub fn lower(mode: &Mode, first: u32, space: u32) -> Result<Lowered, PastTheEnd>
     let mut by_head = Vec::new();
     for (head, group) in &groups {
         let head = head.and_then(|head| u16::try_from(head).ok());
-        let wheels = Wheels::of(group);
-        for &(index, channel) in group.iter().filter(|(i, _)| !joined.contains_key(i)) {
-            let change = change(&channel.function);
+        for (&(index, channel), rest) in group.iter().zip(rests(group)) {
+            if joined.contains_key(&index) {
+                continue;
+            }
+            let role = channel.role();
+            let change = change(&role);
             let travel = travel(channel);
-            let (follows, dark) = match channel.byte {
-                Byte::Coarse => rule(
-                    channel,
-                    carried.get(index).copied().unwrap_or(false),
-                    travel,
-                ),
-                Byte::Fine => (Follows::NONE, 0),
-            };
-            let rest = match channel.byte {
-                Byte::Coarse => channel.open().or_else(|| wheels.rest(channel)),
-                Byte::Fine => None,
-            };
+            let (follows, dark) = rule(
+                channel,
+                &role,
+                carried.get(index).copied().unwrap_or(false),
+                travel,
+            );
             let [dark_coarse, _] = dark.to_be_bytes();
             let config = Config {
                 at: at(index),
-                rest: rest.or(channel.default).unwrap_or(0),
+                rest,
                 dark: dark_coarse,
                 change,
                 ties: Ties::Latest,
@@ -300,7 +272,7 @@ pub fn lower(mode: &Mode, first: u32, space: u32) -> Result<Lowered, PastTheEnd>
         let first_of = |function: &Function| {
             group
                 .iter()
-                .find(|(_, c)| c.byte == Byte::Coarse && c.function == *function)
+                .find(|(_, c)| c.byte == Byte::Coarse && c.role() == *function)
                 .map(|&(index, _)| field(index))
         };
         if let (Some(pan), Some(tilt)) = (first_of(&Function::Pan), first_of(&Function::Tilt)) {
@@ -399,14 +371,155 @@ pub fn lower(mode: &Mode, first: u32, space: u32) -> Result<Lowered, PastTheEnd>
     })
 }
 
+/// The shared shutter and wheel helpers take their role in the v11 function field.
+/// Adapt just their inputs so each head gets the rest bytes of its declared roles.
+fn rests(group: &[(usize, &Channel)]) -> Vec<u8> {
+    let channels: Vec<_> = group
+        .iter()
+        .map(|&(_, c)| Channel {
+            function: c.role(),
+            ..c.clone()
+        })
+        .collect();
+    let numbered: Vec<_> = group
+        .iter()
+        .zip(&channels)
+        .map(|(&(i, _), c)| (i, c))
+        .collect();
+    let wheels = Wheels::of(&numbered);
+    channels
+        .iter()
+        .map(|c| {
+            let rest = match c.byte {
+                Byte::Coarse => c.open().or_else(|| wheels.rest(c)),
+                Byte::Fine => None,
+            };
+            rest.or(c.default).unwrap_or(0)
+        })
+        .collect()
+}
+
+/// Declared facts used to find a fine byte's partner. A channel can belong to several heads.
+struct PairChannel<'a> {
+    byte: Byte,
+    preset: Option<Function>,
+    group: Option<&'a str>,
+    heads: Vec<usize>,
+    slot: bool,
+}
+
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+enum Match {
+    Strict,
+    Loose,
+}
+
+impl<'a> PairChannel<'a> {
+    fn new(channel: &'a Channel) -> Self {
+        let declared = &channel.declared;
+        Self {
+            byte: channel.byte,
+            preset: declared.preset_key(),
+            group: declared
+                .group
+                .as_deref()
+                .or_else(|| declared.preset.as_deref().and_then(preset_group)),
+            heads: Vec::new(),
+            slot: channel.ranges.iter().any(|range| {
+                matches!(
+                    range.does,
+                    Some(
+                        Does::Gobo { .. }
+                            | Does::Color(_)
+                            | Does::Colors(_, _)
+                            | Does::Prism { .. }
+                            | Does::PrismOff
+                    )
+                )
+            }),
+        }
+    }
+
+    fn matches(&self, fine: &Self) -> Option<Match> {
+        if self.byte != Byte::Coarse
+            || !(fine.heads.is_empty() || fine.heads.iter().any(|h| self.heads.contains(h)))
+        {
+            return None;
+        }
+        match (&self.preset, &fine.preset) {
+            (Some(a), Some(b)) => (a == b).then_some(Match::Strict),
+            _ if self.group.is_none() || self.group != fine.group => None,
+            (None, None) => Some(Match::Strict),
+            _ => Some(Match::Loose),
+        }
+    }
+}
+
+/// QLC+ group of a preset on a channel without an explicit group.
+fn preset_group(preset: &str) -> Option<&'static str> {
+    let stem = preset.strip_suffix("Fine").unwrap_or(preset);
+    match stem {
+        "PositionXAxis" => Some("Pan"),
+        "PositionYAxis" => Some("Tilt"),
+        "NoFunction" => Some("Nothing"),
+        _ => [
+            ("Intensity", "Intensity"),
+            ("PositionPan", "Pan"),
+            ("PositionTilt", "Tilt"),
+            ("Speed", "Speed"),
+            ("Color", "Colour"),
+            ("Gobo", "Gobo"),
+            ("Shutter", "Shutter"),
+            ("Beam", "Beam"),
+            ("Prism", "Prism"),
+        ]
+        .into_iter()
+        .find_map(|(prefix, group)| stem.starts_with(prefix).then_some(group)),
+    }
+}
+
+/// Coarse index to fine index. Only a fine that claims a coarse removes it from later choices.
+fn pair_bytes(mode: &Mode) -> BTreeMap<usize, usize> {
+    let mut fine_of = BTreeMap::new();
+    let mut channels: Vec<_> = mode.channels.iter().map(PairChannel::new).collect();
+    for (head, numbers) in mode.pixels.iter().enumerate() {
+        for &number in numbers {
+            if let Some(channel) = channels.get_mut(usize::from(number)) {
+                channel.heads.push(head);
+            }
+        }
+    }
+    for (fine, channel) in channels
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| c.byte == Byte::Fine)
+    {
+        let rank = |(coarse, c): (usize, &PairChannel<'_>)| {
+            if fine_of.contains_key(&coarse) {
+                return None;
+            }
+            Some((c.matches(channel)?, c.slot, coarse))
+        };
+        let adjacent = fine
+            .checked_sub(1)
+            .and_then(|i| rank((i, channels.get(i)?)));
+        if let Some((_, _, coarse)) =
+            adjacent.or_else(|| channels.iter().enumerate().filter_map(rank).min())
+        {
+            fine_of.insert(coarse, fine);
+        }
+    }
+    fine_of
+}
+
 /// Every channel listed alongside a coarse dimmer, or carried by the shared dimmer.
-fn carried_by_dimmers(channels: &[Cow<'_, Channel>], pixels: &[Vec<u16>]) -> Vec<bool> {
-    let dimmer = |c: &Channel| c.byte == Byte::Coarse && c.function == Function::Dimmer;
+fn carried_by_dimmers(channels: &[Channel], pixels: &[Vec<u16>]) -> Vec<bool> {
+    let dimmer = |c: &Channel| c.byte == Byte::Coarse && c.role() == Function::Dimmer;
     let mut carried = vec![false; channels.len()];
     for head in pixels {
         if head
             .iter()
-            .any(|&index| channels.get(usize::from(index)).is_some_and(|c| dimmer(c)))
+            .any(|&index| channels.get(usize::from(index)).is_some_and(dimmer))
         {
             for &index in head {
                 if let Some(in_head) = carried.get_mut(usize::from(index)) {
@@ -427,15 +540,18 @@ fn carried_by_dimmers(channels: &[Cow<'_, Channel>], pixels: &[Vec<u16>]) -> Vec
     carried
 }
 
-/// What a coarse byte follows, and the 16-bit value of its dark. `carried` when a dimmer
-/// carries the channel's emitters.
-fn rule(channel: &Channel, carried: bool, travel: Travel) -> (Follows, u16) {
+/// What a channel follows and its dark word. A joined fine inherits its coarse rule.
+/// Of the unpaired fines only a declared emitter carries light on its own.
+fn rule(channel: &Channel, role: &Function, carried: bool, travel: Travel) -> (Follows, u16) {
+    if channel.byte == Byte::Fine && !is_colour(role) {
+        return (Follows::NONE, 0);
+    }
     let unless_carried = if carried {
         Follows::NONE
     } else {
         Follows::BOTH
     };
-    match &channel.function {
+    match role {
         Function::Dimmer => (
             Follows::BOTH,
             match travel.sense {
@@ -553,11 +669,10 @@ fn components(
 ) -> Vec<(Function, Field)> {
     let mut found = Vec::new();
     for &(index, channel) in group {
-        if channel.byte == Byte::Coarse
-            && includes(&channel.function)
-            && !found.iter().any(|(f, _)| *f == channel.function)
+        let role = channel.role();
+        if channel.byte == Byte::Coarse && includes(&role) && !found.iter().any(|(f, _)| *f == role)
         {
-            found.push((channel.function.clone(), field(index)));
+            found.push((role, field(index)));
         }
     }
     found

@@ -3,7 +3,7 @@
 use crate::capability::{self, Said};
 use crate::error::{Error, LeftOut, Problem, Warning};
 use crate::function::{colour_of, direction_of, function_of};
-use crate::model::{Byte, Channel, Degrees, Fixture, Kind, Layout, Mode, Range};
+use crate::model::{Byte, Channel, Declared, Degrees, Fixture, Kind, Layout, Mode, Range};
 use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -87,10 +87,11 @@ fn read<'a>(document: &'a Document<'a>) -> Result<Fixture, Failure<'a>> {
     let maker = text_of(root, "Manufacturer")?;
     let model = text_of(root, "Model")?;
     let kind = kind_of(&text_of(root, "Type")?);
+    let smoke = matches!(kind, Kind::Smoke | Kind::Hazer);
     let channels = root
         .children()
         .filter(|n| n.has_tag_name("Channel"))
-        .map(channel)
+        .map(|node| channel(node, smoke))
         .collect::<Result<Vec<_>, _>>()?;
     let (mut modes, mut warnings) = (Vec::new(), Vec::new());
     for node in root.children().filter(|n| n.has_tag_name("Mode")) {
@@ -151,7 +152,7 @@ fn number<'a, T: core::str::FromStr>(
     })
 }
 
-fn channel<'a>(node: Node<'a, 'a>) -> Result<Channel, Failure<'a>> {
+fn channel<'a>(node: Node<'a, 'a>, smoke: bool) -> Result<Channel, Failure<'a>> {
     let name = node.attribute("Name").unwrap_or_default().to_string();
     let group = match node.children().find(|n| n.has_tag_name("Group")) {
         Some(group) => {
@@ -172,13 +173,14 @@ fn channel<'a>(node: Node<'a, 'a>) -> Result<Channel, Failure<'a>> {
         }
         None => None,
     };
-    let (function, byte) = function_of(node.attribute("Preset"), group, &name);
+    let preset = node.attribute("Preset");
+    let (function, byte) = function_of(preset, group, &name);
     let colour = node
         .children()
         .find(|n| n.has_tag_name("Colour"))
         .and_then(|n| n.text())
         .and_then(|text| colour_of(text.trim()));
-    let direction = node.attribute("Preset").and_then(direction_of);
+    let direction = preset.and_then(direction_of);
     let default = match node.attribute("Default") {
         Some(_) => Some(number(node, "Default")?),
         None => None,
@@ -191,7 +193,12 @@ fn channel<'a>(node: Node<'a, 'a>) -> Result<Channel, Failure<'a>> {
     Ok(Channel {
         name,
         function,
-        colour,
+        declared: Declared {
+            preset: preset.map(String::from),
+            group: group.map(|(name, _)| String::from(name)),
+            colour,
+            smoke,
+        },
         byte,
         default,
         direction,

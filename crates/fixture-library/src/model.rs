@@ -69,16 +69,18 @@ pub struct Layout {
     pub height: u16,
 }
 
-/// One DMX channel. The v11 writers use its `function`. The channel model uses
-/// [`Self::role`], which also takes its declared colour and name into account.
+/// One DMX channel. The v11 writers use its `function`. The channel model derives
+/// [`Self::role`] and fine-byte partners from the definition's declarations.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Channel {
     pub name: String,
     pub function: Function,
-    /// The QLC+ `<Colour>` child, when it names an emitter or a subtractive colour.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub colour: Option<Function>,
+    /// What the definition declares about the channel. The channel model reads only
+    /// these declarations for its role and pairing key. A v6 show or a hand-made
+    /// channel without them has role `Other("")` and cannot form a pair.
+    #[serde(default, skip_serializing)]
+    pub declared: Declared,
     /// The high byte, or the second byte of a 16-bit value.
     pub byte: Byte,
     /// The value the definition gives when nothing else is said. `None` when it gives none.
@@ -87,6 +89,20 @@ pub struct Channel {
     /// runs as its coarse byte.
     pub direction: Option<Direction>,
     pub ranges: Vec<Range>,
+}
+
+/// The QLC+ metadata used to classify a channel independently of its name.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Declared {
+    /// The preset as written, including its `Fine` suffix.
+    pub preset: Option<String>,
+    /// The text of the `<Group>` child.
+    pub group: Option<String>,
+    /// The emitter or subtractive colour named by the `<Colour>` child.
+    pub colour: Option<Function>,
+    /// The fixture declares type `Smoke` or `Hazer`.
+    pub smoke: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

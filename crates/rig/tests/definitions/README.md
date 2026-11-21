@@ -37,3 +37,7 @@ the Apache License 2.0 (`COPYING` in the repository root, copied here as
 | `American-DJ-WiFly-EXR-HEX5-IP.qxf` | American_DJ | a colour macro at 0 named "Off/Color change/fade 1/Slow to fast": refused |
 | `American-DJ-QA5-IP.qxf` | American_DJ | a colour macro at 0 named "Color 1 (off)": refused |
 | `Equinox-Party-Par-LED-PAR-56.qxf` | Equinox | a colour macro at 0 named "Blackout": refused |
+| `American-DJ-Focus-Spot-4Z.qxf` | American_DJ | fine prism indexing beside each prism selection channel |
+| `Generic-Generic-Smoke.qxf` | Generic | a pump with a master dimmer preset on a smoke machine |
+| `Shehds-120W-4in1-RGBW-LED-Wash-Moving-Head.qxf` | Shehds | an auxiliary head with its own dimmer and RGB channels |
+| `Botex-DSP-405.qxf` | Botex | four Intensity channels with only a group declaration |
