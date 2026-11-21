@@ -180,7 +180,7 @@ The tick sees bytes and 16-bit pairs. Everything else is the API and the Rig (ch
 | Compound | Channels in order | Detected from |
 |---|---|---|
 | `Byte` | one | every channel, always |
-| `Word` | coarse, fine | a Fine channel and the first coarse channel of the same function with no fine yet, adjacent or not (today's `join` scans the mode) |
+| `Word` | coarse, fine | a Fine channel and the nearest coarse channel before it of the same function with no fine yet, adjacent or not (a gobo index fine never joins a rotation coarse: Clay Paky, Elation) |
 | `Xy` | pan word or byte, tilt word or byte | Pan and Tilt functions, degrees from the mode |
 | `Rgb`, `Rgbw`, `Rgba`, `Cmy` | the colour channels | R, G, B, White, Amber, C, M, Y functions in one mode or head. No `Cmyk` (owner, cm-cmyk, 2026-11-21): no fixture definition has a black function; it comes back with the first one that does |
 | `Slot` | one wheel channel | colour wheel, gobo, prism and mode ranges: named slots |
