@@ -12,9 +12,9 @@ flowchart LR
 
 | Role | Model, effort | Does | Never does |
 |---|---|---|---|
-| **Worker** | Sonnet 5.5, medium. Opus 5.5, high for tickets that touch the real-time core or cross crates. Hands over at 30% of its context (about 300k tokens, owner 2026-11-20) | designs the change of one ticket, writes the Codex build task with its red tests, runs `npm run peer -- codex build`, applies and verifies the patch, commits, reports with evidence. Codex writes the code (owner, 2026-11-20); the worker writes the text and the design | closes issues, changes checks, decides product design |
-| **Orchestrator** | Opus 5.5, medium (owner, 2026-11-20). Hands over to a fresh Opus 5.5 medium session at 50% of its context (about 500k tokens, owner 2026-11-20) | picks the next ticket, briefs the worker, verifies, closes, keeps `main` green, hands hard checkable tasks, second looks and research to the peers (Codex, Copilot) and verifies what they return, measures how well they did and improves their harness (`docs/agents/peers.md`) | writes product code, makes product decisions, plans a change to the peer harness with a model below Opus |
-| **Peers** (`npm run peer`) | Codex `gpt-6.2-astra` at `ultra` for builds (all coding, owner 2026-11-20), `gpt-6.2-sol` at `ultra` for reviews; Copilot `gpt-6.2-sol` at `max`, long context | build, review or research in a scratch copy, leave a patch, repro tests and evidence | commits, pushes, closes issues, trusted on its report: Opus verifies every result |
+| **Worker** | Sonnet 5.5, medium. Opus 5.5, high for tickets that touch the real-time core or cross crates. Hands over at 30% of its context (about 300k tokens, owner 2026-11-20) | designs and writes the change of one ticket from red tests, verifies it, commits, reports with evidence. Claude writes the code again (owner, 2026-11-21) | closes issues, changes checks, decides product design |
+| **Orchestrator** | Opus 5.5, medium (owner, 2026-11-20). Hands over to a fresh Opus 5.5 medium session at 50% of its context (about 500k tokens, owner 2026-11-20) | picks the next ticket, briefs the worker, verifies, closes, keeps `main` green, has every result checked by Opus (owner, 2026-11-21: all verification and checks come from Opus) | writes product code, makes product decisions, plans a change to the peer harness with a model below Opus |
+| **Peers** (`npm run peer`) | Not used for code or checks since 2026-11-21 (owner). Harness kept: Codex `gpt-6.2-astra`/`sol`, Copilot `gpt-6.2-sol` | build, review or research in a scratch copy, leave a patch, repro tests and evidence | commits, pushes, closes issues, trusted on its report: Opus verifies every result |
 | **Checker** (`.claude/agents/checker.md`, subagent type `checker`) | Opus 5.5, with only Read, Grep, Glob, Bash and Write: no browser, MCP or skill tools, so each call re-reads less | checks one result in its own clean copy, plants breaks, reports a verdict | edits the shared checkout, commits, posts |
 | **Gate reviewer** | Fable 5.2, high | deep review at a milestone, designs the next slice | routine verification, ticket by ticket |
 
@@ -31,7 +31,7 @@ Why cheaper models are safe for the routine: the rules are held by the compiler,
 ```mermaid
 flowchart LR
   P["Pick<br/>+ pre-check"] --> B["Brief<br/>modules it owns"] --> W["Worker<br/>in the trunk"] --> H["Hand-over comment,<br/>SendMessage,<br/>clear self"]
-  W -- "push main" --> V["Verify<br/>clean copy"] --> D["Second look<br/>Codex + Copilot"] --> C["Close"] --> P
+  W -- "push main" --> V["Verify<br/>clean copy"] --> D["Second look<br/>Opus"] --> C["Close"] --> P
   H --> V
 ```
 
@@ -41,7 +41,7 @@ flowchart LR
 | 2. Pre-check | can every box pass with this ticket's own commands? Does a box need a rule of who wins, or allow a state that cannot come out right? Settle it (or ask the owner) before the worker builds |
 | 3. Brief | the criteria from the issue, out of scope, the modules the worker owns (see "Work isolation"), the end of the slice (below). One ticket per worker. Send it only when `list_events` shows the worker empty |
 | 4. Verify | never trust a report. `npm run verify -- <commit> --mutants`: a clean copy of the pushed commit, every suite of `npm test` with the default target folder, mutants on the commit's diff (missed lines are listed). Then `npm run scorecard`. Drive the feature by hand. Break each new rule on purpose and see its check fail. Compare numbers with raw result files |
-| 4b. Second look | after your own verify, before closing: `npm run peer -- both review <commit> <task-file>` (Codex and Copilot in parallel, a scratch copy each, `docs/agents/peers.md`), after the verify, not beside it (load made a UI test time out). The task, from `docs/agents/tasks/review.md`: the issue boxes, the commit, your evidence and your breaks; ask for a box not truly met, a test that cannot fail, a rule broken (`docs/coding.md`, `AGENTS.md`), and to argue against your verdict. Findings are leads: check each yourself; a confirmed one keeps the ticket open or becomes an issue. Name the result in the closing comment |
+| 4b. Second look | after your own verify, before closing: an Opus check in its own clean copy (the `checker` agent): each box red before and green after, breaks planted on purpose, a rule broken (`docs/coding.md`, `AGENTS.md`), argue against the verdict. All checks come from Opus (owner, 2026-11-21). A confirmed finding keeps the ticket open or becomes an issue. Name the result in the closing comment |
 | 4c. Peer ledger | after each peer run: paste the row `npm run peer` prints into `docs/agents/peer-runs.md`, fill in whether verify passed first time and what the breaks or the second look found |
 | 5. Close | tick the boxes, close with a table of evidence, note what was not verified |
 | 6. Next | hand over the next ticket. Stop only for a decision of the owner |
