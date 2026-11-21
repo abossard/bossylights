@@ -1,11 +1,16 @@
 mod mock;
+#[expect(
+    clippy::disallowed_types,
+    reason = "the fixture supplies an output kind"
+)]
+#[path = "../../outputs/tests/common/stream.rs"]
+mod stream;
 
 use engine::{
-    ChannelNumbers, Command, Engine, Levels, OutputNumber, QUEUE, Rate, Refusal, RunNumbers,
-    Sender, Snapshot, Status, Universes,
+    Begun, ChannelNumbers, Color, Command, Engine, Levels, MAX_OUTPUTS, OutputNumber, QUEUE, Rate,
+    Refusal, RunNumbers, Sender, Snapshot, Status, Universes,
 };
 use mock::Heard;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -220,7 +225,11 @@ fn after_the_last_output_is_removed_a_command_still_lands_and_the_engine_stops()
 }
 
 /// A device whose drop waits until the test lets it go: a port that closes slowly.
-struct SlowToFree(Arc<AtomicBool>);
+#[expect(
+    clippy::disallowed_types,
+    reason = "only the test device waits to close"
+)]
+struct SlowToFree(mpsc::Receiver<()>);
 
 impl engine::Device for SlowToFree {
     fn take(&mut self, _frame: &[u8]) -> engine::Outcome {
@@ -230,10 +239,7 @@ impl engine::Device for SlowToFree {
 
 impl Drop for SlowToFree {
     fn drop(&mut self) {
-        let started = Instant::now();
-        while !self.0.load(Ordering::Relaxed) && started.elapsed() < Duration::from_secs(10) {
-            thread::sleep(Duration::from_millis(1)); // poll
-        }
+        let _ = self.0.recv_timeout(Duration::from_secs(10));
     }
 }
 
@@ -248,15 +254,15 @@ fn a_device_the_full_queue_refuses_is_freed_without_holding_up_the_sender() {
         );
         let (_engine, mut sender) = Engine::start(Universes::ONE).unwrap();
         let run = run(1, 1).check(Universes::ONE).unwrap();
-        let let_go = Arc::new(AtomicBool::new(false));
-        let device = Box::new(SlowToFree(Arc::clone(&let_go)));
+        let (let_go, hold) = mpsc::channel();
+        let device = Box::new(SlowToFree(hold));
         while sender.send(set(1, 1, 1)) != Err(Refusal::QueueFull) {}
         let (done, answered) = mpsc::channel();
         let attaching = thread::spawn(move || {
             let _ = done.send(sender.attach(output(1), device, run, Rate::Sixty));
         });
         let answer = answered.recv_timeout(Duration::from_secs(2));
-        let_go.store(true, Ordering::Relaxed);
+        drop(let_go);
         attaching.join().unwrap();
         match answer {
             Ok(Err(Refusal::QueueFull)) => return,
@@ -264,4 +270,89 @@ fn a_device_the_full_queue_refuses_is_freed_without_holding_up_the_sender() {
             Err(_) => panic!("the sender waited for the refused device to be freed"),
         }
     }
+}
+
+/// Keep the removed device on its way back until the caller drops the handle.
+#[expect(clippy::disallowed_types, reason = "the test holds the device's close")]
+fn remove_slow_device(sender: &mut Sender) -> mpsc::Sender<()> {
+    let (let_go, hold) = mpsc::channel();
+    let first = output(1);
+    sender
+        .attach(
+            first,
+            Box::new(SlowToFree(hold)),
+            run(1, 1).check(Universes::ONE).unwrap(),
+            Rate::Sixty,
+        )
+        .unwrap();
+    sender
+        .send(Command::RemoveOutput { output: first })
+        .unwrap();
+    let_go
+}
+
+#[test]
+fn removing_an_output_needs_a_free_return_only_if_it_has_a_device() {
+    let universes = Universes::new(2).unwrap();
+    let (mut engine, mut sender) = Engine::start(universes).unwrap();
+    let (_receiver, kind) = stream::receiver(Color::Rgb);
+    let set = |count| Command::SetOutput {
+        output: output(3),
+        kind,
+        universes: run(1, count),
+        rate: None,
+    };
+    sender.send(set(1)).unwrap();
+    let closing = remove_slow_device(&mut sender);
+    mock::attach(&mut sender, universes, 2, run(1, 1), Rate::Sixty);
+
+    // One device is closing. Leave just two more returns for a restart to
+    // hand back its old lane and then install its replacement.
+    let patch = sender.patch();
+    for n in 0..QUEUE + MAX_OUTPUTS - 3 {
+        if n % (QUEUE / 2) == 0 {
+            engine.fresh();
+        }
+        sender.load((*patch).clone()).unwrap();
+    }
+    engine.fresh();
+    let Begun::Opening(restart) = sender.begin(set(2), &[]).unwrap() else {
+        panic!("the longer route needs to reopen");
+    };
+    assert_eq!(sender.load((*patch).clone()), Err(Refusal::QueueFull));
+    for (number, expected) in [(1, Ok(())), (2, Err(Refusal::QueueFull))] {
+        let sent = sender.sent();
+        let project = sender.project();
+        let remove = Command::RemoveOutput {
+            output: output(number),
+        };
+        assert_eq!(sender.send(remove), expected, "output {number}");
+        assert_eq!(sender.sent(), sent + u64::from(expected.is_ok()));
+        assert_eq!(sender.project(), project);
+        assert_eq!(engine.fresh().applied(), sender.sent());
+    }
+    drop(closing);
+    sender.finish(restart.open()).unwrap();
+}
+
+#[test]
+fn a_reopen_gives_a_closing_port_its_full_second_before_trying_again() {
+    let (attempted, attempts) = mpsc::channel();
+    let open = Box::new(move |_| {
+        attempted.send(Instant::now()).unwrap();
+        Err(std::io::Error::other("the old port is still closing"))
+    });
+    let (_engine, mut sender) = Engine::start_with(Universes::ONE, open).unwrap();
+    let (_receiver, kind) = stream::receiver(Color::Rgb);
+    let _closing = remove_slow_device(&mut sender);
+    let reopen = Command::SetOutput {
+        output: output(1),
+        kind,
+        universes: run(1, 1),
+        rate: None,
+    };
+    let before = Instant::now();
+    assert_eq!(sender.send(reopen), Err(Refusal::CannotOpen));
+    let attempted = attempts.try_recv().unwrap();
+    assert!(attempted.duration_since(before) >= Duration::from_secs(1));
 }

@@ -16,13 +16,19 @@ fn with_no_output_the_counter_advances() {
 }
 
 #[test]
-fn dropping_the_engine_stops_the_tick_thread() {
-    let (mut engine, _sender) = Engine::start(Universes::ONE).expect("the tick thread starts");
-    mock::wait_until("the counter does not advance", || {
-        engine.latest().state.frame > 0
-    });
-    // `drop` joins the tick thread: a thread that never stops hangs the test.
+fn dropping_the_engine_stops_the_tick_thread_and_releases_the_device() {
+    let (engine, mut sender) = Engine::start(Universes::ONE).expect("the tick thread starts");
+    let run = RunNumbers { first: 1, count: 1 };
+    let heard = mock::attach(&mut sender, Universes::ONE, 1, run, Rate::Sixty);
+    heard.two_more_frames();
+    let device = Arc::downgrade(&heard);
+    drop(heard);
+
     drop(engine);
+    assert!(
+        device.upgrade().is_none(),
+        "the stopped output still owns the device"
+    );
 }
 
 #[test]

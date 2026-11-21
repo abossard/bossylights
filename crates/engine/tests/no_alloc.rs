@@ -7,7 +7,7 @@
 //! snapshot on every frame. A Wave runs over two strip pixels. Linked sequences run, replan and end inside the
 //! counting window. The stepped clock takes full command bursts, replans 32 live roots
 //! near the visit limit and ends all 32 while retirement is stalled. It also reads
-//! output health through a device loss, return and replacement with all frees counted.
+//! output health through a device loss, return, refused restart and replacement with all frees counted.
 //! The tick frees nothing: the old writers, runs, plans and a replaced device with its thread go to
 //! the free thread. A
 //! counting allocator sees every allocation in this process, except those of the front
@@ -618,11 +618,16 @@ fn output_health() {
     }
 
     let universes = Universes::new(2).unwrap();
-    let (mut engine, mut sender, wakes) = Engine::start_stepped(
-        universes,
-        Box::new(|_| Ok(Box::new(UnplugOnOne) as Box<dyn Device>)),
-    )
-    .unwrap();
+    let mut opens = 0;
+    let open = Box::new(move |_| {
+        opens += 1;
+        if opens == 2 {
+            // The first restart cannot get the old device or open a fresh one.
+            return Err(std::io::ErrorKind::NotFound.into());
+        }
+        Ok(Box::new(UnplugOnOne) as Box<dyn Device>)
+    });
+    let (mut engine, mut sender, wakes) = Engine::start_stepped(universes, open).unwrap();
     wakes.hold().unwrap();
     engine.stall_reclamation(true);
     let one = OutputNumber::try_from(1).unwrap();
@@ -723,29 +728,33 @@ fn output_health() {
         before,
         "allocation or free during a reconfigure that keeps the lane"
     );
-    // Pause the lane with reclamation stalled. The tick returns the worker
-    // handle and serves the routed mirror while the accepting lane stays installed.
-    let restart = begin(&mut sender, set_two(2, Rate::Sixty), &[]).unwrap();
-    let Begun::Opening(restart) = restart else {
-        panic!("a longer route needs new boxes");
-    };
-    let before = counts();
-    wakes.wake().unwrap();
-    assert_eq!(counts(), before, "retiring the lane allocated or freed");
+    // A refused restart resumes the old generation and its press history.
+    // A successful restart serves the first press of a new generation.
+    for (hand_back, result, generation, presses) in [
+        (false, Err(Refusal::CannotOpen), 2, 2),
+        (true, Ok(()), 3, 1),
+    ] {
+        let Begun::Opening(restart) = begin(&mut sender, set_two(2, Rate::Sixty), &[]).unwrap()
+        else {
+            panic!("a longer route needs new boxes");
+        };
+        let before = counts();
+        wakes.wake().unwrap();
+        assert_eq!(counts(), before, "retiring the lane allocated or freed");
 
-    engine.stall_reclamation(false);
-    let opened = restart.open(); // the worker joins one thread and starts another
-    // Commit now retires the old boxes. Hold their free thread so this window
-    // counts every allocation and free on the tick and both output workers.
-    engine.stall_reclamation(true);
-    let before = counts();
-    sender.finish(opened).unwrap();
-    runs(&mut engine, &sender, 3, 0);
-    assert_eq!(
-        counts(),
-        before,
-        "installing or serving the restarted lane allocated or freed"
-    );
+        engine.stall_reclamation(!hand_back);
+        let opened = restart.open();
+        // Hold the free thread through the tick's resume or replacement and the
+        // delivery of a new press. Count every allocation and free on both paths.
+        engine.stall_reclamation(true);
+        let before = counts();
+        assert_eq!(sender.finish(opened), result);
+        sender
+            .send(Command::SetChannel { channel, value: 73 })
+            .unwrap();
+        runs(&mut engine, &sender, generation, presses);
+        assert_eq!(counts(), before, "allocation or free after {result:?}");
+    }
 }
 
 /// Queue two replacement revisions while every once-use crosses its end between wakes.
