@@ -10,7 +10,7 @@
 mod common;
 
 use common::{Fake, NEVER, read_message};
-use outputs::dmx_usb_pro::{DmxUsbPro, Find, MESSAGE, never_wait};
+use outputs::dmx_usb_pro::{DmxUsbPro, FINISH_WITHIN, Find, MESSAGE, never_wait};
 use outputs::{Device, Outcome};
 use serialport::TTYPort;
 use std::io::{self, Read};
@@ -254,4 +254,134 @@ fn a_stop_in_the_middle_of_a_message_finishes_it() {
         bytes > 0 && bytes % MESSAGE == 0,
         "{bytes} bytes: not whole messages"
     );
+}
+
+/// Expected kinds: open(2) (ENOENT: no such file, the adapter is absent; EACCES: no
+/// permission) and TIOCEXCL in tty_ioctl(4) and termios(4) (EBUSY: another program holds
+/// the port). An absent adapter keeps no cause; a refusal is kept, also on a later look.
+#[test]
+fn a_find_error_shows_why_an_adapter_that_is_there_cannot_open() {
+    use nix::errno::Errno;
+    use std::io::ErrorKind;
+    // (find answers at open, then on every look, the cause kept)
+    let cases = [
+        (Errno::ENOENT, Errno::ENOENT, None),
+        (
+            Errno::EACCES,
+            Errno::EACCES,
+            Some(ErrorKind::PermissionDenied),
+        ),
+        (Errno::EBUSY, Errno::EBUSY, Some(ErrorKind::ResourceBusy)),
+        (
+            Errno::ENOENT,
+            Errno::EACCES,
+            Some(ErrorKind::PermissionDenied),
+        ),
+    ];
+    for (at_open, on_look, expected) in cases {
+        let looks = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let find: Find = {
+            let looks = Arc::clone(&looks);
+            Box::new(move || {
+                let error = if looks.fetch_add(1, Ordering::Relaxed) == 0 {
+                    at_open
+                } else {
+                    on_look
+                };
+                Err(error.into())
+            })
+        };
+        let mut device = DmxUsbPro::open(find).unwrap();
+        assert_eq!(device.take(&[0; 512]), Outcome::Failed, "{at_open:?}");
+        let started = Instant::now();
+        while looks.load(Ordering::Relaxed) < 2 {
+            assert!(started.elapsed() < NEVER, "never looked again"); // guard
+            thread::sleep(Duration::from_millis(5)); // poll
+        }
+        let kept = device.lost_with().get().map(|cause| cause.kind());
+        assert_eq!(kept, expected, "{at_open:?} then {on_look:?}");
+    }
+}
+
+#[test]
+fn a_route_finished_while_lost_never_replays_the_old_route_on_the_found_port() {
+    let (find, mut fake) = Fake::new(true);
+    let mut device = DmxUsbPro::open(find).unwrap();
+    let mut end = fake.next_end();
+    take_until_stuck(&mut device, &mut fake, &mut end);
+    fake.plugged().store(false, Ordering::Relaxed);
+    drop(end); // unplugged with a message unsent and one queued
+    let started = Instant::now();
+    while device.take(&[0; 512]) != Outcome::Failed {
+        assert!(started.elapsed() < NEVER, "never lost"); // guard
+        thread::sleep(Duration::from_millis(5)); // poll
+    }
+    device.finish_route();
+    fake.plugged().store(true, Ordering::Relaxed);
+    take_when_free(&mut device, &[77]);
+    let mut end = fake.next_end();
+    assert_eq!(
+        read_message(&mut end)[5],
+        77,
+        "an old-route message came first"
+    );
+}
+
+#[test]
+fn a_route_finish_on_a_port_that_takes_no_byte_ends_within_its_bound() {
+    let (find, mut fake) = Fake::new(true);
+    let mut device = DmxUsbPro::open(find).unwrap();
+    let lost_with = device.lost_with();
+    let mut end = fake.next_end();
+    take_until_stuck(&mut device, &mut fake, &mut end);
+    fake.plugged().store(false, Ordering::Relaxed);
+    let started = Instant::now();
+    device.finish_route();
+    let took = started.elapsed();
+    assert!(took <= FINISH_WITHIN, "{took:?} > {FINISH_WITHIN:?}");
+    assert_eq!(device.take(&[0; 512]), Outcome::Failed);
+    let cause = lost_with.get().map(|cause| cause.kind());
+    assert_eq!(cause, Some(io::ErrorKind::TimedOut));
+    drop(end);
+}
+
+#[test]
+fn a_finish_the_opener_gave_up_on_still_ends_before_the_new_route_is_written() {
+    // The port listing hangs past FINISH_WITHIN: the opener gives up. Once the port is
+    // found, the port thread still finishes the old route first; the first message on
+    // the wire is the new route's.
+    let (mut fake_find, mut fake) = Fake::new(true);
+    let (entered, in_find) = mpsc::channel();
+    let (release, released) = mpsc::channel::<()>();
+    let mut looks = 0;
+    let find: Find = Box::new(move || {
+        looks += 1;
+        match looks {
+            1 => return Err(io::ErrorKind::NotFound.into()),
+            2 => {
+                let _ = entered.send(());
+                let _ = released.recv();
+            }
+            _ => {}
+        }
+        fake_find()
+    });
+    let mut device = DmxUsbPro::open(find).unwrap();
+    in_find.recv_timeout(NEVER).expect("never looked again");
+    device.finish_route(); // gives up: the look hangs
+    release.send(()).unwrap();
+    let (mut seen, started) = (vec![], Instant::now());
+    while seen.last() != Some(&Outcome::Accepted) {
+        assert!(started.elapsed() < NEVER, "{seen:?}"); // guard
+        let outcome = device.take(&[5; 512]);
+        if seen.last() != Some(&outcome) {
+            seen.push(outcome);
+        }
+    }
+    // `take` drops while the finish is open (the gate table walks that); whether a
+    // frame came in that short time is up to the scheduler.
+    seen.retain(|outcome| *outcome != Outcome::Dropped);
+    assert_eq!(seen, [Outcome::Failed, Outcome::Accepted]);
+    let mut end = fake.next_end();
+    assert_eq!(read_message(&mut end)[5], 5);
 }

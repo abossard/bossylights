@@ -190,34 +190,13 @@ stateDiagram-v2
   Reconnecting --> Running: accepted
 ```
 
-"Accepted" is the device's word: a DMX USB Pro accepts only once its adapter is found. DDP gets no answer from the device, so for it accepted, and Running, mean the frames were sent. After a refusal (nothing listens) a DDP output shows Reconnecting until 30 frames went out without one. A broken socket (a new address) is opened again by itself, off the tick thread.
+"Accepted" is the device's word: a DMX USB Pro accepts only once its adapter is found. DDP gets no answer from the device, so for it accepted, and Running, mean the frames were sent. After a refusal (nothing listens) a DDP output shows Reconnecting until 30 frames went out without one. A socket that broke (a new address), or that the system refused when the output was set, is opened again by the output's own socket thread, off the tick thread: [outputs.md](design/outputs.md).
 
 Counters: `accepted`, `dropped` (the socket or the link was busy: the frame is dropped, never waited for), `failed`, `off_beat` (intervals more than 2 ms from the rate). With no output the engine still wakes 44 times a second and publishes its state.
 
 ## The DMX USB Pro port thread
 
-The output thread never calls the serial driver: a vanishing device holds the driver up for many milliseconds. Each DMX USB Pro has a port thread that does every call:
-
-```mermaid
-sequenceDiagram
-  participant O as output thread
-  participant P as port thread (one per adapter)
-  Note over P: not there when the output is set: "lost" from the start, frames fail until found
-  O->>P: the message (one-slot wait-free queue), wake
-  P->>P: write it, then wait until the link is free
-  Note over P: unplugged: write fails
-  P->>P: close the port, set "lost"
-  O->>O: next frames: Failed, at once
-  loop every 500 ms while lost
-    P->>P: list USB serial ports, match the identity, open at 500 000 baud
-  end
-  P->>P: clear "lost"
-  O->>O: next frame: Accepted, the state goes back to Running
-```
-
-| Who looks | How often | Cost |
-|---|---|---|
-| the port thread of each DMX USB Pro output | writes each message; while the adapter is not there yet or lost, lists the USB serial ports every 500 ms | asleep between messages. One listing is an IOKit or sysfs query of a few ms, never on the output thread |
+The output thread never calls the serial driver: a vanishing device holds it up for many milliseconds. Each DMX USB Pro has a port thread that does every call, looks for a lost adapter every 500 ms, and finishes a route when an output moves. Its machines (link, life, route finish, drain) and the bound `FINISH_WITHIN`: [outputs.md](design/outputs.md).
 
 ## Checks with hands or hardware
 

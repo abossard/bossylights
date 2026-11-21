@@ -1,0 +1,172 @@
+# Outputs: the machines inside each adapter
+
+An adapter takes bytes and never waits ([theory, idea 10](theory.md)). What waits lives on the adapter's own thread, as the machines below. Each table is every pair of state and event; the tests walk each row (`crates/outputs`). "n/a" rows cannot happen and say why.
+
+## DMX USB Pro
+
+```mermaid
+sequenceDiagram
+  participant O as output thread
+  participant P as port thread (one per adapter)
+  participant W as opener (off the tick)
+  O->>P: the message (one-slot wait-free queue), wake
+  P->>P: write it whole, then wait a link time
+  W->>P: finish the route (number n), wake
+  Note over O: take drops every frame while n is open
+  P->>P: last accepted message out, older ones never replayed, drain
+  P-->>W: answered n (wake on a one-slot channel)
+```
+
+| Who | Does |
+|---|---|
+| output thread | `take`: one-slot queue, wake. Never calls the serial driver: a vanishing device holds it up for many milliseconds |
+| port thread | every driver call: writes, drains, looks for the adapter every 500 ms while it has no port |
+| opener | asks a route finish and waits for the answer, at most `FINISH_WITHIN` |
+
+### Link: the port thread's link to the adapter
+
+```mermaid
+stateDiagram-v2
+  direction LR
+  [*] --> NotFound
+  NotFound --> Writing: found
+  NotFound --> CannotOpen: refused
+  CannotOpen --> Writing: found
+  CannotOpen --> NotFound: missing
+  Writing --> Stalled: no byte
+  Stalled --> Writing: message whole
+  Stalled --> Lost: 500 ms after<br/>its first no byte
+  Writing --> Lost: write error
+  Stalled --> Lost: write error
+  Lost --> Writing: found again
+  Lost --> CannotOpen: refused
+```
+
+| link \ seen | Bytes | NoBytes | Whole | Error(e) | Found | Missing | Refused(e) |
+|---|---|---|---|---|---|---|---|
+| NotFound | NotFound | NotFound | NotFound | Lost{e} | Writing | NotFound | CannotOpen{e} |
+| CannotOpen{w} | same | same | same | Lost{e} | Writing | NotFound | CannotOpen{e} |
+| Writing | Writing | Stalled{now} | Writing | Lost{e} | n/a: no look with a port | n/a | n/a |
+| Stalled{s} | Stalled{s}, Lost{ETIMEDOUT} from s + 500 ms | as Bytes | Writing | Lost{e} | n/a | n/a | n/a |
+| Lost{w} | Lost{w} | Lost{w} | Lost{w} | Lost{e} | Writing | Lost{w}: still unplugged | CannotOpen{e} |
+
+Bytes never restart a stall's clock: a port that trickles a byte now and then is still lost after 500 ms.
+
+### Not found or cannot open
+
+A find error is one of two things. `lost_with` keeps the cause of `Lost` and `CannotOpen`; read today by the hardware check (`engine-server/examples/dmx_usb_pro.rs`) and its test. The API learns it with #265.
+
+| find gives (its code) | seen | means |
+|---|---|---|
+| a port | Found | |
+| ENOENT, ENXIO, ENODEV | Missing | no adapter (open(2)) |
+| EACCES, EPERM | Refused(e) | the adapter is there, no permission (open(2)) |
+| EBUSY | Refused(e) | another program holds it (TIOCEXCL: tty_ioctl(4), termios(4)) |
+| any other | Refused(e) | |
+
+The serial crate keeps only the kind of an open error (its `From<Error> for io::Error`), so a kind stands for the code std's `decode_error_kind` maps to it: PermissionDenied is EACCES, NotFound ENOENT, ResourceBusy EBUSY, any other EIO.
+
+### Life: the port thread's life
+
+```mermaid
+stateDiagram-v2
+  direction LR
+  [*] --> Running
+  Running --> Finishing: finish n asked
+  Finishing --> Running: finished,<br/>answer n
+  Running --> Draining: stop, a port
+  Finishing --> Draining: stop, a port
+  Running --> Closed: stop, no port
+  Finishing --> Closed: stop, no port
+  Draining --> Closed: drained
+  Closed --> [*]
+```
+
+| life \ heard | Stop, a port | Stop, no port | Finish(n) | Finished | Drained |
+|---|---|---|---|---|---|
+| Running | Draining | Closed | Finishing{n} | n/a: nothing to finish | n/a: no drain running |
+| Finishing{a} | Draining. Only after the opener gave up: while it waits it holds the device, so no drop | Closed (same) | n/a: not listened for while finishing. A newer ask stays asked and starts the next finish | Running, answer a | n/a |
+| Draining | Draining | Draining | n/a: drop owns the device, no finish after it | n/a | Closed |
+| Closed | Closed | Closed | Closed | Closed | Closed |
+
+### Finishing: one turn
+
+| the port thread sees | does | then |
+|---|---|---|
+| a port, nothing unsent, a message queued | writes it: the old route's last accepted frame | stays Finishing |
+| a port, otherwise | drops `unsent` and the queue, drains | Empty: Finished. Stuck or Failed(e): clears the driver, Lost{ETIMEDOUT or e}, Finished |
+| no port | drops `unsent` and the queue | Finished |
+
+A message that lost its port belongs to the old route: it never replays on the new one.
+
+### Drain: one look at the driver
+
+TIOCOUTQ answers the bytes in the output queue (tty_ioctl(4); on macOS `sys/ttycom.h`, termios(4)). An error answers nothing about them.
+
+| driver holds | since the drain began | answer |
+|---|---|---|
+| 0 | any | Empty |
+| more | under 500 ms | look again in 1 ms |
+| more | 500 ms or more | Stuck |
+| an error e | any | Failed(e): not drained |
+
+### The opener's wait
+
+| its finish \ woke by | an answer | the time ran out | the port thread ended |
+|---|---|---|---|
+| still open | wait on (an answer to a finish it gave up on) | gives up | done |
+| answered | done | done | done |
+
+`take` answers `Dropped` while any finish is open (`gate`: lost fails, then an open finish or a full queue drops), so a give-up is safe: no frame of the next route meets the old one.
+
+**The bound.** `FINISH_WITHIN = 3 x (STALLED_FOR + QUEUE_FULL + LINK_TIME)`, about 1.55 s: the message being written when the finish is asked, the one queued behind it, then the drain. Not covered: a USB port listing that hangs while the adapter is lost. Then the opener gives up and the output keeps dropping frames until the port thread answered.
+
+## DDP
+
+### Health: what the engine sees, frame by frame
+
+```mermaid
+stateDiagram-v2
+  direction LR
+  [*] --> Running
+  [*] --> Reopening: no socket at the start
+  Running --> Proving: not there
+  Proving --> Running: 30 clean frames
+  Running --> Reopening: broken
+  Proving --> Reopening: broken
+  Reopening --> Proving: new socket
+```
+
+| health \ event | Sent | Failed(Busy) | Failed(NotThere) | Failed(Broken) | NewSocket |
+|---|---|---|---|---|---|
+| Running | Running, Accepted | Running, Dropped | Proving{0}, Failed | Reopening, ask a socket, Failed | n/a: no socket asked |
+| Proving{c} | Proving{c+1}, Running at 30, Failed until then | Proving{c}, Dropped | Proving{0}, Failed | Reopening, ask, Failed | n/a |
+| Reopening | Reopening, Failed | Reopening, Dropped | Reopening, Failed | Reopening, Failed (asked once) | Proving{0}, Failed |
+
+### The socket thread
+
+The one owner of every reopen, also of a socket the system refused when the output was set. One atomic ask from the output thread: nothing, a socket, or stop (a stop is never overwritten).
+
+```mermaid
+stateDiagram-v2
+  direction LR
+  [*] --> Idle
+  [*] --> Opening: no socket at the start
+  Idle --> Opening: asked
+  Opening --> Idle: opened, handed over
+  Opening --> Retrying: open failed
+  Retrying --> Opening: 500 ms
+  Idle --> Stopping: stop
+  Opening --> Stopping: stop
+  Retrying --> Stopping: stop
+  Stopping --> [*]
+```
+
+| phase \ turn | asked | opened | open failed(e) | wait over | stop |
+|---|---|---|---|---|---|
+| Idle | Opening | n/a | n/a | n/a | Stopping |
+| Opening | Opening: the same ask | Idle | Retrying{e} | n/a | Stopping |
+| Retrying{e} | Retrying{e}: the same ask | n/a | n/a | Opening | Stopping |
+| Stopping | Stopping | Stopping | Stopping | Stopping | Stopping |
+
+`Retrying{e}` keeps the cause; no reader outside the crate yet (#265 carries causes to the API).

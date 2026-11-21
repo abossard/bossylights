@@ -304,7 +304,7 @@ stateDiagram-v2
 | Nothing early | no reader sees the new run before the writer hears `Accepted` |
 | Nothing changes on a refusal | the old lane sends every due frame until the switch |
 
-Every transition: [output-cutover.md](output-cutover.md).
+Every transition: [output-cutover.md](output-cutover.md). The machines inside each adapter: [outputs.md](outputs.md).
 
 ## Three walks through the system
 

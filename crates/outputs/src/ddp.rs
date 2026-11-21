@@ -15,7 +15,7 @@ use std::io::{self, ErrorKind};
 use std::net::{Ipv4Addr, SocketAddrV4, UdpSocket};
 use std::num::NonZeroU16;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -167,16 +167,79 @@ fn socket(address: SocketAddrV4) -> io::Result<Box<dyn Link>> {
     Ok(Box::new(socket))
 }
 
+/// What the output thread or `drop` asks of the socket thread. One value: a stop is
+/// never overwritten by an ask for a socket.
+const ASK_NOTHING: u8 = 0;
+const ASK_SOCKET: u8 = 1;
+const ASK_STOP: u8 = 2;
+
 struct Shared {
-    want: AtomicBool,
-    stop: AtomicBool,
+    ask: AtomicU8,
     /// The socket thread is in its loop: whatever its start-up allocated is done.
     ready: AtomicBool,
 }
 
+/// What the socket thread is doing. Every pair: `docs/design/outputs.md`.
+///
+/// ```text
+/// [*] --> Idle --asked--> Opening --opened--> Idle
+/// Opening --open failed--> Retrying --wait over--> Opening
+/// any --stop--> Stopping
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Phase {
+    /// Waits for an ask.
+    Idle,
+    /// Opens a new socket now.
+    Opening,
+    /// The last open failed `with`; waits [`REOPEN_EVERY`], then opens again. The cause
+    /// stays here: no reader outside this crate yet (#265 carries causes to the API).
+    Retrying { with: ErrorKind },
+    /// Ends: frees the spent sockets and returns.
+    Stopping,
+}
+
+/// What the socket thread heard or did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Turn {
+    /// The output thread asked for a new socket.
+    Asked,
+    /// A new socket opened and was handed over.
+    Opened,
+    /// Opening failed.
+    OpenFailed(ErrorKind),
+    /// [`REOPEN_EVERY`] passed, or a wake cut it short.
+    WaitOver,
+    /// `drop` asked it to stop.
+    Stop,
+}
+
+/// The one transition function of the socket thread: a calculation.
+const fn next_phase(phase: Phase, turn: Turn) -> Phase {
+    match (phase, turn) {
+        (_, Turn::Stop) | (Phase::Stopping, _) => Phase::Stopping,
+        (Phase::Idle, Turn::Asked) | (Phase::Retrying { .. }, Turn::WaitOver) => Phase::Opening,
+        (Phase::Opening, Turn::Opened) => Phase::Idle,
+        (Phase::Opening, Turn::OpenFailed(with)) => Phase::Retrying { with },
+        // Asked once per broken socket; an ask while opening is that same ask.
+        (same @ (Phase::Idle | Phase::Opening | Phase::Retrying { .. }), _) => same,
+    }
+}
+
+/// The link of an output whose socket did not open yet: every send says so, without
+/// allocating, and the output stays reopening until the socket thread hands one over.
+struct NoSocket;
+
+impl Link for NoSocket {
+    fn send(&mut self, _: &[u8]) -> io::Result<usize> {
+        Err(ErrorKind::NotConnected.into())
+    }
+}
+
 /// A DDP output: a connected, non-blocking UDP socket and one packet's buffer. A broken
 /// socket is replaced by one the socket thread opens, and dropped there, off the output
-/// thread.
+/// thread. The socket thread is the one owner of every reopen, also of a socket that did
+/// not open at the start.
 pub(crate) struct Ddp {
     link: Box<dyn Link>,
     color: Color,
@@ -191,18 +254,31 @@ pub(crate) struct Ddp {
 }
 
 impl Ddp {
-    /// Opens a socket to `address`. Off the output thread.
+    /// Opens a socket to `address`. A socket the system refuses now is opened by the
+    /// socket thread later: frames fail until then. Fails on port 0 and when the system
+    /// refuses a thread. Off the output thread.
     pub(crate) fn open(address: SocketAddrV4, color: Color) -> io::Result<Self> {
         if address.port() == 0 {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "no port"));
         }
-        Self::with(socket(address)?, Box::new(move || socket(address)), color)
+        Self::with(
+            socket(address).ok(),
+            Box::new(move || socket(address)),
+            color,
+        )
     }
 
-    fn with(link: Box<dyn Link>, mut reopen: Reopen, color: Color) -> io::Result<Self> {
+    fn with(link: Option<Box<dyn Link>>, mut reopen: Reopen, color: Color) -> io::Result<Self> {
+        let (link, health, first) = match link {
+            Some(link) => (link, Health::Running, Phase::Idle),
+            None => (
+                Box::new(NoSocket) as Box<dyn Link>,
+                Health::Reopening,
+                Phase::Opening,
+            ),
+        };
         let shared = Arc::new(Shared {
-            want: AtomicBool::new(false),
-            stop: AtomicBool::new(false),
+            ask: AtomicU8::new(ASK_NOTHING),
             ready: AtomicBool::new(false),
         });
         let (mut give, renewed) = rtrb::RingBuffer::new(1);
@@ -214,23 +290,47 @@ impl Ddp {
                 .spawn(move || {
                     thread::park_timeout(Duration::ZERO); // sets up the park state
                     shared.ready.store(true, Ordering::Release);
-                    while !shared.stop.load(Ordering::Acquire) {
-                        if !shared.want.swap(false, Ordering::AcqRel) {
-                            thread::park();
-                            continue;
-                        }
-                        // The socket the last new one replaced: `take` handed it back
-                        // before it asked again.
-                        while close.pop().is_ok() {}
-                        match reopen() {
-                            Ok(link) => {
-                                let _ = give.push(link);
+                    let heard = || match shared.ask.load(Ordering::Acquire) {
+                        ASK_STOP => Some(Turn::Stop),
+                        ASK_SOCKET => Some(Turn::Asked),
+                        _ => None,
+                    };
+                    let mut phase = first;
+                    loop {
+                        let turn = match (phase, heard()) {
+                            (Phase::Stopping, _) => break,
+                            (_, Some(Turn::Stop)) => Turn::Stop,
+                            (Phase::Idle, Some(asked)) => {
+                                let _ = shared.ask.compare_exchange(
+                                    ASK_SOCKET,
+                                    ASK_NOTHING,
+                                    Ordering::AcqRel,
+                                    Ordering::Acquire,
+                                );
+                                asked
                             }
-                            Err(_) => {
-                                shared.want.store(true, Ordering::Release);
+                            (Phase::Idle, None) => {
+                                thread::park();
+                                continue;
+                            }
+                            (Phase::Opening, _) => {
+                                // The socket the last new one replaced: `take` handed it
+                                // back before it asked again.
+                                while close.pop().is_ok() {}
+                                match reopen() {
+                                    Ok(link) => {
+                                        let _ = give.push(link);
+                                        Turn::Opened
+                                    }
+                                    Err(error) => Turn::OpenFailed(error.kind()),
+                                }
+                            }
+                            (Phase::Retrying { .. }, _) => {
                                 thread::park_timeout(REOPEN_EVERY);
+                                Turn::WaitOver
                             }
-                        }
+                        };
+                        phase = next_phase(phase, turn);
                     }
                     while close.pop().is_ok() {}
                 })?
@@ -243,7 +343,7 @@ impl Ddp {
             color,
             sequence: 0,
             packet: [0; HEADER + MAX_DATA],
-            health: Health::Running,
+            health,
             renewed,
             spent,
             shared,
@@ -300,7 +400,7 @@ const SOCKET_THREAD: &str = "ddp-socket";
 
 impl Drop for Ddp {
     fn drop(&mut self) {
-        self.shared.stop.store(true, Ordering::Release);
+        self.shared.ask.store(ASK_STOP, Ordering::Release);
         self.thread.thread().unpark();
     }
 }
@@ -323,7 +423,12 @@ impl Device for Ddp {
         let (health, ask) = next(self.health, event);
         self.health = health;
         if ask == Ask::NewSocket {
-            self.shared.want.store(true, Ordering::Release);
+            let _ = self.shared.ask.compare_exchange(
+                ASK_NOTHING,
+                ASK_SOCKET,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            );
             self.thread.thread().unpark();
         }
         outcome(health, event)
@@ -621,7 +726,7 @@ mod tests {
     #[test]
     fn refusals_now_and_then_keep_the_output_failed_until_a_clean_stretch() {
         let reopen: Reopen = Box::new(|| Err(io::Error::other("not needed")));
-        let mut ddp = Ddp::with(Box::new(Refused(6, 0)), reopen, Color::Rgb).unwrap();
+        let mut ddp = Ddp::with(Some(Box::new(Refused(6, 0))), reopen, Color::Rgb).unwrap();
         let frame = [0; engine_core::ADDRESSES];
         let outcomes: Vec<_> = (0..198).map(|_| ddp.take(&frame)).collect(); // ends on a refusal
         // The first five frames went out before the first refusal.
@@ -672,7 +777,10 @@ mod tests {
         };
         let dropped = Arc::new(std::sync::atomic::AtomicU8::new(0));
         let mut ddp = Ddp::with(
-            Box::new(Fails(ErrorKind::AddrNotAvailable, Arc::clone(&dropped))),
+            Some(Box::new(Fails(
+                ErrorKind::AddrNotAvailable,
+                Arc::clone(&dropped),
+            ))),
             reopen,
             Color::Rgb,
         )
@@ -710,6 +818,84 @@ mod tests {
             dropped.load(Ordering::SeqCst),
             1,
             "the broken socket is closed and freed on the socket thread"
+        );
+    }
+
+    /// Every pair of the socket thread table in `docs/design/outputs.md`.
+    #[test]
+    fn every_phase_and_turn_of_the_socket_thread() {
+        use Phase::{Idle, Opening, Retrying, Stopping};
+        let retrying = Retrying {
+            with: ErrorKind::AddrNotAvailable,
+        };
+        let failed = Turn::OpenFailed(ErrorKind::NetworkUnreachable);
+        let unreachable = Retrying {
+            with: ErrorKind::NetworkUnreachable,
+        };
+        // (phase, turn, phase after)
+        let cases = [
+            (Idle, Turn::Asked, Opening),
+            (Idle, Turn::Opened, Idle),   // n/a
+            (Idle, failed, Idle),         // n/a
+            (Idle, Turn::WaitOver, Idle), // n/a
+            (Idle, Turn::Stop, Stopping),
+            (Opening, Turn::Asked, Opening), // the same ask
+            (Opening, Turn::Opened, Idle),
+            (Opening, failed, unreachable),
+            (Opening, Turn::WaitOver, Opening), // n/a
+            (Opening, Turn::Stop, Stopping),
+            (retrying, Turn::Asked, retrying),  // the same ask
+            (retrying, Turn::Opened, retrying), // n/a
+            (retrying, failed, retrying),       // n/a
+            (retrying, Turn::WaitOver, Opening),
+            (retrying, Turn::Stop, Stopping),
+            (Stopping, Turn::Asked, Stopping),
+            (Stopping, Turn::Opened, Stopping),
+            (Stopping, failed, Stopping),
+            (Stopping, Turn::WaitOver, Stopping),
+            (Stopping, Turn::Stop, Stopping),
+        ];
+        for (phase, turn, after) in cases {
+            assert_eq!(next_phase(phase, turn), after, "{phase:?} {turn:?}");
+        }
+    }
+
+    /// A socket the system refuses at the start is opened by the socket thread, never by
+    /// the engine: frames fail until then, then `CLEAN` frames prove it, as after a
+    /// refusal (`docs/engine.md`, each output's states).
+    #[test]
+    fn an_output_whose_socket_did_not_open_is_opened_by_its_own_thread() {
+        let opened = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let sent = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let reopen: Reopen = {
+            let (opened, sent) = (Arc::clone(&opened), Arc::clone(&sent));
+            Box::new(move || {
+                if opened.fetch_add(1, Ordering::SeqCst) == 0 {
+                    return Err(ErrorKind::NetworkUnreachable.into());
+                }
+                Ok(Box::new(Counts(Arc::clone(&sent))) as Box<dyn Link>)
+            })
+        };
+        let mut ddp = Ddp::with(None, reopen, Color::Rgb).unwrap();
+        let frame = [0; engine_core::ADDRESSES];
+        let (mut seen, started) = (vec![], std::time::Instant::now());
+        while seen.last() != Some(&Outcome::Accepted) {
+            assert!(started.elapsed() < Duration::from_secs(10), "{seen:?}"); // guard
+            seen.push(ddp.take(&frame));
+            thread::yield_now();
+        }
+        let failed = seen.iter().filter(|o| **o == Outcome::Failed).count();
+        let clean = usize::try_from(CLEAN).unwrap();
+        assert!(failed >= clean - 1, "{failed} failed");
+        assert_eq!(
+            opened.load(Ordering::SeqCst),
+            2,
+            "one failed open, one retry"
+        );
+        assert_eq!(
+            sent.load(Ordering::SeqCst),
+            clean,
+            "the proving frames went out"
         );
     }
 }
