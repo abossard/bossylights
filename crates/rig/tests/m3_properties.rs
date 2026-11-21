@@ -486,11 +486,13 @@ fn each_hybrid_holds_its_wheel_where_the_mix_goes_through() {
     let hex5 = "American-DJ-WiFly-EXR-HEX5-IP.qxf";
     let vpar = "American-DJ-VPar.qxf";
     let domino = "Ayrton-Domino-LT.qxf";
+    let mistral = "Ayrton-Mistral.qxf";
     let briteq = "Briteq-BT-Theatre-261FC.qxf";
     let hydra = "Cameo-HydraBeam-4000.qxf";
     let ovation = "Chauvet-Ovation-CYC-1-FC.qxf";
     let ek = "EK-R3-Wash.qxf";
     let mac301 = "Martin-MAC-301-Wash.qxf";
+    let robin = "Robe-Robin-800-LEDWash.qxf";
     let spikie = "Robe-Robin-Spikie.qxf";
     let spectral = "Showtec-Spectral-850-RGBA-Tour.qxf";
     let mh100 = "Stairville-MH-100-Beam-36x3-LED.qxf";
@@ -520,6 +522,9 @@ fn each_hybrid_holds_its_wheel_where_the_mix_goes_through() {
         (domino, "Basic", 17, refused()),
         (domino, "Extended", 15, refused()),
         (domino, "Extended", 29, refused()),
+        (mistral, "Standard", 15, Ok((1, "Open"))),
+        (mistral, "Basic", 13, Ok((1, "Open"))),
+        (mistral, "Extended", 18, Ok((1, "Open"))),
         (briteq, "12 Channel CMY", 7, Ok((2, no_filter))),
         (briteq, "14 Channel Full 8bit", 6, Ok((2, no_filter))),
         (briteq, "21 Channel Full 16bit", 7, Ok((2, no_filter))),
@@ -549,6 +554,12 @@ fn each_hybrid_holds_its_wheel_where_the_mix_goes_through() {
         (alpha, "Option 16b", 5, Ok((17, "white"))),
         (alpha, "Option Stnd", 5, Ok((17, "white"))),
         (alpha, "Option Extn", 5, Ok((17, "white"))),
+        (
+            "Clay-Paky-Arolla-Profile-HP.qxf",
+            "Standard",
+            6,
+            Ok((4, "White")),
+        ),
         // "LED off": dark
         ("Contest-SFX-HO150QC.qxf", "8 Channel", 7, refused()),
         (ek, "16 Channel", 6, Ok((4, "Macro Color OFF"))),
@@ -587,6 +598,11 @@ fn each_hybrid_holds_its_wheel_where_the_mix_goes_through() {
         (mac, "16-bit with Dimmer Wheel", 7, Ok((0, "White"))),
         (mac301, "Standard 8bit", 13, Ok((0, "Inactive"))),
         (mac301, "Standard 16bit", 16, Ok((0, "Inactive"))),
+        (robin, "38 Channel", 32, Ok((175, "Red"))),
+        (robin, "22 Channel", 16, Ok((0, "No function"))),
+        (robin, "16 Channel", 12, Ok((0, "No function"))),
+        (robin, "38 Channel #2", 14, Ok((0, "No function"))),
+        (robin, "37 Channel", 32, Ok((175, "Red"))),
         // "No function" with a white preset: the macro is off
         (spikie, "Standard 16-bit (RGB)", 9, Ok((0, default))),
         (spikie, "Reduced 8-bit (RGB)", 9, Ok((0, default))),

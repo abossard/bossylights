@@ -443,6 +443,72 @@ fn dimmer_roles_come_from_the_channels_in_each_mode() {
 }
 
 #[test]
+fn only_channel_numbers_are_read_as_acts_on() {
+    for (target, expected) in [
+        (" 0 ", Some(0)),
+        ("65535", Some(u16::MAX)),
+        ("65536", None),
+        ("-1", None),
+        ("Pump", None),
+        ("", None),
+    ] {
+        let xml = format!(
+            r#"<FixtureDefinition><Manufacturer>A</Manufacturer><Model>M</Model><Type>Other</Type>
+            <Channel Name="Level" Preset="IntensityDimmer"/>
+            <Mode Name="One"><Channel Number="0" ActsOn="{target}">Level</Channel></Mode>
+            </FixtureDefinition>"#
+        );
+        let fixture = parse("number.qxf", xml.as_bytes()).unwrap();
+        assert_eq!(
+            fixture.modes[0].channels[0].declared.acts_on, expected,
+            "{target}"
+        );
+    }
+}
+
+#[test]
+fn a_fog_fixture_only_dims_its_emitters_with_a_plain_level() {
+    let cases = [
+        ("", Dimmer),
+        (r#"<Capability Min="3" Max="32">Level</Capability>"#, Dimmer),
+        (r#"<Capability Min="0" Max="255" Preset="LampOn"/>"#, Dimmer),
+        (
+            r#"<Capability Min="1" Max="255" Preset="LampOn"/>"#,
+            other("IntensityDimmer"),
+        ),
+        (
+            r#"<Capability Min="0" Max="254" Preset="LampOn"/>"#,
+            other("IntensityDimmer"),
+        ),
+        (
+            r#"<Capability Min="0" Max="9">Off</Capability><Capability Min="10" Max="255">Output</Capability>"#,
+            other("IntensityDimmer"),
+        ),
+    ];
+    for kind in ["Smoke", "Hazer"] {
+        for (ranges, expected) in &cases {
+            let xml = format!(
+                r#"<FixtureDefinition><Manufacturer>A</Manufacturer><Model>M</Model><Type>{kind}</Type>
+                <Channel Name="Level" Preset="IntensityDimmer">{ranges}</Channel>
+                <Channel Name="Red" Preset="IntensityRed"/>
+                <Mode Name="Shared"><Channel Number="0">Level</Channel><Channel Number="1">Red</Channel>
+                    <Head><Channel>0</Channel><Channel>1</Channel></Head></Mode>
+                <Mode Name="Headless"><Channel Number="0">Level</Channel><Channel Number="1">Red</Channel></Mode>
+                </FixtureDefinition>"#
+            );
+            for mode in parse("fog.qxf", xml.as_bytes()).unwrap().modes {
+                assert_eq!(
+                    &mode.channels[0].role(),
+                    expected,
+                    "{kind} {}, {ranges}",
+                    mode.name
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn a_declared_colour_sets_the_role_and_keeps_the_v11_function() {
     for (name, colour) in [
         ("Red", Some(Red)),
@@ -571,4 +637,41 @@ fn a_channel_preset_says_which_way_its_values_run() {
         let channel = format!(r#"<Channel Name="C" {attributes}/>"#);
         assert_eq!(only_channel(&channel).direction, direction, "{attributes}");
     }
+}
+
+// `ActsOn` belongs to the mode: the same channel acts on another channel in each mode
+#[test]
+fn acts_on_is_read_per_mode() {
+    let xml = r#"<?xml version="1.0"?>
+<FixtureDefinition xmlns="http://www.qlcplus.org/FixtureDefinition">
+ <Manufacturer>Acme</Manufacturer><Model>Test</Model><Type>Moving Head</Type>
+ <Channel Name="Focus" Preset="BeamFocusNearFar"/>
+ <Channel Name="Auto Focus"><Group Byte="0">Beam</Group></Channel>
+ <Channel Name="Auto Focus fine" Preset="BeamFocusFine"/>
+ <Mode Name="Named">
+  <Channel Number="0">Focus</Channel><Channel Number="1">Auto Focus</Channel>
+  <Channel Number="2" ActsOn="1">Auto Focus fine</Channel>
+ </Mode>
+ <Mode Name="Moved">
+  <Channel Number="0">Auto Focus</Channel><Channel Number="1" ActsOn="0">Auto Focus fine</Channel>
+  <Channel Number="2">Focus</Channel>
+ </Mode>
+ <Mode Name="None">
+  <Channel Number="0">Focus</Channel><Channel Number="1">Auto Focus fine</Channel>
+ </Mode>
+</FixtureDefinition>"#;
+    let fixture = parse("acts-on.qxf", xml.as_bytes()).unwrap();
+    let acts_on: Vec<Vec<Option<u16>>> = fixture
+        .modes
+        .iter()
+        .map(|mode| mode.channels.iter().map(|c| c.declared.acts_on).collect())
+        .collect();
+    assert_eq!(
+        acts_on,
+        [
+            vec![None, None, Some(1)],
+            vec![None, Some(0), None],
+            vec![None, None]
+        ]
+    );
 }

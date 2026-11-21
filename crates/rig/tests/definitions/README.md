@@ -47,3 +47,7 @@ the Apache License 2.0 (`COPYING` in the repository root, copied here as
 | `Contest-Evora-Beam-15R.qxf` | Contest | a fixed gobo index fine right after the fixed gobos, the only `GoboIndex` coarse further up |
 | `ADB-Warp-M.qxf` | ADB | framing shutters B, C, D coarse, then B, C, D fine, and In/Out declared fine |
 | `Ayrton-Domino-LT.qxf` | Ayrton | gobo index fines with no coarse of their preset, blades whose coarse looks like the frost before it |
+| `Ayrton-Mistral.qxf` | Ayrton | an Auto Focus fine whose `ActsOn` names its coarse, beside a Focus coarse of its preset |
+| `Showtec-Acrobat.qxf` | Showtec | two Pan coarses, then their two Pan fines: which is which is not declared |
+| `Robe-Robin-800-LEDWash.qxf` | Robe | mode `38 Channel #2` lists each zone head one channel early |
+| `Clay-Paky-Arolla-Profile-HP.qxf` | Clay_Paky | a gobo rotation fine whose one range runs over the whole byte |

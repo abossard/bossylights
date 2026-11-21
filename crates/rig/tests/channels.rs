@@ -407,9 +407,10 @@ fn a_fine_byte_pairs_only_when_certain() {
         (&rgb, 0, &[]),
         // two coarses that look the same, then their fines: which is whose is not certain
         (&twice, 0, &[]),
-        // two coarses with the fine's preset and neither right before it
+        // Two free Pan coarses follow the fine.
         (&before, 0, &[]),
-        (&between, 0, &[]),
+        // The earlier Pan is the only candidate before the fine.
+        (&between, 0, &[(0, 2)]),
         // a fine byte joins within its head
         (&heads, 0, &[(0, 3), (1, 2)]),
         (&trailing, 0, &[(0, 3), (1, 4)]),
@@ -509,6 +510,16 @@ fn fine_pair_candidates_use_the_declared_group_and_all_the_heads() {
             &[(1, 0)],
         ),
         (
+            "the first pair leaves one free Pan right after the second fine",
+            hand(vec![pan(), pan_fine(), pan_fine(), pan()], &[]),
+            &[(0, 1), (3, 2)],
+        ),
+        (
+            "a gap separates the fine from the only later Pan",
+            hand(vec![pan_fine(), channel("PositionTilt"), pan()], &[]),
+            &[],
+        ),
+        (
             "two heads share the coarse",
             hand(vec![pan(), pan_fine()], &[&[0], &[0, 1]]),
             &[],
@@ -546,6 +557,68 @@ fn fine_pair_candidates_use_the_declared_group_and_all_the_heads() {
 }
 
 #[test]
+fn acts_on_chooses_among_siblings_before_considering_the_named_channel() {
+    let sibling = |byte| {
+        let mut c = declared(None, Some("Beam"), byte);
+        c.declared.acts_on = Some(0);
+        c
+    };
+    let parent = || declared(None, Some("Beam"), Byte::Coarse);
+    let gap = || channel("PositionPan");
+    let coarse = || sibling(Byte::Coarse);
+    let fine = || sibling(Byte::Fine);
+    let mut pan_sibling = gap();
+    pan_sibling.declared.acts_on = Some(0);
+    let cases = [
+        // A sibling after a gap and after the fine outranks its named parent.
+        (vec![parent(), fine(), gap(), coarse()], vec![(3, 1)]),
+        // Several siblings fit: take the preceding channel only when it is one of them.
+        (vec![parent(), coarse(), coarse(), fine()], vec![(2, 3)]),
+        (vec![parent(), coarse(), coarse(), gap(), fine()], vec![]),
+        // The neighbor must both act on the named channel and fit the fine.
+        (vec![parent(), coarse(), coarse(), parent(), fine()], vec![]),
+        (
+            vec![parent(), coarse(), coarse(), pan_sibling, fine()],
+            vec![],
+        ),
+        // Even a sibling which is another fine rules out the parent.
+        (vec![parent(), fine(), fine()], vec![]),
+    ];
+    for (channels, expected) in cases {
+        let result = lower(&hand(channels, &[]), 0, SPACE).unwrap();
+        let actual: Vec<_> = result.pairs.iter().map(|p| (p.coarse, p.fine)).collect();
+        assert_eq!(actual, expected);
+    }
+}
+
+#[test]
+fn adjacent_bytes_stay_apart_only_in_matching_blocks() {
+    let coarse = || declared(None, Some("Beam"), Byte::Coarse);
+    let fine = || declared(None, Some("Beam"), Byte::Fine);
+    let different_group = || declared(None, Some("Speed"), Byte::Fine);
+    let cases = [
+        (ranged(coarse(), &[None]), fine(), false),
+        (coarse(), different_group(), true),
+        (channel("BeamZoom"), fine(), true),
+        (ranged(coarse(), &[Some(Does::Closed)]), fine(), true),
+        (declared(None, Some("Effect"), Byte::Coarse), fine(), true),
+    ];
+    for (previous, following, joins) in cases {
+        // Both a group-only fine and a preset fine with no matching preset use adjacency.
+        for candidate in [fine(), declared(Some("BeamFocusFine"), None, Byte::Fine)] {
+            let channels = vec![previous.clone(), coarse(), candidate, following.clone()];
+            let result = lower(&hand(channels, &[]), 0, SPACE).unwrap();
+            assert_eq!(
+                result.pairs,
+                joins
+                    .then_some(rig::channels::Pair { coarse: 1, fine: 2 })
+                    .as_slice(),
+            );
+        }
+    }
+}
+
+#[test]
 fn a_group_only_byte_uses_the_qlc_group_of_the_other_byte() {
     let cases = [
         ("IntensityDimmer", "Intensity"),
@@ -577,13 +650,15 @@ fn a_group_only_byte_uses_the_qlc_group_of_the_other_byte() {
 }
 
 #[test]
-fn only_the_way_a_preset_runs_can_differ_across_a_gap() {
+fn presets_pair_by_what_they_control_adjacent_or_across_a_gap() {
     let cases = [
         ("SpeedPanSlowFast", "SpeedPanFastSlow", true),
         ("BeamZoomBigSmall", "BeamZoomSmallBig", true),
         ("BeamFocusNearFar", "BeamFocusFarNear", true),
         ("ShutterIrisMinToMax", "ShutterIrisMaxToMin", true),
-        ("IntensityMasterDimmer", "IntensityDimmer", false),
+        ("IntensityMasterDimmer", "IntensityDimmer", true),
+        ("PositionXAxis", "PositionPan", true),
+        ("PositionYAxis", "PositionTilt", true),
         ("ColorCTOMixer", "ColorCTCMixer", false),
         ("ColorCTCMixer", "ColorCTBMixer", false),
         ("GoboWheel", "GoboIndex", false),
@@ -591,16 +666,16 @@ fn only_the_way_a_preset_runs_can_differ_across_a_gap() {
         ("ColorMacro", "ColorWheel", false),
     ];
     for (coarse, low, same_preset) in cases {
-        // Each row has a plain fine in the coarse's group, so adjacency alone is enough.
-        for (channels, joins) in [
-            (vec![channel(coarse), fine(low)], true),
-            (
-                vec![channel(coarse), channel("NoFunction"), fine(low)],
-                same_preset,
-            ),
+        for channels in [
+            vec![channel(coarse), fine(low)],
+            vec![channel(coarse), channel("NoFunction"), fine(low)],
         ] {
             let result = lower(&hand(channels, &[]), 0, SPACE).unwrap();
-            assert_eq!(result.pairs.len(), usize::from(joins), "{coarse} / {low}");
+            assert_eq!(
+                result.pairs.len(),
+                usize::from(same_preset),
+                "{coarse} / {low}"
+            );
         }
     }
 }
@@ -1678,12 +1753,64 @@ fn only_a_free_lookalike_makes_an_adjacent_pair_uncertain() {
             })],
         )
     };
+    let mut claimed = group("Beam", Byte::Fine);
+    claimed.declared.acts_on = Some(1);
+    let mut selector = group("Gobo", Byte::Coarse);
+    selector.ranges.push(range(
+        0,
+        255,
+        "Gobo",
+        Some(Does::Gobo {
+            picture: None,
+            shakes: false,
+        }),
+    ));
     type Case<'a> = (&'a str, Mode, &'a [(u32, u32)]);
     let cases: &[Case<'_>] = &[
         (
-            "no ranges and one unnamed range look the same",
+            "two lookalikes before a single fine",
             adjacent(ranged(zoom(), &[None]), zoom(), group("Beam", Byte::Fine)),
-            &[],
+            &[(1, 2)],
+        ),
+        (
+            "a coarse in another head cannot start a block",
+            hand(
+                vec![
+                    zoom(),
+                    zoom(),
+                    group("Beam", Byte::Fine),
+                    group("Beam", Byte::Fine),
+                ],
+                &[&[0]],
+            ),
+            &[(1, 2)],
+        ),
+        (
+            "a claimed coarse cannot start a block",
+            hand(
+                vec![
+                    claimed,
+                    zoom(),
+                    zoom(),
+                    group("Beam", Byte::Fine),
+                    group("Beam", Byte::Fine),
+                ],
+                &[],
+            ),
+            &[(1, 0), (2, 3)],
+        ),
+        (
+            "a pure selector cannot start a block for an index fine",
+            hand(
+                vec![
+                    selector,
+                    group("Gobo", Byte::Coarse),
+                    fine("GoboIndex"),
+                    group("Gobo", Byte::Fine),
+                ],
+                &[],
+            ),
+            &[(1, 2)],
         ),
         (
             "opposite directions match the fine but distinguish the coarses",
@@ -1722,7 +1849,7 @@ fn only_a_free_lookalike_makes_an_adjacent_pair_uncertain() {
             &[(1, 2)],
         ),
         (
-            "the preceding fine cannot be a lookalike coarse",
+            "only the second fine has an earlier Zoom",
             hand(vec![zoom_fine(), zoom(), zoom_fine(), zoom()], &[]),
             &[(1, 2)],
         ),

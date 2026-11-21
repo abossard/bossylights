@@ -90,6 +90,19 @@ pub struct Channel {
     pub ranges: Vec<Range>,
 }
 
+impl Channel {
+    /// A plain byte has no steps. A single range is plain when it names no function
+    /// or covers the whole byte.
+    #[must_use]
+    pub fn is_plain(&self) -> bool {
+        match self.ranges.as_slice() {
+            [] => true,
+            [range] => range.does.is_none() || (range.min == 0 && range.max == u8::MAX),
+            _ => false,
+        }
+    }
+}
+
 /// The channel's QLC+ declarations and how its fixture and heads use a dimmer.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Declared {
@@ -99,6 +112,8 @@ pub struct Declared {
     pub group: Option<String>,
     /// The emitter or subtractive colour named by the `<Colour>` child.
     pub colour: Option<Function>,
+    /// The mode's `ActsOn`: the channel number (counted from 0) this channel acts on.
+    pub acts_on: Option<u16>,
     pub(crate) dimming: Dimming,
 }
 
@@ -110,8 +125,8 @@ pub(crate) enum Dimming {
     Preset,
     /// On a dimmer fixture, a group-only Intensity channel also controls light.
     DimmerPack,
-    /// A Smoke or Hazer dimmer outside the heads that declare an emitter.
-    /// In a headless mode this applies when the mode declares no emitter.
+    /// A Smoke or Hazer channel with steps, or without an emitter in its head
+    /// (in its mode when headless). A dimmer preset here controls fog.
     Fog,
 }
 

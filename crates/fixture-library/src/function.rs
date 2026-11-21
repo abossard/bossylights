@@ -5,9 +5,9 @@ use crate::model::{Byte, Channel, Declared, Dimming, Direction, Function};
 use alloc::string::{String, ToString};
 
 impl Channel {
-    /// The declared colour, else preset, else group. On Smoke and Hazer fixtures a dimmer
-    /// preset controls light only in a head with an emitter, or a headless mode with one.
-    /// On a dimmer pack the Intensity group dims.
+    /// The declared colour, else preset, else group. A Smoke or Hazer dimmer preset
+    /// controls light only on a plain byte sharing a head with an emitter, or on a
+    /// plain byte in a headless mode with an emitter. On a dimmer pack the Intensity group dims.
     #[must_use]
     pub fn role(&self) -> Function {
         let declared = &self.declared;

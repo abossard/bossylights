@@ -235,7 +235,7 @@ fn mode<'a>(
     warnings: &mut Vec<Warning>,
 ) -> Result<Mode, Failure<'a>> {
     let name = node.attribute("Name").unwrap_or_default().to_string();
-    let mut by_number: BTreeMap<u16, &Channel> = BTreeMap::new();
+    let mut by_number = BTreeMap::new();
     for entry in node.children().filter(|n| n.has_tag_name("Channel")) {
         let number: u16 = number(entry, "Number")?;
         // Names match as written, else ignoring spaces at the ends: real files have both.
@@ -245,7 +245,10 @@ fn mode<'a>(
             .find(|c| c.name == wanted)
             .or_else(|| defined.iter().find(|c| c.name.trim() == wanted.trim()))
             .ok_or_else(|| (entry, Problem::UnknownChannel(wanted.trim().to_string())))?;
-        if by_number.insert(number, found).is_some() {
+        let acts_on = entry
+            .attribute("ActsOn")
+            .and_then(|s| s.trim().parse().ok());
+        if by_number.insert(number, (found, acts_on)).is_some() {
             return Err((entry, Problem::DuplicateNumber(number)));
         }
     }
@@ -267,7 +270,14 @@ fn mode<'a>(
             .unwrap_or(node);
         return Err((entry, Problem::SkippedNumber(number)));
     }
-    let mut channels: Vec<_> = by_number.into_values().cloned().collect();
+    let mut channels: Vec<_> = by_number
+        .into_values()
+        .map(|(definition, acts_on)| {
+            let mut channel = definition.clone();
+            channel.declared.acts_on = acts_on;
+            channel
+        })
+        .collect();
     let warn = |at: Node, left_out| Warning {
         mode: name.clone(),
         line: line_of(at),
@@ -333,8 +343,8 @@ fn mode<'a>(
     })
 }
 
-/// On fog fixtures a dimmer controls light when its head declares an emitter.
-/// Without heads, the mode supplies the emitter declaration.
+/// On fog fixtures a plain dimmer controls light when its head declares an emitter.
+/// A headless mode supplies the emitter declaration for all its channels.
 fn set_dimming(kind: &Kind, channels: &mut [Channel], heads: &[Vec<u16>]) {
     if *kind == Kind::Dimmer {
         for channel in channels {
@@ -346,12 +356,8 @@ fn set_dimming(kind: &Kind, channels: &mut [Channel], heads: &[Vec<u16>]) {
         return;
     }
     let emits = |channel: &Channel| channel.declared.emitter_colour().is_some();
-    if heads.is_empty() && channels.iter().any(emits) {
-        return;
-    }
-    for channel in channels.iter_mut() {
-        channel.declared.dimming = Dimming::Fog;
-    }
+    let headless_emits = heads.is_empty() && channels.iter().any(emits);
+    let mut shares_emitter = alloc::vec![headless_emits; channels.len()];
     for head in heads {
         if head
             .iter()
@@ -359,10 +365,15 @@ fn set_dimming(kind: &Kind, channels: &mut [Channel], heads: &[Vec<u16>]) {
             .any(emits)
         {
             for &n in head {
-                if let Some(channel) = channels.get_mut(usize::from(n)) {
-                    channel.declared.dimming = Dimming::Preset;
+                if let Some(shares) = shares_emitter.get_mut(usize::from(n)) {
+                    *shares = true;
                 }
             }
+        }
+    }
+    for (channel, shares) in channels.iter_mut().zip(shares_emitter) {
+        if !shares || !channel.is_plain() {
+            channel.declared.dimming = Dimming::Fog;
         }
     }
 }
