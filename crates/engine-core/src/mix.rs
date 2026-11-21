@@ -681,7 +681,10 @@ mod tests {
                 .iter()
                 .flat_map(|row| row.0.iter())
                 .position(|byte| *byte != out);
-            assert_eq!(missed, None, "blackout {dark}: the first channel not at {out}");
+            assert_eq!(
+                missed, None,
+                "blackout {dark}: the first channel not at {out}"
+            );
         }
     }
 
@@ -874,6 +877,39 @@ mod tests {
         ];
         for (case, value, dark, flags, follows, levels, out) in cases {
             assert_eq!(follow(value, dark, flags, follows, levels), out, "{case}");
+        }
+    }
+
+    #[test]
+    fn followed_levels_say_full_dark_or_part() {
+        let (master, both) = (Follows(1), Follows(1 | 1 << 2));
+        // (case, follows, levels, scale)
+        let cases = [
+            ("follows nothing", Follows(0), [0; MODIFIERS], Scale::Full),
+            ("master full", master, [255; MODIFIERS], Scale::Full),
+            ("two slots full", both, [255; MODIFIERS], Scale::Full),
+            ("master at 0", master, [0; MODIFIERS], Scale::Dark),
+            (
+                "master at 128",
+                master,
+                [128; MODIFIERS],
+                Scale::Part {
+                    product: 128,
+                    whole: 255,
+                },
+            ),
+            (
+                "two slots at 128",
+                both,
+                [128; MODIFIERS],
+                Scale::Part {
+                    product: 128 * 128,
+                    whole: 255 * 255,
+                },
+            ),
+        ];
+        for (case, follows, levels, scale) in cases {
+            assert_eq!(scale_of(follows, levels), scale, "{case}");
         }
     }
 }
