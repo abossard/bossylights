@@ -4,6 +4,7 @@
 mod common;
 
 use common::mode;
+use engine_core::{Levels, Light, Universes, resolve};
 use fixture_library::{Byte, Direction, Does, Function, Mode, Range};
 use rig::channels::{
     Change, Compound, Config, Field, Follows, PastTheEnd, Sense, Shape, Ties, Travel, Width,
@@ -15,6 +16,8 @@ const MH6: &str = "Martin-Rush-MH6-Wash.qxf";
 const FOGGER: &str = "Stairville-AF-180-LED-Fogger-Co2-FX.qxf";
 const SPECTRAL: &str = "Showtec-Spectral-850-RGBA-Tour.qxf";
 const CLB4: &str = "Stairville-CLB4-RGB-Compact-LED-Bar-4.qxf";
+const ELATION: &str = "Elation-Platinum-Spot-5R.qxf";
+const CAMEO: &str = "Cameo-CLBARL10RGBA.qxf";
 const SPACE: u32 = 524_288;
 
 /// A channel that does `function`, coarse, with nothing else said.
@@ -22,6 +25,7 @@ fn channel(function: Function) -> fixture_library::Channel {
     fixture_library::Channel {
         name: format!("{function:?}"),
         function,
+        colour: None,
         byte: Byte::Coarse,
         default: None,
         direction: None,
@@ -61,6 +65,27 @@ fn reverse_dimmer() -> fixture_library::Channel {
         direction: Some(Direction::Down),
         ..channel(Function::Dimmer)
     }
+}
+
+/// A parsed Intensity channel, optionally followed by a separate LED dimmer.
+fn intensity_mode(kind: &str, name: &str, led_dimmer: bool) -> Mode {
+    let (definition, entry) = if led_dimmer {
+        (
+            r#"<Channel Name="LED Dimmer" Preset="IntensityDimmer"/>"#,
+            r#"<Channel Number="1">LED Dimmer</Channel>"#,
+        )
+    } else {
+        ("", "")
+    };
+    let xml = format!(
+        r#"<FixtureDefinition><Manufacturer>Test</Manufacturer><Model>Test</Model><Type>{kind}</Type>
+        <Channel Name="{name}"><Group Byte="0">Intensity</Group></Channel>{definition}
+        <Mode Name="{name}"><Channel Number="0">{name}</Channel>{entry}</Mode></FixtureDefinition>"#
+    );
+    fixture_library::parse("intensity.qxf", xml.as_bytes())
+        .unwrap()
+        .modes
+        .remove(0)
 }
 
 /// A channel's config in words: "rest 252, dark 0, jump, blackout".
@@ -103,7 +128,7 @@ fn say_field(field: &Field) -> String {
     }
 }
 
-/// A compound in words, `None` for a lone byte or word: every channel has one.
+/// A compound in words, skipping the individual bytes and words.
 fn say_compound(compound: &Compound) -> Option<String> {
     let fields = |fields: &[Field]| fields.iter().map(say_field).collect::<Vec<_>>().join(" ");
     let shape = match &compound.shape {
@@ -220,7 +245,20 @@ fn each_channel_gets_rules_from_its_function() {
         }],
         &[],
     );
-    let cases: [(&Mode, usize, &str); 26] = [
+    let pan = hand(
+        vec![
+            fixture_library::Channel {
+                default: Some(128),
+                ..channel(Function::Pan)
+            },
+            fixture_library::Channel {
+                default: Some(19),
+                ..fine(Function::Pan)
+            },
+        ],
+        &[],
+    );
+    let cases = [
         (&shehds, 0, "rest 0, dark 0, fade, master and blackout"),
         // open shutter: rest where light comes out, dark at the first byte of Closed
         (&shehds, 1, "rest 252, dark 0, jump, blackout"),
@@ -230,7 +268,7 @@ fn each_channel_gets_rules_from_its_function() {
         (&shehds, 5, "rest 0, dark 0, jump, none"),
         (&shehds, 10, "rest 0, dark 0, fade, none, runs 255 to 0"),
         (&shehds, 13, "rest 0, dark 0, jump, none"),
-        (&mh6, 0, "rest 8, dark 0, jump, blackout"),
+        (&mh6, 0, "rest 8, dark 0, jump, blackout, runs 181 to 140"),
         (&mh6, 1, "rest 0, dark 0, fade, master and blackout"),
         (&mh6, 2, "rest 0, dark 0, fade, master and blackout"),
         // a dimmer carries the emitters
@@ -244,6 +282,10 @@ fn each_channel_gets_rules_from_its_function() {
         (&fogger, 4, "rest 0, dark 0, fade, none"),
         // a shutter with no Closed range does not follow Blackout
         (&spectral, 6, "rest 0, dark 0, jump, none"),
+        // the macro wheel lets the mix through at the midpoint of its 0..13 bypass
+        (&spectral, 5, "rest 6, dark 0, jump, none"),
+        (&pan, 0, "rest 128, dark 0, fade, none"),
+        (&pan, 1, "rest 19, dark 0, fade, none"),
         (&no_closed, 0, "rest 0, dark 0, jump, none"),
         // emitters with no dimmer follow both
         (&rgb, 0, "rest 0, dark 0, fade, master and blackout"),
@@ -282,11 +324,13 @@ fn each_channel_gets_rules_from_its_function() {
 }
 
 #[test]
-fn a_fine_byte_joins_the_first_coarse_byte_that_does_the_same() {
+fn a_fine_byte_joins_the_nearest_free_coarse_before_it_else_the_first_after() {
     // (mode, first, pairs as coarse and fine)
     let shehds = mode(SHEHDS, "14 Channel");
     let mh6 = mode(MH6, "Standard");
     let rgb = mode("Generic-Generic-RGB.qxf", "RGB");
+    let clay = mode("Clay-Paky-Alpha-Spot-575-HPE.qxf", "Option Extn");
+    let elation = mode(ELATION, "Extended");
     let twice = hand(
         vec![
             channel(Function::Pan),
@@ -306,22 +350,62 @@ fn a_fine_byte_joins_the_first_coarse_byte_that_does_the_same() {
         ],
         &[&[0, 3], &[1, 2]],
     );
+    let before = hand(
+        vec![
+            fine(Function::Pan),
+            channel(Function::Pan),
+            channel(Function::Pan),
+        ],
+        &[],
+    );
+    let between = hand(
+        vec![
+            channel(Function::Pan),
+            channel(Function::Tilt),
+            fine(Function::Pan),
+            channel(Function::Pan),
+        ],
+        &[],
+    );
     type Case<'a> = (&'a Mode, u32, &'a [(u32, u32)]);
-    let cases: [Case; 5] = [
+    let cases: &[Case] = &[
         // not adjacent: pan at 2 and its fine at 11
         (&shehds, 0, &[(2, 11), (3, 12)]),
         (&mh6, 600, &[(601, 602), (609, 610), (611, 612)]),
         (&rgb, 0, &[]),
-        // each fine takes the next coarse with none yet; a third stays alone
-        (&twice, 0, &[(0, 2), (1, 3)]),
+        // each fine takes the nearest unused coarse before it; a third stays alone
+        (&twice, 0, &[(0, 3), (1, 2)]),
+        (&before, 0, &[(1, 0)]),
+        // The earlier coarse byte wins even when the following one is closer.
+        (&between, 0, &[(0, 2)]),
         // a fine byte joins within its head
         (&heads, 0, &[(0, 3), (1, 2)]),
+        (&clay, 0, &[(10, 11), (13, 14), (22, 23), (24, 25)]),
+        (
+            &elation,
+            0,
+            &[
+                (0, 1),
+                (2, 3),
+                (4, 5),
+                (7, 8),
+                (9, 10),
+                (12, 13),
+                (14, 15),
+                (17, 18),
+                (19, 20),
+            ],
+        ),
     ];
-    for (mode, first, expected) in cases {
+    let mut wrong = Vec::new();
+    for &(mode, first, expected) in cases {
         let lowered = lower(mode, first, SPACE).unwrap();
-        let pairs: Vec<(u32, u32)> = lowered.pairs.iter().map(|p| (p.coarse, p.fine)).collect();
-        assert_eq!(pairs, expected, "{}", mode.name);
+        let pairs: Vec<_> = lowered.pairs.iter().map(|p| (p.coarse, p.fine)).collect();
+        if pairs != expected {
+            wrong.push((&mode.name, pairs, expected));
+        }
     }
+    assert!(wrong.is_empty(), "(mode, actual, expected): {wrong:?}");
 }
 
 #[test]
@@ -352,7 +436,8 @@ fn compounds_come_from_metadata() {
         &[],
     );
     let one = hand(vec![channel(Function::Red)], &[]);
-    let cases: [(&Mode, &[&str]); 8] = [
+    let cameo = mode(CAMEO, "19-Channel");
+    let cases: &[(&Mode, &[&str])] = &[
         (
             &shehds,
             &[
@@ -388,7 +473,12 @@ fn compounds_come_from_metadata() {
         ),
         (
             &spectral,
-            &["rgba 1 2 3 4", "slot 5: 39 slots", "slot 6: 2 slots"],
+            &[
+                "rgba 1 2 3 4",
+                "slot 5: 39 slots",
+                "slot 6: 2 slots",
+                "slot 7: 1 slots",
+            ],
         ),
         (&rgbw, &["rgbw 1 2 3 4"]),
         // named in their order, past the listed shapes
@@ -399,16 +489,97 @@ fn compounds_come_from_metadata() {
         // in the order of the shape, not of the mode
         (&cmy, &["cmy 2 1 0"]),
         (&one, &[]),
+        (
+            &cameo,
+            &[
+                "slot 0: 31 slots",
+                "slot 1: 1 slots",
+                "slot 2: 1 slots",
+                "head 0: rgba 3 4 5 6",
+                "head 1: rgba 7 8 9 10",
+                "head 2: rgba 11 12 13 14",
+                "head 3: rgba 15 16 17 18",
+            ],
+        ),
     ];
-    for (mode, expected) in cases {
+    let mut wrong = Vec::new();
+    for &(mode, expected) in cases {
         let lowered = lower(mode, 0, SPACE).unwrap();
         let said: Vec<String> = lowered.compounds.iter().filter_map(say_compound).collect();
+        if said != expected {
+            wrong.push((&mode.name, said, expected));
+        }
+    }
+    assert!(wrong.is_empty(), "(mode, actual, expected): {wrong:?}");
+}
+
+#[test]
+fn v11_colour_bar_writers_match_the_mode_without_colour_tags() {
+    let mode = mode(CAMEO, "19-Channel");
+    let mut untagged = mode.clone();
+    for channel in &mut untagged.channels {
+        channel.colour = None;
+    }
+    let writers = |mode: &Mode| {
+        rig::compile(
+            mode,
+            common::at(1),
+            common::light(0),
+            Universes::ONE,
+            common::lights(),
+        )
+        .unwrap()
+        .writers
+    };
+    assert_eq!(writers(&mode), writers(&untagged));
+}
+
+#[test]
+fn hue_saturation_lightness_and_value_make_a_compound_in_channel_order() {
+    let hsv = mode("Chauvet-Ovation-CYC-1-FC.qxf", "HSV");
+    let mixed = hand(
+        vec![
+            channel(Function::Lightness),
+            channel(Function::Blue),
+            channel(Function::Hue),
+            fine(Function::Hue),
+            channel(Function::Red),
+            channel(Function::Hue),
+            channel(Function::Green),
+            channel(Function::Value),
+            channel(Function::Saturation),
+        ],
+        &[&[8, 7, 6, 5, 4, 3, 2, 1, 0]],
+    );
+    let separate = hand(
+        vec![channel(Function::Hue), channel(Function::Value)],
+        &[&[0], &[1]],
+    );
+    let two = hand(
+        vec![channel(Function::Value), channel(Function::Hue)],
+        &[&[1, 0]],
+    );
+    let cases: &[(&Mode, &[&str])] = &[
+        (&hsv, &["components Hue 40, Saturation 41, Value 42"]),
+        (
+            &mixed,
+            &[
+                "head 0: rgb 44 46 41",
+                "head 0: components Lightness 40, Hue 42+43, Value 47, Saturation 48",
+            ],
+        ),
+        (&separate, &[]),
+        (&two, &["head 0: components Value 40, Hue 41"]),
+    ];
+    for &(mode, expected) in cases {
+        let lowered = lower(mode, 40, SPACE).unwrap();
+        let said: Vec<_> = lowered.compounds.iter().filter_map(say_compound).collect();
         assert_eq!(said, expected, "{}", mode.name);
     }
 }
 
 #[test]
-fn every_channel_is_one_lone_byte_or_one_word() {
+fn every_channel_has_a_byte_and_each_paired_coarse_has_its_word_next() {
     let modes = [
         mode(SHEHDS, "14 Channel"),
         mode(MH6, "Standard"),
@@ -416,25 +587,27 @@ fn every_channel_is_one_lone_byte_or_one_word() {
         mode(FOGGER, "7 Channel"),
     ];
     for mode in &modes {
-        let lowered = lower(mode, 40, SPACE).unwrap();
-        let mut covered: Vec<u32> = lowered
-            .compounds
-            .iter()
-            .flat_map(|compound| match compound.shape {
-                Shape::Byte(at) => vec![at],
-                Shape::Word(pair) => vec![pair.coarse, pair.fine],
-                Shape::Xy { .. }
-                | Shape::Rgb(_)
-                | Shape::Rgbw(_)
-                | Shape::Rgba(_)
-                | Shape::Cmy(_)
-                | Shape::Slot { .. }
-                | Shape::Components(_) => vec![],
-            })
-            .collect();
-        covered.sort_unstable();
-        let all: Vec<u32> = lowered.channels.iter().map(|c| c.at).collect();
-        assert_eq!(covered, all, "{}", mode.name);
+        let lowered = lower(mode, 0, SPACE).unwrap();
+        let mut shapes = lowered.compounds.iter().map(|c| &c.shape);
+        for config in &lowered.channels {
+            assert_eq!(
+                shapes.next(),
+                Some(&Shape::Byte(config.at)),
+                "{} byte {}",
+                mode.name,
+                config.at
+            );
+            if let Some(pair) = lowered.pairs.iter().find(|p| p.coarse == config.at) {
+                assert_eq!(
+                    shapes.next(),
+                    Some(&Shape::Word(*pair)),
+                    "{} word at {}",
+                    mode.name,
+                    config.at
+                );
+            }
+        }
+        assert!(shapes.all(|s| !matches!(s, Shape::Byte(_) | Shape::Word(_))));
     }
 }
 
@@ -455,24 +628,30 @@ fn a_wheel_slot_sits_at_the_lower_midpoint_of_its_range() {
             "{min} to {max}"
         );
     }
-    let lowered = lower(&mode(SHEHDS, "14 Channel"), 0, SPACE).unwrap();
-    let wheel = lowered
-        .compounds
-        .iter()
-        .find_map(|compound| {
-            if let Shape::Slot { at: 5, slots } = &compound.shape {
-                Some(slots)
+    let cases = [
+        (SHEHDS, "14 Channel", 5, 0, ("Open", 2)),
+        (SHEHDS, "14 Channel", 5, 1, ("Red", 7)),
+        (SHEHDS, "14 Channel", 5, 2, ("Green", 12)),
+        (ELATION, "Standard", 4, 1, ("Red", 20)),
+        (ELATION, "Extended", 4, 1, ("Red", 20)),
+    ];
+    for (file, name, channel, index, expected) in cases {
+        let lowered = lower(&mode(file, name), 0, SPACE).unwrap();
+        let slot = lowered.compounds.iter().find_map(|compound| {
+            if let Shape::Slot { at, slots } = &compound.shape
+                && *at == channel
+            {
+                slots.get(index)
             } else {
                 None
             }
-        })
-        .unwrap();
-    let first: Vec<(&str, u8)> = wheel
-        .iter()
-        .take(3)
-        .map(|slot| (slot.label.as_str(), slot.byte))
-        .collect();
-    assert_eq!(first, [("Open", 2), ("Red", 7), ("Green", 12)]);
+        });
+        assert_eq!(
+            slot.map(|s| (s.label.as_str(), s.byte)),
+            Some(expected),
+            "{file} {name} channel {channel} slot {index}"
+        );
+    }
 }
 
 #[test]
@@ -506,8 +685,13 @@ fn a_normalised_value_becomes_a_native_byte_or_word() {
         high: 20,
         sense: Sense::Rising,
     };
+    let wash = mode("Martin-MAC-2000-Wash.qxf", "8-bit with Color Wheel 2");
+    let speed = lower(&wash, 0, SPACE).unwrap().channels[17];
+    assert_eq!(speed.change, Change::Jump);
     // (value 0 to 65535, travel, width, native)
     let cases = [
+        (0, speed.travel, Width::Byte, 236),
+        (u16::MAX, speed.travel, Width::Byte, 3),
         (0, full, Width::Byte, 0),
         (u16::MAX, full, Width::Byte, 255),
         (32_768, full, Width::Byte, 128),
@@ -562,6 +746,157 @@ fn degrees_become_a_word() {
     ];
     for (at, of, expected) in cases {
         assert_eq!(degrees(at, of), expected, "{at} of {of}");
+    }
+}
+
+#[test]
+fn dark_is_a_word_split_across_the_pair() {
+    let dimmer = |low, high, sense, closed: Option<u8>| {
+        let mut ranges = vec![range(low, high, "Dimmer", Some(Does::Runs(sense)))];
+        if let Some(byte) = closed {
+            ranges.push(range(byte, byte, "Closed", Some(Does::Closed)));
+        }
+        fixture_library::Channel {
+            ranges,
+            ..channel(Function::Dimmer)
+        }
+    };
+    let cases = [
+        (dimmer(20, 200, Direction::Down, Some(240)), [240, 0]),
+        (dimmer(0, 254, Direction::Down, Some(255)), [255, 0]),
+        (dimmer(0, 200, Direction::Down, None), [200, 255]),
+        (dimmer(20, 200, Direction::Up, Some(240)), [0, 0]),
+        (channel(Function::Cyan), [255, 255]),
+    ];
+    for (coarse, [high, low]) in cases {
+        let fine = fine(coarse.function.clone());
+        let mut mode = hand(vec![coarse], &[]);
+        let single = lower(&mode, 0, SPACE).unwrap().channels[0];
+        assert_eq!((single.dark, single.follows.bits()), (high, 3));
+
+        mode.channels.push(fine);
+        let lowered = lower(&mode, 0, SPACE).unwrap();
+        let bytes = [0, 1].map(|i| (lowered.channels[i].dark, lowered.channels[i].follows.bits()));
+        assert_eq!(bytes, [(high, 3), (low, 3)]);
+    }
+}
+
+#[test]
+fn an_emitter_follows_modifiers_only_when_no_dimmer_carries_it() {
+    use Function::{Dimmer, Red};
+    let cases = [
+        // One dimmer in two heads, another head without it.
+        (
+            Vec::from([Dimmer, Red, Red, Red].map(channel)),
+            vec![&[0, 1][..], &[0, 2], &[3]],
+            vec![3, 0, 0, 3],
+        ),
+        // A shared dimmer, plus a head with a dimmer of its own.
+        (
+            Vec::from([Dimmer, Red, Red, Dimmer, Red].map(channel)),
+            vec![&[2], &[3, 4]],
+            vec![3, 0, 0, 3, 0],
+        ),
+        // The second head also lists the first head's emitter. The last emitter has no head.
+        (
+            Vec::from([Dimmer, Red, Red, Red].map(channel)),
+            vec![&[0, 1], &[1, 2]],
+            vec![3, 0, 3, 3],
+        ),
+        // An unpaired fine dimmer cannot carry an emitter, shared or in a head.
+        (vec![fine(Dimmer), channel(Red)], vec![], vec![0, 3]),
+        (vec![fine(Dimmer), channel(Red)], vec![&[0, 1]], vec![0, 3]),
+    ];
+    for (channels, heads, expected) in cases {
+        let mode = hand(channels, &heads);
+        let lowered = lower(&mode, 0, SPACE).unwrap();
+        let follows: Vec<_> = lowered.channels.iter().map(|c| c.follows.bits()).collect();
+        assert_eq!(follows, expected, "{heads:?}");
+    }
+}
+
+#[test]
+fn fog_fan_aux_and_dimming_curves_jump_independently() {
+    let cases = [
+        (intensity_mode("Smoke", "Fog Output", false), 0),
+        (intensity_mode("Fan", "Fan Speed", false), 0),
+        (intensity_mode("Fan", "Fan speed", false), 0),
+        (intensity_mode("Other", "Auxiliary", false), 0),
+        (mode(SPECTRAL, "8 channel"), 7),
+    ];
+    let actual = cases.each_ref().map(|(mode, index)| {
+        let lowered = lower(mode, 0, SPACE).unwrap();
+        say(&lowered.channels[*index])
+    });
+    assert_eq!(actual, ["rest 0, dark 0, jump, none"; 5]);
+}
+
+#[test]
+fn tagged_emitters_pair_and_mix_beside_a_fog_channel() {
+    let xml = br##"<FixtureDefinition><Manufacturer>Test</Manufacturer><Model>Fog and colour</Model><Type>Smoke</Type>
+        <Channel Name="Emitter"><Group Byte="0">Intensity</Group><Colour>Red</Colour></Channel>
+        <Channel Name="Fog"><Group Byte="0">Intensity</Group></Channel>
+        <Channel Name="Fine"><Group Byte="1">Intensity</Group><Colour>Red</Colour></Channel>
+        <Channel Name="Wheel" Default="47"><Group Byte="0">Colour</Group>
+            <Capability Min="0" Max="19" Preset="ColorMacro" Res1="#0000ff">Blue</Capability>
+            <Capability Min="20" Max="29">Open</Capability>
+        </Channel>
+        <Mode Name="All"><Channel Number="0">Emitter</Channel><Channel Number="1">Fog</Channel>
+            <Channel Number="2">Fine</Channel><Channel Number="3">Wheel</Channel></Mode></FixtureDefinition>"##;
+    let fixture = fixture_library::parse("fog-colour.qxf", xml).unwrap();
+    let lowered = lower(&fixture.modes[0], 0, SPACE).unwrap();
+    let configs: Vec<_> = lowered.channels.iter().map(say).collect();
+    let expected = [
+        "rest 0, dark 0, fade, master and blackout",
+        "rest 0, dark 0, jump, none",
+        "rest 0, dark 0, fade, master and blackout",
+        "rest 24, dark 0, jump, none",
+    ];
+    assert_eq!(configs, expected);
+    assert_eq!(lowered.pairs, [rig::channels::Pair { coarse: 0, fine: 2 }]);
+}
+
+#[test]
+fn v11_intensity_still_reaches_the_fog_channels() {
+    let cases = [
+        (intensity_mode("Hazer", "Haze", false), 91 * 257, vec![91]),
+        (
+            intensity_mode("Smoke", "Amount of Fog", true),
+            u16::MAX,
+            vec![255, 255],
+        ),
+    ];
+    let actual = cases.each_ref().map(|(mode, intensity, _)| {
+        let compiled = rig::compile(
+            mode,
+            common::at(1),
+            common::light(0),
+            Universes::ONE,
+            common::lights(),
+        )
+        .unwrap();
+        let light = Light {
+            intensity: Some(*intensity),
+            ..Light::DARK
+        };
+        let mut frame = [Levels::ZERO];
+        resolve(&[light], &compiled.writers, &mut frame);
+        frame[0].0[..mode.channels.len()].to_vec()
+    });
+    assert_eq!(actual, cases.map(|(_, _, expected)| expected));
+}
+
+#[test]
+fn follows_records_each_modifier_in_its_slot() {
+    let lowered = lower(&hand(vec![channel(Function::Dimmer)], &[]), 0, SPACE).unwrap();
+    let cases = [
+        (Follows::NONE, 0),
+        (Follows::MASTER, 1),
+        (Follows::BLACKOUT, 2),
+        (lowered.channels[0].follows, 3),
+    ];
+    for (follows, expected) in cases {
+        assert_eq!(follows.bits(), expected);
     }
 }
 

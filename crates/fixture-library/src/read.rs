@@ -2,7 +2,7 @@
 
 use crate::capability::{self, Said};
 use crate::error::{Error, LeftOut, Problem, Warning};
-use crate::function::{direction_of, function_of};
+use crate::function::{colour_of, direction_of, function_of};
 use crate::model::{Byte, Channel, Degrees, Fixture, Kind, Layout, Mode, Range};
 use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
@@ -173,6 +173,11 @@ fn channel<'a>(node: Node<'a, 'a>) -> Result<Channel, Failure<'a>> {
         None => None,
     };
     let (function, byte) = function_of(node.attribute("Preset"), group, &name);
+    let colour = node
+        .children()
+        .find(|n| n.has_tag_name("Colour"))
+        .and_then(|n| n.text())
+        .and_then(|text| colour_of(text.trim()));
     let direction = node.attribute("Preset").and_then(direction_of);
     let default = match node.attribute("Default") {
         Some(_) => Some(number(node, "Default")?),
@@ -186,6 +191,7 @@ fn channel<'a>(node: Node<'a, 'a>) -> Result<Channel, Failure<'a>> {
     Ok(Channel {
         name,
         function,
+        colour,
         byte,
         default,
         direction,

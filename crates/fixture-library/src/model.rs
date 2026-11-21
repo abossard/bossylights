@@ -69,11 +69,16 @@ pub struct Layout {
     pub height: u16,
 }
 
+/// One DMX channel. The v11 writers use its `function`. The channel model uses
+/// [`Self::role`], which also takes its declared colour and name into account.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Channel {
     pub name: String,
     pub function: Function,
+    /// The QLC+ `<Colour>` child, when it names an emitter or a subtractive colour.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub colour: Option<Function>,
     /// The high byte, or the second byte of a 16-bit value.
     pub byte: Byte,
     /// The value the definition gives when nothing else is said. `None` when it gives none.

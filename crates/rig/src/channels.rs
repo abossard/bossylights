@@ -13,35 +13,42 @@
 //!
 //! | Function | Follows | Dark | Change |
 //! |---|---|---|---|
-//! | dimmer | master and blackout | 0, or the top of its travel when it runs down (a reverse dimmer) | fade |
+//! | dimmer | master and blackout | 0 when rising, first Closed byte when falling, else the top of its travel | fade |
 //! | red, green, blue, white, amber, UV, lime, indigo | master and blackout, none when a dimmer carries it | 0 | fade |
 //! | cyan, magenta, yellow | master and blackout, none when a dimmer carries it | 255 | fade |
 //! | shutter | blackout, none without a range marked closed | the first byte of that range | jump |
 //! | hue to colour temperature, pan, tilt, zoom, focus, iris, frost | none | 0 | fade |
-//! | strobe, wheels, gobo, prism, speed, effect, control, nothing, other (fog) | none | 0 | jump |
+//! | strobe, wheels, gobo, prism, speed, effect, control, nothing, other (including fog, haze, smoke, fan, auxiliary and dimming curves) | none | 0 | jump |
 //!
-//! - A dimmer carries an emitter when it is in the emitter's head, or when it is in no
-//!   head (the fixture's shared dimmer) and the emitter's head has none: master scales once.
-//! - `travel`: for a channel that fades, the first range that says which way it runs, that
-//!   way, else every byte the way the channel runs.
+//! - Each channel uses its [role](Channel::role), including the colour named by the fixture.
+//! - A coarse dimmer carries the emitters in every head that lists it. A dimmer listed in
+//!   no head carries the other emitters, including emitters listed in no head.
+//! - A falling dimmer's dark word is the first Closed byte with a low byte of 0, or the
+//!   high end of its travel with a low byte of 255 when it has no Closed range.
+//! - `travel`: the first range marked as running gives its limits and direction, for both
+//!   jumps and fades. Otherwise it spans every byte in the channel's direction.
 //! - `rest`: the value that lets light out for a shutter or strobe, the bypass for a colour
 //!   wheel over a colour mix, else the default, else 0. Ties: latest wins.
-//! - A fine byte joins the first coarse byte of its head that does the same and has no fine
-//!   byte yet, adjacent or not. It follows, changes and runs as its coarse byte, and its dark
-//!   is the low byte of the pair's dark. A fine byte that joins none is a channel of its own.
+//! - Fine bytes pair in channel order. Each takes the nearest unused coarse byte before
+//!   it in its head with the same role, else the first such byte after it. It keeps its
+//!   own rest, takes the low byte of the pair's dark and follows, changes and runs with
+//!   its coarse byte. A fine byte that joins none is a channel of its own.
 //!
 //! | Compound | One per |
 //! |---|---|
-//! | `Byte` or `Word` | channel, or pair: every channel is in one |
+//! | `Byte` | every channel, including both halves of a pair |
+//! | `Word` | pair, immediately after its coarse channel's `Byte` |
 //! | `Xy` | head with a pan and a tilt: the first of each |
 //! | `Rgb`, `Rgbw`, `Rgba`, `Cmy` | head whose colour channels are exactly these (the first of each) |
-//! | `Components` | head with 2 to 8 other colour channels, in channel order |
-//! | `Slot` | channel that jumps and has ranges: each range, at [`slot_byte`] |
+//! | `Components` | head with 2 to 8 other colour roles, and separately with 2 or more of hue, saturation, lightness and value. First coarse byte of each role, in channel order |
+//! | `Slot` | coarse channel that jumps and has ranges, including when paired. Each range is at [`slot_byte`] |
 
 use crate::capabilities::Wheels;
-use crate::{Has, heads};
+use crate::heads;
+use alloc::borrow::Cow;
 use alloc::collections::BTreeMap;
 use alloc::string::String;
+use alloc::vec;
 use alloc::vec::Vec;
 use fixture_library::{Byte, Channel, Degrees, Direction, Does, Function, Mode};
 
@@ -55,7 +62,7 @@ pub struct Lowered {
     /// Each coarse byte with its fine byte, by coarse byte.
     pub pairs: Vec<Pair>,
     /// Bytes and words first, in channel order, then per head (the fixture's own first):
-    /// position, colour, slots.
+    /// position, colour, hue/saturation components, slots.
     pub compounds: Vec<Compound>,
 }
 
@@ -100,7 +107,7 @@ impl Follows {
     pub const MASTER: Self = Self(1);
     /// Slot 1.
     pub const BLACKOUT: Self = Self(1 << 1);
-    const BOTH: Self = Self(Self::MASTER.0 | Self::BLACKOUT.0);
+    const BOTH: Self = Self(0b11);
 
     /// Whether every slot of `other` is followed.
     #[must_use]
@@ -206,19 +213,38 @@ pub fn lower(mode: &Mode, first: u32, space: u32) -> Result<Lowered, PastTheEnd>
     }
     // below `end`, so it fits
     let at = |index: usize| first.saturating_add(u32::try_from(index).unwrap_or(u32::MAX));
+    // Use the channel-model role for every inference, including the existing shutter and
+    // wheel rest calculations. V11 reads the fixture's original function.
+    let role_channels: Vec<_> = mode
+        .channels
+        .iter()
+        .map(|channel| {
+            let role = channel.role();
+            if role == channel.function {
+                Cow::Borrowed(channel)
+            } else {
+                Cow::Owned(Channel {
+                    function: role,
+                    ..channel.clone()
+                })
+            }
+        })
+        .collect();
+    let carried = carried_by_dimmers(&role_channels, &mode.pixels);
     let heads = heads(mode);
     let mut groups: BTreeMap<Option<usize>, Vec<(usize, &Channel)>> = BTreeMap::new();
-    for ((index, channel), head) in mode.channels.iter().enumerate().zip(&heads) {
+    for ((index, channel), head) in role_channels.iter().enumerate().zip(&heads) {
         groups.entry(*head).or_default().push((index, channel));
     }
-    let shared = mode.channels.iter().zip(&heads).any(|(c, head)| {
-        head.is_none() && c.byte == Byte::Coarse && c.function == Function::Dimmer
-    });
     // coarse index to fine index, within each head
     let mut fine_of: BTreeMap<usize, usize> = BTreeMap::new();
     for group in groups.values() {
-        for &(fine, channel) in group.iter().filter(|(_, c)| c.byte == Byte::Fine) {
-            let coarse = group.iter().find(|(index, c)| {
+        for (position, &(fine, channel)) in group.iter().enumerate() {
+            if channel.byte != Byte::Fine {
+                continue;
+            }
+            let (before, after) = group.split_at(position);
+            let coarse = before.iter().rev().chain(after).find(|(index, c)| {
                 c.byte == Byte::Coarse
                     && c.function == channel.function
                     && !fine_of.contains_key(index)
@@ -243,13 +269,16 @@ pub fn lower(mode: &Mode, first: u32, space: u32) -> Result<Lowered, PastTheEnd>
     let mut by_head = Vec::new();
     for (head, group) in &groups {
         let head = head.and_then(|head| u16::try_from(head).ok());
-        let carried = shared || Has::of(group.iter().map(|(_, c)| *c)).dimmer;
         let wheels = Wheels::of(group);
         for &(index, channel) in group.iter().filter(|(i, _)| !joined.contains_key(i)) {
             let change = change(&channel.function);
-            let travel = travel(channel, change);
+            let travel = travel(channel);
             let (follows, dark) = match channel.byte {
-                Byte::Coarse => rule(channel, carried, travel),
+                Byte::Coarse => rule(
+                    channel,
+                    carried.get(index).copied().unwrap_or(false),
+                    travel,
+                ),
                 Byte::Fine => (Follows::NONE, 0),
             };
             let rest = match channel.byte {
@@ -284,18 +313,26 @@ pub fn lower(mode: &Mode, first: u32, space: u32) -> Result<Lowered, PastTheEnd>
                 },
             });
         }
-        if let Some(shape) = colour(group, field) {
+        if let Some(shape) = colour(components(group, field, is_colour)) {
             by_head.push(Compound { head, shape });
+        }
+        let hsv = components(group, field, |role| {
+            matches!(
+                role,
+                Function::Hue | Function::Saturation | Function::Lightness | Function::Value
+            )
+        });
+        if hsv.len() >= 2 {
+            by_head.push(Compound {
+                head,
+                shape: Shape::Components(hsv),
+            });
         }
         for &(index, channel) in group {
             let jumps = own
                 .get(&index)
                 .is_some_and(|(config, _)| config.change == Change::Jump);
-            if channel.byte == Byte::Coarse
-                && jumps
-                && !fine_of.contains_key(&index)
-                && !channel.ranges.is_empty()
-            {
+            if channel.byte == Byte::Coarse && jumps && !channel.ranges.is_empty() {
                 by_head.push(Compound {
                     head,
                     shape: Shape::Slot {
@@ -332,17 +369,20 @@ pub fn lower(mode: &Mode, first: u32, space: u32) -> Result<Lowered, PastTheEnd>
             },
         };
         channels.push(config);
-        if !joined.contains_key(&index) {
-            let shape = match field(index) {
-                Field::Byte(at) => Shape::Byte(at),
-                Field::Word(pair) => Shape::Word(pair),
-            };
-            let head = heads
-                .get(index)
-                .copied()
-                .flatten()
-                .and_then(|head| u16::try_from(head).ok());
-            compounds.push(Compound { head, shape });
+        let head = heads
+            .get(index)
+            .copied()
+            .flatten()
+            .and_then(|head| u16::try_from(head).ok());
+        compounds.push(Compound {
+            head,
+            shape: Shape::Byte(config.at),
+        });
+        if let Field::Word(pair) = field(index) {
+            compounds.push(Compound {
+                head,
+                shape: Shape::Word(pair),
+            });
         }
     }
     compounds.extend(by_head);
@@ -359,6 +399,34 @@ pub fn lower(mode: &Mode, first: u32, space: u32) -> Result<Lowered, PastTheEnd>
     })
 }
 
+/// Every channel listed alongside a coarse dimmer, or carried by the shared dimmer.
+fn carried_by_dimmers(channels: &[Cow<'_, Channel>], pixels: &[Vec<u16>]) -> Vec<bool> {
+    let dimmer = |c: &Channel| c.byte == Byte::Coarse && c.function == Function::Dimmer;
+    let mut carried = vec![false; channels.len()];
+    for head in pixels {
+        if head
+            .iter()
+            .any(|&index| channels.get(usize::from(index)).is_some_and(|c| dimmer(c)))
+        {
+            for &index in head {
+                if let Some(in_head) = carried.get_mut(usize::from(index)) {
+                    *in_head = true;
+                }
+            }
+        }
+    }
+    // A dimmer in any head marked its own channel above. An unmarked dimmer is shared
+    // and carries every emitter that a head dimmer did not already carry.
+    if channels
+        .iter()
+        .zip(&carried)
+        .any(|(c, in_head)| dimmer(c) && !in_head)
+    {
+        carried.fill(true);
+    }
+    carried
+}
+
 /// What a coarse byte follows, and the 16-bit value of its dark. `carried` when a dimmer
 /// carries the channel's emitters.
 fn rule(channel: &Channel, carried: bool, travel: Travel) -> (Follows, u16) {
@@ -372,7 +440,11 @@ fn rule(channel: &Channel, carried: bool, travel: Travel) -> (Follows, u16) {
             Follows::BOTH,
             match travel.sense {
                 Sense::Rising => 0,
-                Sense::Falling => u16::from_be_bytes([travel.high, u8::MAX]),
+                Sense::Falling => u16::from_be_bytes(
+                    channel
+                        .closed()
+                        .map_or([travel.high, u8::MAX], |closed| [closed, 0]),
+                ),
             },
         ),
         Function::Red
@@ -449,9 +521,8 @@ fn change(function: &Function) -> Change {
     }
 }
 
-/// For a channel that fades, the first range that says which way it runs, that way. Else
-/// every byte, the way the channel runs.
-fn travel(channel: &Channel, change: Change) -> Travel {
+/// The first range that says which way it runs, else every byte the way the channel runs.
+fn travel(channel: &Channel) -> Travel {
     let sense = |direction: Option<Direction>| match direction {
         Some(Direction::Down) => Sense::Falling,
         Some(Direction::Up) | None => Sense::Rising,
@@ -459,8 +530,8 @@ fn travel(channel: &Channel, change: Change) -> Travel {
     channel
         .ranges
         .iter()
-        .find_map(|range| match (change, &range.does) {
-            (Change::Fade, Some(Does::Runs(direction))) => Some(Travel {
+        .find_map(|range| match &range.does {
+            Some(Does::Runs(direction)) => Some(Travel {
                 low: range.min,
                 high: range.max,
                 sense: sense(Some(*direction)),
@@ -474,22 +545,31 @@ fn travel(channel: &Channel, change: Change) -> Travel {
         })
 }
 
-/// The colour compound of a head: its colour channels, the first of each function.
-fn colour(group: &[(usize, &Channel)], field: impl Fn(usize) -> Field) -> Option<Shape> {
-    let mut found: Vec<(&Function, usize)> = Vec::new();
+/// The first coarse channel of each selected role in a head, in channel order.
+fn components(
+    group: &[(usize, &Channel)],
+    field: impl Fn(usize) -> Field,
+    includes: impl Fn(&Function) -> bool,
+) -> Vec<(Function, Field)> {
+    let mut found = Vec::new();
     for &(index, channel) in group {
         if channel.byte == Byte::Coarse
-            && is_colour(&channel.function)
-            && !found.iter().any(|(f, _)| **f == channel.function)
+            && includes(&channel.function)
+            && !found.iter().any(|(f, _)| *f == channel.function)
         {
-            found.push((&channel.function, index));
+            found.push((channel.function.clone(), field(index)));
         }
     }
+    found
+}
+
+/// The colour compound for these emitters or filters.
+fn colour(found: Vec<(Function, Field)>) -> Option<Shape> {
     let of = |function: Function| {
         found
             .iter()
-            .find(|(f, _)| **f == function)
-            .map(|&(_, index)| field(index))
+            .find(|(f, _)| *f == function)
+            .map(|&(_, field)| field)
     };
     let shape = match found.len() {
         3 => match (
@@ -518,14 +598,9 @@ fn colour(group: &[(usize, &Channel)], field: impl Fn(usize) -> Field) -> Option
         _ => None,
     };
     shape.or_else(|| {
-        (2..=8).contains(&found.len()).then(|| {
-            Shape::Components(
-                found
-                    .iter()
-                    .map(|&(function, index)| (function.clone(), field(index)))
-                    .collect(),
-            )
-        })
+        (2..=8)
+            .contains(&found.len())
+            .then_some(Shape::Components(found))
     })
 }
 

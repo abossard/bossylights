@@ -1,25 +1,59 @@
 //! What a channel does, from a preset, a group or a name. A calculation: strings in, a
 //! closed `Function` out. Anything the list does not know stays as `Other(name)`.
 
-use crate::model::{Byte, Direction, Function};
+use crate::model::{Byte, Channel, Direction, Function};
 use alloc::string::{String, ToString};
+
+impl Channel {
+    /// The function used by the channel model. A declared colour takes precedence.
+    /// Intensity names that describe other controls keep their names as `Other`.
+    #[must_use]
+    pub fn role(&self) -> Function {
+        if let Some(colour) = &self.colour {
+            return colour.clone();
+        }
+        if self.function == Function::Dimmer
+            && self
+                .name
+                .to_ascii_lowercase()
+                .split(|c: char| !c.is_alphanumeric())
+                .any(|word| {
+                    matches!(
+                        word,
+                        "fog" | "haze" | "hazer" | "smoke" | "fan" | "aux" | "auxiliary" | "curve"
+                    )
+                })
+        {
+            return Function::Other(self.name.clone());
+        }
+        self.function.clone()
+    }
+}
+
+/// The colour named by a QLC+ `<Colour>` child or an `Intensity` colour preset.
+pub(crate) fn colour_of(name: &str) -> Option<Function> {
+    let colour = match name {
+        "Red" => Function::Red,
+        "Green" => Function::Green,
+        "Blue" => Function::Blue,
+        "Cyan" => Function::Cyan,
+        "Magenta" => Function::Magenta,
+        "Yellow" => Function::Yellow,
+        "Amber" => Function::Amber,
+        "White" => Function::White,
+        "UV" => Function::Uv,
+        "Indigo" => Function::Indigo,
+        "Lime" => Function::Lime,
+        _ => return None,
+    };
+    Some(colour)
+}
 
 /// A QLC+ channel preset (`engine/src/qlcchannel.h`), every one of them, without its
 /// `Fine` ending. `None` when the list does not know it.
 fn from_preset(stem: &str) -> Option<Function> {
     let function = match stem {
         "IntensityMasterDimmer" | "IntensityDimmer" => Function::Dimmer,
-        "IntensityRed" => Function::Red,
-        "IntensityGreen" => Function::Green,
-        "IntensityBlue" => Function::Blue,
-        "IntensityCyan" => Function::Cyan,
-        "IntensityMagenta" => Function::Magenta,
-        "IntensityYellow" => Function::Yellow,
-        "IntensityAmber" => Function::Amber,
-        "IntensityWhite" => Function::White,
-        "IntensityUV" => Function::Uv,
-        "IntensityIndigo" => Function::Indigo,
-        "IntensityLime" => Function::Lime,
         "IntensityHue" => Function::Hue,
         "IntensitySaturation" => Function::Saturation,
         "IntensityLightness" => Function::Lightness,
@@ -47,22 +81,14 @@ fn from_preset(stem: &str) -> Option<Function> {
         "BeamZoomSmallBig" | "BeamZoomBigSmall" | "BeamZoom" => Function::Zoom,
         "PrismRotationSlowFast" | "PrismRotationFastSlow" => Function::Prism,
         "NoFunction" => Function::NoFunction,
-        _ => return None,
+        _ => return stem.strip_prefix("Intensity").and_then(colour_of),
     };
     Some(function)
 }
 
-/// A channel's colour or dimmer, said only by its name inside the Intensity group. A name
-/// with fog, haze or smoke in it ("Amount of Fog") is no dimmer: it is `Other`.
+/// A channel's colour or dimmer, said only by its name inside the Intensity group.
 fn intensity_by_name(name: &str) -> Function {
-    let lower = name.trim().to_ascii_lowercase();
-    if lower
-        .split(|c: char| !c.is_ascii_alphanumeric())
-        .any(|word| matches!(word, "fog" | "haze" | "smoke"))
-    {
-        return Function::Other(name.to_string());
-    }
-    match lower.as_str() {
+    match name.trim().to_ascii_lowercase().as_str() {
         "red" => Function::Red,
         "green" => Function::Green,
         "blue" => Function::Blue,

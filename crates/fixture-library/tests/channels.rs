@@ -173,20 +173,20 @@ fn a_channel_does_what_its_group_or_name_says() {
             Dimmer,
             Fine,
         ),
-        // fog, haze or smoke in the Intensity group is no dimmer
+        // v11 uses Dimmer for an unrecognised Intensity name.
         (
             r#"<Channel Name="Amount of Fog"><Group Byte="0">Intensity</Group></Channel>"#,
-            other("Amount of Fog"),
+            Dimmer,
             Coarse,
         ),
         (
             r#"<Channel Name="Haze"><Group Byte="0">Intensity</Group></Channel>"#,
-            other("Haze"),
+            Dimmer,
             Coarse,
         ),
         (
             r#"<Channel Name="Smoke-output"><Group Byte="0">Intensity</Group></Channel>"#,
-            other("Smoke-output"),
+            Dimmer,
             Coarse,
         ),
         (
@@ -293,6 +293,60 @@ fn a_channel_does_what_its_group_or_name_says() {
             (&function, byte),
             "{channel}"
         );
+    }
+}
+
+#[test]
+fn dimmer_names_that_describe_other_functions_keep_their_name_as_the_role() {
+    let cases = [
+        ("Amount of Fog", "Intensity", other("Amount of Fog")),
+        ("Haze", "Intensity", other("Haze")),
+        ("Hazer level", "Intensity", other("Hazer level")),
+        ("Smoke-output", "Intensity", other("Smoke-output")),
+        ("FAN speed", "Intensity", other("FAN speed")),
+        ("Aux", "Intensity", other("Aux")),
+        ("Auxiliary", "Intensity", other("Auxiliary")),
+        ("Dimming curve", "Intensity", other("Dimming curve")),
+        ("Foggy dimmer", "Intensity", Dimmer),
+        ("Fog", "Effect", Effect),
+    ];
+    for (name, group, role) in cases {
+        let channel = format!(r#"<Channel Name="{name}"><Group>{group}</Group></Channel>"#);
+        assert_eq!(only_channel(&channel).role(), role, "{name} in {group}");
+    }
+}
+
+#[test]
+fn a_declared_colour_sets_the_role_and_keeps_the_v11_function() {
+    for (name, colour) in [
+        ("Red", Some(Red)),
+        ("Green", Some(Green)),
+        ("Blue", Some(Blue)),
+        ("White", Some(White)),
+        ("Amber", Some(Amber)),
+        ("UV", Some(Uv)),
+        ("Cyan", Some(Cyan)),
+        ("Magenta", Some(Magenta)),
+        ("Yellow", Some(Yellow)),
+        ("Lime", Some(Lime)),
+        ("Indigo", Some(Indigo)),
+        ("red", None),
+        ("Unknown", None),
+    ] {
+        for (group, function, fallback) in [
+            ("Intensity", Dimmer, other("Fan")),
+            ("Effect", Effect, Effect),
+        ] {
+            let channel = only_channel(&format!(
+                r#"<Channel Name="Fan"><Group>{group}</Group><Colour>{name}</Colour></Channel>"#
+            ));
+            let expected_role = colour.clone().unwrap_or(fallback);
+            assert_eq!(
+                (channel.role(), &channel.colour, channel.function),
+                (expected_role, &colour, function),
+                "{name} in {group}"
+            );
+        }
     }
 }
 

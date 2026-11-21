@@ -206,6 +206,7 @@ fn strip(pixels: Pixels, color: Color) -> (&'static str, Mode) {
     let channel = |function: &Function| fixture_library::Channel {
         name: format!("{function:?}"),
         function: function.clone(),
+        colour: None,
         byte: Byte::Coarse,
         default: None,
         direction: None,
