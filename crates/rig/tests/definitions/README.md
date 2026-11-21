@@ -51,3 +51,5 @@ the Apache License 2.0 (`COPYING` in the repository root, copied here as
 | `Showtec-Acrobat.qxf` | Showtec | two Pan coarses, then their two Pan fines: which is which is not declared |
 | `Robe-Robin-800-LEDWash.qxf` | Robe | mode `38 Channel #2` lists each zone head one channel early |
 | `Clay-Paky-Arolla-Profile-HP.qxf` | Clay_Paky | a gobo rotation fine whose one range runs over the whole byte |
+| `Ayrton-Rivale-Profile.qxf` | Ayrton | gobo and prism rotation fines whose coarse shares their `ActsOn` but sits in group Speed |
+| `Elation-E-Spot-III.qxf` | Elation | a gobo index coarse declared fine: its fine stays apart (definition error) |

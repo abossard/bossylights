@@ -142,29 +142,41 @@ fn shape(c: &Channel) -> Vec<Option<Discriminant<Does>>> {
 }
 
 /// The pairs a mode must have, as (coarse, fine), from the definition alone. A fine joins
-/// only a coarse it certainly belongs to; every other fine stays a byte of its own.
+/// only a coarse it certainly belongs to; every other fine stays a byte of its own. The
+/// definition is the truth: where it contradicts the maker's chart, this follows it.
 ///
 /// A coarse takes at most one fine, never an index to a wheel selector, and only within
-/// the same heads (a fine in no head a coarse in no head) with the same colour. The
-/// evidence, in order:
+/// the same heads (a fine in no head a coarse in no head) with the same colour, and never a
+/// fog output to a light dimmer (on a smoke machine or hazer, `light` says which a dimmer
+/// preset is: a pump with "no fog" then "fog" declared a dimmer fine stays apart from the
+/// LED dimmer). The evidence, in order, each kind choosing before the next:
 /// 1. `ActsOn`: the fine refines what it names, so it joins the channel that acts on the
 ///    same one (a gobo rotation fine names the wheel, as its rotation does), else the named
-///    channel itself; a coarse the fine fits. Several: the one right before the fine.
-///    Fines with `ActsOn` choose first; one that finds no coarse stays apart.
+///    channel itself; sharing what they act on stands for the group (Ayrton's rotation sits
+///    in group Speed, its fine in Gobo). Several: the one right before the fine. One that
+///    finds no coarse stays apart.
 /// 2. Preset: a fine with a preset joins the coarse with that preset (`kin`: the way it runs
 ///    and QLC+'s other names do not count) before the fine, or right after it when that is
 ///    the only coarse of its control (Briteq BT-250-EZ: Dimmer fine, then Dimmer). One such
 ///    coarse: it, unless the channel right before the fine is another coarse of its group
 ///    (two readings). Several: the one right before the fine, unless a fine follows (a run
 ///    of fines after a run of coarses: Showtec Acrobat's Pan 1, Tilt, Pan 2, then their
-///    fines). None: the adjacent coarse, when that declares no preset (a coarse with
-///    another preset is another control: Zoom never takes a Focus fine).
-/// 3. Adjacent: the channel right before the fine, a coarse of its group that it fits (a
-///    plain fine fits any, a fine with steps only the same steps), unless coarses and fines
-///    come in blocks: the channel before that coarse looks the same and the channel after
-///    the fine is a fine of its group (Shutter B, C, D coarse, then B, C, D fine).
-fn expected_pairs(mode: &Mode, heads: &[Vec<usize>]) -> Vec<(usize, usize)> {
+///    fines). It chooses before any fine that only sits next to a coarse.
+/// 3. Adjacent: a fine with no preset, or with no coarse of its preset left, joins the
+///    channel right before it, a coarse of its group that it fits (when the fine has a
+///    preset, a coarse with no preset: Zoom never takes a Focus fine), unless coarses and
+///    fines come in blocks: the channel before that coarse looks the same and the channel
+///    after the fine is a fine of its group (Shutter B, C, D coarse, then B, C, D fine).
+fn expected_pairs(mode: &Mode, kind: &Kind, heads: &[Vec<usize>]) -> Vec<(usize, usize)> {
     let channels = &mode.channels;
+    // A dimmer preset on a smoke machine or hazer that neither dims light nor emits it
+    // (a declared `<Colour>` is an emitter): the fog output.
+    let fog = |j: usize| {
+        let c = &channels[j];
+        matches!(kind, Kind::Smoke | Kind::Hazer)
+            && stem(c).is_some_and(|s| kin(s) == "IntensityDimmer")
+            && light(c, kind, emitter_in(mode, heads, j)) == Light::Independent
+    };
     let only_index = |c: &Channel| index(c) && !wheel(c);
     let only_wheel = |c: &Channel| wheel(c) && !index(c);
     let mixes = |i: usize, j: usize| {
@@ -178,14 +190,19 @@ fn expected_pairs(mode: &Mode, heads: &[Vec<usize>]) -> Vec<(usize, usize)> {
             && !taken[j]
             && heads[j] == heads[i]
             && colour(coarse) == colour(&channels[i])
+            && fog(j) == fog(i)
     };
     let free = |taken: &[bool], i: usize, j: usize| open(taken, i, j) && !mixes(i, j);
     let same_group = |i: usize, j: usize| {
         group(&channels[i]).is_some() && group(&channels[j]) == group(&channels[i])
     };
-    let fits = |taken: &[bool], i: usize, j: usize| {
+    // A plain fine fits any coarse, a fine with steps only the same steps.
+    let steps_fit = |i: usize, j: usize| {
         let steps = shape(&channels[i]);
-        free(taken, i, j) && same_group(i, j) && (steps.is_empty() || shape(&channels[j]) == steps)
+        steps.is_empty() || shape(&channels[j]) == steps
+    };
+    let fits = |taken: &[bool], i: usize, j: usize| {
+        free(taken, i, j) && same_group(i, j) && steps_fit(i, j)
     };
     let fines = || {
         channels
@@ -209,7 +226,10 @@ fn expected_pairs(mode: &Mode, heads: &[Vec<usize>]) -> Vec<(usize, usize)> {
         } else {
             siblings
         };
-        let fitting: Vec<_> = acting.into_iter().filter(|&j| fits(&taken, i, j)).collect();
+        let fitting: Vec<_> = acting
+            .into_iter()
+            .filter(|&j| free(&taken, i, j) && steps_fit(i, j))
+            .collect();
         let partner = match fitting.as_slice() {
             &[j] => Some(j),
             _ => i.checked_sub(1).filter(|b| fitting.contains(b)),
@@ -219,11 +239,48 @@ fn expected_pairs(mode: &Mode, heads: &[Vec<usize>]) -> Vec<(usize, usize)> {
             pairs.push((j, i));
         }
     }
+    // 2. Preset. A fine with no coarse of its preset left waits for 3.
+    let mut adjacent_only = Vec::new();
     for (i, fine) in fines().filter(|(_, c)| c.declared.acts_on.is_none()) {
+        let Some(preset) = stem(fine).map(kin) else {
+            adjacent_only.push(i);
+            continue;
+        };
         let free = |j: usize| free(&taken, i, j);
-        let open = |j: usize| open(&taken, i, j);
-        let fits = |j: usize| fits(&taken, i, j);
         let before = i.checked_sub(1);
+        let all: Vec<_> = (0..channels.len())
+            .filter(|&j| free(j) && stem(&channels[j]).map(kin).as_ref() == Some(&preset))
+            .collect();
+        // A coarse right after the fine only when it is the one coarse of its control.
+        let same: Vec<_> = all
+            .iter()
+            .copied()
+            .filter(|&j| j < i || (j == i + 1 && all == [j]))
+            .collect();
+        let fine_after = channels.get(i + 1).is_some_and(|c| c.byte == Byte::Fine);
+        let partner = match same.as_slice() {
+            [] => {
+                adjacent_only.push(i);
+                None
+            }
+            &[j] if before == Some(j)
+                || before.is_none_or(|b| !(open(&taken, i, b) && same_group(i, b))) =>
+            {
+                Some(j)
+            }
+            [_] => None,
+            _ => before.filter(|b| same.contains(b) && !fine_after),
+        };
+        if let Some(j) = partner {
+            taken[j] = true;
+            pairs.push((j, i));
+        }
+    }
+    // 3. Adjacent.
+    for i in adjacent_only {
+        let fine = &channels[i];
+        let free = |j: usize| free(&taken, i, j);
+        let fits = |j: usize| fits(&taken, i, j);
         let alike = |j: usize, k: usize| {
             free(k)
                 && group(&channels[k]) == group(&channels[j])
@@ -236,34 +293,9 @@ fn expected_pairs(mode: &Mode, heads: &[Vec<usize>]) -> Vec<(usize, usize)> {
                 && group(&channels[i + 1]) == group(fine)
                 && j.checked_sub(1).is_some_and(|k| alike(j, k))
         };
-        let adjacent = |any_preset: bool| {
-            before
-                .filter(|&j| fits(j) && !blocks(j) && (any_preset || stem(&channels[j]).is_none()))
-        };
-        let partner = match stem(fine).map(kin) {
-            None => adjacent(true),
-            Some(preset) => {
-                let all: Vec<_> = (0..channels.len())
-                    .filter(|&j| free(j) && stem(&channels[j]).map(kin).as_ref() == Some(&preset))
-                    .collect();
-                // A coarse right after the fine only when it is the one coarse of its control.
-                let same: Vec<_> = all
-                    .iter()
-                    .copied()
-                    .filter(|&j| j < i || (j == i + 1 && all == [j]))
-                    .collect();
-                match same.as_slice() {
-                    [] => adjacent(false),
-                    &[j] if before == Some(j)
-                        || before.is_none_or(|b| !(open(b) && same_group(i, b))) =>
-                    {
-                        Some(j)
-                    }
-                    [_] => None,
-                    _ => before.filter(|b| same.contains(b) && !fine_after),
-                }
-            }
-        };
+        let partner = i.checked_sub(1).filter(|&j| {
+            fits(j) && !blocks(j) && (stem(fine).is_none() || stem(&channels[j]).is_none())
+        });
         if let Some(j) = partner {
             taken[j] = true;
             pairs.push((j, i));
@@ -336,9 +368,13 @@ enum Fine {
 }
 use Fine::{Apart, Joins};
 
-/// Ground truth for every fixture the reviews named (rounds 3 to 6): written by hand from
+/// Ground truth for every fixture the reviews named (rounds 3 to 7): written by hand from
 /// the maker's DMX chart, never from the rule. Where no chart was at hand, from the channel
 /// names the definition copies from it. Every fine byte of the mode is listed once.
+/// Where the definition contradicts the chart (a slot moved, a fine declared coarse), the
+/// entry says "definition error, follows the definition" and lists what the definition
+/// makes certain: the fix is the definition (Patch, and upstream to QLC+), never a rule
+/// for one fixture.
 /// (file, mode, every fine byte with what the chart says of it)
 type Chart = (&'static str, &'static str, &'static [(usize, Fine)]);
 
@@ -405,8 +441,10 @@ const CHARTS: &[Chart] = &[
             (26, Joins(25)),
         ],
     ),
-    // No chart found. The name says the fixed gobos (13), a wheel selector; the only
-    // `GoboIndex` coarse (12) indexes the rotating gobos.
+    // Contest Evora-Beam15R manual v1.0, p. 16, column Ex: DMX 12 gobo rotation with its
+    // fine at DMX 13. Definition error, follows the definition: DMX 13 is "Gobo indexing",
+    // declared coarse (`GoboIndex`), so 11 and 12 stay two channels. The fixed gobos (13)
+    // are a wheel selector; the fixed gobo index fine (14) stays apart from it.
     (
         "Contest-Evora-Beam-15R.qxf",
         "Extended",
@@ -420,7 +458,10 @@ const CHARTS: &[Chart] = &[
             (19, Joins(18)),
         ],
     ),
-    // Shutter A, then B, C, D coarse, then B, C, D fine; In/Out is a channel of its own.
+    // ADB WARP/M M5084-D v1.1, p. 34: each shutter's coarse and fine side by side (DMX
+    // 11/12, 14/15, 17/18). Definition error, follows the definition: it declares Shutter
+    // A, then B, C, D coarse, then B, C, D fine, then In/Out declared fine; blocks stay
+    // apart (the coarse is the one the fine's name gives).
     (
         "ADB-Warp-M.qxf",
         "34 Channel",
@@ -465,6 +506,9 @@ const CHARTS: &[Chart] = &[
     ("Botex-DSP-405.qxf", "4 Channels", &[]),
     // Ayrton's chart: each gobo index/rotation is a channel of its own (declared fine here),
     // its index fine right after it; each blade A fine right after its blade.
+    // Basic: definition error, follows the definition. The chart has Prism 2 insertion at
+    // DMX 31 and its rotation at 32; the definition drops the insertion and declares 31 the
+    // Prism 2 rotation, 32 its fine, so they join.
     (
         "Ayrton-Domino-LT.qxf",
         "Standard",
@@ -480,6 +524,9 @@ const CHARTS: &[Chart] = &[
         "Basic",
         &[(21, Apart(None)), (23, Apart(None)), (31, Joins(30))],
     ),
+    // Extended: definition error, follows the definition. The chart has each blade B fine
+    // after its blade B (DMX 54/55, 58/59, 62/63, 66/67); the definition declares the four
+    // Blade B Fine channels (54, 58, 62, 66) coarse, so they are channels of their own.
     (
         "Ayrton-Domino-LT.qxf",
         "Extended",
@@ -534,8 +581,11 @@ const CHARTS: &[Chart] = &[
         "16 Channel",
         &[(3, Apart(Some(0))), (4, Joins(1)), (5, Apart(Some(2)))],
     ),
-    // Each zone head is listed one channel early, so each white fine sits in the next
-    // zone's head (the last in none), away from its white coarse.
+    // Robe Robin 800 LEDWash DMX chart v1.1: each colour's coarse and fine side by side.
+    // Definition error, follows the definition, in every mode: it declares the four
+    // coarses of a zone, then their four fines (38 Channel #2 from DMX 15, the other modes
+    // from DMX 7), and lists each zone head one channel early, so each white fine sits in
+    // the next zone's head (the last in none), away from its white coarse.
     (
         "Robe-Robin-800-LEDWash.qxf",
         "38 Channel #2",
@@ -556,6 +606,92 @@ const CHARTS: &[Chart] = &[
             (35, Joins(31)),
             (36, Joins(32)),
             (37, Apart(Some(33))),
+        ],
+    ),
+    // Ayrton Mistral 1.1, p. 16: the gobo rotation fine (29) after the rotation (28),
+    // which sits in group Speed with the same `ActsOn` (27). Auto Focus fine names its
+    // coarse (`ActsOn="15"`); the Iris fine has no Iris coarse of its preset.
+    (
+        "Ayrton-Mistral.qxf",
+        "Extended",
+        &[
+            (1, Joins(0)),
+            (3, Joins(2)),
+            (7, Joins(6)),
+            (12, Joins(11)),
+            (14, Joins(13)),
+            (16, Joins(15)),
+            (18, Joins(17)),
+            (20, Joins(19)),
+            (22, Joins(21)),
+            (24, Joins(23)),
+            (26, Joins(25)),
+            (29, Joins(28)),
+            (33, Joins(32)),
+            (36, Joins(35)),
+        ],
+    ),
+    // Ayrton Rivale Profile DMX chart V115: the gobo rotation fine after the rotation, in
+    // group Speed with the same `ActsOn`; Standard 21/22, Extended 32/33. The Extended Iris
+    // fine is in group Shutter, its Iris in group Beam.
+    (
+        "Ayrton-Rivale-Profile.qxf",
+        "Standard",
+        &[
+            (1, Joins(0)),
+            (3, Joins(2)),
+            (8, Joins(7)),
+            (10, Joins(9)),
+            (12, Joins(11)),
+            (14, Joins(13)),
+            (22, Joins(21)),
+        ],
+    ),
+    (
+        "Ayrton-Rivale-Profile.qxf",
+        "Extended",
+        &[
+            (1, Joins(0)),
+            (3, Joins(2)),
+            (9, Joins(8)),
+            (11, Joins(10)),
+            (13, Joins(12)),
+            (15, Joins(14)),
+            (17, Joins(16)),
+            (19, Joins(18)),
+            (21, Joins(20)),
+            (23, Joins(22)),
+            (25, Joins(24)),
+            (27, Joins(26)),
+            (33, Joins(32)),
+            (37, Apart(Some(36))),
+            (40, Joins(39)),
+            (43, Joins(42)),
+            (47, Joins(46)),
+            (49, Joins(48)),
+            (51, Joins(50)),
+            (53, Joins(52)),
+            (55, Joins(54)),
+            (57, Joins(56)),
+            (59, Joins(58)),
+            (61, Joins(60)),
+            (63, Joins(62)),
+        ],
+    ),
+    // Elation E Spot III DMX Traits v1, p. 1: the gobo index/rotation (8) is a coarse with
+    // its fine at DMX 9. Definition error, follows the definition: it declares the index
+    // `Byte="1"`, so it is a channel of its own and its fine stays apart.
+    (
+        "Elation-E-Spot-III.qxf",
+        "Extended",
+        &[
+            (1, Joins(0)),
+            (3, Joins(2)),
+            (5, Joins(4)),
+            (7, Apart(None)),
+            (8, Apart(Some(7))),
+            (11, Joins(10)),
+            (15, Joins(14)),
         ],
     ),
 ];
@@ -579,6 +715,19 @@ fn chart_pairs(fines: &[(usize, Fine)]) -> Vec<(usize, usize)> {
         .collect();
     pairs.sort_unstable();
     pairs
+}
+
+/// Whether an emitter shares a head with this channel, or, in no head, the mode has no
+/// heads and declares an emitter.
+fn emitter_in(mode: &Mode, heads: &[Vec<usize>], i: usize) -> bool {
+    let channels = &mode.channels;
+    if heads[i].is_empty() {
+        mode.pixels.is_empty() && channels.iter().any(|c| colour(c).is_some())
+    } else {
+        (0..channels.len()).any(|j| {
+            heads[i].iter().any(|h| heads[j].contains(h)) && colour(&channels[j]).is_some()
+        })
+    }
 }
 
 fn head_lists(mode: &Mode) -> Vec<Vec<usize>> {
@@ -622,7 +771,7 @@ fn check_mode(file: &str, mode: &Mode, kind: &Kind, result: &Lowered) -> Vec<Str
         report(twice[0].1, format!("joined {} twice", twice[0].0));
     }
     let expected =
-        chart(file, &mode.name).map_or_else(|| expected_pairs(mode, &heads), chart_pairs);
+        chart(file, &mode.name).map_or_else(|| expected_pairs(mode, kind, &heads), chart_pairs);
     let name = |i: usize| {
         channels
             .get(i)
@@ -646,17 +795,10 @@ fn check_mode(file: &str, mode: &Mode, kind: &Kind, result: &Lowered) -> Vec<Str
         owner[fine] = Some(coarse);
     }
 
-    let emitter_in = |i: usize| {
-        if heads[i].is_empty() {
-            mode.pixels.is_empty() && channels.iter().any(|c| colour(c).is_some())
-        } else {
-            (0..channels.len()).any(|j| share_head(i, j) && colour(&channels[j]).is_some())
-        }
-    };
     let roles: Vec<_> = channels
         .iter()
         .enumerate()
-        .map(|(i, c)| light(c, kind, emitter_in(i)))
+        .map(|(i, c)| light(c, kind, emitter_in(mode, &heads, i)))
         .collect();
     let dimmers: Vec<_> = channels
         .iter()
@@ -812,7 +954,8 @@ fn the_rule_agrees_with_every_chart() {
     let mut wrong = Vec::new();
     for &(file, name, fines) in CHARTS {
         let mode = common::mode(file, name);
-        let rule = expected_pairs(&mode, &head_lists(&mode));
+        let kind = common::fixture(file).kind;
+        let rule = expected_pairs(&mode, &kind, &head_lists(&mode));
         if rule != chart_pairs(fines) {
             wrong.push(format!(
                 "{file} / {name}: rule {rule:?}, chart {:?}",
@@ -1115,4 +1258,94 @@ fn a_coarse_after_its_fine_only_when_it_is_the_only_one() {
         }
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn a_unique_preset_chooses_before_a_fine_that_only_sits_next_to_a_coarse() {
+    // (name, its preset, the fine's preset, group of the group-only fine, its name)
+    let cases = [
+        ("Pan", "PositionPan", "PositionPanFine", "Pan", "Pan trim"),
+        ("Focus", "BeamFocus", "BeamFocusFine", "Beam", "Iris fine"),
+    ];
+    let mut wrong = Vec::new();
+    for (name, preset, fine_preset, group, adjacent) in cases {
+        let (kind, mode) = inline(&format!(
+            r#"<FixtureDefinition><Manufacturer>Test</Manufacturer><Model>Preset first</Model><Type>Moving Head</Type>
+            <Channel Name="{name}" Preset="{preset}"/>
+            <Channel Name="{adjacent}"><Group Byte="1">{group}</Group></Channel>
+            <Channel Name="{name} fine" Preset="{fine_preset}"/>
+            <Mode Name="Three">
+                <Channel Number="0">{name}</Channel><Channel Number="1">{adjacent}</Channel>
+                <Channel Number="2">{name} fine</Channel>
+            </Mode></FixtureDefinition>"#
+        ));
+        let lowered = lower(&mode, 0, 3).unwrap();
+        let pairs: Vec<_> = lowered.pairs.iter().map(|p| (p.coarse, p.fine)).collect();
+        let oracle = check_mode("inline.qxf", &mode, &kind, &lowered);
+        if pairs != [(0, 2)] || !oracle.is_empty() {
+            wrong.push(format!(
+                "{name}: pairs {pairs:?}, expected [(0, 2)]; oracle {oracle:?}"
+            ));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn a_fog_pump_declared_a_dimmer_fine_never_joins_and_never_follows() {
+    let shared = "<Head><Channel>0</Channel><Channel>1</Channel><Channel>2</Channel></Head>";
+    let layouts = [("headless", ""), ("one shared head", shared)];
+    let mut wrong = Vec::new();
+    for kind in ["Smoke", "Hazer"] {
+        for (layout, heads) in layouts {
+            let (kind_read, mode) = inline(&format!(
+                r#"<FixtureDefinition><Manufacturer>Test</Manufacturer><Model>Fog with an LED dimmer</Model><Type>{kind}</Type>
+                <Channel Name="LED dimmer" Preset="IntensityDimmer"/>
+                <Channel Name="Fog pump" Preset="IntensityDimmerFine">
+                    <Capability Min="0" Max="9">No fog output</Capability>
+                    <Capability Min="10" Max="255">Fog output</Capability>
+                </Channel>
+                <Channel Name="Red" Preset="IntensityRed"/>
+                <Mode Name="3 channels">
+                    <Channel Number="0">LED dimmer</Channel><Channel Number="1">Fog pump</Channel>
+                    <Channel Number="2">Red</Channel>{heads}
+                </Mode></FixtureDefinition>"#
+            ));
+            let lowered = lower(&mode, 0, 3).unwrap();
+            let follows: Vec<_> = lowered.channels.iter().map(|c| c.follows.bits()).collect();
+            let oracle = check_mode("inline.qxf", &mode, &kind_read, &lowered);
+            if follows != [3, 0, 0] || !lowered.pairs.is_empty() || !oracle.is_empty() {
+                wrong.push(format!(
+                    "{kind}, {layout}: follows {follows:?}, expected [3, 0, 0]; pairs {:?}, expected []; oracle {oracle:?}",
+                    lowered.pairs
+                ));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn a_fog_switch_declared_a_shutter_follows_the_definition() {
+    // Stairville SF-1500, mode Normal, DMX 1 (the pinned definition, first channel only).
+    // The maker's switch turns fog output on and off; QLC+ declares it a shutter that
+    // closes at 0 to 13. Definition error, follows the definition: it follows Blackout.
+    let (kind, mode) = inline(
+        r#"<FixtureDefinition><Manufacturer>Stairville</Manufacturer><Model>SF-1500</Model><Type>Smoke</Type>
+        <Channel Name="On-Off">
+            <Group Byte="0">Shutter</Group>
+            <Capability Min="0" Max="13" Preset="ShutterClose">Off</Capability>
+            <Capability Min="14" Max="127">Continuos CH2</Capability>
+            <Capability Min="128" Max="231">Timer-Controlled CH2,3,4</Capability>
+            <Capability Min="232" Max="255">Continuos to MAX</Capability>
+        </Channel>
+        <Mode Name="Normal"><Channel Number="0">On-Off</Channel></Mode>
+        </FixtureDefinition>"#,
+    );
+    let lowered = lower(&mode, 0, 1).unwrap();
+    assert_eq!(lowered.channels[0].follows, Follows::BLACKOUT);
+    assert_eq!(
+        check_mode("inline.qxf", &mode, &kind, &lowered),
+        Vec::<String>::new()
+    );
 }

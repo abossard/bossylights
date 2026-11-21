@@ -525,6 +525,8 @@ fn each_hybrid_holds_its_wheel_where_the_mix_goes_through() {
         (mistral, "Standard", 15, Ok((1, "Open"))),
         (mistral, "Basic", 13, Ok((1, "Open"))),
         (mistral, "Extended", 18, Ok((1, "Open"))),
+        ("Ayrton-Rivale-Profile.qxf", "Extended", 17, Ok((1, "Open"))),
+        ("Ayrton-Rivale-Profile.qxf", "Standard", 14, Ok((1, "Open"))),
         (briteq, "12 Channel CMY", 7, Ok((2, no_filter))),
         (briteq, "14 Channel Full 8bit", 6, Ok((2, no_filter))),
         (briteq, "21 Channel Full 16bit", 7, Ok((2, no_filter))),

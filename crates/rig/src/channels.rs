@@ -22,8 +22,9 @@
 //! | strobe, wheels, gobo, prism, speed, effect, control, nothing, other (including fog pumps) | none | 0 | jump |
 //!
 //! - [Roles](Channel::role) use only declarations. A v6 channel with none starts independent.
-//! - On Smoke and Hazer fixtures a dimmer preset controls fog unless it is a plain byte
-//!   and shares a head with an emitter, or is plain in a headless mode with an emitter.
+//! - A declared colour is an emitter. On Smoke and Hazer fixtures an uncoloured dimmer
+//!   preset controls light when it is plain and shares a head with an emitter, or is
+//!   plain in a headless mode with an emitter. Otherwise it controls fog.
 //! - A coarse dimmer carries the emitters in every head that lists it. A dimmer listed in
 //!   no head carries the other emitters, including emitters listed in no head.
 //! - A falling dimmer's dark word is the first Closed byte with a low byte of 0, or the
@@ -32,21 +33,22 @@
 //!   jumps and fades. Otherwise it spans every byte in the channel's direction.
 //! - `rest`: the value that lets light out for a shutter or strobe, the bypass for a colour
 //!   wheel over a colour mix, else the default, else 0. Ties: latest wins.
-//! - Fines with `ActsOn` claim coarses first, in channel order, then the remaining fines
-//!   choose in channel order. A coarse must be free and have the fine's heads and colour.
-//!   A wheel selector alone cannot pair with an index alone.
+//! - Fines claim coarses in three passes: `ActsOn`, matching preset, then adjacency.
+//!   Each pass uses channel order. Both bytes must share heads, colour and fog status.
+//!   A coarse can be claimed once. A wheel selector alone cannot pair with an index alone.
 //!
 //! | Evidence for a fine | Coarse to join |
 //! |---|---|
-//! | `ActsOn` | Try the other channels with the same target, or the target itself if there are none. Join the only fit, or the fit right before the fine. Otherwise stay single |
+//! | `ActsOn` | Try the other channels with the same target, or the target itself if there are none. The target takes the place of the group. Join the only fit, or the fit right before the fine. Otherwise stay single |
 //! | One matching free coarse before the fine, or one right after it that is the only free coarse of its preset family in the mode | That coarse, unless another free coarse of the fine's group, heads and colour is right before the fine |
 //! | Several matching free coarses before the fine | The matching coarse right before the fine, unless another fine follows |
-//! | No matching preset, or no preset on the fine | The fitting coarse right before the fine, unless coarses and fines come in blocks. A fine with a preset can use this rule only when the coarse has none |
+//! | No matching preset, or no preset on the fine | The coarse of its group right before the fine, unless coarses and fines come in blocks. A fine with a preset can use this rule only when the coarse has none |
 //! | Any other case | The fine stays a single byte. A declared emitter follows its own head's dimmer rules |
 //!
-//! Presets match by control, ignoring travel direction, `Master` and the X/Pan and Y/Tilt
-//! aliases. A fine fits a coarse of its group if it is plain or has the same range kinds
-//! in order. A plain byte has no ranges, one unnamed range or one full-byte range.
+//! Matching presets pair regardless of steps. They match by control, ignoring travel
+//! direction, `Master` and the X/Pan and Y/Tilt aliases. For `ActsOn` and adjacency,
+//! a fine with steps needs the same range kinds in order. A plain fine fits any range
+//! shape: it has no ranges, one unnamed range or one full-byte range.
 //! A block has a free lookalike right before the coarse (same group, preset and range shape)
 //! and another fine of the same group right after the fine.
 //!
@@ -413,6 +415,7 @@ fn rests(group: &[(usize, &Channel)]) -> Vec<u8> {
 struct PairChannel<'a> {
     byte: Byte,
     colour: Option<Function>,
+    fog: bool,
     acts_on: Option<u16>,
     preset: Option<&'a str>,
     family: Option<String>,
@@ -469,6 +472,10 @@ impl<'a> PairChannel<'a> {
     fn new(channel: &'a Channel) -> Self {
         let declared = &channel.declared;
         let stem = declared.preset_stem();
+        let family = stem.map(preset_family);
+        // The fixture library gives a fog dimmer preset the role Other.
+        let fog = family.as_deref() == Some("IntensityDimmer")
+            && matches!(channel.role(), Function::Other(_));
         let ranges = if channel.is_plain() {
             Vec::new()
         } else {
@@ -481,9 +488,10 @@ impl<'a> PairChannel<'a> {
         Self {
             byte: channel.byte,
             colour: declared.emitter_colour(),
+            fog,
             acts_on: declared.acts_on,
             preset: stem,
-            family: stem.map(preset_family),
+            family,
             group: declared
                 .group
                 .as_deref()
@@ -494,86 +502,125 @@ impl<'a> PairChannel<'a> {
         }
     }
 
-    fn partner(
+    fn open(&self, i: usize, coarse: &Self, taken: &BTreeMap<usize, usize>) -> bool {
+        coarse.byte == Byte::Coarse
+            && coarse.heads == self.heads
+            && coarse.colour == self.colour
+            && coarse.fog == self.fog
+            && !taken.contains_key(&i)
+    }
+
+    fn free(&self, i: usize, coarse: &Self, taken: &BTreeMap<usize, usize>) -> bool {
+        self.open(i, coarse, taken) && coarse.wheel.can_pair(self.wheel)
+    }
+
+    fn fits(&self, i: usize, coarse: &Self, taken: &BTreeMap<usize, usize>) -> bool {
+        self.free(i, coarse, taken) && (self.ranges.is_empty() || self.ranges == coarse.ranges)
+    }
+
+    fn same_group(&self, other: &Self) -> bool {
+        self.group.is_some() && self.group == other.group
+    }
+
+    fn acts_on_partner(
+        &self,
+        named: u16,
+        fine: usize,
+        channels: &[Self],
+        taken: &BTreeMap<usize, usize>,
+    ) -> Option<usize> {
+        // Even a fine sibling means the parent itself is not the target.
+        let mut siblings = channels
+            .iter()
+            .enumerate()
+            .filter(|&(i, c)| i != fine && c.acts_on == Some(named))
+            .peekable();
+        if siblings.peek().is_none() {
+            let i = usize::from(named);
+            return self.fits(i, channels.get(i)?, taken).then_some(i);
+        }
+        let mut fitting = siblings.filter(|&(i, c)| self.fits(i, c, taken));
+        let (first, _) = fitting.next()?;
+        if fitting.next().is_none() {
+            return Some(first);
+        }
+        let (i, c) = before(channels, fine)?;
+        (c.acts_on == Some(named) && self.fits(i, c, taken)).then_some(i)
+    }
+
+    fn preset_partner(
+        &self,
+        fine: usize,
+        channels: &[Self],
+        taken: &BTreeMap<usize, usize>,
+    ) -> PresetMatch {
+        let Some(family) = &self.family else {
+            return PresetMatch::TryAdjacent;
+        };
+        let matches = |i, c: &Self| c.family.as_ref() == Some(family) && self.free(i, c, taken);
+        let mut matching = channels
+            .iter()
+            .enumerate()
+            .filter_map(|(i, c)| matches(i, c).then_some(i));
+        let Some(first) = matching.next() else {
+            return PresetMatch::TryAdjacent;
+        };
+        let second = matching.next();
+        let adjacent = before(channels, fine);
+        if second.is_some_and(|i| i < fine) {
+            let fine_after = channels.get(fine + 1).is_some_and(|c| c.byte == Byte::Fine);
+            return match adjacent {
+                Some((i, c)) if !fine_after && matches(i, c) => PresetMatch::Join(i),
+                _ => PresetMatch::Ambiguous,
+            };
+        }
+        if first < fine || (first == fine + 1 && second.is_none()) {
+            // Even a selector beside an index fine casts doubt on a distant preset.
+            return match adjacent {
+                Some((i, c)) if i != first && self.open(i, c, taken) && self.same_group(c) => {
+                    PresetMatch::Ambiguous
+                }
+                _ => PresetMatch::Join(first),
+            };
+        }
+        PresetMatch::TryAdjacent
+    }
+
+    fn adjacent_partner(
         &self,
         fine: usize,
         channels: &[Self],
         taken: &BTreeMap<usize, usize>,
     ) -> Option<usize> {
-        let open = |i, c: &Self| {
-            c.byte == Byte::Coarse
-                && c.heads == self.heads
-                && c.colour == self.colour
-                && !taken.contains_key(&i)
-        };
-        let free = |i, c: &Self| open(i, c) && c.wheel.can_pair(self.wheel);
-        let before = |i: usize| {
-            let i = i.checked_sub(1)?;
-            Some((i, channels.get(i)?))
-        };
-        let same_group = |c: &Self| self.group.is_some() && c.group == self.group;
-        let fits = |i, c: &Self| {
-            free(i, c) && same_group(c) && (self.ranges.is_empty() || self.ranges == c.ranges)
-        };
-        let adjacent = before(fine);
-
-        if let Some(named) = self.acts_on {
-            // Even a fine sibling means the parent itself is not the target.
-            let mut siblings = channels
-                .iter()
-                .enumerate()
-                .filter(|&(i, c)| i != fine && c.acts_on == Some(named))
-                .peekable();
-            if siblings.peek().is_none() {
-                let i = usize::from(named);
-                return fits(i, channels.get(i)?).then_some(i);
-            }
-            let mut fitting = siblings.filter(|&(i, c)| fits(i, c));
-            let (first, _) = fitting.next()?;
-            if fitting.next().is_none() {
-                return Some(first);
-            }
-            return adjacent
-                .filter(|&(i, c)| c.acts_on == Some(named) && fits(i, c))
-                .map(|(i, _)| i);
-        }
-
-        let fine_after = channels.get(fine + 1).filter(|c| c.byte == Byte::Fine);
-        if let Some(family) = &self.family {
-            let matches = |i, c: &Self| c.family.as_ref() == Some(family) && free(i, c);
-            let mut matching = channels
-                .iter()
-                .enumerate()
-                .filter_map(|(i, c)| matches(i, c).then_some(i));
-            if let Some(first) = matching.next() {
-                let second = matching.next();
-                if second.is_some_and(|i| i < fine) {
-                    return adjacent
-                        .filter(|&(j, c)| fine_after.is_none() && matches(j, c))
-                        .map(|(j, _)| j);
-                }
-                if first < fine || (first == fine + 1 && second.is_none()) {
-                    // Even a selector beside an index fine casts doubt on a distant preset.
-                    return adjacent
-                        .is_none_or(|(j, c)| j == first || !(open(j, c) && same_group(c)))
-                        .then_some(first);
-                }
-            }
-        }
-
-        let (i, c) = adjacent?;
-        if !fits(i, c) || (self.preset.is_some() && c.preset.is_some()) {
+        let (i, c) = before(channels, fine)?;
+        if !self.fits(i, c, taken)
+            || !self.same_group(c)
+            || (self.preset.is_some() && c.preset.is_some())
+        {
             return None;
         }
-        let in_blocks = fine_after.is_some_and(same_group)
-            && before(i).is_some_and(|(j, prev)| {
-                free(j, prev)
+        let in_blocks = channels
+            .get(fine + 1)
+            .is_some_and(|next| next.byte == Byte::Fine && self.same_group(next))
+            && before(channels, i).is_some_and(|(j, prev)| {
+                self.free(j, prev, taken)
                     && prev.group == c.group
                     && prev.preset == c.preset
                     && prev.ranges == c.ranges
             });
         (!in_blocks).then_some(i)
     }
+}
+
+enum PresetMatch {
+    Join(usize),
+    Ambiguous,
+    TryAdjacent,
+}
+
+fn before<T>(channels: &[T], i: usize) -> Option<(usize, &T)> {
+    let i = i.checked_sub(1)?;
+    Some((i, channels.get(i)?))
 }
 
 /// The control named by the preset, independent of travel and QLC+'s aliases.
@@ -627,9 +674,25 @@ fn pair_bytes(mode: &Mode) -> BTreeMap<usize, usize> {
         .iter()
         .enumerate()
         .filter(|(_, c)| c.byte == Byte::Fine);
-    let linked = fines.clone().filter(|(_, c)| c.acts_on.is_some());
-    for (fine, channel) in linked.chain(fines.filter(|(_, c)| c.acts_on.is_none())) {
-        if let Some(coarse) = channel.partner(fine, &channels, &fine_of) {
+    for (fine, channel) in fines.clone() {
+        if let Some(named) = channel.acts_on
+            && let Some(coarse) = channel.acts_on_partner(named, fine, &channels, &fine_of)
+        {
+            fine_of.insert(coarse, fine);
+        }
+    }
+    let mut adjacent = Vec::new();
+    for (fine, channel) in fines.filter(|(_, c)| c.acts_on.is_none()) {
+        match channel.preset_partner(fine, &channels, &fine_of) {
+            PresetMatch::Join(coarse) => {
+                fine_of.insert(coarse, fine);
+            }
+            PresetMatch::Ambiguous => {}
+            PresetMatch::TryAdjacent => adjacent.push((fine, channel)),
+        }
+    }
+    for (fine, channel) in adjacent {
+        if let Some(coarse) = channel.adjacent_partner(fine, &channels, &fine_of) {
             fine_of.insert(coarse, fine);
         }
     }

@@ -575,11 +575,12 @@ fn acts_on_chooses_among_siblings_before_considering_the_named_channel() {
         // Several siblings fit: take the preceding channel only when it is one of them.
         (vec![parent(), coarse(), coarse(), fine()], vec![(2, 3)]),
         (vec![parent(), coarse(), coarse(), gap(), fine()], vec![]),
-        // The neighbor must both act on the named channel and fit the fine.
+        // The neighbor must act on the named channel.
         (vec![parent(), coarse(), coarse(), parent(), fine()], vec![]),
+        // Acting on the same channel stands for the group: a Pan sibling takes a Beam fine.
         (
             vec![parent(), coarse(), coarse(), pan_sibling, fine()],
-            vec![],
+            vec![(3, 4)],
         ),
         // Even a sibling which is another fine rules out the parent.
         (vec![parent(), fine(), fine()], vec![]),
