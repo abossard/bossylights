@@ -173,22 +173,25 @@ fn a_port_that_takes_no_bytes_is_lost_then_found_again() {
 }
 
 /// Takes a frame with a new level on channel 1 each time until the port thread waits in
-/// the middle of a message, one more queued (nobody reads the port), or the port is lost
-/// that way. Returns the levels accepted, in order.
-fn take_until_stuck(device: &mut DmxUsbPro) -> Vec<u8> {
+/// the middle of a message, one more queued (nobody reads the port): `take` drops 20
+/// frames in a row. A runner that pauses past the 500 ms a stall may take loses the port
+/// on the way; the port thread opens a new one, which fills the same way, and `end`
+/// becomes its end. Returns the levels accepted, in order.
+fn take_until_stuck(device: &mut DmxUsbPro, fake: &mut Fake, end: &mut TTYPort) -> Vec<u8> {
     let (mut accepted, mut dropped, started) = (vec![], 0, Instant::now());
-    for level in 1..=u8::MAX {
-        assert!(started.elapsed() < NEVER, "never full"); // guard
-        match device.take(&[level; 512]) {
+    while dropped < 20 {
+        assert!(started.elapsed() < NEVER, "never stuck"); // guard
+        let level = accepted.last().map_or(1, |last| last + 1);
+        dropped = match device.take(&[level; 512]) {
             Outcome::Accepted => {
                 accepted.push(level);
-                dropped = 0;
+                0
             }
-            Outcome::Dropped => dropped += 1,
-            Outcome::Failed => break,
-        }
-        if dropped == 20 {
-            break;
+            Outcome::Dropped => dropped + 1,
+            Outcome::Failed => 0,
+        };
+        while let Some(newer) = fake.new_end() {
+            *end = newer;
         }
         thread::sleep(Duration::from_millis(5)); // poll
     }
@@ -199,8 +202,8 @@ fn take_until_stuck(device: &mut DmxUsbPro) -> Vec<u8> {
 fn a_loss_throws_away_no_accepted_frame_they_go_out_first_on_the_new_port_in_order() {
     let (find, mut fake) = Fake::new(true);
     let mut device = DmxUsbPro::open(find).unwrap();
-    let end = fake.next_end();
-    let accepted = take_until_stuck(&mut device);
+    let mut end = fake.next_end();
+    let accepted = take_until_stuck(&mut device, &mut fake, &mut end);
     // The one being written, and the one queued behind it.
     let unsent = accepted.get(accepted.len() - 2..).unwrap().to_vec();
 
@@ -225,17 +228,7 @@ fn a_stop_in_the_middle_of_a_message_finishes_it() {
     let (find, mut fake) = Fake::new(true);
     let mut device = DmxUsbPro::open(find).unwrap();
     let mut end = fake.next_end();
-    // Nobody reads the other end: the driver queue fills, and the port thread waits in
-    // the middle of a message. Then `take` drops every frame.
-    let (mut dropped, started) = (0, Instant::now());
-    while dropped < 20 {
-        assert!(started.elapsed() < Duration::from_secs(10), "never full");
-        dropped = match device.take(&[7; 512]) {
-            Outcome::Dropped => dropped + 1,
-            Outcome::Accepted | Outcome::Failed => 0,
-        };
-        thread::sleep(Duration::from_millis(5)); // poll
-    }
+    take_until_stuck(&mut device, &mut fake, &mut end);
     let stopping = thread::spawn(move || drop(device));
     // Once the port closes, what it had queued is gone: a stop that did not wait leaves
     // nothing to read.
