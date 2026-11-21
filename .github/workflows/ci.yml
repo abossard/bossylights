@@ -17,7 +17,7 @@ jobs:
         with:
           node-version: 24
           cache: npm
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.93.1  # the local toolchain verify runs on
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
