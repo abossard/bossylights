@@ -68,3 +68,5 @@ One row per run of Codex or Copilot, pasted by the orchestrator after verifying 
 | 2026-11-20 | codex | review-197f | review | sol, ultra | 196 | 24 (1) | 1.77M / 1.67M / 5.5k | n/a | no new defects |
 | 2026-11-20 | copilot | review-197f | review | sol, max | 294 | 13 (0) | 1.17M / 1.09M / 9.8k | n/a | no new defects |
 | 2026-11-20 | codex | spec-216 | spec | astra, ultra | 1186 | 65 (0) | 6.23M / 6.04M / 43.1k | n/a (spec) | dense and over-built; Claude replaced it with one nearest-beat rule; the Opus checker found 18 gaps, all fixed |
+| 2026-11-20 | codex | review-247-249 | review | sol, ultra | 412 | 58 (7) | 6.07M / 5.93M / 13.4k | n/a | 13 findings with red repros: v11 hazer bytes changed, source table missing, fine pairing by function, wheel slots lost, fan as dimmer, reverse dimmer dark; Opus missed most |
+| 2026-11-20 | copilot | review-247-249 | review | sol, max | 607 | 44 (4) | 4.95M / 4.78M / 32.0k | n/a | 10 findings, 7 red repros; overlaps Codex on 6, new: dimmer in some heads taken as shared, Byte metadata on word halves |
