@@ -43,3 +43,7 @@ the Apache License 2.0 (`COPYING` in the repository root, copied here as
 | `Botex-DSP-405.qxf` | Botex | four Intensity channels with only a group declaration |
 | `Vari-Lite-VL2202-Spot.qxf` | Vari-Lite | a gobo index declared as a fine byte right after the gobo selector: two channels, no pair |
 | `Cameo-CLMPAR3.qxf` | Cameo | external On/Off fine bytes after White and the master dimmer: no pair |
+| `Robe-ColorSpot-575-AT.qxf` | Robe | gobo index fines beside a static wheel and a rotating index, an Iris fine after an Iris in the Beam group |
+| `Contest-Evora-Beam-15R.qxf` | Contest | a fixed gobo index fine right after the fixed gobos, the only `GoboIndex` coarse further up |
+| `ADB-Warp-M.qxf` | ADB | framing shutters B, C, D coarse, then B, C, D fine, and In/Out declared fine |
+| `Ayrton-Domino-LT.qxf` | Ayrton | gobo index fines with no coarse of their preset, blades whose coarse looks like the frost before it |

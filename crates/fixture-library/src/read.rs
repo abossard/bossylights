@@ -267,25 +267,7 @@ fn mode<'a>(
             .unwrap_or(node);
         return Err((entry, Problem::SkippedNumber(number)));
     }
-    let dimming = if *kind == Kind::Dimmer {
-        Dimming::DimmerPack
-    } else if matches!(kind, Kind::Smoke | Kind::Hazer)
-        && !by_number
-            .values()
-            .any(|c| c.declared.emitter_colour().is_some())
-    {
-        Dimming::Fog
-    } else {
-        Dimming::Preset
-    };
-    let channels: Vec<_> = by_number
-        .into_values()
-        .cloned()
-        .map(|mut channel| {
-            channel.declared.dimming = dimming;
-            channel
-        })
-        .collect();
+    let mut channels: Vec<_> = by_number.into_values().cloned().collect();
     let warn = |at: Node, left_out| Warning {
         mode: name.clone(),
         line: line_of(at),
@@ -317,6 +299,7 @@ fn mode<'a>(
             None => pixels.push(numbers.into_iter().map(|(_, number)| number).collect()),
         }
     }
+    set_dimming(kind, &mut channels, &pixels);
     let found = layout_in(node).or_else(|| {
         root.children()
             .find(|n| n.has_tag_name("Physical"))
@@ -348,6 +331,40 @@ fn mode<'a>(
         layout,
         degrees: degrees_of(node, root)?,
     })
+}
+
+/// On fog fixtures a dimmer controls light when its head declares an emitter.
+/// Without heads, the mode supplies the emitter declaration.
+fn set_dimming(kind: &Kind, channels: &mut [Channel], heads: &[Vec<u16>]) {
+    if *kind == Kind::Dimmer {
+        for channel in channels {
+            channel.declared.dimming = Dimming::DimmerPack;
+        }
+        return;
+    }
+    if !matches!(kind, Kind::Smoke | Kind::Hazer) {
+        return;
+    }
+    let emits = |channel: &Channel| channel.declared.emitter_colour().is_some();
+    if heads.is_empty() && channels.iter().any(emits) {
+        return;
+    }
+    for channel in channels.iter_mut() {
+        channel.declared.dimming = Dimming::Fog;
+    }
+    for head in heads {
+        if head
+            .iter()
+            .filter_map(|&n| channels.get(usize::from(n)))
+            .any(emits)
+        {
+            for &n in head {
+                if let Some(channel) = channels.get_mut(usize::from(n)) {
+                    channel.declared.dimming = Dimming::Preset;
+                }
+            }
+        }
+    }
 }
 
 /// A channel number of a head.

@@ -333,7 +333,7 @@ fn each_channel_gets_rules_from_its_declared_role() {
 }
 
 #[test]
-fn a_fine_byte_pairs_by_adjacency_then_channel_order() {
+fn a_fine_byte_pairs_only_when_certain() {
     // (mode, first, pairs as coarse and fine)
     let shehds = mode(SHEHDS, "14 Channel");
     let mh6 = mode(MH6, "Standard");
@@ -405,17 +405,18 @@ fn a_fine_byte_pairs_by_adjacency_then_channel_order() {
         (&shehds, 0, &[(2, 11), (3, 12)]),
         (&mh6, 600, &[(601, 602), (609, 610), (611, 612)]),
         (&rgb, 0, &[]),
-        // the first fine is adjacent, the next takes the remaining coarse, the third stays alone
-        (&twice, 0, &[(0, 3), (1, 2)]),
-        (&before, 0, &[(1, 0)]),
-        // The earlier coarse byte wins even when the following one is closer.
-        (&between, 0, &[(0, 2)]),
+        // two coarses that look the same, then their fines: which is whose is not certain
+        (&twice, 0, &[]),
+        // two coarses with the fine's preset and neither right before it
+        (&before, 0, &[]),
+        (&between, 0, &[]),
         // a fine byte joins within its head
         (&heads, 0, &[(0, 3), (1, 2)]),
         (&trailing, 0, &[(0, 3), (1, 4)]),
         (&mixed, 0, &[(0, 1)]),
         (&clay, 0, &[(10, 11), (13, 14), (22, 23), (24, 25)]),
-        (&clay_16, 0, &[(10, 26), (12, 27), (20, 24), (21, 25)]),
+        // gobo fines after other fines, far from any gobo coarse: single bytes
+        (&clay_16, 0, &[(20, 24), (21, 25)]),
         (
             &focus_spot,
             0,
@@ -498,9 +499,9 @@ fn fine_pair_candidates_use_the_declared_group_and_all_the_heads() {
             &[(0, 1)],
         ),
         (
-            "adjacent group-only coarse before an earlier preset",
+            "adjacent group-only coarse competes with the earlier preset",
             hand(vec![pan(), group("Pan", Byte::Coarse), pan_fine()], &[]),
-            &[(1, 2)],
+            &[],
         ),
         (
             "earlier fine claims a later coarse before its adjacent fine",
@@ -525,7 +526,7 @@ fn fine_pair_candidates_use_the_declared_group_and_all_the_heads() {
         (
             "fine outside every head",
             hand(vec![pan(), pan_fine()], &[&[0]]),
-            &[(0, 1)],
+            &[],
         ),
         (
             "coarse outside the fine's head",
@@ -576,22 +577,31 @@ fn a_group_only_byte_uses_the_qlc_group_of_the_other_byte() {
 }
 
 #[test]
-fn presets_pair_by_family_and_keep_the_specific_control() {
+fn only_the_way_a_preset_runs_can_differ_across_a_gap() {
     let cases = [
         ("SpeedPanSlowFast", "SpeedPanFastSlow", true),
         ("BeamZoomBigSmall", "BeamZoomSmallBig", true),
         ("BeamFocusNearFar", "BeamFocusFarNear", true),
         ("ShutterIrisMinToMax", "ShutterIrisMaxToMin", true),
-        ("IntensityMasterDimmer", "IntensityDimmer", true),
-        ("ColorCTOMixer", "ColorCTCMixer", true),
-        ("ColorCTCMixer", "ColorCTBMixer", true),
+        ("IntensityMasterDimmer", "IntensityDimmer", false),
+        ("ColorCTOMixer", "ColorCTCMixer", false),
+        ("ColorCTCMixer", "ColorCTBMixer", false),
         ("GoboWheel", "GoboIndex", false),
         ("SpeedPanSlowFast", "SpeedTiltFastSlow", false),
         ("ColorMacro", "ColorWheel", false),
     ];
-    for (coarse, low, joins) in cases {
-        let result = lower(&hand(vec![channel(coarse), fine(low)], &[]), 0, SPACE).unwrap();
-        assert_eq!(result.pairs.len(), usize::from(joins), "{coarse} / {low}");
+    for (coarse, low, same_preset) in cases {
+        // Each row has a plain fine in the coarse's group, so adjacency alone is enough.
+        for (channels, joins) in [
+            (vec![channel(coarse), fine(low)], true),
+            (
+                vec![channel(coarse), channel("NoFunction"), fine(low)],
+                same_preset,
+            ),
+        ] {
+            let result = lower(&hand(channels, &[]), 0, SPACE).unwrap();
+            assert_eq!(result.pairs.len(), usize::from(joins), "{coarse} / {low}");
+        }
     }
 }
 
@@ -612,7 +622,7 @@ fn ranged(
 }
 
 #[test]
-fn a_fine_with_steps_matches_each_step_and_a_plain_fine_matches_one_kind() {
+fn group_only_fines_require_the_same_steps_while_matching_presets_pair_directly() {
     use Direction::{Down, Up};
     use Does::{Closed, Open, Runs};
     type Case<'a> = (&'a str, &'a [Option<Does>], &'a [Option<Does>], bool);
@@ -646,13 +656,13 @@ fn a_fine_with_steps_matches_each_step_and_a_plain_fine_matches_one_kind() {
             "no named coarse capability",
             &[None],
             &[Some(Runs(Up))],
-            true,
+            false,
         ),
         (
             "one kind found among several",
             &[Some(Open), Some(Runs(Up))],
             &[Some(Runs(Down))],
-            true,
+            false,
         ),
         ("unnamed fine", &[Some(Closed)], &[None], true),
         (
@@ -663,18 +673,23 @@ fn a_fine_with_steps_matches_each_step_and_a_plain_fine_matches_one_kind() {
         ),
     ];
     for &(name, coarse, low, joins) in cases {
-        let mode = hand(
-            vec![
-                ranged(channel("ShutterIris"), coarse),
-                ranged(fine("ShutterIris"), low),
-            ],
-            &[],
-        );
-        assert_eq!(
-            lower(&mode, 0, SPACE).unwrap().pairs.len(),
-            usize::from(joins),
-            "{name}"
-        );
+        for (fine_channel, expected) in [
+            (fine("ShutterIris"), true),
+            (declared(None, Some("Shutter"), Byte::Fine), joins),
+        ] {
+            let mode = hand(
+                vec![
+                    ranged(channel("ShutterIris"), coarse),
+                    ranged(fine_channel, low),
+                ],
+                &[],
+            );
+            assert_eq!(
+                lower(&mode, 0, SPACE).unwrap().pairs.len(),
+                usize::from(expected),
+                "{name}"
+            );
+        }
     }
 }
 
@@ -690,7 +705,7 @@ fn a_selector_and_its_rotation_use_separate_words() {
     let wheel = || channel("GoboWheel");
     let group_coarse = || group(Byte::Coarse);
     let group_fine = || group(Byte::Fine);
-    // Both spellings of the gobo wheel and its index, followed by the index fine.
+    // The wheel right before the index fine blocks a more distant match.
     for (index, wheel) in [(index(), wheel()), (group_coarse(), group_coarse())] {
         let mode = hand(
             vec![
@@ -700,10 +715,7 @@ fn a_selector_and_its_rotation_use_separate_words() {
             ],
             &[],
         );
-        assert_eq!(
-            lower(&mode, 0, SPACE).unwrap().pairs,
-            [rig::channels::Pair { coarse: 0, fine: 2 }]
-        );
+        assert!(lower(&mode, 0, SPACE).unwrap().pairs.is_empty());
     }
     let selector = |c| ranged(c, std::slice::from_ref(&gobo));
     let turns = |c| ranged(c, std::slice::from_ref(&rotation));
@@ -787,7 +799,7 @@ fn each_fine_keeps_the_policy_of_its_own_colour_capability_and_heads() {
                 ],
                 &[],
             ),
-            &[(0, 2), (1, 3)],
+            &[],
             &[3, 0, 3, 0],
         ),
         (
@@ -871,7 +883,7 @@ fn each_fine_keeps_the_policy_of_its_own_colour_capability_and_heads() {
 }
 
 #[test]
-fn compatible_non_slots_precede_slots_unless_the_slot_is_adjacent() {
+fn wheel_slots_and_indices_pair_only_when_certain() {
     let rgb = fixture_library::Rgb {
         red: 255,
         green: 0,
@@ -897,54 +909,65 @@ fn compatible_non_slots_precede_slots_unless_the_slot_is_adjacent() {
         let end = || fine("GoboWheel");
         let cases = [
             (
-                "first non-slot preset",
+                "matching wheel presets with selector-only and index-only ranges",
+                vec![
+                    slot(preset()),
+                    ranged(
+                        end(),
+                        &[Some(Does::Rotation(fixture_library::Turn::Indexed))],
+                    ),
+                ],
+                None,
+            ),
+            (
+                "three matching presets",
                 vec![slot(preset()), preset(), preset(), gap(), end()],
-                1,
+                None,
             ),
             (
-                "group-only non-slot before preset slot",
+                "one matching preset with slots",
                 vec![group(), slot(preset()), gap(), end()],
-                0,
+                Some(1),
             ),
             (
-                "first preset slot",
+                "two matching presets with slots",
                 vec![slot(preset()), slot(preset()), gap(), end()],
-                0,
+                None,
             ),
             (
-                "first group-only non-slot",
+                "only group matches",
                 vec![slot(group()), group(), group(), gap(), end()],
-                1,
+                None,
             ),
             (
-                "first group-only slot",
+                "only group matches with slots",
                 vec![slot(group()), slot(group()), gap(), end()],
-                0,
+                None,
             ),
             (
-                "adjacent group-only slot",
+                "adjacent group-only slot competes with the preset",
                 vec![preset(), slot(group()), end()],
-                1,
+                None,
             ),
             (
-                "group-only fine uses the first compatible coarse",
+                "group-only fine after a gap",
                 vec![
                     preset(),
                     group(),
                     gap(),
                     declared(None, Some("Gobo"), Byte::Fine),
                 ],
-                0,
+                None,
             ),
             (
-                "a wheel that also indexes still has slots",
+                "group-only fine after a gap with a wheel that also indexes",
                 vec![
                     slot(channel("GoboIndex")),
                     group(),
                     gap(),
                     declared(None, Some("Gobo"), Byte::Fine),
                 ],
-                1,
+                None,
             ),
         ];
         for (case, channels, coarse) in cases {
@@ -952,7 +975,9 @@ fn compatible_non_slots_precede_slots_unless_the_slot_is_adjacent() {
             let lowered = lower(&hand(channels, &[]), 0, SPACE).unwrap();
             assert_eq!(
                 lowered.pairs,
-                [rig::channels::Pair { coarse, fine }],
+                coarse
+                    .map(|coarse| rig::channels::Pair { coarse, fine })
+                    .as_slice(),
                 "{case} / {does:?}"
             );
         }
@@ -1564,14 +1589,18 @@ fn tagged_emitters_pair_and_mix_beside_a_fog_channel() {
     let light = "rest 0, dark 0, fade, master and blackout";
     let independent = "rest 0, dark 0, jump, none";
     let bypass = "rest 24, dark 0, jump, none";
-    for (mode, coarse, fine, expected) in [
-        (emitter_first, 0, 1, [light, light, independent, bypass]),
-        (fog_before_fine, 0, 2, [light, independent, light, bypass]),
+    for (mode, pair, expected) in [
+        (
+            emitter_first,
+            Some(rig::channels::Pair { coarse: 0, fine: 1 }),
+            [light, light, independent, bypass],
+        ),
+        (fog_before_fine, None, [light, independent, light, bypass]),
     ] {
         let lowered = lower(&mode, 0, SPACE).unwrap();
         let configs: Vec<_> = lowered.channels.iter().map(say).collect();
         assert_eq!(configs, expected);
-        assert_eq!(lowered.pairs, [rig::channels::Pair { coarse, fine }]);
+        assert_eq!(lowered.pairs, pair.as_slice());
     }
 }
 
@@ -1630,4 +1659,98 @@ fn ties_are_latest_wins_by_default() {
     assert!(lowered.channels.iter().all(|c| c.ties == Ties::Latest));
     assert!(Follows::NONE.has(Follows::NONE));
     assert!(!Follows::NONE.has(Follows::MASTER));
+}
+
+#[test]
+fn only_a_free_lookalike_makes_an_adjacent_pair_uncertain() {
+    let group = |name, byte| declared(None, Some(name), byte);
+    let zoom = || channel("BeamZoom");
+    let zoom_fine = || fine("BeamZoom");
+    let adjacent = |previous, coarse, low| hand(vec![previous, coarse, low], &[]);
+    let mut red = group("Intensity", Byte::Coarse);
+    red.declared.colour = Some(Function::Red);
+    let selector_fine = || {
+        ranged(
+            fine("GoboWheel"),
+            &[Some(Does::Gobo {
+                picture: None,
+                shakes: false,
+            })],
+        )
+    };
+    type Case<'a> = (&'a str, Mode, &'a [(u32, u32)]);
+    let cases: &[Case<'_>] = &[
+        (
+            "no ranges and one unnamed range look the same",
+            adjacent(ranged(zoom(), &[None]), zoom(), group("Beam", Byte::Fine)),
+            &[],
+        ),
+        (
+            "opposite directions match the fine but distinguish the coarses",
+            adjacent(
+                channel("BeamZoomSmallBig"),
+                channel("BeamZoomBigSmall"),
+                zoom_fine(),
+            ),
+            &[(1, 2)],
+        ),
+        (
+            "a different explicit group distinguishes the coarses",
+            adjacent(
+                declared(Some("BeamZoom"), Some("Effect"), Byte::Coarse),
+                zoom(),
+                group("Beam", Byte::Fine),
+            ),
+            &[(1, 2)],
+        ),
+        (
+            "a different colour distinguishes the coarses",
+            adjacent(
+                red,
+                group("Intensity", Byte::Coarse),
+                group("Intensity", Byte::Fine),
+            ),
+            &[(1, 2)],
+        ),
+        (
+            "a different range kind distinguishes the coarses",
+            adjacent(
+                ranged(zoom(), &[Some(Does::Closed)]),
+                ranged(zoom(), &[Some(Does::Open)]),
+                zoom_fine(),
+            ),
+            &[(1, 2)],
+        ),
+        (
+            "the preceding fine cannot be a lookalike coarse",
+            hand(vec![zoom_fine(), zoom(), zoom_fine(), zoom()], &[]),
+            &[(1, 2)],
+        ),
+        (
+            "a free adjacent index blocks a distant selector despite the wheel conflict",
+            hand(
+                vec![channel("GoboWheel"), channel("GoboIndex"), selector_fine()],
+                &[],
+            ),
+            &[],
+        ),
+        (
+            "an already paired adjacent index leaves the unique selector free to join",
+            hand(
+                vec![
+                    fine("GoboIndex"),
+                    channel("GoboIndex"),
+                    selector_fine(),
+                    channel("GoboWheel"),
+                ],
+                &[],
+            ),
+            &[(1, 0), (3, 2)],
+        ),
+    ];
+    for &(name, ref mode, expected) in cases {
+        let result = lower(mode, 0, SPACE).unwrap();
+        let pairs: Vec<_> = result.pairs.iter().map(|p| (p.coarse, p.fine)).collect();
+        assert_eq!(pairs, expected, "{name}");
+    }
 }

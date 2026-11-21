@@ -34,22 +34,15 @@ fn stem(c: &Channel) -> Option<&str> {
         .map(|p| p.strip_suffix("Fine").unwrap_or(p))
 }
 
-/// The preset without the way it runs: a zoom from small to big and one from big to
-/// small are one function. A gobo index and a gobo wheel are not.
-fn family(stem: &str) -> String {
-    let mut family = stem.replace("MasterDimmer", "Dimmer");
-    for (from, to) in [("CTOMixer", "CTCMixer"), ("CTBMixer", "CTCMixer")] {
-        family = family.replace(from, to);
-    }
-    for way in [
+/// A preset without the way it runs (`BeamZoomSmallBig` is `BeamZoom`).
+fn without_way(stem: &str) -> &str {
+    [
         "SlowFast", "FastSlow", "SmallBig", "BigSmall", "NearFar", "FarNear", "MinToMax",
         "MaxToMin",
-    ] {
-        if let Some(rest) = family.strip_suffix(way) {
-            return rest.to_string();
-        }
-    }
-    family
+    ]
+    .into_iter()
+    .find_map(|way| stem.strip_suffix(way))
+    .unwrap_or(stem)
 }
 
 /// The QLC+ group: the `<Group>` text, or the group a preset belongs to.
@@ -133,52 +126,92 @@ fn index(c: &Channel) -> bool {
             .any(|r| matches!(r.does, Some(Does::Rotation(_))))
 }
 
-/// Why `fine` cannot be the second byte of `coarse`, from the definition alone.
-fn incompatible(fine: &Channel, coarse: &Channel) -> Option<String> {
-    if colour(fine) != colour(coarse) {
-        return Some(format!(
-            "colour {:?} joins colour {:?}",
-            colour(fine),
-            colour(coarse)
-        ));
+/// What the ranges do, by kind, in order. No range and one range that names nothing
+/// are one shape: a plain byte.
+fn shape(c: &Channel) -> Vec<Option<Discriminant<Does>>> {
+    match kinds(c).as_slice() {
+        [] | [None] => Vec::new(),
+        kinds => kinds.to_vec(),
     }
-    match (stem(fine), stem(coarse)) {
-        (Some(f), Some(c)) if family(f) != family(c) => {
-            return Some(format!("preset {f} joins preset {c}"));
-        }
-        (Some(_), Some(_)) => {}
-        _ if group(fine).is_none() || group(fine) != group(coarse) => {
-            return Some(format!(
-                "group {:?} joins group {:?}",
-                group(fine),
-                group(coarse)
-            ));
-        }
-        _ => {}
-    }
-    let (f, c) = (kinds(fine), kinds(coarse));
-    // A fine with steps of its own has the coarse's steps. A plain fine names nothing
-    // the coarse does not, unless the coarse names nothing at all (Martin smartMAC).
-    let shaped = if f.len() > 1 {
-        f == c
-    } else {
-        c.iter().all(Option::is_none) || f.iter().flatten().all(|kind| c.contains(&Some(*kind)))
-    };
-    if !shaped {
-        return Some(format!(
-            "{} ranges {:?} join {} ranges {:?}",
-            f.len(),
-            fine.ranges.iter().map(|r| &r.label).collect::<Vec<_>>(),
-            c.len(),
-            coarse.ranges.iter().map(|r| &r.label).collect::<Vec<_>>()
-        ));
-    }
+}
+
+/// The pairs a mode must have, as (coarse, fine), from the definition alone. A fine joins
+/// only a coarse it certainly belongs to; every other fine stays a byte of its own.
+///
+/// Both join only within the same heads (a fine in no head joins a coarse in no head),
+/// with the same colour, a coarse no earlier fine took, and never an index to a wheel
+/// selector. Then:
+/// - a fine with a preset joins the coarse right before it with that preset (a coarse
+///   preset names the way it runs, its fine does not: `BeamZoomSmallBig`, `BeamZoomFine`),
+///   unless the channel before that coarse looks the same; else the one coarse with that
+///   preset, unless the channel right before the fine is another coarse of its group.
+///   Two such coarses and neither right before: no pair. None: as a fine with no preset,
+///   in the group of its preset;
+/// - a fine with no preset joins the channel right before it when that is a coarse of
+///   the same group that it fits (a plain fine fits any coarse, a fine with steps only
+///   the same steps), and the channel before that coarse does not look the same (same
+///   group, preset and shape: Shutter B, C, D coarse, then B, C, D fine).
+fn expected_pairs(mode: &Mode, heads: &[Vec<usize>]) -> Vec<(usize, usize)> {
+    let channels = &mode.channels;
     let only_index = |c: &Channel| index(c) && !wheel(c);
     let only_wheel = |c: &Channel| wheel(c) && !index(c);
-    if (only_index(fine) && only_wheel(coarse)) || (only_wheel(fine) && only_index(coarse)) {
-        return Some("an index joins a wheel selector".into());
+    let mut taken = vec![false; channels.len()];
+    let mut pairs = Vec::new();
+    for (i, fine) in channels.iter().enumerate() {
+        if fine.byte != Byte::Fine {
+            continue;
+        }
+        let free = |j: usize| {
+            let coarse = &channels[j];
+            coarse.byte == Byte::Coarse
+                && !taken[j]
+                && heads[j] == heads[i]
+                && colour(coarse) == colour(fine)
+        };
+        let same_group = |j: usize| group(fine).is_some() && group(&channels[j]) == group(fine);
+        let mixes = |j: usize| {
+            let coarse = &channels[j];
+            (only_index(fine) && only_wheel(coarse)) || (only_wheel(fine) && only_index(coarse))
+        };
+        let before = i.checked_sub(1);
+        let steps = shape(fine);
+        let fits = |j: usize| {
+            free(j)
+                && same_group(j)
+                && !mixes(j)
+                && (steps.is_empty() || shape(&channels[j]) == steps)
+        };
+        let alike = |j: usize, k: usize| {
+            free(k)
+                && group(&channels[k]) == group(&channels[j])
+                && stem(&channels[k]) == stem(&channels[j])
+                && shape(&channels[k]) == shape(&channels[j])
+        };
+        let unlike_before = |j: usize| j.checked_sub(1).is_none_or(|k| !alike(j, k));
+        let adjacent = || before.filter(|&j| fits(j) && unlike_before(j));
+        let partner = match stem(fine).map(without_way) {
+            None => adjacent(),
+            Some(preset) => {
+                let same: Vec<_> = (0..channels.len())
+                    .filter(|&j| {
+                        free(j) && !mixes(j) && stem(&channels[j]).map(without_way) == Some(preset)
+                    })
+                    .collect();
+                match same.as_slice() {
+                    [] => adjacent(),
+                    _ if before.is_some_and(|b| same.contains(&b) && unlike_before(b)) => before,
+                    &[j] if before.is_none_or(|b| !(free(b) && same_group(b))) => Some(j),
+                    _ => None,
+                }
+            }
+        };
+        if let Some(j) = partner {
+            taken[j] = true;
+            pairs.push((j, i));
+        }
     }
-    None
+    pairs.sort_unstable();
+    pairs
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -190,13 +223,14 @@ enum Light {
 }
 
 /// What a channel does to the light, from its declarations and the fixture's type.
-/// On a smoke machine or hazer a dimmer preset is the fog output, unless the mode has
-/// emitters for it to dim. On a dimmer pack every group-only Intensity channel is a dimmer.
-fn light(c: &Channel, kind: &Kind, emitters: bool) -> Light {
+/// On a smoke machine or hazer a dimmer preset is the fog output, unless it certainly
+/// dims emitters: it shares a head with one, or the mode has no heads and has emitters.
+/// On a dimmer pack every group-only Intensity channel is a dimmer.
+fn light(c: &Channel, kind: &Kind, dims_emitters: bool) -> Light {
     if colour(c).is_some() {
         return Light::Emitter;
     }
-    let fog = matches!(kind, Kind::Smoke | Kind::Hazer) && !emitters;
+    let fog = matches!(kind, Kind::Smoke | Kind::Hazer) && !dims_emitters;
     match stem(c) {
         Some("IntensityDimmer" | "IntensityMasterDimmer") if !fog => Light::Dimmer,
         None if c.declared.group.as_deref() == Some("Intensity") && *kind == Kind::Dimmer => {
@@ -254,70 +288,52 @@ fn check_mode(mode: &Mode, kind: &Kind, result: &Lowered) -> Vec<String> {
         }
     }
     let share_head = |i: usize, j: usize| heads[i].iter().any(|h| heads[j].contains(h));
-    // A fine in a head joins a coarse in exactly its heads.
-    let can_join = |fine: usize, coarse: usize| -> Option<String> {
-        if channels[coarse].byte != Byte::Coarse {
-            return Some("not a coarse byte".into());
-        }
-        if !heads[fine].is_empty() && heads[fine] != heads[coarse] {
-            return Some(format!(
-                "heads {:?} join heads {:?}",
-                heads[fine], heads[coarse]
-            ));
-        }
-        incompatible(&channels[fine], &channels[coarse])
-    };
 
-    let mut owner = vec![None; channels.len()];
-    let mut taken = vec![None; channels.len()];
-    for pair in &result.pairs {
-        let fine = pair.fine as usize;
-        let coarse = pair.coarse as usize;
-        if channels.get(fine).is_none_or(|c| c.byte != Byte::Fine) {
-            report(fine, format!("pair with {coarse} needs a fine byte here"));
-        } else if channels.get(coarse).is_none_or(|c| c.byte != Byte::Coarse) {
-            report(coarse, format!("pair with {fine} needs a coarse byte here"));
-        } else if let Some(previous) = owner[fine].replace(coarse) {
-            report(fine, format!("joined both {previous} and {coarse}"));
-        } else if let Some(other) = taken[coarse].replace(fine) {
-            report(coarse, format!("coarse of both {other} and {fine}"));
-        } else if let Some(why) = can_join(fine, coarse) {
+    let mut lowered: Vec<_> = result
+        .pairs
+        .iter()
+        .map(|p| (p.coarse as usize, p.fine as usize))
+        .collect();
+    lowered.sort_unstable();
+    for twice in lowered.windows(2).filter(|w| w[0] == w[1]) {
+        report(twice[0].1, format!("joined {} twice", twice[0].0));
+    }
+    let expected = expected_pairs(mode, &heads);
+    let name = |i: usize| {
+        channels
+            .get(i)
+            .map_or("(outside mode)", |c| c.name.as_str())
+    };
+    for &(coarse, fine) in &lowered {
+        if !expected.contains(&(coarse, fine)) {
             report(
                 fine,
-                format!("joined {coarse} {}: {why}", channels[coarse].name),
+                format!("joined {coarse} {}: not certain", name(coarse)),
             );
         }
     }
-    for (i, _) in channels
-        .iter()
-        .enumerate()
-        .filter(|(_, c)| c.byte == Byte::Fine)
-    {
-        // The coarse byte right before a fine is its partner, unless an earlier fine has it.
-        if let Some(j) = i.checked_sub(1)
-            && can_join(i, j).is_none()
-            && taken[j].is_none_or(|other| other > i)
-            && owner[i] != Some(j)
-        {
-            report(
-                i,
-                format!("not joined to {j} {}, right before it", channels[j].name),
-            );
+    for &(coarse, fine) in &expected {
+        if !lowered.contains(&(coarse, fine)) {
+            report(fine, format!("not joined to {coarse} {}", name(coarse)));
         }
-        // A fine left alone has no free coarse it could join.
-        if owner[i].is_none()
-            && let Some(j) =
-                (0..channels.len()).find(|&j| taken[j].is_none() && can_join(i, j).is_none())
-        {
-            report(
-                i,
-                format!("left alone, but {j} {} is free", channels[j].name),
-            );
-        }
+    }
+    let mut owner = vec![None; channels.len()];
+    for &(coarse, fine) in &expected {
+        owner[fine] = Some(coarse);
     }
 
-    let emitters = channels.iter().any(|c| colour(c).is_some());
-    let roles: Vec<_> = channels.iter().map(|c| light(c, kind, emitters)).collect();
+    let emitter_in = |i: usize| {
+        if heads[i].is_empty() {
+            mode.pixels.is_empty() && channels.iter().any(|c| colour(c).is_some())
+        } else {
+            (0..channels.len()).any(|j| share_head(i, j) && colour(&channels[j]).is_some())
+        }
+    };
+    let roles: Vec<_> = channels
+        .iter()
+        .enumerate()
+        .map(|(i, c)| light(c, kind, emitter_in(i)))
+        .collect();
     let dimmers: Vec<_> = channels
         .iter()
         .enumerate()
@@ -420,4 +436,193 @@ fn every_mode_obeys_the_channel_rules() -> io::Result<()> {
         errors.join("\n")
     );
     Ok(())
+}
+
+#[test]
+fn a_fine_joins_only_a_coarse_it_certainly_belongs_to() {
+    // (file, mode, fine, the coarse it joins or none)
+    let robe = "Robe-ColorSpot-575-AT.qxf";
+    let contest = "Contest-Evora-Beam-15R.qxf";
+    let adb = "ADB-Warp-M.qxf";
+    let domino = "Ayrton-Domino-LT.qxf";
+    let clay = "Clay-Paky-Alpha-Spot-575-HPE.qxf";
+    let elation = "Elation-Platinum-Spot-5R.qxf";
+    let cases: &[(&str, &str, u32, Option<u32>)] = &[
+        // ColorWheelFine and no coarse with that preset: the wheel right before it
+        (robe, "1 - 27-Channel", 7, Some(6)),
+        // an index fine never joins the static wheel selector right before it
+        (robe, "1 - 27-Channel", 11, None),
+        (robe, "1 - 27-Channel", 14, Some(13)),
+        (robe, "1 - 27-Channel", 18, Some(17)),
+        // ShutterIrisFine after an Iris in the Beam group: no coarse of its group before it
+        (robe, "1 - 27-Channel", 20, None),
+        (robe, "1 - 27-Channel", 23, Some(22)),
+        (robe, "1 - 27-Channel", 26, Some(25)),
+        (contest, "Extended", 7, Some(6)),
+        (contest, "Extended", 9, Some(8)),
+        // the one GoboIndex coarse is 12, but the fixed gobo wheel at 13 is right before
+        (contest, "Extended", 14, None),
+        (adb, "34 Channel", 2, Some(1)),
+        (adb, "34 Channel", 8, Some(7)),
+        // In/Out declared fine, right after a fine
+        (adb, "34 Channel", 9, None),
+        // Shutter B, C, D coarse, then B, C, D fine: the coarse before D looks the same
+        (adb, "34 Channel", 13, None),
+        (adb, "34 Channel", 14, None),
+        (adb, "34 Channel", 15, None),
+        (adb, "34 Channel", 16, None),
+        (adb, "34 Channel", 20, Some(19)),
+        (adb, "34 Channel", 22, Some(21)),
+        (adb, "34 Channel", 24, Some(23)),
+        // BeamZoomSmallBig and BeamZoomFine are the same preset
+        (domino, "Extended", 9, Some(8)),
+        (domino, "Extended", 15, Some(14)),
+        (domino, "Extended", 33, None),
+        (domino, "Extended", 34, None),
+        (domino, "Extended", 37, None),
+        (domino, "Extended", 42, Some(41)),
+        // Frost 2 and Blade 1A look the same
+        (domino, "Extended", 52, None),
+        (domino, "Basic", 31, None),
+        (clay, "Option 16b", 24, Some(20)),
+        (clay, "Option 16b", 25, Some(21)),
+        (clay, "Option 16b", 26, None),
+        (clay, "Option 16b", 27, None),
+        (elation, "Extended", 8, Some(7)),
+        (elation, "Extended", 10, None),
+        (elation, "Extended", 13, Some(12)),
+    ];
+    let mut wrong = Vec::new();
+    for &(file, name, fine, expected) in cases {
+        let mode = common::mode(file, name);
+        let lowered = lower(&mode, 0, u32::try_from(mode.channels.len()).unwrap()).unwrap();
+        let joined = lowered
+            .pairs
+            .iter()
+            .find(|p| p.fine == fine)
+            .map(|p| p.coarse);
+        if joined != expected {
+            wrong.push(format!(
+                "{file} / {name} / {fine}: joined {joined:?}, expected {expected:?}"
+            ));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+fn inline(xml: &str) -> (Kind, Mode) {
+    let mut fixture = parse("inline.qxf", xml.as_bytes()).unwrap();
+    (fixture.kind, fixture.modes.remove(0))
+}
+
+#[test]
+fn a_fog_pump_never_follows_master_or_blackout() {
+    // (type, the pump in a head of its own, follows of pump, LED dimmer, red, green, blue)
+    let cases = [
+        ("Smoke", true, [0, 3, 0, 0, 0]),
+        ("Hazer", true, [0, 3, 0, 0, 0]),
+        ("Smoke", false, [0, 3, 0, 0, 0]),
+        ("Hazer", false, [0, 3, 0, 0, 0]),
+    ];
+    let mut wrong = Vec::new();
+    for (kind, own_head, expected) in cases {
+        let pump_head = if own_head {
+            "<Head><Channel>0</Channel></Head>"
+        } else {
+            ""
+        };
+        let (kind_read, mode) = inline(&format!(
+            r#"<FixtureDefinition><Manufacturer>Test</Manufacturer><Model>Fog and LED</Model><Type>{kind}</Type>
+            <Channel Name="Pump" Preset="IntensityMasterDimmer"/>
+            <Channel Name="LED dimmer" Preset="IntensityDimmer"/>
+            <Channel Name="Red" Preset="IntensityRed"/>
+            <Channel Name="Green" Preset="IntensityGreen"/>
+            <Channel Name="Blue" Preset="IntensityBlue"/>
+            <Mode Name="Both">
+                <Channel Number="0">Pump</Channel><Channel Number="1">LED dimmer</Channel>
+                <Channel Number="2">Red</Channel><Channel Number="3">Green</Channel>
+                <Channel Number="4">Blue</Channel>
+                {pump_head}
+                <Head><Channel>1</Channel><Channel>2</Channel><Channel>3</Channel><Channel>4</Channel></Head>
+            </Mode></FixtureDefinition>"#
+        ));
+        let lowered = lower(&mode, 0, 5).unwrap();
+        let follows: Vec<_> = lowered.channels.iter().map(|c| c.follows.bits()).collect();
+        let oracle = check_mode(&mode, &kind_read, &lowered);
+        if follows != expected || !oracle.is_empty() {
+            wrong.push(format!(
+                "{kind}, own head {own_head}: follows {follows:?}, expected {expected:?}; oracle {oracle:?}"
+            ));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn a_fine_in_no_head_joins_a_coarse_in_no_head() {
+    let (kind, mode) = inline(
+        r#"<FixtureDefinition><Manufacturer>Test</Manufacturer><Model>Shared red</Model><Type>Other</Type>
+        <Channel Name="Shared red" Preset="IntensityRed"/>
+        <Channel Name="Head dimmer" Preset="IntensityDimmer"/>
+        <Channel Name="Head red" Preset="IntensityRed"/>
+        <Channel Name="Shared red fine" Preset="IntensityRedFine"/>
+        <Mode Name="Both">
+            <Channel Number="0">Shared red</Channel><Channel Number="1">Head dimmer</Channel>
+            <Channel Number="2">Head red</Channel><Channel Number="3">Shared red fine</Channel>
+            <Head><Channel>1</Channel><Channel>2</Channel></Head>
+        </Mode></FixtureDefinition>"#,
+    );
+    let lowered = lower(&mode, 0, 4).unwrap();
+    let pairs: Vec<_> = lowered.pairs.iter().map(|p| (p.coarse, p.fine)).collect();
+    let follows: Vec<_> = lowered.channels.iter().map(|c| c.follows.bits()).collect();
+    assert_eq!(
+        (pairs, follows, check_mode(&mode, &kind, &lowered)),
+        (vec![(0, 3)], vec![3, 3, 0, 3], Vec::<String>::new())
+    );
+}
+
+#[test]
+fn the_oracle_refuses_a_changed_pair() {
+    // (file, mode, pairs taken out, pairs put in)
+    type Case<'a> = (&'a str, &'a str, &'a [(u32, u32)], &'a [(u32, u32)]);
+    let clay = "Clay-Paky-Alpha-Spot-575-HPE.qxf";
+    let cases: &[Case] = &[
+        (clay, "Option 16b", &[], &[(10, 26)]),
+        (clay, "Option 16b", &[], &[(10, 27), (12, 26)]),
+        (
+            clay,
+            "Option 16b",
+            &[(20, 24), (21, 25)],
+            &[(20, 25), (21, 24)],
+        ),
+        (clay, "Option 16b", &[(20, 24)], &[]),
+        (
+            "Robe-ColorSpot-575-AT.qxf",
+            "1 - 27-Channel",
+            &[],
+            &[(24, 20)],
+        ),
+        ("Contest-Evora-Beam-15R.qxf", "Extended", &[], &[(12, 14)]),
+        ("ADB-Warp-M.qxf", "34 Channel", &[], &[(12, 13)]),
+        ("Ayrton-Domino-LT.qxf", "Extended", &[], &[(38, 34)]),
+    ];
+    let mut wrong = Vec::new();
+    for &(file, name, out, put) in cases {
+        let fixture = common::fixture(file);
+        let mode = common::mode(file, name);
+        let mut lowered = lower(&mode, 0, u32::try_from(mode.channels.len()).unwrap()).unwrap();
+        let before = check_mode(&mode, &fixture.kind, &lowered);
+        lowered.pairs.retain(|p| !out.contains(&(p.coarse, p.fine)));
+        lowered.pairs.extend(
+            put.iter()
+                .map(|&(coarse, fine)| rig::channels::Pair { coarse, fine }),
+        );
+        let after = check_mode(&mode, &fixture.kind, &lowered);
+        if !before.is_empty() || after.is_empty() {
+            wrong.push(format!(
+                "{file} / {name} -{out:?} +{put:?}: before {before:?}, after {after:?}"
+            ));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }

@@ -19,9 +19,11 @@
 //! | cyan, magenta, yellow | master and blackout, none when a dimmer carries it | 255 | fade |
 //! | shutter | blackout, none without a range marked closed | the first byte of that range | jump |
 //! | hue to colour temperature, pan, tilt, zoom, focus, iris, frost | none | 0 | fade |
-//! | strobe, wheels, gobo, prism, speed, effect, control, nothing, other (including dimmer presets in emitterless Smoke and Hazer modes) | none | 0 | jump |
+//! | strobe, wheels, gobo, prism, speed, effect, control, nothing, other (including fog pumps) | none | 0 | jump |
 //!
 //! - [Roles](Channel::role) use only declarations. A v6 channel with none starts independent.
+//! - On Smoke and Hazer fixtures a dimmer preset controls fog unless its head contains a
+//!   declared emitter, or the mode has no heads and contains a declared emitter.
 //! - A coarse dimmer carries the emitters in every head that lists it. A dimmer listed in
 //!   no head carries the other emitters, including emitters listed in no head.
 //! - A falling dimmer's dark word is the first Closed byte with a low byte of 0, or the
@@ -30,22 +32,18 @@
 //!   jumps and fades. Otherwise it spans every byte in the channel's direction.
 //! - `rest`: the value that lets light out for a shutter or strobe, the bypass for a colour
 //!   wheel over a colour mix, else the default, else 0. Ties: latest wins.
-//! - Fine bytes claim one free coarse byte in fine-channel order.
+//! - Fines claim a free coarse in fine-channel order. Both bytes must have exactly the same
+//!   heads and colour. A wheel selector alone cannot pair with an index alone.
 //!
-//! | A pair must agree on | Compatibility |
+//! | Evidence for a fine | Coarse to join |
 //! |---|---|
-//! | Colour | Same declared colour or Intensity colour preset, including both absent |
-//! | Presets | Same preset family, ignoring direction and the dimmer and colour-temperature aliases |
-//! | Group | When either preset is absent, both bytes declare or imply the same QLC+ group |
-//! | Ranges | Two or more fine ranges match the coarse range kinds in order. A single named fine range occurs on the coarse, unless all coarse ranges are unnamed |
-//! | Wheel | An index-only channel cannot join a selector-only channel |
-//! | Heads | A fine in heads has exactly the coarse's heads. A fine in no head can join any head |
+//! | Matching preset, ignoring travel direction | The coarse right before the fine, unless the preceding free coarse looks the same |
+//! | Exactly one matching preset elsewhere | That coarse, unless a free coarse of the fine's group is right before the fine |
+//! | No matching preset, or no preset on the fine | The coarse right before it, of the same explicit or preset-implied group, unless the preceding free coarse looks the same. A plain fine fits any ranges. A stepped fine requires the same range kinds in order |
+//! | Any other case | The fine stays a single byte. A declared emitter follows its own head's dimmer rules |
 //!
-//! | Fine byte, first match wins | Coarse byte |
-//! |---|---|
-//! | 1 | Immediately preceding compatible coarse |
-//! | 2 | First compatible coarse in channel order, preferring channels without gobo, colour or prism slots |
-//! | 3 | No match. The fine stays a single byte. A declared emitter follows its own head's dimmer rules |
+//! Two free coarses look the same when their group, full preset and range kinds match.
+//! No ranges and one unnamed range both describe a plain byte.
 //!
 //! A joined fine keeps its rest, takes the low byte of the pair's dark, and inherits
 //! the coarse byte's follows, change and travel.
@@ -451,65 +449,101 @@ impl Wheel {
             (true, true) => Self::IndexAndSlots,
         }
     }
+
+    fn can_pair(self, other: Self) -> bool {
+        !matches!(
+            (self, other),
+            (Self::Slots, Self::Index) | (Self::Index, Self::Slots)
+        )
+    }
 }
 
 impl<'a> PairChannel<'a> {
     fn new(channel: &'a Channel) -> Self {
         let declared = &channel.declared;
         let stem = declared.preset_stem();
+        let ranges = match channel.ranges.as_slice() {
+            [only] if only.does.is_none() => Vec::new(),
+            steps => steps
+                .iter()
+                .map(|r| r.does.as_ref().map(discriminant))
+                .collect(),
+        };
         Self {
             byte: channel.byte,
             colour: declared.emitter_colour(),
-            preset: stem.map(preset_family),
+            preset: stem,
             group: declared
                 .group
                 .as_deref()
                 .or_else(|| stem.and_then(preset_group)),
-            ranges: channel
-                .ranges
-                .iter()
-                .map(|r| r.does.as_ref().map(discriminant))
-                .collect(),
+            ranges,
             wheel: Wheel::of(channel, stem),
             heads: Vec::new(),
         }
     }
 
-    fn can_take(&self, fine: &Self) -> bool {
-        let same_function = match (self.preset, fine.preset) {
-            (Some(a), Some(b)) => a == b,
-            _ => self.group.is_some() && self.group == fine.group,
+    fn partner(
+        &self,
+        fine: usize,
+        channels: &[Self],
+        taken: &BTreeMap<usize, usize>,
+    ) -> Option<usize> {
+        let free = |i, c: &Self| {
+            c.byte == Byte::Coarse
+                && c.heads == self.heads
+                && c.colour == self.colour
+                && !taken.contains_key(&i)
         };
-        self.byte == Byte::Coarse
-            && self.colour == fine.colour
-            && same_function
-            && (fine.heads.is_empty() || self.heads == fine.heads)
-            && !matches!(
-                (self.wheel, fine.wheel),
-                (Wheel::Slots, Wheel::Index) | (Wheel::Index, Wheel::Slots)
-            )
-            && match fine.ranges.as_slice() {
-                [] | [None] => true,
-                [kind] => self.ranges.contains(kind) || self.ranges.iter().all(Option::is_none),
-                steps => self.ranges == steps,
+        let free_before = |i: usize| {
+            let i = i.checked_sub(1)?;
+            let c = channels.get(i)?;
+            free(i, c).then_some((i, c))
+        };
+        let same_group = |c: &Self| self.group.is_some() && c.group == self.group;
+        let adjacent = free_before(fine);
+        let distinct_adjacent = adjacent.filter(|&(i, c)| {
+            free_before(i).is_none_or(|(_, prev)| {
+                prev.group != c.group || prev.preset != c.preset || prev.ranges != c.ranges
+            })
+        });
+
+        if let Some(preset) = self.preset.map(preset_family) {
+            let matches_preset = |c: &Self| {
+                c.preset.map(preset_family) == Some(preset) && c.wheel.can_pair(self.wheel)
+            };
+            if let Some((i, _)) = distinct_adjacent.filter(|(_, c)| matches_preset(c)) {
+                return Some(i);
             }
+            let mut candidates = channels
+                .iter()
+                .enumerate()
+                .filter(|&(i, c)| free(i, c) && matches_preset(c));
+            if let Some((i, _)) = candidates.next() {
+                // Even a selector beside an index fine casts doubt on a distant preset.
+                return (candidates.next().is_none()
+                    && adjacent.is_none_or(|(_, c)| !same_group(c)))
+                .then_some(i);
+            }
+        }
+
+        let (i, c) = distinct_adjacent?;
+        (same_group(c)
+            && c.wheel.can_pair(self.wheel)
+            && (self.ranges.is_empty() || self.ranges == c.ranges))
+            .then_some(i)
     }
 }
 
 /// A QLC+ preset identifies a capability even when its travel direction differs.
 fn preset_family(stem: &str) -> &str {
-    let family = [
+    [
         "SlowFast", "FastSlow", "SmallBig", "BigSmall", "NearFar", "FarNear", "MinToMax",
         "MaxToMin",
     ]
     .into_iter()
     .find_map(|way| stem.strip_suffix(way))
-    .unwrap_or(stem);
-    match family {
-        "IntensityMasterDimmer" => "IntensityDimmer",
-        "ColorCTOMixer" | "ColorCTBMixer" => "ColorCTCMixer",
-        _ => family,
-    }
+    .unwrap_or(stem)
 }
 
 /// QLC+ group of a preset on a channel without an explicit group.
@@ -550,16 +584,7 @@ fn pair_bytes(mode: &Mode) -> BTreeMap<usize, usize> {
         .enumerate()
         .filter(|(_, c)| c.byte == Byte::Fine)
     {
-        let rank = |(coarse, c): (usize, &PairChannel<'_>)| {
-            let slot = matches!(c.wheel, Wheel::Slots | Wheel::IndexAndSlots);
-            (!fine_of.contains_key(&coarse) && c.can_take(channel)).then_some((slot, coarse))
-        };
-        let adjacent = fine
-            .checked_sub(1)
-            .and_then(|i| rank((i, channels.get(i)?)));
-        if let Some((_, coarse)) =
-            adjacent.or_else(|| channels.iter().enumerate().filter_map(rank).min())
-        {
+        if let Some(coarse) = channel.partner(fine, &channels, &fine_of) {
             fine_of.insert(coarse, fine);
         }
     }

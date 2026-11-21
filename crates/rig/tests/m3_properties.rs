@@ -485,6 +485,7 @@ fn each_hybrid_holds_its_wheel_where_the_mix_goes_through() {
     let qa5 = "American-DJ-QA5-IP.qxf";
     let hex5 = "American-DJ-WiFly-EXR-HEX5-IP.qxf";
     let vpar = "American-DJ-VPar.qxf";
+    let domino = "Ayrton-Domino-LT.qxf";
     let briteq = "Briteq-BT-Theatre-261FC.qxf";
     let hydra = "Cameo-HydraBeam-4000.qxf";
     let ovation = "Chauvet-Ovation-CYC-1-FC.qxf";
@@ -512,6 +513,13 @@ fn each_hybrid_holds_its_wheel_where_the_mix_goes_through() {
         // "Off/Color change/fade 1/Slow to fast": more than off
         (hex5, "11 Channel", 10, refused()),
         (hex5, "12 Channel", 10, refused()),
+        // v11 has no recognised colour-wheel bypass for "Open / White".
+        (domino, "Standard", 12, refused()),
+        (domino, "Standard", 19, refused()),
+        (domino, "Basic", 10, refused()),
+        (domino, "Basic", 17, refused()),
+        (domino, "Extended", 15, refused()),
+        (domino, "Extended", 29, refused()),
         (briteq, "12 Channel CMY", 7, Ok((2, no_filter))),
         (briteq, "14 Channel Full 8bit", 6, Ok((2, no_filter))),
         (briteq, "21 Channel Full 16bit", 7, Ok((2, no_filter))),

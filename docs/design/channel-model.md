@@ -163,7 +163,7 @@ Default rules, from the fixture file (cx-3: unknown channels start independent):
 | C, M, Y on a fixture without a dimmer | yes | yes | 255 (subtractive) |
 | Shutter | no | yes | the first byte of its Closed range. A shutter with no Closed range does not follow Blackout |
 | Strobe, pan, tilt, zoom, focus, iris, wheels, prism | no | no | |
-| Fog, haze, fan, unknown, other | no | no | |
+| Fog, haze, fan, unknown, other. On a smoke machine or hazer a dimmer preset is the fog output unless it shares a head with an emitter, or the mode has no heads and has emitters | no | no | |
 
 - No virtual dimmer exists unless a user creates one (cx-4). Creating one is: pick a slot, pick follower channels in Patch. Looks can then set its control channel like any channel.
 - Brightness on a dimmerless fixture is baked into the emitter bytes (cx-4) unless such a virtual dimmer exists.
@@ -180,7 +180,7 @@ The tick sees bytes and 16-bit pairs. Everything else is the API and the Rig (ch
 | Compound | Channels in order | Detected from |
 |---|---|---|
 | `Byte` | one | every channel, always |
-| `Word` | coarse, fine | a Fine channel and a compatible coarse channel with no fine yet: the one right before it, else the first in channel order, so fines keep the order of their coarses (Clay Paky Option 16b). Compatible: same colour, same preset or QLC+ group, matching capability ranges, the same heads. An index never joins a wheel selector (Vari-Lite VL2202, Elation 5R) |
+| `Word` | coarse, fine | only when certain. Both in the same heads, the same colour, the coarse has no fine yet, never an index with a wheel selector. A fine with a preset takes the coarse right before it with that preset (`BeamZoomSmallBig` takes `BeamZoomFine`), else the only coarse with that preset unless another coarse of its group is right before the fine. A fine with no preset, or no coarse of its preset, takes the coarse right before it when it is of its group and fits (a plain fine fits any coarse, a fine with steps only the same steps). Never when the channel before that coarse looks the same (Shutter B, C, D, then their fines). Every other fine stays a single byte, shown in Patch as "fine, not joined", where the user joins it (T5): a wrong pair moves the wrong thing, a lone fine only loses precision |
 | `Xy` | pan word or byte, tilt word or byte | Pan and Tilt functions, degrees from the mode |
 | `Rgb`, `Rgbw`, `Rgba`, `Cmy` | the colour channels | R, G, B, White, Amber, C, M, Y functions in one mode or head. No `Cmyk` (owner, cm-cmyk, 2026-11-21): no fixture definition has a black function; it comes back with the first one that does |
 | `Slot` | one wheel channel | colour wheel, gobo, prism and mode ranges: named slots |

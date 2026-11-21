@@ -415,6 +415,12 @@ fn dimmer_roles_come_from_the_channels_in_each_mode() {
             <Mode Name="Unlit"><Channel Number="0">Level</Channel><Channel Number="1">Ch 1</Channel><Channel Number="2">Aux</Channel></Mode>
             <Mode Name="Lamp"><Channel Number="0">Level</Channel><Channel Number="1">Lamp</Channel></Mode>
             <Mode Name="Fine"><Channel Number="0">Level</Channel><Channel Number="1">Fine</Channel></Mode>
+            <Mode Name="Heads">
+                <Channel Number="0">Level</Channel><Channel Number="1">Level</Channel>
+                <Channel Number="2">Lamp</Channel><Channel Number="3">Level</Channel>
+                <Head><Channel>1</Channel><Channel>2</Channel></Head>
+                <Head><Channel>0</Channel><Channel>1</Channel></Head>
+            </Mode>
             </FixtureDefinition>"#
         );
         let fixture = parse("modes.qxf", xml.as_bytes()).unwrap();
@@ -426,9 +432,10 @@ fn dimmer_roles_come_from_the_channels_in_each_mode() {
         assert_eq!(
             roles,
             [
-                vec![pump, bank, Effect],
+                vec![pump.clone(), bank, Effect],
                 vec![Dimmer, Amber],
-                vec![Dimmer, Red]
+                vec![Dimmer, Red],
+                vec![pump.clone(), Dimmer, Amber, pump]
             ],
             "{kind}"
         );

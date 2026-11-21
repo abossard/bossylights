@@ -90,7 +90,7 @@ pub struct Channel {
     pub ranges: Vec<Range>,
 }
 
-/// The channel's QLC+ declarations and how dimmers are used in its mode.
+/// The channel's QLC+ declarations and how its fixture and heads use a dimmer.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Declared {
     /// The preset as written, including its `Fine` suffix.
@@ -102,7 +102,7 @@ pub struct Declared {
     pub(crate) dimming: Dimming,
 }
 
-/// Which declarations identify a dimmer in this mode.
+/// Which declarations identify a light dimmer at this channel.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum Dimming {
     /// A dimmer preset controls light.
@@ -110,7 +110,8 @@ pub(crate) enum Dimming {
     Preset,
     /// On a dimmer fixture, a group-only Intensity channel also controls light.
     DimmerPack,
-    /// In a Smoke or Hazer mode with no declared emitter, a dimmer preset controls fog.
+    /// A Smoke or Hazer dimmer outside the heads that declare an emitter.
+    /// In a headless mode this applies when the mode declares no emitter.
     Fog,
 }
 
