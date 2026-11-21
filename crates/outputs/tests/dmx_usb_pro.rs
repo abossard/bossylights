@@ -13,7 +13,7 @@ use common::{Fake, NEVER, read_message};
 use outputs::dmx_usb_pro::{DmxUsbPro, Find, MESSAGE, never_wait};
 use outputs::{Device, Outcome};
 use serialport::TTYPort;
-use std::io::Read;
+use std::io::{self, Read};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
 use std::thread;
@@ -225,19 +225,31 @@ fn a_loss_throws_away_no_accepted_frame_they_go_out_first_on_the_new_port_in_ord
 
 #[test]
 fn a_stop_in_the_middle_of_a_message_finishes_it() {
-    let (find, mut fake) = Fake::new(true);
-    let mut device = DmxUsbPro::open(find).unwrap();
-    let mut end = fake.next_end();
-    take_until_stuck(&mut device, &mut fake, &mut end);
-    let stopping = thread::spawn(move || drop(device));
-    // Once the port closes, what it had queued is gone: a stop that did not wait leaves
-    // nothing to read.
-    let mut bytes = 0;
-    let mut chunk = [0; 4096];
-    while let Ok(read @ 1..) = end.read(&mut chunk) {
-        bytes += read;
-    }
-    stopping.join().unwrap();
+    // The case needs the test to read within the 500 ms a stall may take. A runner that
+    // pauses past it loses the port first (a stall's loss is a time out): the case was
+    // not reached, so it is set up again. Any other loss fails.
+    let started = Instant::now();
+    let bytes = loop {
+        assert!(started.elapsed() < NEVER, "every stop came after a loss"); // guard
+        let (find, mut fake) = Fake::new(true);
+        let mut device = DmxUsbPro::open(find).unwrap();
+        let lost_with = device.lost_with();
+        let mut end = fake.next_end();
+        take_until_stuck(&mut device, &mut fake, &mut end);
+        let stopping = thread::spawn(move || drop(device));
+        // Once the port closes, what it had queued is gone: a stop that did not wait
+        // leaves nothing to read.
+        let mut bytes = 0;
+        let mut chunk = [0; 4096];
+        while let Ok(read @ 1..) = end.read(&mut chunk) {
+            bytes += read;
+        }
+        stopping.join().unwrap();
+        match lost_with.get() {
+            None => break bytes,
+            Some(lost) => assert_eq!(lost.kind(), io::ErrorKind::TimedOut, "{lost}"),
+        }
+    };
     assert!(
         bytes > 0 && bytes % MESSAGE == 0,
         "{bytes} bytes: not whole messages"

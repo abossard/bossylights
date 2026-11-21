@@ -75,7 +75,7 @@ fn a_command_reaches_the_frame_and_the_state() {
         for command in &commands {
             assert_eq!(sender.send(*command), Ok(()), "{command:?}");
         }
-        first.two_more_frames();
+        first.took_everything_sent(&mut engine, &sender);
         assert_eq!(first.level(universe, address), out, "{commands:?} out");
         let picture = engine.fresh();
         let level = picture.universes()[usize::from(universe - 1)].0[usize::from(address - 1)];
@@ -129,7 +129,7 @@ fn outputs_are_attached_changed_and_removed() {
         (vec![Step::Remove], None),
     ];
     for (steps, rate) in cases {
-        let (mut engine, mut sender, first) = start();
+        let (mut engine, mut sender, _first) = start();
         let mut heard = None;
         for step in &steps {
             match *step {
@@ -144,8 +144,13 @@ fn outputs_are_attached_changed_and_removed() {
             }
         }
         assert_eq!(sender.send(set(2, 1, 77)), Ok(()));
-        first.two_more_frames();
-        first.two_more_frames(); // a mock at 30 a second had a frame too
+        if let (Some(_), Some(heard)) = (rate, &heard) {
+            heard.took_everything_sent(&mut engine, &sender);
+            // Running from its second frame taken; the first may carry the command.
+            mock::wait_until("output 3 never ran", || {
+                engine.latest().state.outputs[2].is_some_and(|o| o.status == Status::Running)
+            });
+        }
         let picture = engine.fresh();
         let state = picture.state;
         let third = state.outputs[2];
