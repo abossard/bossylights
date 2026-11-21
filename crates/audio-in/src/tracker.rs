@@ -12,7 +12,8 @@ pub struct Tracker {
     hop: Hop,
     history: HopHistory,
     second_hop: bool,
-    signal: Signal,
+    onset_signal: Signal,
+    quiet_through: u64,
     onsets: Onsets,
 }
 
@@ -51,7 +52,7 @@ impl HopHistory {
     }
 }
 
-/// All the history that expires after three quiet seconds.
+/// History used to decide the next onset on its capture clock.
 #[derive(Default)]
 struct Onsets {
     last: Option<u64>,
@@ -68,7 +69,8 @@ impl Tracker {
             hop: Hop::default(),
             history: HopHistory::default(),
             second_hop: false,
-            signal: Signal::None,
+            onset_signal: Signal::None,
+            quiet_through: 0,
             onsets: Onsets::default(),
         }
     }
@@ -76,7 +78,7 @@ impl Tracker {
     /// Start counting hops again at the next block's first frame.
     pub fn gap(&mut self) {
         *self = Self {
-            signal: self.signal.next(Step::Gap),
+            onset_signal: self.onset_signal.next(Step::Gap),
             ..Self::new(self.format)
         };
     }
@@ -162,43 +164,56 @@ impl Tracker {
                     .last
                     .is_none_or(|last| at.saturating_sub(last) >= MIN_ONSET_GAP)
             });
-        if let Some(last) = self.onsets.last {
-            // The silence ends at the onset itself, which can precede the hop's end.
-            self.signal = self.signal.next(Step::Quiet {
-                since_onset: onset.unwrap_or(end).saturating_sub(last),
-            });
-            if self.signal == Signal::Lost {
-                self.onsets = Onsets::default();
-            }
-        }
         if let Some(at) = onset {
             self.hear_onset(at, out);
+            self.quiet_through = at;
+        } else {
+            // Overlapping silent blocks cannot shorten the silence already observed.
+            self.quiet_through = self.quiet_through.max(end);
         }
         if self.second_hop {
             let level = (100.0 * energy.max(previous).sqrt()).round().min(100.0) as u8;
+            let signal = self.signal_at(self.quiet_through);
+            let estimate = if signal == Signal::Lost {
+                Estimate::default()
+            } else {
+                self.onsets.estimate
+            };
             out.push(Event::Reading {
                 at: end,
                 level,
-                signal: self.signal,
-                confidence: self.onsets.estimate.confidence,
-                tempo: self.onsets.estimate.tempo,
+                signal,
+                confidence: estimate.confidence,
+                tempo: estimate.tempo,
             });
         }
         self.second_hop = !self.second_hop;
         self.history.push(energy);
     }
 
+    fn signal_at(&self, at: u64) -> Signal {
+        self.onsets.last.map_or(self.onset_signal, |last| {
+            self.onset_signal.next(Step::Quiet {
+                since_onset: at.saturating_sub(last),
+            })
+        })
+    }
+
     fn hear_onset(&mut self, at: u64, out: &mut Vec<Event>) {
+        // A block may overlap a quiet reading. Age the history at the captured click.
+        let before = self.signal_at(at);
+        if before == Signal::Lost {
+            self.onsets = Onsets::default();
+        }
         if let Some(last) = self.onsets.last.replace(at) {
             self.onsets.gaps.push(at - last);
         }
         let estimate = self.onsets.gaps.estimate(self.onsets.reference);
         self.onsets.estimate = estimate;
         let confidence = estimate.confidence;
-        let before = self.signal;
-        self.signal = before.next(Step::Onset { confidence });
+        self.onset_signal = before.next(Step::Onset { confidence });
         out.push(Event::Onset { at, confidence });
-        if self.signal == Signal::Locked
+        if self.onset_signal == Signal::Locked
             && let Some(tempo) = estimate.tempo
         {
             self.onsets.reference = Some(tempo);

@@ -543,43 +543,139 @@ fn a_backwards_capture_stamp_is_a_gap_inside_the_jump_tolerance() {
 }
 
 #[test]
-fn a_click_after_three_quiet_seconds_reacquires_even_inside_a_hop() {
-    // Start, first click frame, steady gaps, pulse samples, total frames, reading time,
-    // confidence when the last click beats the deadline by one frame.
+fn the_captured_click_time_decides_the_three_second_timeout() {
+    use Signal::{Locked, Weak};
+
+    #[derive(Clone, Copy, Debug)]
+    enum BeforeClick {
+        LastReading(u64),
+        Beat(u64),
+    }
+    #[derive(Clone, Copy, Debug)]
+    enum Capture {
+        Inside { frames: usize, reading_at: u64 },
+        NextBlock(BeforeClick),
+    }
+    let pulse = &[i16::MIN][..];
+    let click = &[24_576; 40][..];
+    // Stream start, first click frame, steady gaps, waveform, block layout,
+    // distance either side of the deadline (ns), confidence before it.
+    let inside = |frames, reading_at| Capture::Inside { frames, reading_at };
+    let after_reading = Capture::NextBlock(BeforeClick::LastReading(7480 * MS));
+    let after_beat = Capture::NextBlock(BeforeClick::Beat(2760 * MS));
     let cases = [
         (
             START,
             HOP / 2,
             7,
-            &[i16::MIN][..],
-            60_000,
-            START + 7_500 * MS,
+            pulse,
+            inside(60_000, START + 7500 * MS),
+            FRAME_NS,
             87,
         ),
-        (0, 205 * 8, 4, &[24_576; 40][..], 5_800 * 8, 5_780 * MS, 80),
+        (
+            0,
+            205 * 8,
+            4,
+            click,
+            inside(5800 * 8, 5780 * MS),
+            FRAME_NS,
+            80,
+        ),
+        (0, HOP, 7, pulse, after_reading, MS, 87),
+        (0, 200 * 8, 4, click, after_beat, 1, 80),
     ];
-    for (start, first, steady, click, frames, reading_at, before_deadline) in cases {
-        for (quiet, confidence, signal) in [
-            (23_999, before_deadline, Signal::Locked),
-            (24_000, 0, Signal::Weak),
-            (24_001, 0, Signal::Weak),
+    for (start, first, steady, click, capture, step, held) in cases {
+        let last = first + steady * 5120;
+        let deadline_frame = last + 24_000;
+        let deadline = start + deadline_frame as u64 * FRAME_NS;
+        for (heard, confidence, signal) in [
+            (deadline - step, held, Locked),
+            (deadline, 0, Weak),
+            (deadline + step, 0, Weak),
         ] {
-            let mut gaps = vec![5120; steady];
-            gaps.push(quiet);
-            let events = click_events(start, first, &gaps, click, frames);
-            let heard = start + (first + gaps.iter().sum::<usize>()) as u64 * FRAME_NS;
-            let reading = events
-                .iter()
-                .position(|e| matches!(e, Event::Reading { at, .. } if *at == reading_at))
-                .unwrap();
+            let mut events;
+            let observed = match capture {
+                Capture::Inside { frames, reading_at } => {
+                    let mut gaps = vec![5120; steady];
+                    gaps.push(((heard - start) / FRAME_NS) as usize - last);
+                    events = click_events(start, first, &gaps, click, frames);
+                    let reading = events
+                        .iter()
+                        .position(|e| matches!(e, Event::Reading { at, .. } if *at == reading_at))
+                        .unwrap();
+                    &events[reading - 1..=reading]
+                }
+                Capture::NextBlock(before_click) => {
+                    let mut before = vec![0; deadline_frame];
+                    for frame in (first..=last).step_by(5120) {
+                        before[frame..frame + click.len()].copy_from_slice(click);
+                    }
+                    let mut tracker = tracker(1);
+                    events = Vec::new();
+                    tracker
+                        .push(start, Samples::I16(&before), &mut events)
+                        .unwrap();
+                    match before_click {
+                        BeforeClick::LastReading(expected) => assert!(matches!(events.last(),
+                            Some(Event::Reading { at, signal: Locked, .. }) if *at == expected
+                        )),
+                        BeforeClick::Beat(expected) => assert!(
+                            events
+                                .iter()
+                                .any(|e| matches!(e, Event::Beat { at, .. } if *at == expected))
+                        ),
+                    }
+                    events.clear();
+                    let mut after = [0; 2 * HOP];
+                    after[..click.len()].copy_from_slice(click);
+                    tracker
+                        .push(heard, Samples::I16(&after), &mut events)
+                        .unwrap();
+                    events.as_slice()
+                }
+            };
             assert!(
-                matches!(&events[..=reading],
-                    [.., Event::Onset { at, confidence: c }, Event::Reading { signal: s, .. }]
+                matches!(observed,
+                    [Event::Onset { at, confidence: c }, Event::Reading { signal: s, .. }]
                         if (*at, *c, *s) == (heard, confidence, signal)
                 ),
-                "{steady} steady gaps then {quiet} quiet frames"
+                "{capture:?}, click at {heard}, deadline {deadline}: {observed:?}"
             );
         }
+    }
+}
+
+#[test]
+fn overlapping_quiet_blocks_stay_lost_until_an_onset() {
+    // The last click at 2775 ms times out at 5775 ms, before the reading at 5780 ms.
+    let mut before = vec![0; 5780 * 8];
+    for ms in (215..=2775).step_by(640) {
+        before[ms * 8] = i16::MIN;
+    }
+    for (sample, signal, confidence) in [(0, Signal::Lost, 0), (i16::MIN, Signal::Locked, 80)] {
+        let mut tracker = tracker(1);
+        let mut events = Vec::new();
+        tracker.push(0, Samples::I16(&before), &mut events).unwrap();
+        assert!(
+            matches!(events.last(), Some(Event::Reading { at, signal: Signal::Lost, .. })
+            if *at == 5780 * MS)
+        );
+        events.clear();
+        // Both hops overlap the end of the first block and precede the timeout.
+        let mut hop = [0; HOP];
+        tracker
+            .push(5760 * MS, Samples::I16(&hop), &mut events)
+            .unwrap();
+        hop[0] = sample;
+        tracker
+            .push(5760 * MS, Samples::I16(&hop), &mut events)
+            .unwrap();
+        assert!(
+            matches!(events.last(), Some(Event::Reading { at, signal: s, confidence: c, .. })
+            if (*at, *s, *c) == (5770 * MS, signal, confidence)),
+            "{events:?}"
+        );
     }
 }
 
