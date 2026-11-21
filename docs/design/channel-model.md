@@ -150,7 +150,7 @@ For a channel with value `v`, dark `d`, following modifiers with levels `m1..mn`
 - Blackout at 0 gives `d` exactly. For a shutter, `d` is the first byte of its Closed range.
 - A **jump** channel (`fade` clear) follows all or nothing: `d` when the combined level is 0, else `v`. A shutter on Master at 50% therefore never passes through a strobe range.
 - A control channel cannot follow a modifier (refused at patch), so there are no cycles.
-- **Owner (cm-two-dimmers, cm-master-ceiling, 2026-11-21): Master is a ceiling, not a multiplier.** A dimmer at 70% under Master 50% sends 50%, at Master 100% it sends 70%. On a fixture with head dimmers and a shared dimmer, Master caps the head dimmers and the shared dimmer keeps its value. On a fixture with no dimmer, Master scales the colour bytes with the formula above, so the hue stays. The formula stays for Blackout and the virtual dimmers. T5 builds it.
+- **Owner (cm-master-scale-or-cap, cm-master-ceiling, 2026-11-21): Master scales, with the formula above** (like QLC+'s default and ONYX): a dimmer at 70% under Master 50% sends 35%. On a fixture with head dimmers and a shared dimmer, Master follows the head dimmers only and the shared dimmer keeps its value. On a fixture with no dimmer, Master scales the colour bytes, so the hue stays. T5 builds it. Sources: #251.
 - Master and the virtual dimmers apply to the winner and the raw hold. Identify is written after them and before Blackout, so a low Master never hides it, and Blackout always does. A raw hold on one byte of a pair under Master shows the assembled, scaled word. Explain gives both the held byte and the sent one.
 
 Default rules, from the fixture file (cx-3: unknown channels start independent):
