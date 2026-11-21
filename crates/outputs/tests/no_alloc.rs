@@ -7,8 +7,11 @@
     reason = "the test waits between frames; it is not the output thread"
 )]
 
+mod common;
 #[path = "counting/mod.rs"]
 mod counting;
+
+use common::NEVER;
 
 use nix::errno::Errno;
 use nix::unistd::read;
@@ -103,5 +106,10 @@ fn main() {
         );
     }
     drop(devices);
+    let started = Instant::now();
+    while !reader.is_finished() {
+        assert!(started.elapsed() < NEVER, "the fake port was never closed"); // guard
+        thread::sleep(Duration::from_millis(5)); // poll
+    }
     reader.join().unwrap();
 }

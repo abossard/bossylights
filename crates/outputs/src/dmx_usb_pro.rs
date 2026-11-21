@@ -245,59 +245,80 @@ impl PortThread {
         self.port = None;
     }
 
+    /// Runs until `drop` asks it to stop, as [`Life`] says: then sends what the driver
+    /// holds and closes the port.
+    fn run(mut self) {
+        let mut life = Life::Running;
+        loop {
+            life = match life {
+                Life::Running if self.shared.stop.load(Ordering::Relaxed) => {
+                    next_life(life, Heard::Stop, self.link)
+                }
+                Life::Running => {
+                    self.step();
+                    life
+                }
+                Life::Draining => {
+                    if let Some(port) = &self.port {
+                        drain(port);
+                    }
+                    next_life(life, Heard::Drained, self.link)
+                }
+                // Dropping `self` closes the port.
+                Life::Closed => return,
+            };
+        }
+    }
+
+    /// One turn while running: finishes a route, looks for the adapter, or writes one
+    /// whole message.
     #[expect(
         clippy::disallowed_methods,
         reason = "the port thread sleeps; the output thread never does"
     )]
-    fn run(mut self) {
-        while !self.shared.stop.load(Ordering::Relaxed) {
-            if self.shared.finish_route.load(Ordering::Acquire) {
-                self.finish_route();
-            }
-            let Some(port) = &self.port else {
-                // An adapter not found or lost is gone for a while; then look again.
-                // `drop` wakes it; a wake left over from `take` does not cut the wait short.
-                let look_at = Instant::now() + LOOK_EVERY;
-                while Instant::now() < look_at
-                    && !self.shared.stop.load(Ordering::Relaxed)
-                    && !self.shared.finish_route.load(Ordering::Acquire)
-                {
-                    thread::park_timeout(look_at.saturating_duration_since(Instant::now()));
-                }
-                if self.shared.stop.load(Ordering::Relaxed) {
-                    break;
-                }
-                if self.shared.finish_route.load(Ordering::Acquire) {
-                    continue;
-                }
-                if let Ok(port) = (self.find)() {
-                    self.port = Some(port);
-                    self.link = next(self.link, Seen::Found, Instant::now());
-                    self.shared.lost.store(false, Ordering::Release);
-                }
-                continue;
-            };
-            // The one that failed was taken before the one queued.
-            let Some(message) = self.unsent.take().or_else(|| self.messages.pop().ok()) else {
-                thread::park_timeout(WATCH_EVERY);
-                continue;
-            };
-            let started = Instant::now();
-            self.link = write_all(port, &message, self.link);
-            match self.link {
-                Link::Writing | Link::Stalled { .. } => {
-                    thread::sleep(LINK_TIME.saturating_sub(started.elapsed()));
-                }
-                Link::Lost { with } => {
-                    self.unsent = Some(message);
-                    self.lose(with);
-                }
-                // A write never leads here: the link was found before it.
-                Link::NotFound => {}
-            }
+    fn step(&mut self) {
+        if self.shared.finish_route.load(Ordering::Acquire) {
+            self.finish_route();
         }
-        if let Some(port) = &self.port {
-            drain(port);
+        let Some(port) = &self.port else {
+            // An adapter not found or lost is gone for a while; then look again.
+            // `drop` wakes it; a wake left over from `take` does not cut the wait short.
+            let look_at = Instant::now() + LOOK_EVERY;
+            while Instant::now() < look_at
+                && !self.shared.stop.load(Ordering::Relaxed)
+                && !self.shared.finish_route.load(Ordering::Acquire)
+            {
+                thread::park_timeout(look_at.saturating_duration_since(Instant::now()));
+            }
+            if self.shared.stop.load(Ordering::Relaxed)
+                || self.shared.finish_route.load(Ordering::Acquire)
+            {
+                return;
+            }
+            if let Ok(port) = (self.find)() {
+                self.port = Some(port);
+                self.link = next(self.link, Seen::Found, Instant::now());
+                self.shared.lost.store(false, Ordering::Release);
+            }
+            return;
+        };
+        // The one that failed was taken before the one queued.
+        let Some(message) = self.unsent.take().or_else(|| self.messages.pop().ok()) else {
+            thread::park_timeout(WATCH_EVERY);
+            return;
+        };
+        let started = Instant::now();
+        self.link = write_all(port, &message, self.link);
+        match self.link {
+            Link::Writing | Link::Stalled { .. } => {
+                thread::sleep(LINK_TIME.saturating_sub(started.elapsed()));
+            }
+            Link::Lost { with } => {
+                self.unsent = Some(message);
+                self.lose(with);
+            }
+            // A write never leads here: the link was found before it.
+            Link::NotFound => {}
         }
     }
 }
@@ -404,6 +425,47 @@ fn next(link: Link, seen: Seen, now: Instant) -> Link {
                 Link::Stalled { since }
             }
         }
+    }
+}
+
+/// The port thread's life. A stop never cuts a message: it is looked at between
+/// messages, and [`write_all`] returns only once the whole message is written or the
+/// port is lost.
+///
+/// ```text
+/// [*] --> Running --stop, a port--> Draining --drained, or no byte for STALLED_FOR--> Closed
+///            |                                                                          ^
+///            +------------------------------ stop, no port -----------------------------+
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Life {
+    /// Writes messages and looks for a lost adapter.
+    Running,
+    /// Stopped: the driver sends what it holds, so the next opener's first frame is whole.
+    Draining,
+    /// Done: the port is closed.
+    Closed,
+}
+
+/// What the port thread heard about its life.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Heard {
+    /// `drop` asked it to stop.
+    Stop,
+    /// [`drain`] returned: the driver is empty, or it took no byte for [`STALLED_FOR`].
+    Drained,
+}
+
+/// The one transition function of the port thread's life: a calculation. `link` tells
+/// whether there is a port to drain.
+fn next_life(life: Life, heard: Heard, link: Link) -> Life {
+    match (life, heard, link) {
+        (Life::Running, Heard::Stop, Link::Writing | Link::Stalled { .. }) => Life::Draining,
+        (Life::Running, Heard::Stop, Link::NotFound | Link::Lost { .. })
+        | (Life::Draining, Heard::Drained, _)
+        | (Life::Closed, Heard::Stop | Heard::Drained, _) => Life::Closed,
+        (Life::Running, Heard::Drained, _) => Life::Running,
+        (Life::Draining, Heard::Stop, _) => Life::Draining,
     }
 }
 
@@ -544,6 +606,34 @@ mod tests {
         ];
         for (link, seen, now, after) in cases {
             assert_eq!(next(link, seen, now), after, "{link:?} {seen:?}");
+        }
+    }
+
+    #[test]
+    fn every_life_and_what_the_port_thread_heard() {
+        let stalled = Link::Stalled {
+            since: Instant::now(),
+        };
+        let lost = Link::Lost { with: Errno::EIO };
+        // (life, what the port thread heard, its link, the life after)
+        let cases = [
+            (Life::Running, Heard::Stop, Link::Writing, Life::Draining),
+            (Life::Running, Heard::Stop, stalled, Life::Draining),
+            (Life::Running, Heard::Stop, Link::NotFound, Life::Closed),
+            (Life::Running, Heard::Stop, lost, Life::Closed),
+            (Life::Running, Heard::Drained, Link::Writing, Life::Running),
+            (Life::Draining, Heard::Drained, Link::Writing, Life::Closed),
+            (Life::Draining, Heard::Drained, stalled, Life::Closed), // gave up
+            (Life::Draining, Heard::Stop, Link::Writing, Life::Draining),
+            (Life::Closed, Heard::Stop, Link::Writing, Life::Closed),
+            (Life::Closed, Heard::Drained, Link::Writing, Life::Closed),
+        ];
+        for (life, heard, link, after) in cases {
+            assert_eq!(
+                next_life(life, heard, link),
+                after,
+                "{life:?} {heard:?} {link:?}"
+            );
         }
     }
 

@@ -181,7 +181,7 @@ fn take_until_stuck(device: &mut DmxUsbPro, fake: &mut Fake, end: &mut TTYPort) 
     let (mut accepted, mut dropped, started) = (vec![], 0, Instant::now());
     while dropped < 20 {
         assert!(started.elapsed() < NEVER, "never stuck"); // guard
-        let level = accepted.last().map_or(1, |last| last + 1);
+        let level = accepted.last().map_or(1, |last: &u8| last.wrapping_add(1));
         dropped = match device.take(&[level; 512]) {
             Outcome::Accepted => {
                 accepted.push(level);
