@@ -5,7 +5,10 @@
 
 #![allow(dead_code, reason = "each test binary uses only part of it")]
 
-use engine::{ADDRESSES, Device, Outcome, OutputNumber, Rate, RunNumbers, Sender, Universes};
+use engine::{
+    ADDRESSES, Device, Engine, Outcome, OutputNumber, Rate, RunNumbers, Sender, Status, Universes,
+};
+use engine_core::health::HealthSample;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use std::thread;
@@ -21,6 +24,9 @@ pub struct Heard {
     history: [AtomicU8; HISTORY],
     /// The channels not zero in frame `n` at `n % HISTORY`.
     lit: [AtomicUsize; HISTORY],
+    output: OutputNumber,
+    /// The commands the sender had queued once this mock was attached.
+    attached: AtomicU64,
 }
 
 impl Heard {
@@ -56,6 +62,21 @@ impl Heard {
             assert!(started.elapsed() < Duration::from_secs(2), "no frames");
             thread::sleep(Duration::from_millis(1)); // poll
         }
+    }
+
+    /// Waits until the device took a frame that carries every command `sender` queued
+    /// since this mock was attached, each one a press (no output attached or removed
+    /// since). The engine counts a press once the device accepted the first frame that
+    /// carries it, so a frame made before the commands, still on its way, never counts.
+    /// [`Heard::two_more_frames`] can count two such frames when the output's thread is
+    /// behind: one in `take`, the newest waiting.
+    pub fn took_everything_sent(&self, engine: &mut Engine, sender: &Sender) {
+        let presses = sender.sent() - self.attached.load(Ordering::Acquire);
+        let mut sample = HealthSample::new(Duration::ZERO, 0, Status::NotFound);
+        wait_until("no frame the device took carries every command sent", || {
+            engine.latest().health_sample(self.output, &mut sample)
+                && sample.press.iter().sum::<u64>() + sample.press_missing >= presses
+        });
     }
 }
 
@@ -93,15 +114,18 @@ pub fn attach(
     run: RunNumbers,
     rate: Rate,
 ) -> Arc<Heard> {
+    let output = OutputNumber::try_from(output).unwrap();
     let heard = Arc::new(Heard {
         frames: AtomicU64::new(0),
         levels: [const { AtomicU8::new(0) }; 2 * ADDRESSES],
         history: [const { AtomicU8::new(0) }; HISTORY],
         lit: [const { AtomicUsize::new(0) }; HISTORY],
+        output,
+        attached: AtomicU64::new(0),
     });
-    let output = OutputNumber::try_from(output).unwrap();
     let run = run.check(universes).unwrap();
     let mock = Box::new(Mock(Arc::clone(&heard)));
     sender.attach(output, mock, run, rate).unwrap();
+    heard.attached.store(sender.sent(), Ordering::Release);
     heard
 }

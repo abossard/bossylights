@@ -143,7 +143,7 @@ fn a_saved_sequence_must_fit_its_first_start() {
         assert_eq!(sender.send(sequence), expected, "{pixels} pixels");
         if expected.is_ok() {
             sender.send(start).unwrap();
-            heard.two_more_frames();
+            heard.took_everything_sent(&mut engine, &sender);
             assert_eq!(bytes(&heard, 1, 1), [255, 0, 0]);
         } else {
             assert_eq!(sender.send(start), Err(Refusal::NoSuchLook));
@@ -153,7 +153,7 @@ fn a_saved_sequence_must_fit_its_first_start() {
 
 #[test]
 fn a_start_between_group_prepare_and_admit_protects_its_bindings() {
-    let (_engine, mut sender, heard) = start();
+    let (mut engine, mut sender, heard) = start();
     sender.begin(par("A", 1, 1), &library()).unwrap();
     sender.begin(par("B", 1, 4), &library()).unwrap();
     let group = text("row");
@@ -178,14 +178,14 @@ fn a_start_between_group_prepare_and_admit_protects_its_bindings() {
         sender.admit(edit).err(),
         Some(Refusal::LookInUse { look: 2 })
     );
-    heard.two_more_frames();
+    heard.took_everything_sent(&mut engine, &sender);
     assert_eq!(bytes(&heard, 1, 1), [255, 0, 0]);
     assert_eq!(bytes(&heard, 1, 4), [0, 0, 0]);
 
     sender.send(Command::ReleaseHold { play }).unwrap();
     sender.send(on(2)).unwrap();
     sender.send(start).unwrap();
-    heard.two_more_frames();
+    heard.took_everything_sent(&mut engine, &sender);
     assert_eq!(bytes(&heard, 1, 1), [0, 0, 0]);
     assert_eq!(bytes(&heard, 1, 4), [255, 0, 0]);
 }
@@ -225,7 +225,7 @@ fn a_patched_fixture_shows_its_light_and_keeps_it_through_any_change_of_the_patc
         ),
     ];
     for (change, (universe, address), there, left) in cases {
-        let (_engine, mut sender, heard) = start();
+        let (mut engine, mut sender, heard) = start();
         assert_eq!(send(&mut sender, par("PAR 3", 1, 37)), Ok(Some(1)));
         assert_eq!(send(&mut sender, par("PAR 4", 1, 50)), Ok(Some(2)));
         for command in red(2) {
@@ -234,7 +234,7 @@ fn a_patched_fixture_shows_its_light_and_keeps_it_through_any_change_of_the_patc
         for command in &change {
             assert!(send(&mut sender, *command).is_ok(), "{command:?}");
         }
-        heard.two_more_frames();
+        heard.took_everything_sent(&mut engine, &sender);
         assert_eq!(bytes(&heard, universe, address), there, "{change:?}");
         assert_eq!(bytes(&heard, 1, 50), left, "{change:?} at 1.50");
         assert_eq!(bytes(&heard, 1, 37), [0, 0, 0], "{change:?}: PAR 3 is dark");
@@ -243,7 +243,7 @@ fn a_patched_fixture_shows_its_light_and_keeps_it_through_any_change_of_the_patc
 
 #[test]
 fn a_patch_the_front_refuses_changes_nothing() {
-    let (_engine, mut sender, heard) = start();
+    let (mut engine, mut sender, heard) = start();
     assert_eq!(send(&mut sender, par("PAR 3", 1, 37)), Ok(Some(1)));
     for command in red(1) {
         assert_eq!(send(&mut sender, command), Ok(None));
@@ -260,7 +260,7 @@ fn a_patch_the_front_refuses_changes_nothing() {
         Err(Refusal::NotPatched)
     );
     assert_eq!(sender.patch(), before);
-    heard.two_more_frames();
+    heard.took_everything_sent(&mut engine, &sender);
     assert_eq!(bytes(&heard, 1, 37), [255, 0, 0]);
 }
 
@@ -462,7 +462,7 @@ fn the_live_grabs_stay_bounded_whatever_a_client_grabs() {
 
 #[test]
 fn a_light_let_go_does_not_veto_an_update_of_the_lights_still_held() {
-    let (_engine, mut sender, heard) = start();
+    let (mut engine, mut sender, heard) = start();
     let shehds = Command::Patch {
         name: text("Spot"),
         maker: text("Shehds"),
@@ -488,7 +488,7 @@ fn a_light_let_go_does_not_veto_an_update_of_the_lights_still_held() {
     let Ok(Some(grab)) = queued(&mut sender, grab_colour("both")) else {
         panic!("red is grabbed");
     };
-    heard.two_more_frames();
+    heard.took_everything_sent(&mut engine, &sender);
     assert_eq!(bytes(&heard, 1, 1), [255, 0, 0]);
     let release = Command::ReleaseProperty {
         target: Target::Fixture { fixture: 2 },
@@ -501,7 +501,7 @@ fn a_light_let_go_does_not_veto_an_update_of_the_lights_still_held() {
         value: Value::Colour(Rgb::BLACK),
     };
     assert_eq!(send(&mut sender, black), Ok(None));
-    heard.two_more_frames();
+    heard.took_everything_sent(&mut engine, &sender);
     assert_eq!(bytes(&heard, 1, 1), [0, 0, 0]);
 }
 
@@ -528,7 +528,7 @@ fn a_kept_plays_frozen_lights_cannot_be_unpatched_under_it() {
         (false, Ok(None), [0, 0, 0]),
     ];
     for (stopped, unpatched, on_a) in cases {
-        let (_engine, mut sender, heard) = start();
+        let (mut engine, mut sender, heard) = start();
         assert_eq!(send(&mut sender, par("A", 1, 1)), Ok(Some(1)));
         assert_eq!(send(&mut sender, par("B", 1, 4)), Ok(Some(2)));
         assert_eq!(send(&mut sender, red_on(1)), Ok(None));
@@ -553,7 +553,7 @@ fn a_kept_plays_frozen_lights_cannot_be_unpatched_under_it() {
         if unpatched.is_ok() {
             assert_eq!(send(&mut sender, par("C", 1, 1)), Ok(Some(1)));
         }
-        heard.two_more_frames();
+        heard.took_everything_sent(&mut engine, &sender);
         assert_eq!(bytes(&heard, 1, 1), on_a, "stopped {stopped}");
     }
 }
