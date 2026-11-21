@@ -13,15 +13,21 @@ flowchart LR
 | Light | what you see and pick in the app: one lamp, moving head, strip or smoke machine at its place in the patch. A light is the channels its fixture file gives it |
 | Fixture | the file that describes a kind of light: its maker, model, modes and channels. Only the file, never the lamp itself |
 | Channel | one value, 0 to 255, that a light listens to (dimmer, red, pan). Two channels can move together as one finer value (coarse and fine) |
+| Pair | a coarse and a fine channel that move as one finer value. Joined only when the fixture file makes it certain; otherwise you join them in Patch |
+| Rig | the part that turns a light and its fixture file into channels and their rules (which follow Master, which follow Blackout). It runs on every patch edit, also during a show, beside the part that drives the lights, never inside it |
+| Master | one level that scales the brightness of every light that follows it. 50% Master makes a dimmer at 70% send 35% |
+| Blackout | everything that gives light goes dark at once, until it is turned off |
+| Raw hold | a channel set by hand on the DMX screen, by number. It wins over every look until you release it |
 | Engine | the part that decides the value of every channel. It knows channels, not lights. It runs on its own and keeps going if the window closes |
 | Output | one cable or network link that carries channel values to the lights (DMX adapter, network strip). A show can use up to 16 |
-| Universe | one DMX line of 512 values. An output carries one or more |
+| Universe | one DMX line of 512 values. Patch shows where a channel is as universe and address. A DMX output carries one; a network strip takes a run of channels |
+| Route | which channels an output sends, in order |
 | Look | something you can play: a colour, a step, a sequence, a Wave |
 | Step | a single saved look: a colour (and more) on some lights |
 | Sequence | steps played one after the other, with timing |
 | Wave | a colour that moves across a group of lights, such as a chase from left to right |
 | Grab | a hold by hand: you take a light's channels and keep them until you let go |
-| Mixer | the one place that decides who wins when two things want the same channel (a grab, a look, the autopilot) |
+| Mixer | the one place that decides who wins when two things want the same channel (a grab, a look, the autopilot). Each channel is decided on its own |
 | Press | any command: a pad, a key, a fader move |
 | Lateness | how late a light's message goes out compared with its planned moment. It is measured in microseconds (a millionth of a second). 1 000 microseconds is 1 millisecond |
 | p99 | "99 out of 100 are better than this". The usual way to say how late the late ones are |

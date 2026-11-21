@@ -135,7 +135,7 @@ Every decision below belongs to **`crates/engine-core/src/mix.rs`**. Playback su
 | Show or Autopilot end | `Reveal` removes the contribution. `Stay` freezes it at its original rank and order until released or restarted. | Release reveals the source underneath at its current position. |
 | Channel | Blackout forces zero. A held raw byte, including zero, wins over resolved light. No row between two lights: patches never overlap and a channel two heads name is one property of the fixture, so every channel has one writer (decision 48, #173). | DMX is resolved at the look stage: who wins is decided per light property, never per channel. |
 
-The three settings are saved. An edit takes effect on the applying frame. Switching to `UntilStop` or `Reveal` clears the corresponding stopped holds. [Owner’s five rules](who-wins.md)
+The three settings are saved. An edit takes effect on the applying frame. Switching to `UntilStop` or `Reveal` clears the corresponding stopped holds. [Owner’s five rules](../design/who-wins.md)
 
 ## Commands, refusals and readback
 
@@ -246,7 +246,7 @@ Every ticket runs `npm test`. Each `m3_*` wire test sends commands through `/api
 | Q46 press behind its own slow open; Q47 concurrent opens | Recommend independent admission of performance commands. The current socket can await its own open. M3 tests the cutoff after admission and uses an already attached adapter. Either opening policy can feed that FIFO. [Open findings on device opens](https://github.com/abossard/bossylights/issues/146) |
 | Q48 shared physical channel | Decided (owner, 2026-11-19): patches never overlap, a shared head channel is one property of its fixture with one writer, no who-wins on a channel (#173). |
 | Q49 outputs in the show file | Use #155’s byte-coverage check against the outputs available at validation. Today the server loads before attaching outputs. Use fully streamed, single-universe restart fixtures. Leave spanning-fixture restore and output persistence together for the owner. [Show-file handoff](https://github.com/abossard/bossylights/issues/139#issuecomment-7003402941) |
-| Pattern choice and look primitives | Recommend Wave as the first engine pattern. Later slices can add more shapes, side-by-side items within one sequence, and linked palettes beyond Wave. Authored look groups are many-to-many labels. M3 Rig groups are ordered light targets. [Look model](looks.md) |
+| Pattern choice and look primitives | Recommend Wave as the first engine pattern. Later slices can add more shapes, side-by-side items within one sequence, and linked palettes beyond Wave. Authored look groups are many-to-many labels. M3 Rig groups are ordered light targets. [Look model](../design/looks.md) |
 | Later milestones | Product screens wait for #102. M5 supplies show recording, autopilot choices, MIDI and controllers. External tempo feeds and master controls have later slices. M3 uses original Apache-2.0 code. |
 | Gate evidence | The ordered adapter and DDP scenario is runnable without hardware. The owner parked the physical-rig run. This revision is a read-only spec and ticket briefs. No files or issues were changed, and no builds or tests ran. [Hardware decision](https://github.com/abossard/bossylights/issues/141#issuecomment-7006108962) |
 

@@ -460,10 +460,10 @@ Order rules:
 
 | Rule | Why |
 |---|---|
-| Shared API files (`crates/engine-core/src/{api,lib}.rs`, `crates/engine-server/src/lib.rs`, `ui/src/engine-api.ts`, `docs/engine.md`) one ticket at a time: C, then F, after #227 (T28) in the chain of `screens-slice-1.md` | one writer per file |
+| Shared API files (`crates/engine-core/src/{api,lib}.rs`, `crates/engine-server/src/lib.rs`, `ui/src/engine-api.ts`, `docs/engine.md`) one ticket at a time: C, then F, after #227 (T28) in the chain of `docs/history/screens-slice-1.md` | one writer per file |
 | C, D and F after the channel rework's API cutover (#239, its ticket "API v12 and show file v7") | that ticket rewrites `engine-core/src/*`, `engine/src/*` and every light-model test |
 | B touches `clock.rs` alone. It must not run at the same time as #239's "Sources on channels" ticket, which owns `engine-core/src/*` | one writer per file |
-| G joins the `engine-server/src/main.rs` chain of `screens-slice-1.md` | one writer per file |
+| G joins the `engine-server/src/main.rs` chain of `docs/history/screens-slice-1.md` | one writer per file |
 | A needs nothing | new crate |
 
 Each ticket starts with its failing public test.

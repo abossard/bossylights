@@ -20,7 +20,7 @@ A command goes in through the API, and real light comes out of two different out
 | The engine is its own process and outlives the window | #25 |
 | The output thread runs with the real-time policy | #23, #25 |
 | A press is in the very next frame | #24, #25 |
-| The rate belongs to each output | [theory.md](theory.md), idea 1 |
+| The rate belongs to each output | [theory.md](../design/theory.md), idea 1 |
 | Everything is a command. State flows one way | [../coding.md](../coding.md), rule 2 |
 
 ## The real-time core: one thread, many outputs

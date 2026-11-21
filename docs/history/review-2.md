@@ -90,7 +90,7 @@ The autopilot gets its own part of the Looks screen:
 | Modules 3 | Where does controller mapping live? | in Surface, next to the widgets | **in In/Out**, like QLC+ profiles |
 | Modules 2 | Can you play something that is not saved? | everything you try is saved by itself | no, everything playable lives in Project (same thing) |
 | Theory 6 | What is Song Director? | an editor for a show whose blocks follow sections | it is the show editor, it is the song editor. One thing, one name |
-| Theory 1, 2 | Who wins, how many layers | top layer wins, layers can be added | no layers. See [who-wins.md](who-wins.md) |
+| Theory 1, 2 | Who wins, how many layers | top layer wins, layers can be added | no layers. See [who-wins.md](../design/who-wins.md) |
 
 ### What Modules 3 does to the map
 

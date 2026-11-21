@@ -20,7 +20,7 @@ Origin: **Q** = QLC+ v5 parity, **F** = built in the fork, **N** = new.
 
 | ID | Requirement | Test |
 |---|---|---|
-| r-first60 | A press on a pad changes the real lights at once | The app opens on the example setup with nothing playing; a pad press shows on the DMX screen in the next frame and, with an output connected, on the lights. No timed first run (owner decision D11, `docs/design/screens-slice-1.md`) |
+| r-first60 | A press on a pad changes the real lights at once | The app opens on the example setup with nothing playing; a pad press shows on the DMX screen in the next frame and, with an output connected, on the lights. No timed first run (owner decision D11, `docs/history/screens-slice-1.md`) |
 | r-visible | State is always visible | LIVE on or off, tempo, running items and master are on screen in every view |
 | r-layers | Simple by default, expert on request | Default layer shows a handful of controls. Channels and priorities are one level down |
 | r-words | Plain words | No "HTP", "LTP" or "function" in the default layer |
@@ -147,7 +147,7 @@ Origin: **Q** = QLC+ v5 parity, **F** = built in the fork, **N** = new.
 - **f-golive (N)** Connect your lights, then LIVE. Lights follow the app at once. The LIVE switch starts the night: DJ link, recording, autopilot, lock. There is no preview mode.
 - **f-panic (N)** Blackout, panic and "surprise me".
 
-Order of the first screens (`docs/design/screens-slice-1.md`): shell with DMX, then USB and DDP output setup saved with the show, then offline Patch, Looks and the Console, then Art-Net, sACN, controllers and richer editors. There is no timed script: every reachable control works end to end.
+Order of the first screens (`docs/history/screens-slice-1.md`): shell with DMX, then USB and DDP output setup saved with the show, then offline Patch, Looks and the Console, then Art-Net, sACN, controllers and richer editors. There is no timed script: every reachable control works end to end.
 
 ## Laser
 

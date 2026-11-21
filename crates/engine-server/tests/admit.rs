@@ -1,5 +1,5 @@
 //! The front prepares a command off its lock and admits it under it
-//! (`docs/design/looks-slice-3.md`, "Prepare an edit" and "Admit"). A press is admitted
+//! (`docs/history/looks-slice-3.md`, "Prepare an edit" and "Admit"). A press is admitted
 //! while another client's edit is still being prepared. A refused admission, for a stale
 //! base, a full queue or an edit the project refuses, keeps the project, the patch and
 //! the looks (what the show file saves) and the next DMX frame. The tick is stepped, so a

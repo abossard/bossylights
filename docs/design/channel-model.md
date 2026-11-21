@@ -349,7 +349,7 @@ flowchart LR
 
 ## API v12
 
-One Rust wire schema in `engine-core::api`, generated TypeScript as today. The screens spec (`screens-slice-1.md`) is built on this table.
+One Rust wire schema in `engine-core::api`, generated TypeScript as today. The screens spec (`docs/history/screens-slice-1.md`) is built on this table.
 
 | Command | Meaning |
 |---|---|

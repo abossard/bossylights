@@ -1,6 +1,13 @@
 # Module boundary map
 
-Written before M1. M1 is built (a command lights two outputs, each at its own rate); the rest is design. Read [theory.md](theory.md) first. Questions are at the end.
+Read [theory.md](theory.md) first: the engine knows channels, the Rig and the screens know lights. Answers from the reviews are at the end.
+
+| Module | State |
+|---|---|
+| Engine, Mixer (per light property today), Sources (steps, sequences, Wave), Clock, Rig, Fixture library, Output (DMX USB, DDP), Project | built |
+| Mixer per channel | being built (#250) |
+| Rig rules from the file, Master | designed (#251) |
+| Surface, Controllers, Show, Music, Autopilot | design |
 
 ## The rule: deep modules
 
@@ -43,10 +50,11 @@ flowchart LR
   subgraph rt["Real-time core"]
     direction LR
     CLOCK(("Clock"))
-    MIX["Mixer"]
-    RIG["Rig"]
-    OUT["Output"]
+    MIX["Mixer<br/>per channel"]
+    OUT["Output<br/>adapters"]
   end
+
+  RIG["Rig<br/>off the tick"]
 
   UI --> DOOR
   AG --> DOOR
@@ -58,10 +66,11 @@ flowchart LR
   MUSIC --> CLOCK
   DOOR --> MIX
   DOOR --> PROJ
-  LIB --> PROJ
-  PROJ --> MIX
+  LIB --> RIG
+  RIG -- "channels and rules" --> PROJ
+  PROJ -- "channel plans" --> MIX
   CLOCK --> MIX
-  MIX -- "look" --> RIG -- "channel space" --> OUT
+  MIX -- "frame" --> OUT
   MIX -. "state" .-> DOOR
 ```
 
@@ -74,7 +83,7 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-  R1["Every writer goes<br/>through the Engine"] ~~~ R2["The core never<br/>calls outward"] ~~~ R3["Only Output knows bytes<br/>Only Rig knows addresses"]
+  R1["Every writer goes<br/>through the Engine"] ~~~ R2["The core never<br/>calls outward"] ~~~ R3["The core knows only channels<br/>Only adapters know wire formats<br/>Only Rig turns lights into channels"]
 ```
 
 ## The thirteen modules
@@ -84,12 +93,12 @@ The bar shows depth: interface size on the left, what it hides on the right.
 | Module | Whole interface | Hides | Depth |
 |---|---|---|---|
 | **Engine** | `send` `subscribe` `query` | a listed set of commands, transports (UI, MCP, OSC), versions, permissions | ▮▮▮ → ▮▮▮▮▮▮ |
-| **Mixer** | `apply` `frame` | the who-wins rules (one table), fades, launch on beat, flash, release, masters, blackout | ▮▮ → ▮▮▮▮▮▮▮▮ |
-| **Sources** | `evaluate` | chases, movement maths, pixel matrices, audio scripts, palettes, laser shapes | ▮ → ▮▮▮▮▮▮▮▮ |
+| **Mixer** | `apply` `frame` | the who-wins rules (one table, per channel), fades, launch on beat, flash, release, raw holds, modifiers (Master, Blackout, virtual dimmers) | ▮▮ → ▮▮▮▮▮▮▮▮ |
+| **Sources** | `evaluate`: channel bytes and words at a time | chases, movement maths, pixel matrices, audio scripts, palettes, laser shapes (built off the tick into plans) | ▮ → ▮▮▮▮▮▮▮▮ |
 | **Clock** | `now` `follow` | tap, audio beat, MIDI clock, DJ position, timecode, smoothing | ▮▮ → ▮▮▮▮▮▮ |
-| **Rig** | `fixtures` `groups` `resolve` `lower` | addresses, modes, 16-bit, colour mixing, pan/tilt limits, curves, fixture swap, the default rules of each channel | ▮▮▮ → ▮▮▮▮▮▮▮▮▮ |
+| **Rig** | `fixtures` `groups` `lower` | addresses, modes, pairs, compounds, colour mixing, pan/tilt limits, fixture swap, the default rules of each channel | ▮▮▮ → ▮▮▮▮▮▮▮▮▮ |
 | **Fixture library** | `search` `model` | QLC+, OFL and GDTF file formats | ▮▮ → ▮▮▮▮▮ |
-| **Output** | `devices` `send` | USB timing, the rate of each device (44 for DMX, 60 for DDP by default), reconnects, Art-Net, sACN, DDP, laser DAC | ▮▮ → ▮▮▮▮▮▮▮▮ |
+| **Output** | `take` bytes, a route, a rate | USB timing, the rate of each device (44 for DMX, 60 for DDP by default), reconnects, switching lanes, Art-Net, sACN, DDP, laser DAC | ▮▮ → ▮▮▮▮▮▮▮▮ |
 | **Project** | `read` `edit` `undo` `redo` | file format, autosave, migration, history | ▮▮▮▮ → ▮▮▮▮▮▮ |
 | **Surface** | `layout` `press` | widgets, pages | ▮▮ → ▮▮▮▮▮ |
 | **Controllers** (new, not rated yet) | `devices` `learn` `mappings` | MIDI, OSC, controller profiles, pad colours sent back | ▮▮▮ → ▮▮▮▮▮▮ |
@@ -99,7 +108,7 @@ The bar shows depth: interface size on the left, what it hides on the right.
 
 ### Rig: a mode becomes channels (channel model, #239)
 
-`rig::channels::lower` is a calculation off the tick. `resolve` (writers per light) goes at T4, when the tick runs on channels.
+`rig::channels::lower` is a calculation off the tick. `resolve` (writers per light) goes when the tick runs on channels (#250).
 
 ```mermaid
 flowchart LR
@@ -112,13 +121,15 @@ flowchart LR
 | Hides | Rule |
 |---|---|
 | which channels follow Master and Blackout | from the function: dimmers, emitters no dimmer carries, a shutter with a closed range. Fog and unknown channels stay independent |
-| where a pair is | a fine byte joins the first coarse byte of its head that does the same |
+| where a pair is | only when certain, from the file: what the fine acts on, then its preset, then the coarse right before it. Any other fine stays a single byte, joined by the user in Patch. The definition is the truth: no rule for one fixture |
 | what a typed value is set on | one compound per head, every channel in one Byte or Word |
 | the helpers | `word_split`, `word_join`, `to_native`, `rgb_to_rgbw`, `slot_byte`, `degrees` |
 
-All who-wins rules live in the Mixer, in one table. No screen and no other module decides between two values for the same light. See [who-wins.md](who-wins.md).
+All who-wins rules live in the Mixer, in one table. No screen and no other module decides between two values for the same channel. See [who-wins.md](who-wins.md).
 
 ## How a press travels
+
+The design, once the tick runs on channels (#250). Today the Mixer picks one winner per light property, then `resolve` writes channels through per-light writers.
 
 ```mermaid
 sequenceDiagram
@@ -129,10 +140,10 @@ sequenceDiagram
   participant C as Channel space
   participant O as Output
   S->>D: send(start Sunset on Manual)
-  D->>M: apply(command)
+  Note over D,R: off the tick, before the press:<br/>Rig turns lights into channels,<br/>the look is compiled to a channel plan
+  D->>M: apply(command with its plan)
   loop each frame
-    M->>R: resolve the look
-    R->>C: write the channel values
+    M->>C: offers, one winner per channel, modifiers
     loop each output due
       O->>C: gather this output's route
       C-->>O: bytes in route order
@@ -161,6 +172,7 @@ Screens are thin. Each is a view of one or two modules through the Engine.
 flowchart LR
   N1["Function manager,<br/>virtual console, simple desk<br/>as separate engines"]:::no
   N2["A universe object<br/>that code writes into"]:::no
+  N4["A light or fixture<br/>in the engine core"]:::no
   N3["A plugin interface<br/>(until two real cases exist)"]:::no
   classDef no stroke:#ef3e7b,stroke-width:2px,stroke-dasharray: 5 3
 ```
@@ -177,4 +189,4 @@ flowchart LR
 | 6 | Words on the desk | Playback, Patch, Show file, Looks, Tempo |
 | 7 | Songs and shows | a song has one show |
 
-Details: [review-1.md](review-1.md), [review-2.md](review-2.md).
+Details: [review-1.md](../history/review-1.md), [review-2.md](../history/review-2.md).
