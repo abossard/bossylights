@@ -153,13 +153,17 @@ fn a_file_that_could_grow_when_read_is_an_error_before_it_is_read() {
         ),
         (
             "a comment naming a bare DOCTYPE before the real one",
-            format!("<?xml version=\"1.0\"?>\n<!-- <!DOCTYPE x> -->\n<!DOCTYPE FixtureDefinition [\n<!ENTITY m \"Evil\">\n]>\n{BODY}"),
+            format!(
+                "<?xml version=\"1.0\"?>\n<!-- <!DOCTYPE x> -->\n<!DOCTYPE FixtureDefinition [\n<!ENTITY m \"Evil\">\n]>\n{BODY}"
+            ),
             Some(3),
             "declarations",
         ),
         (
             "a processing instruction naming one before the real one",
-            format!("<?xml version=\"1.0\"?>\n<?note <!DOCTYPE x> ?>\n<!DOCTYPE FixtureDefinition [\n<!ENTITY m \"Evil\">\n]>\n{BODY}"),
+            format!(
+                "<?xml version=\"1.0\"?>\n<?note <!DOCTYPE x> ?>\n<!DOCTYPE FixtureDefinition [\n<!ENTITY m \"Evil\">\n]>\n{BODY}"
+            ),
             Some(3),
             "declarations",
         ),

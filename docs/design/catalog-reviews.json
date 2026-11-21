@@ -7,6 +7,50 @@
     "rating": 3,
     "comment": ""
   },
+  "kit:Block": {
+    "rating": 5,
+    "comment": ""
+  },
+  "kit:Button": {
+    "rating": 5,
+    "comment": ""
+  },
+  "kit:Fader": {
+    "rating": 5,
+    "comment": ""
+  },
+  "kit:Field": {
+    "rating": 5,
+    "comment": ""
+  },
+  "kit:Handle": {
+    "rating": 5,
+    "comment": ""
+  },
+  "kit:Item": {
+    "rating": 5,
+    "comment": ""
+  },
+  "kit:Pad": {
+    "rating": 5,
+    "comment": ""
+  },
+  "kit:Picker": {
+    "rating": 5,
+    "comment": ""
+  },
+  "kit:Preview": {
+    "rating": 5,
+    "comment": ""
+  },
+  "kit:Status": {
+    "rating": 5,
+    "comment": ""
+  },
+  "kit:XY": {
+    "rating": 5,
+    "comment": ""
+  },
   "top.blackout": {
     "rating": 4,
     "comment": "needs stable width"
@@ -44,6 +88,10 @@
     "comment": "craped texte in the preview, not so cool"
   },
   "top.tap": {
+    "rating": 5,
+    "comment": ""
+  },
+  "top.tempo.source": {
     "rating": 5,
     "comment": ""
   },
