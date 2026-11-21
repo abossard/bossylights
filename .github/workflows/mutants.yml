@@ -14,7 +14,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24
-      - uses: dtolnay/rust-toolchain@1.93.1  # the local toolchain verify runs on
+      - run: rustup toolchain install  # the pin in rust-toolchain.toml
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@v2
         with:

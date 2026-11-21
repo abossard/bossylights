@@ -119,7 +119,7 @@ The task file is a ticket: parent, boxes with their commands, files it may touch
 | 3 | break each new rule on purpose; the test must fail |
 | 4 | review: apply `repro.patch` on a copy and run each red test; a finding that does not reproduce is dropped |
 | 5 | a second model reads the diff (the other CLI), findings verified one by one |
-| 6 | commit with explicit paths, `git log origin/main..`, push |
+| 6 | commit on the ticket's `wip/` branch, push the branch; it lands with `npm run land` |
 
 A patch that fails 2 or 3 goes back with the failing output, not fixed by Opus.
 

@@ -119,3 +119,4 @@ One row per run of Codex or Copilot, pasted by the orchestrator after verifying 
 | 2026-11-21 | codex | build-256 | build | astra, ultra | 832 | n/a | n/a | yes | admit test wakes while it waits (b8b9eff) |
 | 2026-11-21 | codex | build-256b | build | astra, ultra | 350 | n/a | n/a | yes | m3_mover wakes while it waits (a9d1d9d) |
 | 2026-11-21 | codex | build-256c | build | astra, ultra | 238 | n/a | n/a | yes | no_alloc drains the fake port without allocating (52bfac5) |
+| 2026-11-21 | codex | build-ci-one-command | build | astra, ultra | 1107 | 87 (3) | 5.60M / 5.47M / 37.2k | ? | ? |

@@ -11,6 +11,8 @@ const run = (command, args, cwd, options = {}) =>
   spawnSync(command, args, { cwd, encoding: "utf8", maxBuffer: 1 << 28, ...options });
 const env = { ...process.env };
 delete env.CARGO_TARGET_DIR;
+delete env.RUSTUP_TOOLCHAIN; // the pin in the commit's rust-toolchain.toml decides
+delete env.UPDATE_TS; // check the committed API types, never write them
 
 let args;
 try {

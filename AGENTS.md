@@ -9,8 +9,10 @@ Rust engine, web UI in a Tauri shell, Apache-2.0. Status: skeleton (engine count
 |---|---|
 | Install | `npm install` |
 | Run (desktop app, dev) | `npm run dev` |
-| Test and check everything (lints, layers, generated types, tests) | `npm test` |
-| Scorecard / mutation score | `npm run scorecard` / `npm run mutants` (needs `cargo-mutants`) |
+| Test and check everything (lints, layers, generated types, tests, scorecard). CI runs the same | `npm test` |
+| The same on one commit, in a clean copy | `npm run verify -- <commit>` |
+| Land a reviewed `wip/` branch on `main` | `npm run land -- wip/<ticket> <message-file>` |
+| Scorecard with timings / mutation score | `npm run scorecard` / `npm run mutants` (needs `cargo-mutants`) |
 | Build | `npm run build` |
 | Engine alone / UI alone | `npm run engine` / `npm run ui` (browser at http://127.0.0.1:5174) |
 
@@ -42,7 +44,7 @@ Rust engine, web UI in a Tauri shell, Apache-2.0. Status: skeleton (engine count
 - The output thread never blocks, locks or allocates. It runs with the real-time policy of the system.
 - The engine is its own process and outlives the window. A UI crash or a hidden window never touches the lights.
 - A press is in the very next frame. Each output has its own rate (`docs/design/theory.md`, idea 1).
-- First engine slice: `docs/design/engine-slice-1.md`.
+- First engine slice: `docs/history/engine-slice-1.md`.
 - Every feature has an end-to-end test that checks DMX output.
 - Apache-2.0 only: no GPL or AGPL code or dependencies. Ideas from BlinderKitten, Chataigne and Mizer are fine, their code is not.
 - Plain words in the default view: looks, pads. Desk words: Playback, Patch, Show file, Looks, Tempo. A song has one show.
@@ -68,13 +70,16 @@ The owner has ADHD and is a visual learner. This applies to every output: docs, 
 
 ## Workflow
 
-- Trunk-based: commit and push directly to `main`. No long-lived branches. This overrides any general "always work on branches" rule.
-- Never force-push or rewrite history on `main`.
-- Keep `main` green: run the tests before every push.
-- All work is on `main` in the one checkout, no worktrees (owner). Work apart by modules: a brief names the files a worker owns. Stage only your own paths; `git log origin/main..` shows only your commits before a push.
-- Verify your change in a clean copy first (`npm run verify -- <commit>`), then commit and push in one step. A commit left unpushed on the shared `main` blocks every other worker's push.
-- A worker's slice ends with: a hand-over comment on the issue, `SendMessage` to the orchestrator (a chat answer reaches nobody), `clear_session "self"`.
-- No invalid project state: a command that would make one is refused, and so is a later command that would break it. Never allow and flag.
+| Rule | How |
+|---|---|
+| One ticket, one branch | `wip/<ticket>` in its own worktree, folder named like the branch: `git worktree add -b wip/<ticket> ../wip-<ticket> origin/main`. Push the branch, never `main` |
+| Lands as one commit | after the clean-copy check and the Opus review: `npm run land -- wip/<ticket> <message-file>` squashes it onto `main`, checks that commit again, pushes it, removes the branch and its worktree. Same day |
+| `main` stays green | `land` waits for a finished green CI run on `main`. Only a red run can be passed, by naming the open `CI red on main:` issue in the message. Never force-push or rewrite `main` |
+| Plan before code | a ticket that changes behaviour or a module edge starts with an Opus explain-back of the plan against the theory (`docs/design/theory.md`). Test, CI and doc fixes skip it |
+| State machines first | written in the design doc before code. The tests walk every row |
+| Expected answers from outside the code | charts, QLC+, hand-worked tables, saved real output |
+| End of a slice | a hand-over comment on the issue, `SendMessage` to the orchestrator (a chat answer reaches nobody), `clear_session "self"` |
+| No invalid project state | a command that would make one is refused, and so is a later command that would break it. Never allow and flag |
 
 ## Agent skills
 

@@ -17,9 +17,7 @@ jobs:
         with:
           node-version: 24
           cache: npm
-      - uses: dtolnay/rust-toolchain@1.93.1  # the local toolchain verify runs on
-        with:
-          components: clippy
+      - run: rustup toolchain install  # the pin in rust-toolchain.toml, with clippy
       - uses: Swatinem/rust-cache@v2
       - name: System libraries for Tauri
         if: runner.os == 'Linux'
@@ -28,11 +26,11 @@ jobs:
           # no recommends: the desktop portal they bring never answers on the runner's session bus, and GTK waits on it before the window exists (#256)
           sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
       - run: npm ci
-      - run: npx playwright install --with-deps chromium
+      - name: System libraries for Chromium
+        if: runner.os == 'Linux'
+        run: npx playwright install-deps chromium
       - run: npm test
         if: runner.os != 'Linux'
       - name: npm test (with a display, for the shell's window)
         if: runner.os == 'Linux'
         run: xvfb-run -a npm test
-      - name: Scorecard (written into the run summary, no timing on a runner)
-        run: npm run scorecard

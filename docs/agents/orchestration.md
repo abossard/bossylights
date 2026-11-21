@@ -30,37 +30,38 @@ Why cheaper models are safe for the routine: the rules are held by the compiler,
 
 ```mermaid
 flowchart LR
-  P["Pick<br/>+ pre-check"] --> B["Brief<br/>modules it owns"] --> W["Worker<br/>in the trunk"] --> H["Hand-over comment,<br/>SendMessage,<br/>clear self"]
-  W -- "push main" --> V["Verify<br/>clean copy"] --> D["Second look<br/>Opus"] --> C["Close"] --> P
+  P["Pick<br/>+ pre-check"] --> B["Brief<br/>modules it owns"] --> W["Worker<br/>wip/ branch,<br/>own worktree"] --> H["Hand-over comment,<br/>SendMessage,<br/>clear self"]
+  W -- "push branch" --> V["Verify<br/>clean copy"] --> D["Second look<br/>Opus"] --> L["Land<br/>one commit<br/>on main"] --> C["Close"] --> P
   H --> V
 ```
 
 | Step | How |
 |---|---|
 | 1. Pick | the lowest open `ready-for-agent` issue with no open blocker |
-| 2. Pre-check | can every box pass with this ticket's own commands? Does a box need a rule of who wins, or allow a state that cannot come out right? Settle it (or ask the owner) before the worker builds |
+| 2. Pre-check | can every box pass with this ticket's own commands? Does a box need a rule of who wins, or allow a state that cannot come out right? Settle it (or ask the owner) before the worker builds. A ticket that changes behaviour or a module edge: an Opus explain-back of the plan against the theory first (test, CI, doc fixes skip it). Its state machines are written in the design doc, its expected answers come from outside the code |
 | 3. Brief | the criteria from the issue, out of scope, the modules the worker owns (see "Work isolation"), the end of the slice (below). One ticket per worker. Send it only when `list_events` shows the worker empty |
-| 4. Verify | never trust a report. `npm run verify -- <commit> --mutants`: a clean copy of the pushed commit, every suite of `npm test` with the default target folder, mutants on the commit's diff (missed lines are listed). Then `npm run scorecard`. Drive the feature by hand. Break each new rule on purpose and see its check fail. Compare numbers with raw result files |
+| 4. Verify | never trust a report. `npm run verify -- <commit> --mutants`: a clean copy of the branch tip, every suite of `npm test` with the default target folder, mutants on the commit's diff (missed lines are listed). Then `npm run scorecard`. Drive the feature by hand. Break each new rule on purpose and see its check fail. Compare numbers with raw result files |
 | 4b. Second look | after your own verify, before closing: an Opus check in its own clean copy (the `checker` agent): each box red before and green after, breaks planted on purpose, a rule broken (`docs/coding.md`, `AGENTS.md`), argue against the verdict. All checks come from Opus (owner, 2026-11-21). A confirmed finding keeps the ticket open or becomes an issue. Name the result in the closing comment |
 | 4c. Peer ledger | after each peer run: paste the row `npm run peer` prints into `docs/agents/peer-runs.md`, fill in whether verify passed first time and what the breaks or the second look found |
-| 5. Close | tick the boxes, close with a table of evidence, note what was not verified |
-| 6. Next | hand over the next ticket. Stop only for a decision of the owner |
+| 5. Land | `npm run land -- wip/<ticket> <message-file>`: the branch squashed onto `origin/main`, verified again in a clean copy, pushed, branch and worktree removed. It refuses while CI on `main` is running, missing or cancelled. A red run is passed only when the message names the open `CI red on main:` issue |
+| 6. Close | tick the boxes, close with a table of evidence, note what was not verified |
+| 7. Next | hand over the next ticket. Stop only for a decision of the owner |
 
 | A worker's slice ends with, in this order | Why |
 |---|---|
 | 1. a hand-over comment on the issue: done, evidence, next, pitfalls | the next session starts from the issue, not from a chat |
-| 2. `SendMessage` to the orchestrator: the commit and three lines | a chat answer reaches nobody: workers sat idle for hours |
+| 2. `SendMessage` to the orchestrator: the branch tip and three lines | a chat answer reaches nobody: workers sat idle for hours |
 | 3. `clear_session "self"` | the worker is empty for its next brief, no round trip |
 
 | The orchestrator wakes on | |
 |---|---|
 | a worker's message | the normal path |
-| a new commit on `main` | a watch polls `origin/main` every minute: a push with no message still gets verified |
+| a new commit on a `wip/` branch | a watch polls `origin` every minute: a push with no message still gets verified |
 | a busy worker gone idle without a message | checked on every wake: a worker that stopped before pushing is nudged |
 
-## Work isolation: modules, not worktrees
+## Work isolation: a branch and a worktree per ticket
 
-Workers share one checkout of `main`. The design keeps them apart: a slice that needs a separate worktree points at a seam in the wrong place.
+Each ticket has its own `wip/` branch and worktree. Modules still keep slices apart, so the branches land without conflicts.
 
 | Rule | How |
 |---|---|
@@ -68,8 +69,8 @@ Workers share one checkout of `main`. The design keeps them apart: a slice that 
 | New file over a shared edit | a new command family, test table or fake goes into a file of its own, wired in by one line |
 | Hotspots get one owner at a time | `engine-core` `Command` and `api`, `scripts/layers.mjs`, `engine-server/src/lib.rs`. When two slices need one, they run one after the other, or the first splits it so each owns a part |
 | Plan slices along seams | before running two slices in parallel, list the files each will touch. An overlap means sequence them or cut the seam first |
-| Stage only your own | `git diff --cached --stat`, `git commit -m ... -- <paths>`, `git apply --cached` for your hunks in a file with others' edits. Before a push, `git log origin/main..` shows only your commits |
-| No worktrees (owner, 2026-11-20) | all work happens in the one checkout on `main`, the orchestrator included: apply a patch there, commit only your own paths (`git commit -m ... -- <paths>`), `git fetch` and `git merge --ff-only origin/main` right before you commit (it works beside others' uncommitted files; never stash or reset their work), commit, push at once; `git log origin/main..` shows only your commits. `npm run verify -- <commit>` checks a commit in a temporary copy, which is not a worktree |
+| One ticket, one branch (owner, 2026-11-21) | `git worktree add -b wip/<ticket> ../wip-<ticket> origin/main`, the folder named like the branch. Commit and push only the branch. Nobody commits to `main` by hand or writes in the shared checkout |
+| Lands as one commit, same day | after verify and the second look, `npm run land` (step 5). The branch and its worktree go with it |
 
 | Stays with the owner | |
 |---|---|
@@ -82,14 +83,14 @@ Workers share one checkout of `main`. The design keeps them apart: a slice that 
 |---|---|
 | A worker waited on a run that had already ended | check the process and its expected end, not only a notification |
 | A frame-rate assertion failed on a CI runner | CI judges what is sent, a real machine judges timing. No test asserts a time under one second (`scripts/check-timing.mjs`) |
-| Waiting for CI slows every ticket | nobody waits for CI. Run locally what CI runs (`npm test`), push, move on. CI is a backstop, read later |
+| Waiting for CI slows every ticket | nobody waits for CI while building: `npm test` is what CI runs. Only `npm run land` checks CI on `main` |
+| Local checks passed while CI was red | one command: CI runs `npm test`, the Rust version is pinned in `rust-toolchain.toml` |
 | A serial link looked on time and was minutes behind | count what the device accepted |
 | A capture of a hidden window was blank | a hidden web view does not draw. Say what was not seen |
-| Sessions share one checkout | one writer per file. Stage with explicit paths. Never stash another session's work |
-| Workers ended with a chat answer, the orchestrator never heard | the slice ends with `SendMessage`, and the orchestrator watches `main` |
+| Workers ended with a chat answer, the orchestrator never heard | the slice ends with `SendMessage`, and the orchestrator watches the `wip/` branches |
 | A brief arrived before a worker's clear, the clear was lost | the worker clears itself at the end of a slice; brief only an empty worker |
 | A worker's question was answered while it kept building, the answer came too late | the pre-check settles rules before the brief; a worker that asks waits for the answer on that box |
-| A push carried another worker's commit | `git log origin/main..` before every push |
+| Sessions shared one checkout, a push carried another worker's commit | a branch and worktree per ticket; `npm run land` puts exactly one squashed commit on `main` |
 | e2e ports clash between sessions | gone: every run takes free ports (`e2e/ports.ts`) |
 | The orchestrator's own check used another target folder, e2e found no binary | verify with the default target folder |
 | "Allow it and flag it" was overruled | a command that would make an invalid project is refused, and so is a later command that would break it |
@@ -105,7 +106,7 @@ flowchart LR
 
 | Milestone | Ends in | Needs first |
 |---|---|---|
-| M1 Command to light | a command over the API lights a WLED device and a DMX adapter, each at its own rate | the first engine slice (`docs/design/engine-slice-1.md`) |
+| M1 Command to light | a command over the API lights a WLED device and a DMX adapter, each at its own rate | the first engine slice (`docs/history/engine-slice-1.md`) |
 | M2 Lights, not channels | "PAR 3: red" becomes the right bytes. Patch, groups, fixture order | the fixture library |
 | M3 Looks and who wins | steps, sequences and patterns play on the beat. Manual beats show beats autopilot | M2 |
 | M4 First real screens | Console and DMX on the real engine | the storyboard catalog (#102) approved |
