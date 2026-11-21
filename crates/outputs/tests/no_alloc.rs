@@ -10,12 +10,40 @@
 #[path = "counting/mod.rs"]
 mod counting;
 
+use nix::errno::Errno;
+use nix::unistd::read;
 use outputs::dmx_usb_pro::{DmxUsbPro, never_wait};
 use outputs::{Color, Device, Outcome, OutputKind};
 use serialport::TTYPort;
+use std::io::{Read, Write};
 use std::net::{SocketAddr, UdpSocket};
+use std::os::fd::AsRawFd;
+use std::sync::mpsc::sync_channel;
 use std::thread;
 use std::time::{Duration, Instant};
+
+// Drain the fake port so a full queue never sends the port thread looking for a lost adapter.
+fn fake_port() -> (TTYPort, thread::JoinHandle<()>) {
+    let (mut end, mut port) = TTYPort::pair().unwrap();
+    port.write_all(&[0]).unwrap();
+    let (ready, first_read) = sync_channel(1);
+    let reader = thread::spawn(move || {
+        let mut bytes = [0; 4096];
+        end.read_exact(&mut bytes[..1]).unwrap();
+        ready.send(()).unwrap();
+        // Read the blocking descriptor directly. TTYPort's idle timeouts allocate.
+        loop {
+            match read(end.as_raw_fd(), &mut bytes) {
+                Ok(0) | Err(Errno::EIO) => break, // the writer closed
+                Ok(_) | Err(Errno::EINTR) => {}
+                Err(error) => panic!("read fake port: {error}"),
+            }
+        }
+    });
+    first_read.recv().unwrap();
+    never_wait(&port).unwrap();
+    (port, reader)
+}
 
 fn main() {
     let receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
@@ -23,9 +51,7 @@ fn main() {
         panic!("IPv4");
     };
     let frame = [[7; 512], [9; 512]].concat();
-    // A fake serial port: the other end stays open and unread.
-    let (end, port) = TTYPort::pair().unwrap();
-    never_wait(&port).unwrap();
+    let (port, reader) = fake_port();
     let mut port = Some(port);
     let pro = DmxUsbPro::open(Box::new(move || {
         port.take()
@@ -76,5 +102,6 @@ fn main() {
             "{kind}: allocations and frees in {frames} frames"
         );
     }
-    drop(end);
+    drop(devices);
+    reader.join().unwrap();
 }
