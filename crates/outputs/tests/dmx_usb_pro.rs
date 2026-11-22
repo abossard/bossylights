@@ -172,30 +172,56 @@ fn a_port_that_takes_no_bytes_is_lost_then_found_again() {
     drop(drain); // ends by itself once the port is closed and nothing more comes
 }
 
+/// What [`take_until_stuck`] found.
+struct Stuck {
+    /// The levels accepted, in order.
+    accepted: Vec<u8>,
+    /// The port thread's pace, in polls: the longest run of drops between two accepted
+    /// frames while it was healthy (it takes the queued frame once a message is out).
+    pace: u32,
+    /// The port was lost on the way: `lost_with` already holds a time out.
+    lost: bool,
+}
+
 /// Takes a frame with a new level on channel 1 each time until the port thread waits in
-/// the middle of a message, one more queued (nobody reads the port): `take` drops 20
-/// frames in a row. A runner that pauses past the 500 ms a stall may take loses the port
-/// on the way; the port thread opens a new one, which fills the same way, and `end`
-/// becomes its end. Returns the levels accepted, in order.
-fn take_until_stuck(device: &mut DmxUsbPro, fake: &mut Fake, end: &mut TTYPort) -> Vec<u8> {
-    let (mut accepted, mut dropped, started) = (vec![], 0, Instant::now());
-    while dropped < 20 {
+/// the middle of a message, one more queued (nobody reads the port). No clock: while the
+/// port is healthy, `take` drops only until the port thread took the queued frame, and the
+/// longest such run of drops is its pace, counted in polls (0 on a runner that polls
+/// slower than a link time). Once a healthy cycle was seen (3 frames accepted), a run of
+/// drops more than three times the pace, at least 6 polls, is a write that waits. A slow runner polls less often
+/// and so counts a shorter pace: the wait stays a few link times, far inside the 500 ms a
+/// stall may take. A runner that pauses past that loses the port on the way; the port
+/// thread opens a new one, which fills the same way, and `end` becomes its end.
+fn take_until_stuck(device: &mut DmxUsbPro, fake: &mut Fake, end: &mut TTYPort) -> Stuck {
+    let (mut accepted, mut pace, mut run, started) = (vec![], 0, 0, Instant::now());
+    let mut lost = false;
+    loop {
         assert!(started.elapsed() < NEVER, "never stuck"); // guard
         let level = accepted.last().map_or(1, |last: &u8| last.wrapping_add(1));
-        dropped = match device.take(&[level; 512]) {
+        match device.take(&[level; 512]) {
             Outcome::Accepted => {
                 accepted.push(level);
-                0
+                pace = pace.max(run);
+                run = 0;
             }
-            Outcome::Dropped => dropped + 1,
-            Outcome::Failed => 0,
-        };
+            Outcome::Dropped => run += 1,
+            Outcome::Failed => {
+                run = 0;
+                lost = true;
+            }
+        }
+        if accepted.len() >= 3 && run > 3 * pace.max(2) {
+            return Stuck {
+                accepted,
+                pace,
+                lost,
+            };
+        }
         while let Some(newer) = fake.new_end() {
             *end = newer;
         }
-        thread::sleep(Duration::from_millis(5)); // poll
+        thread::sleep(Duration::from_millis(1)); // poll
     }
-    accepted
 }
 
 #[test]
@@ -203,7 +229,7 @@ fn a_loss_throws_away_no_accepted_frame_they_go_out_first_on_the_new_port_in_ord
     let (find, mut fake) = Fake::new(true);
     let mut device = DmxUsbPro::open(find).unwrap();
     let mut end = fake.next_end();
-    let accepted = take_until_stuck(&mut device, &mut fake, &mut end);
+    let accepted = take_until_stuck(&mut device, &mut fake, &mut end).accepted;
     // The one being written, and the one queued behind it.
     let unsent = accepted.get(accepted.len() - 2..).unwrap().to_vec();
 
@@ -224,36 +250,66 @@ fn a_loss_throws_away_no_accepted_frame_they_go_out_first_on_the_new_port_in_ord
 }
 
 #[test]
-fn a_stop_in_the_middle_of_a_message_finishes_it() {
-    // The case needs the test to read within the 500 ms a stall may take. A runner that
-    // pauses past it loses the port first (a stall's loss is a time out): the case was
-    // not reached, so it is set up again. Any other loss fails.
+fn a_stop_in_the_middle_of_a_message_finishes_it_and_sends_what_the_driver_holds() {
+    // The port thread waits in the middle of a message. The stop begins; the test reads
+    // one message, which lets the rest of the stalled one in, and reads on. Every message
+    // arrives whole and in order. On macOS the test first pauses three times the port
+    // thread's pace, well inside the 500 ms a drain may wait: the drain waits for the
+    // read, so every accepted message but the queued one arrives (the queued one may). A
+    // stop that closed without waiting for the driver to empty loses some. A Linux pseudo
+    // terminal reports no bytes held, so there the drain cannot wait and is not checked.
+    // A runner that pauses past the 500 ms a stall may take loses the port first (a time
+    // out): the case was not reached, so it is set up again. Any other loss fails.
+    let checks_drain = cfg!(target_os = "macos");
     let started = Instant::now();
-    let bytes = loop {
+    let (accepted, levels) = loop {
         assert!(started.elapsed() < NEVER, "every stop came after a loss"); // guard
         let (find, mut fake) = Fake::new(true);
         let mut device = DmxUsbPro::open(find).unwrap();
         let lost_with = device.lost_with();
         let mut end = fake.next_end();
-        take_until_stuck(&mut device, &mut fake, &mut end);
+        let Stuck {
+            accepted,
+            pace,
+            lost,
+        } = take_until_stuck(&mut device, &mut fake, &mut end);
+        if lost {
+            continue; // the case was not reached
+        }
         let stopping = thread::spawn(move || drop(device));
-        // Once the port closes, what it had queued is gone: a stop that did not wait
-        // leaves nothing to read.
-        let mut bytes = 0;
-        let mut chunk = [0; 4096];
-        while let Ok(read @ 1..) = end.read(&mut chunk) {
-            bytes += read;
+        let mut levels = vec![];
+        let mut message = [0; MESSAGE];
+        if end.read_exact(&mut message).is_ok() {
+            levels.push(message[5]);
+            // The port thread has finished the message and reached the drain, which
+            // waits for this read. A stop that closed early is done.
+            for _ in 0..if checks_drain { 3 * pace.max(2) } else { 0 } {
+                if stopping.is_finished() {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(1)); // poll
+            }
+            while end.read_exact(&mut message).is_ok() {
+                levels.push(message[5]);
+            }
         }
         stopping.join().unwrap();
         match lost_with.get() {
-            None => break bytes,
+            None => break (accepted, levels),
             Some(lost) => assert_eq!(lost.kind(), io::ErrorKind::TimedOut, "{lost}"),
         }
     };
-    assert!(
-        bytes > 0 && bytes % MESSAGE == 0,
-        "{bytes} bytes: not whole messages"
-    );
+    let in_order = !levels.is_empty() && accepted.starts_with(&levels);
+    assert!(in_order, "sent {levels:?}, accepted {accepted:?}");
+    if checks_drain {
+        // The queued message goes out too when the port thread takes it before it sees
+        // the stop; nothing before it may be missing.
+        let all_but_queued = accepted.get(..accepted.len() - 1).unwrap();
+        assert!(
+            levels == all_but_queued || levels == accepted,
+            "sent {levels:?}, accepted {accepted:?}"
+        );
+    }
 }
 
 /// Expected kinds: open(2) (ENOENT: no such file, the adapter is absent; EACCES: no
