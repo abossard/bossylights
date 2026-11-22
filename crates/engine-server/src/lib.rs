@@ -374,8 +374,9 @@ enum Later {
 
 /// One connection: answers each request in order; once subscribed, sends what changed
 /// with every new snapshot. Never waits on the tick thread, the tick thread never waits
-/// on a client. A pending edit or device open never stops it reading: its `Send`s go to
-/// the connection's worker, one after another (the socket table in docs/engine.md, API).
+/// on a client. A pending edit or device open never stops it reading: only edits go to
+/// the connection's worker, one after another; a press runs at once (the socket table in
+/// docs/engine.md, API).
 async fn talk(mut socket: WebSocket, api: Arc<Api>) {
     let mut pictures = api.pictures.clone();
     // What a subscribed connection sent last.
@@ -425,7 +426,7 @@ async fn talk(mut socket: WebSocket, api: Arc<Api>) {
             }
             message = socket.recv(), if waiting.len() < WAITING => match message {
                 Some(Ok(Message::Text(text))) => {
-                    let slot = take(&api, &text, &jobs, &waiting).await;
+                    let slot = take(&api, &text, &jobs).await;
                     waiting.push_back(slot);
                 }
                 Some(Ok(Message::Binary(_))) => {
@@ -468,14 +469,13 @@ async fn deliver(
     true
 }
 
-/// The slot of one request of a connection. A press while nothing of this connection
-/// is pending is admitted here, at once; every other `Send` goes to the worker, behind
-/// what is there. `Stop` stops the engine at once.
+/// The slot of one request of a connection. A press is admitted here, at once, even
+/// behind a pending edit of this connection; every edit goes to the worker, behind what
+/// is there. Replies keep the order of the requests. `Stop` stops the engine at once.
 async fn take(
     api: &Arc<Api>,
     text: &str,
     jobs: &mpsc::UnboundedSender<Command>,
-    waiting: &VecDeque<Slot>,
 ) -> Slot {
     let Ok(request) = serde_json::from_str::<Request>(text) else {
         return Slot::Ready(json(&Reply::Refused {
@@ -483,7 +483,7 @@ async fn take(
         }));
     };
     match request {
-        Request::Send { command } if waiting.is_empty() && !is_edit(&command) => {
+        Request::Send { command } if !is_edit(&command) => {
             Slot::Ready(json(&replied(send(api, command).await)))
         }
         Request::Send { command } => match jobs.send(command) {

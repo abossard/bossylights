@@ -808,6 +808,66 @@ async fn a_device_that_opens_slowly_stalls_no_other_client_and_the_project_shows
     }
 }
 
+/// The socket table in docs/engine.md: a press after a pending edit on the same
+/// connection runs at once, against the state before that edit.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_press_behind_a_pending_open_on_its_connection_reaches_the_output_at_once() {
+    let (opening, opened) = tokio::sync::oneshot::channel();
+    let (release, released) = std::sync::mpsc::channel::<()>();
+    let mut opening = Some(opening);
+    let mut calls = 0;
+    let open_device: engine::Open = Box::new(move |kind| {
+        calls += 1;
+        if calls == 2 {
+            opening.take().unwrap().send(()).unwrap();
+            let _ = released.recv();
+        }
+        outputs::open(kind)
+    });
+    let (engine, sender) = Engine::start_with(Universes::new(2).unwrap(), open_device).unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let served = tokio::spawn(engine_server::serve(listener, engine, sender, None, None));
+    let (mut desk, mut other) = (open(address).await, open(address).await);
+    let (udp, first) = receiver().await;
+    send(&mut desk, &first).await;
+    assert_eq!(answer(&mut desk).await, "Accepted");
+
+    let (_second_udp, mut second) = receiver().await;
+    second["Send"]["command"]["SetOutput"]["output"] = json!(2);
+    second["Send"]["command"]["SetOutput"]["universes"]["first"] = json!(2);
+    send(&mut desk, &second).await;
+    tokio::time::timeout(Duration::from_secs(5), opened)
+        .await
+        .unwrap()
+        .unwrap();
+    send(&mut desk, &set(1, 1, 123)).await;
+    send(&mut desk, &set(1, 513, 9)).await;
+    send(&mut other, &set(1, 2, 42)).await;
+    assert_eq!(answer(&mut other).await, "Accepted");
+
+    let mut seen = [0, 0];
+    let _ = tokio::time::timeout(Duration::from_secs(5), async {
+        while seen != [123, 42] {
+            let frame = packet(&udp).await;
+            seen.copy_from_slice(&frame[10..12]);
+        }
+    })
+    .await;
+    release.send(()).unwrap();
+    // the replies in request order: the edit, the press, the refused press
+    assert_eq!(answer(&mut desk).await, "Accepted");
+    assert_eq!(answer(&mut desk).await, "Accepted");
+    assert_eq!(
+        answer(&mut desk).await,
+        json!({"Refused": {"reason": "NoSuchAddress"}})
+    );
+    send(&mut other, &json!("Stop")).await;
+    assert_eq!(answer(&mut other).await, "Stopping");
+    let _ = served.await.unwrap().unwrap();
+    assert_eq!(seen, [123, 42], "DDP bytes while output 2 is paused opening");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn no_picture_shows_an_output_in_the_state_and_not_in_the_project_or_the_other_way() {
     let (address, mut commander, _) = start().await;

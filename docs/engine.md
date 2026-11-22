@@ -137,7 +137,7 @@ One connection (`talk` in `crates/engine-server/src/lib.rs`). An edit is a comma
 
 | Event \ connection | Idle (nothing waiting) | Editing (an edit of this connection is pending) |
 |---|---|---|
-| a press arrives | admitted now, reply now | goes behind the edits on the connection's worker; its reply in its turn |
+| a press arrives | admitted now, reply now | admitted now; its reply in its turn. A press after a pending edit on the same connection runs against the state before that edit |
 | an edit arrives | the worker starts it; its reply is first in line | queued on the worker behind the one running |
 | `Query`, `Subscribe`, `Search`, `Fixture`, `Failures` | answered now | answered when its turn comes. A subscription starts as its picture goes out, so no `Changed` comes before it |
 | bad JSON or Binary | `NotACommand` now | `NotACommand` in its turn |
