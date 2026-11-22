@@ -51,3 +51,13 @@ export function protocolNames(path, source, kinds) {
     return named ? [`${path}:${at + 1}: ${line.trim()}`] : [];
   });
 }
+
+// A test file says what it proves, not when it was written (plain words, #267).
+/** Folders whose test files are named by what they prove. */
+export const TEST_FOLDERS = ["crates", "e2e", "shell"];
+const DATED = /^(?:m\d+_|t\d+_|review_\d+)/;
+
+/** The test files among `paths` named by a milestone, a ticket or a review: "m3_wake.rs", "review_248_x.rs". */
+export function datedTestNames(paths) {
+  return paths.filter((path) => /(^|\/)(tests|e2e)\//.test(path) && DATED.test(path.split("/").pop()));
+}

@@ -269,7 +269,7 @@ fn a_mode_that_does_not_fit_is_refused() {
 }
 
 /// Every channel of every mode of the test definitions is written by exactly one writer.
-/// A mode refused for a colour it cannot show (`m3_properties`) has no writers.
+/// A mode refused for a colour it cannot show (`mover_properties_to_bytes`) has no writers.
 #[test]
 fn every_channel_is_written_once() {
     for (file, fixture) in all() {

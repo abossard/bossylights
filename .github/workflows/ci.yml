@@ -19,6 +19,8 @@ jobs:
           cache: npm
       - run: rustup toolchain install  # the pin in rust-toolchain.toml, with clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: v1-rust  # a new key once, so the release shell build gets saved too (#267)
       - name: System libraries for Tauri
         if: runner.os == 'Linux'
         run: |

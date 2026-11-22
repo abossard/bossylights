@@ -32,6 +32,15 @@ const cases = [
   ["thread::sleep(LINK_TIME); // poll", false],
   ["thread::sleep(Duration::from_secs(3));", false],
   ["let started = Instant::now();", false],
+  ["assert!(Instant::now().duration_since(started) < Duration::from_millis(50));", true],
+  ["assert!(Instant::now().duration_since(started) < Duration::from_secs(2));", false],
+  ["assert!(Instant::now() - started < Duration::from_millis(5));", true],
+  ["assert!(Instant::now() - started < Duration::from_secs(2));", false],
+  ["assert_eq!(started.elapsed(), Duration::from_millis(5));", true],
+  ["assert_ne!(started.elapsed(), Duration::from_millis(5));", true],
+  ["assert_eq!(frames, 5);", false],
+  ["expect(Date.now() - started).toBeGreaterThan(200);", true],
+  ["expect(Date.now() - started).toBeGreaterThan(2000);", false],
 ];
 for (const [line, flagged] of cases) {
   test(`${flagged ? "flags" : "allows"}: ${line}`, () => {

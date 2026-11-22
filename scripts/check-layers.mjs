@@ -33,7 +33,7 @@ const crates = metadata.packages.flatMap((p) => {
 
 const uiSources = Object.fromEntries(
   filesUnder(UI_SRC)
-    .filter((file) => /\.tsx?$/.test(file))
+    .filter((file) => /\.(tsx?|mjs|js)$/.test(file))
     .map((file) => [relative(UI_SRC, file), readFileSync(file, "utf8")]),
 );
 const ui = uiViolations(uiSources, UI_FILES, UI_LAYERS);

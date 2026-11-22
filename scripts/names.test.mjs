@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { kindsOf, protocolNames } from "./names.mjs";
+import { datedTestNames, kindsOf, protocolNames } from "./names.mjs";
 
 const FILE = "crates/engine/src/lib.rs";
 const KINDS = ["Ddp", "DmxUsbPro"];
@@ -81,4 +81,21 @@ for (const [source, kinds] of kindCases) {
   test(`kinds of ${JSON.stringify(source.slice(0, 40))}`, () => {
     assert.deepEqual(kindsOf(source), kinds);
   });
+}
+
+// [path, named by a milestone, a ticket or a review]
+const testNameCases = [
+  ["crates/engine-server/tests/m3_wake.rs", true],
+  ["crates/engine/tests/t7_review_realtime.rs", true],
+  ["crates/engine-server/tests/review_248_queued_press.rs", true],
+  ["crates/engine-server/tests/review_261.rs", true],
+  ["crates/engine-server/tests/t4_channels.rs", true],
+  ["e2e/m4_status.spec.ts", true],
+  ["crates/engine-server/tests/first_due_frame.rs", false],
+  ["crates/engine/tests/mock/mod.rs", false],
+  ["crates/engine/src/m3_thing.rs", false],
+  ["crates/engine-server/tests/mover_step.rs", false],
+];
+for (const [path, dated] of testNameCases) {
+  test(`test name ${path}: ${dated ? "dated" : "plain"}`, () => assert.deepEqual(datedTestNames([path]), dated ? [path] : []));
 }

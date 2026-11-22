@@ -1,6 +1,6 @@
 //! Remaining wire paths in docs/design/output-cutover.md. The preparing path (T1,
 //! T2, T3, T4) and a publication during a wake (T5) use the gated opens in routes.rs.
-//! The review_248 targets cover T8 to T11, including a return before the cutoff.
+//! The reroute_* targets cover T8 to T11, including a return before the cutoff.
 mod common;
 #[path = "../../outputs/tests/common/stream.rs"]
 mod stream;

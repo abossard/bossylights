@@ -5,10 +5,14 @@ import { type ChildProcess, execFileSync, spawn, spawnSync } from "node:child_pr
 import { createSocket } from "node:dgram";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import type { Command, OutputKind } from "../ui/src/engine-api.ts";
+import { cargoBuild } from "../scripts/cargo-build.mjs";
+import { query, request, send } from "./api";
 import { NOWHERE, SHELL_ENGINE } from "./ports";
 
 const ADDRESS = SHELL_ENGINE;
-const SHELL = `target/debug/bossylights${process.platform === "win32" ? ".exe" : ""}`;
+/** Where cargo put the shell and the engine: filled before the tests. */
+let programs: Record<string, string> = {};
 const WAIT = { timeout: 30_000 };
 
 interface Shell {
@@ -17,10 +21,11 @@ interface Shell {
 }
 
 function startShell(address = ADDRESS, env: Record<string, string> = {}): Shell {
-  const child = spawn(SHELL, [], { env: { ...process.env, BOSSYLIGHTS_ENGINE: address, ...env } });
+  const child = spawn(programs.bossylights, [], { env: { ...process.env, BOSSYLIGHTS_ENGINE: address, ...env } });
   let text = "";
   child.stdout?.on("data", (chunk: Buffer) => (text += chunk.toString()));
   child.stderr?.on("data", (chunk: Buffer) => (text += chunk.toString()));
+  child.on("error", (error) => (text += `the shell did not start: ${error.message}\n`)); // a failed test, not a crashed worker
   return { process: child, said: () => text };
 }
 
@@ -41,25 +46,6 @@ const gone = () => {
   }
 };
 
-/** The engine's first answer to a request that is not a `Changed`. */
-async function request(message: unknown): Promise<any> {
-  const socket = new WebSocket(`ws://${ADDRESS}/api`);
-  await new Promise((opened, failed) => {
-    socket.onopen = opened;
-    socket.onerror = failed;
-  });
-  const reply = new Promise((answered) => {
-    socket.onmessage = (event) => {
-      const data = JSON.parse(String(event.data));
-      if (data.Changed === undefined) answered(data);
-    };
-  });
-  socket.send(JSON.stringify(message));
-  const answer = await reply;
-  socket.close();
-  return answer;
-}
-
 const health = () =>
   fetch(`http://${ADDRESS}/health`).then(
     (response) => response.status,
@@ -68,7 +54,7 @@ const health = () =>
 
 test.beforeAll(() => {
   test.setTimeout(600_000); // the first run compiles the shell
-  execFileSync("cargo", ["build", "-q", "-p", "shell", "-p", "engine-server"], { stdio: "inherit" });
+  programs = cargoBuild(["-q", "-p", "shell", "-p", "engine-server"]);
 });
 
 test("kill the shell: the engine keeps sending, a new shell adopts it and the frame count goes on", async () => {
@@ -83,10 +69,10 @@ test("kill the shell: the engine keeps sending, a new shell adopts it and the fr
     await expect.poll(first.said, WAIT).toContain(`started the engine on ${ADDRESS}`);
     await expect.poll(first.said, WAIT).toContain(`the window talks to the engine on ${ADDRESS}`);
     await expect.poll(health, WAIT).toBe(200);
-    const kind = { Ddp: { address: `127.0.0.1:${udp.address().port}`, color: "Rgb" } };
-    const command = { SetOutput: { output: 16, kind, universes: { first: 1, count: 1 }, rate: "30" } };
-    expect(await request({ Send: { command } })).toBe("Accepted");
-    const before = (await request("Query")).Picture.state.frame;
+    const kind: OutputKind = { Ddp: { address: `127.0.0.1:${udp.address().port}`, color: "Rgb" } };
+    const command: Command = { SetOutput: { output: 16, kind, universes: { first: 1, count: 1 }, rate: "30" } };
+    expect(await send(ADDRESS, command)).toBe("Accepted");
+    const before = (await query(ADDRESS)).state.frame;
 
     await kill(first);
     packets = 0;
@@ -95,13 +81,13 @@ test("kill the shell: the engine keeps sending, a new shell adopts it and the fr
 
     second = startShell();
     await expect.poll(second.said, WAIT).toContain(`adopted the engine on ${ADDRESS}`);
-    const state = (await request("Query")).Picture.state;
+    const state = (await query(ADDRESS)).state;
     expect(state.frame).toBeGreaterThan(before);
     expect(state.outputs[15]?.rate).toBe("30"); // the same engine: it still has the output
   } finally {
     await kill(first);
     if (second) await kill(second);
-    if ((await health()) === 200) expect(await request("Stop")).toBe("Stopping");
+    if ((await health()) === 200) expect(await request(ADDRESS, "Stop")).toBe("Stopping");
     await expect.poll(health, WAIT).toBe("nobody");
     await expect.poll(gone, WAIT).toBe(true);
     udp.close();
@@ -140,17 +126,17 @@ for (const [whose, before] of engines) {
     const packets: Buffer[] = [];
     udp.on("message", (packet) => packets.push(packet));
     await new Promise<void>((bound) => udp.bind(0, "127.0.0.1", bound));
-    const engine = before ? spawn("target/debug/bossylights-engine", ["--listen", ADDRESS], { stdio: "ignore", detached: true }) : undefined;
+    const engine = before ? spawn(programs["bossylights-engine"], ["--listen", ADDRESS], { stdio: "ignore", detached: true }) : undefined;
     if (before) await expect.poll(health, WAIT).toBe(200);
     const window = await closingPage();
     const shell = startShell(ADDRESS, { BOSSYLIGHTS_UI: window.page, BOSSYLIGHTS_WINDOW_SCRIPT: window.script });
     try {
       await expect.poll(shell.said, WAIT).toContain(`${before ? "adopted" : "started"} the engine on ${ADDRESS}`);
       await expect.poll(health, WAIT).toBe(200);
-      const kind = { Ddp: { address: `127.0.0.1:${udp.address().port}`, color: "Rgb" } };
-      const output = { SetOutput: { output: 16, kind, universes: { first: 1, count: 1 }, rate: "30" } };
-      expect(await request({ Send: { command: output } })).toBe("Accepted");
-      expect(await request({ Send: { command: { SetChannel: { channel: { universe: 1, address: 1 }, value: 77 } } } })).toBe("Accepted");
+      const kind: OutputKind = { Ddp: { address: `127.0.0.1:${udp.address().port}`, color: "Rgb" } };
+      const output: Command = { SetOutput: { output: 16, kind, universes: { first: 1, count: 1 }, rate: "30" } };
+      expect(await send(ADDRESS, output)).toBe("Accepted");
+      expect(await send(ADDRESS, { SetChannel: { channel: { universe: 1, address: 1 }, value: 77 } })).toBe("Accepted");
 
       const exited = new Promise((done) => shell.process.once("exit", done));
       window.close();
@@ -163,9 +149,10 @@ for (const [whose, before] of engines) {
     } finally {
       await kill(shell);
       await window.stop();
-      if ((await health()) === 200) expect(await request("Stop")).toBe("Stopping");
+      if ((await health()) === 200) expect(await request(ADDRESS, "Stop")).toBe("Stopping");
       await expect.poll(health, WAIT).toBe("nobody");
       await expect.poll(gone, WAIT).toBe(true);
+      engine?.kill(); // the engine this test started: none left behind when the test fails
       engine?.unref();
       udp.close();
     }
@@ -226,7 +213,7 @@ test("the window shows the engine on the test port", async ({ baseURL }) => {
   } finally {
     await kill(shell);
     await window.close();
-    if ((await health()) === 200) expect(await request("Stop")).toBe("Stopping");
+    if ((await health()) === 200) expect(await request(ADDRESS, "Stop")).toBe("Stopping");
     await expect.poll(health, WAIT).toBe("nobody");
     await expect.poll(gone, WAIT).toBe(true);
   }
@@ -247,7 +234,7 @@ test("a second shell for the same engine opens no window and stops nothing", asy
   } finally {
     await kill(second);
     await kill(first);
-    if ((await health()) === 200) expect(await request("Stop")).toBe("Stopping");
+    if ((await health()) === 200) expect(await request(ADDRESS, "Stop")).toBe("Stopping");
     await expect.poll(health, WAIT).toBe("nobody");
     await expect.poll(gone, WAIT).toBe(true);
   }

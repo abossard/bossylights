@@ -40,7 +40,7 @@ name = "commands"
 required-features = ["test-support"]
 
 [[test]]
-name = "m3_capacity"
+name = "stalled_free_thread_bounds"
 required-features = ["test-support"]
 
 [[test]]
@@ -60,7 +60,7 @@ name = "snapshot"
 required-features = ["test-support"]
 
 [[test]]
-name = "t7_review_realtime"
+name = "loop_budget"
 required-features = ["test-support"]
 
 [[test]]

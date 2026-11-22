@@ -38,6 +38,15 @@ const sourceCases = [
   ["core", "#![no_std]\nfn f() { extern crate alloc; }", ["x has alloc: no `extern crate alloc` in a core crate"]],
   ["calc", "#![no_std]\nextern crate alloc;", []],
   ["calc", "use std::fs;", ["x has std: it needs #![no_std]"]],
+  ["calc", "#![no_std]\nextern crate std;", ["x has std: no `extern crate std` outside a test"]],
+  ["core", "#![no_std]\nfn f() { extern crate std; }", ["x has std: no `extern crate std` outside a test"]],
+  ["calc", "#![no_std]\n#[cfg(test)]\nextern crate std;", []],
+  // inside a test module, the extern needs its own `#[cfg(test)]` line too
+  ["calc", "#![no_std]\n#[cfg(test)]\nmod tests {\n    extern crate std;\n}", ["x has std: no `extern crate std` outside a test"]],
+  ["tick", "extern crate std;", []],
+  ["calc", "#![no_std]\n// no extern crate std here", []],
+  ["calc", "#![no_std]\n//! never `extern crate std` in this crate", []],
+  ["calc", "#![no_std]\nextern crate std; // a comment after it", ["x has std: no `extern crate std` outside a test"]],
   ["action", "use std::fs;", []],
   ["tick", "use std::thread;", []],
 ];

@@ -6,8 +6,8 @@
 export const CHECKED = ["crates", "e2e", "shell"];
 
 const SECOND_MS = 1000;
-const COMPARE = /[<>]=?|toBeLessThan|toBeGreaterThan/;
-const ELAPSED = /\.elapsed\(\)|Date\.now\(\)|performance\.now\(\)/;
+const COMPARE = /[<>]=?|\bassert_(?:eq|ne)!|toBeLessThan|toBeGreaterThan/;
+const ELAPSED = /\.elapsed\(\)|\.duration_since\(|Instant::now\(\)\s*-|Date\.now\(\)|performance\.now\(\)/;
 
 /** The bound in milliseconds when the line writes one, else undefined. */
 function boundMs(line) {

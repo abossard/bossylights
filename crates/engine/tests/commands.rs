@@ -188,22 +188,28 @@ fn a_full_queue_refuses_and_says_so() {
 
 #[test]
 fn after_the_last_output_is_removed_a_command_still_lands_and_the_engine_stops() {
-    // Hang guards of seconds, not a rate. Three seconds of outputs used to leave the
-    // engine asleep for longer than the guard.
+    // Hang guards of seconds, not a rate. Three seconds of output frames used to push the
+    // next beat so far ahead that the engine slept longer than the guard (#111).
     let guard = Duration::from_secs(2);
-    // (outputs: number and rate)
-    let cases: [&[(u8, Rate)]; 2] = [
-        &[(1, Rate::Sixty)],
-        &[(1, Rate::Sixty), (2, Rate::FortyFour)],
+    // (outputs: number, rate, frames taken first: three seconds at that rate)
+    let cases: [&[(u8, Rate, u64)]; 2] = [
+        &[(1, Rate::Sixty, 180)],
+        &[(1, Rate::Sixty, 180), (2, Rate::FortyFour, 132)],
     ];
     for outputs in cases {
         let (mut engine, mut sender) =
             Engine::start(Universes::ONE).expect("the tick thread starts");
-        for &(number, rate) in outputs {
+        for &(number, rate, _) in outputs {
             mock::attach(&mut sender, Universes::ONE, number, run(1, 1), rate);
         }
-        thread::sleep(Duration::from_secs(3));
-        for &(number, _) in outputs {
+        mock::wait_until("the outputs never took their frames", || {
+            let state = engine.latest().state;
+            outputs.iter().all(|&(number, _, frames)| {
+                state.outputs[usize::from(number) - 1]
+                    .is_some_and(|o| o.counters.accepted >= frames)
+            })
+        });
+        for &(number, _, _) in outputs {
             let remove = Command::RemoveOutput {
                 output: output(number),
             };

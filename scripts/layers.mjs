@@ -41,6 +41,11 @@ export const UI_FILES = {
   "catalog/": "catalog", // the storyboard catalog, its own app: `npm run catalog` (#102)
   "catalog/reviews-file.mjs": "catalog", // its dev server keeps the owner's reviews in docs/design/catalog-reviews.json
   "catalog/run-port.mjs": "catalog", // a free port for each run of the catalog tests
+  "catalog.test.mjs": "test",
+  "connection.test.mjs": "test",
+  "controls.test.mjs": "test",
+  "kit.test.mjs": "test",
+  "picture.test.mjs": "test",
 };
 
 /** Which layer may import which. Views never import engine internals past engine.ts. */
@@ -52,6 +57,7 @@ export const UI_LAYERS = {
   controls: ["controls"], // data and calculations about controls. No engine, no view
   kit: ["kit", "controls"], // views with no engine: the only thing they know of a control is its machine
   catalog: ["catalog", "kit", "controls"], // draws the table with the kit. No engine
+  test: ["data", "calc", "controls", "kit", "catalog"], // node tests of calculations. No engine, no view
 };
 
 const NO_STD = /^#!\[(?:no_std|cfg_attr\(not\(test\),\s*no_std\))\]/m;
@@ -71,10 +77,20 @@ export function crateViolations(name, deps, crates) {
 export function sourceViolations(name, kind, source) {
   const violations = [];
   if ((kind === "core" || kind === "calc") && !NO_STD.test(source)) violations.push(`${name} has std: it needs #![no_std]`);
+  if ((kind === "core" || kind === "calc") && externStd(source)) {
+    violations.push(`${name} has std: no \`extern crate std\` outside a test`);
+  }
   if (kind === "core" && ALLOC.test(source)) {
     violations.push(`${name} has alloc: no \`extern crate alloc\` in a core crate`);
   }
   return violations;
+}
+
+/** True when a line says `extern crate std` and the line before it is not `#[cfg(test)]`, also inside a test module. */
+function externStd(source) {
+  const lines = source.split("\n");
+  const code = (line) => line.replace(/\/\/.*$/, ""); // a comment may name it
+  return lines.some((line, at) => /\bextern\s+crate\s+std\b/.test(code(line)) && !/^\s*#\[cfg\(test\)\]\s*$/.test(lines[at - 1] ?? ""));
 }
 
 /** The relative module specifiers a TypeScript source imports. */

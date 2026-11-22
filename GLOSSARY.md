@@ -42,8 +42,8 @@ flowchart LR
 
 | Test | What it proves, in plain words |
 |---|---|
-| `m3_night` | a whole show night: a Wave under a sequence, a hand grab and release, then a restart that brings the show back |
-| `m3_capacity` | the biggest show the desk admits: 32 plays finishing together, a full burst of presses, nothing leaks, too much is refused |
-| `m3_wave`, `m3_sequence`, `m3_step`, `m3_mix`, `m3_tempo`, `m3_mover` | one feature each, checked on the real bytes sent to the lights |
+| `whole_performance` | a whole show night: a Wave under a sequence, a hand grab and release, then a restart that brings the show back |
+| `stalled_free_thread_bounds` | the biggest show the desk admits: 32 plays finishing together, a full burst of presses, nothing leaks, too much is refused |
+| `waves_on_the_wire`, `linked_sequences`, `saved_step_at_manual`, `who_wins_on_the_wire`, `launch_on_beat`, `mover_step_on_the_wire` | one feature each, checked on the real bytes sent to the lights |
 | `no_alloc` | the engine does no memory work while lights are running |
 | scorecard | plays a heavy show for 60 seconds on 16 outputs and reports lateness and drops per output |

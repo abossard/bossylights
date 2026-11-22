@@ -1,18 +1,11 @@
 import { expect, test } from "@playwright/test";
 import { createSocket } from "node:dgram";
 import { createServer } from "node:http";
+import type { OutputKind } from "../ui/src/engine-api.ts";
+import { send as sendTo } from "./api";
 import { ENGINE } from "./ports";
 
-/** Sends one command over the engine's API, as any client does, and returns its answer. */
-async function send(command: object): Promise<unknown> {
-  const socket = new WebSocket(`ws://${ENGINE}/api`);
-  await new Promise((opened) => (socket.onopen = opened));
-  const answer = new Promise<MessageEvent>((answered) => (socket.onmessage = answered));
-  socket.send(JSON.stringify({ Send: { command } }));
-  const reply = JSON.parse(String((await answer).data));
-  socket.close();
-  return reply;
-}
+const send = (command: Parameters<typeof sendTo>[1]) => sendTo(ENGINE, command);
 
 // [channel of universe 1, value]. DDP (3waylabs): a 10 byte header, then the data from its first channel.
 const levels = [
@@ -31,7 +24,7 @@ for (const [address, value] of levels) {
       const to = `127.0.0.1:${udp.address().port}`;
       await page.goto(`/?engine=ws://${ENGINE}/api`);
       await expect(page.getByTestId("status")).toHaveText("connected");
-      const kind = { Ddp: { address: to, color: "Rgb" } };
+      const kind: OutputKind = { Ddp: { address: to, color: "Rgb" } };
       expect(await send({ SetOutput: { output, kind, universes: { first: 1, count: 1 }, rate: "30" } })).toBe("Accepted");
       await expect(page.getByTestId("outputs")).toContainText(`DDP to ${to}, running, 30 a second`);
       const channel = { universe: 1, address };
@@ -43,8 +36,8 @@ for (const [address, value] of levels) {
       // Header: version and push, sequence, RGB, destination.
       expect([...packets.at(-1)!.subarray(0, 4)]).toEqual([0x41, packets.at(-1)![1], 0x0b, 1]);
     } finally {
-      await send({ ReleaseChannel: { channel: { universe: 1, address } } });
-      await send({ RemoveOutput: { output } });
+      expect(await send({ ReleaseChannel: { channel: { universe: 1, address } } })).toBe("Accepted");
+      expect(await send({ RemoveOutput: { output } })).toBe("Accepted");
       udp.close();
     }
   });

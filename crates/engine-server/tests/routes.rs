@@ -868,6 +868,46 @@ async fn a_lost_device_reopens_the_old_run_after_a_refused_resize() {
     }
 }
 
+/// Keeps reading the test's end of an adapter, as a plugged adapter takes every frame:
+/// an end nobody reads fills up and the port is lost again. `stop` drops the end; a drop
+/// (also a failed assert) tells the reader to stop and leaves it to end on its own.
+struct Drain {
+    stop: Arc<std::sync::atomic::AtomicBool>,
+    reader: Option<thread::JoinHandle<()>>,
+}
+
+impl Drain {
+    fn start(mut end: serialport::TTYPort) -> Self {
+        use std::io::Read;
+
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stopped = Arc::clone(&stop);
+        let reader = thread::spawn(move || {
+            let mut bytes = [0; 1024];
+            // frames keep coming while the port runs, so each read returns soon
+            while !stopped.load(Ordering::Acquire) && end.read(&mut bytes).is_ok_and(|n| n > 0) {}
+        });
+        Self {
+            stop,
+            reader: Some(reader),
+        }
+    }
+
+    /// Stops reading and drops the end once the read under way returns.
+    fn stop(mut self) {
+        self.stop.store(true, Ordering::Release);
+        if let Some(reader) = self.reader.take() {
+            reader.join().unwrap();
+        }
+    }
+}
+
+impl Drop for Drain {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+    }
+}
+
 async fn health_event(
     watch: &mut common::Socket,
     wanted: &Value,
@@ -1851,7 +1891,7 @@ async fn a_lost_adapter_reports_one_loss_and_one_return_across_a_reroute() {
     let press = json!({"SetChannel": {"channel": {"universe": 2, "address": 1}, "value": 91}});
     assert_eq!(common::command(&mut desk, press).await, "Accepted");
     assert_eq!(common::command(&mut desk, route(1)).await, "Accepted");
-    let end = tokio::task::block_in_place(|| adapter.next_end());
+    let end = Drain::start(tokio::task::block_in_place(|| adapter.next_end()));
     output_picture(&mut desk, |out| out["status"] == "Running").await;
     common::send(&mut listener, &json!("Subscribe")).await;
     common::answer(&mut listener).await;
@@ -1860,7 +1900,7 @@ async fn a_lost_adapter_reports_one_loss_and_one_return_across_a_reroute() {
     let lost = json!("OutputLost");
     let returned = json!({"Recovered": {"reason": "OutputAvailable"}});
     adapter.plugged().store(false, Ordering::Release);
-    drop(end);
+    tokio::task::block_in_place(|| end.stop());
     health_event(&mut listener, &lost, &mut events).await;
     let before = output_picture(&mut desk, |out| {
         out["status"]["Reconnecting"]["failures"]
@@ -1890,6 +1930,7 @@ async fn a_lost_adapter_reports_one_loss_and_one_return_across_a_reroute() {
         tokio::task::block_in_place(|| usb::read_message(&mut end))[5],
         91
     );
+    let end = Drain::start(end);
     let report = health_event(&mut listener, &returned, &mut events).await;
     assert_eq!(
         report["Health"]["health"]["outputs"][0]["status"],
@@ -1897,6 +1938,7 @@ async fn a_lost_adapter_reports_one_loss_and_one_return_across_a_reroute() {
     );
     events.retain(|event| *event == lost || *event == returned);
     assert_eq!(events, [lost, returned]);
+    tokio::task::block_in_place(|| end.stop());
     common::send(&mut desk, &json!("Stop")).await;
 }
 

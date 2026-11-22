@@ -20,7 +20,7 @@ Do not read the whole tree. Search for the symbol the task names.
 | One writer per channel, patches never overlap | every DMX value resolves at the look stage, in one table (`docs/design/who-wins.md`) |
 | A press is in the very next frame | nothing a press waits behind: no compile, save or lock the tick or another client needs |
 | The tick and output threads never block, lock, allocate or free | counted by the `no_alloc` tests |
-| Every feature has an end-to-end test that checks DMX output | `engine-server/tests/m3_*.rs` decode real frames |
+| Every feature has an end-to-end test that checks DMX output | `engine-server/tests/*_on_the_wire.rs` and the other feature tests decode real frames |
 | Tests are tables, through the public interface | no test on internals, no assert on a time under a second |
 | Apache-2.0 only | no GPL or AGPL code or dependencies |
 
