@@ -165,7 +165,7 @@ Looks and who wins (`docs/history/looks-slice-3.md`, the Mixer's table in `engin
 | `PutStep` (look, name, step) | saves the target and sparse property values. Optional `step.swatches` holds up to four ordered RGB16 colours. A Wave can reference them by look ID | `EmptyPalette` if a saved Wave or retained play still uses the last swatch |
 | `PutPattern` (look, name, pattern) | saves a Wave on an ordered group or a fixture matrix. Its period is 1 to 32 whole beats; any other is `NotACommand` (API 12). Each target light must support continuous colour | `NoMatrix`, `Unsupported`, `NoSuchLook`, `WrongLookKind`, `EmptyPalette`, `WorkLimit` |
 | `PutSequence` (look, name, sequence) | saves an ordered list of linked looks. Editing a step or sequence updates its running parents on the applying frame. Each keeps its start time and order | `NoSuchLook`, `WrongLookKind`, `LookCycle`, `InvalidTiming`, `WorkLimit` |
-| `StartLook` (look, rank, when, use) | returns `{"Started": {"play": {"slot": 0, "generation": 1}}}`. Rank defaults to `Manual`, with `Show` and `Autopilot` available. Start defaults to `Now`. `Beat` and `Bar` launch at the first matching boundary on or after the request. A fresh start replaces that look at that rank | `NoSuchLook`, `InvalidTiming`, `PlayFull`, `WorkLimit`, `QueueFull` |
+| `StartLook` (look, rank, when, use) | returns `{"Started": {"play": {"slot": 0, "generation": 1}}}`. Rank defaults to `Manual`, with `Show` and `Autopilot` available. Start defaults to `Now`. `Beat` and `Bar` launch at the first matching boundary on or after the time the request was sent. If the engine sees it only after that boundary, it plays in that frame, counting from the frame time. A fresh start replaces that look at that rank | `NoSuchLook`, `InvalidTiming`, `PlayFull`, `WorkLimit`, `QueueFull` |
 | `StopLook` (play) | Cancels a waiting play. For a playing look, `UntilRelease` keeps its Manual sample and `Stay` keeps its Show or Autopilot sample. A rest, `UntilStop` or `Reveal` ends the play | |
 | `EndFlash` (play) | ends a Manual play at once. Another rank or an ended play: nothing | |
 | `ReleaseHold` (play) | ends a play, playing or kept. Ended: nothing. Needs only a place in the command queue, with every play slot taken | |
@@ -234,7 +234,7 @@ The tick keeps each play in a slot: off, `Waiting { beat }`, `Playing` or `Kept`
 
 | State \ tick event | Start, Now | Start, Beat or Bar, not reached | Start, boundary reached | the grid reaches the beat | Keep | Release | ReleaseAll | Rules | Plan for this play |
 |---|---|---|---|---|---|---|---|---|---|
-| off | Playing | Waiting | Playing from the crossing | off | off | off | off | off | goes back |
+| off | Playing | Waiting | Playing from the frame | off | off | off | off | off | goes back |
 | Waiting | Playing (new play) | Waiting (new play) | Playing (new play) | Playing from the crossing | off (cancelled) | off | Manual: off, else Waiting | Waiting | installs |
 | Playing | Playing (new play) | Waiting (new play) | Playing (new play) | Playing | Kept | off | Manual: off, else Playing | Playing | installs |
 | Kept | Playing (new play) | Waiting (new play) | Playing (new play) | Kept | Kept | off | Manual: off, else Kept | off where the rules end its rank's stopped plays, else Kept | goes back |

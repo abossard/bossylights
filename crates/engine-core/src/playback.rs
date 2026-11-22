@@ -205,7 +205,8 @@ impl Plays {
 
     /// `play` starts in its slot at `rank`, asked for as start order `order`, in place
     /// of whatever played there: now, beat zero at the frame `now`, or waiting for the
-    /// beat or bar `when` names. On the grid it launches at once.
+    /// first beat or bar `when` names on or after the time it was sent. A beat the grid
+    /// already reached plays at once, from the frame `now`.
     pub fn start(
         &mut self,
         (play, look, rank): (PlayId, u16, Rank),
@@ -216,6 +217,7 @@ impl Plays {
     ) {
         let state = clock
             .next(when)
+            .filter(|&beat| !clock.reached(beat))
             .map_or(PlayState::Playing, |beat| PlayState::Waiting { beat });
         if let Some(slot) = self.0.get_mut(play.slot()) {
             *slot = Some(Play {

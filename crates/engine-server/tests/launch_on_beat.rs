@@ -320,6 +320,27 @@ async fn taps_set_the_tempo_and_launches_land_on_the_tapped_and_the_fed_beat() {
     desk.stop().await;
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn a_beat_press_sent_before_the_beat_but_seen_after_plays_from_that_frame() {
+    let mut desk = Desk::new().await;
+    // a tap at 0 puts the grid there: at 120 BPM the next beat is at 500
+    desk.at(0).await;
+    desk.send(json!("TapTempo")).await;
+    desk.start(1, "Now").await;
+    desk.at(450).await;
+    // the wake at 501 counts its commands, then the press comes in, sent at 499
+    block_in_place(|| desk.wakes.cut()).unwrap();
+    desk.wakes.set_time(desk.time(499));
+    desk.start(2, "Beat").await;
+    desk.wakes.set_time(desk.time(501));
+    block_in_place(|| desk.wakes.finish()).unwrap();
+    // the wake at 560 sees it: green from its frame on, counting from 560, not from 500
+    assert_eq!(desk.shows_from(560).await, GREEN);
+    let state = desk.picture(600).await;
+    assert!(close(own_beat(&state, 2), 0.08), "{state}");
+    desk.stop().await;
+}
+
 /// Beat `n` of the grid after `zero`, in ms: the grid was at `first` then, 500 ms a beat.
 fn beat_at(first: u64, n: u64) -> u64 {
     (n - first) * 500

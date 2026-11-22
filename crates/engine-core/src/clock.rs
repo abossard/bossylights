@@ -219,7 +219,7 @@ impl TryFrom<u16> for Bpm {
 }
 
 /// When a play starts: at once, or on the first beat or bar of the grid on or after the
-/// request.
+/// time the request was sent.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum When {
@@ -569,10 +569,10 @@ impl Clock {
         }
     }
 
-    /// The beat a launch asked for now waits for: `None` for at once. A request on the
-    /// beat (or bar) waits for none.
+    /// The beat a launch waits for: the first matching one on or after the time the
+    /// launch was sent (the last settle), `None` for at once.
     pub fn next(&self, when: When) -> Option<u64> {
-        let beat = self.first_beat();
+        let beat = self.first_beat(self.sent);
         match when {
             When::Now => None,
             When::Beat => Some(beat),
@@ -580,10 +580,10 @@ impl Clock {
         }
     }
 
-    /// The first beat whose crossing is now or later: the one the grid is on, else the
+    /// The first beat whose crossing is at `t` or later: the one the grid is on, else the
     /// next. Decided by [`Clock::crossing`], as a launch is.
-    fn first_beat(&self) -> u64 {
-        match self.position_at(self.at) {
+    fn first_beat(&self, t: Duration) -> u64 {
+        match self.position_at(t) {
             Count { whole, part: 0 } if whole.is_multiple_of(ONE) => whole / ONE,
             count => (count.whole / ONE).saturating_add(1),
         }
@@ -639,7 +639,7 @@ impl Clock {
                 }
             }
         };
-        let beat = self.first_beat();
+        let beat = self.first_beat(self.at);
         let mut clock = Self {
             anchor: None,
             source,
@@ -1288,6 +1288,13 @@ mod tests {
                 vec![Tap(1001)],
                 3.0,
                 2.002,
+            ),
+            (
+                // the beat it marks is the frame's, not the one after its send time
+                "sent just before a beat, seen after it: on to the next",
+                vec![Late(1499, 1520)],
+                4.0,
+                3.04,
             ),
             (
                 // 1100 aligns to 3; 1850 is 750 ms on: 1.5 beats at 120, so 4.5 -> 5

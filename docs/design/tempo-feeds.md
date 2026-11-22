@@ -367,6 +367,7 @@ sequenceDiagram
 |---|---|
 | Two queues, each one producer | the analyser gets its own `rtrb` queue. A full beat queue never takes a place from a press |
 | One cutoff per wake | the tick counts what is in each queue, then reads the frame time (`lib.rs:1825-1835`). What arrives later is in the next wake |
+| A press sent before its boundary, seen after it | its beat or bar is the first on or after its send time. Already reached: it plays in this frame, counting from the frame time, not back-dated to the crossing |
 | Merged in time order | commands by their sent time, beats by their heard time; on a tie the command first |
 | Bounded work | at most 8 beats, 2 readings and 256 commands per wake. A beat is a few integer operations and the existing bounded launch scan. No sorting, no loop over missed beats |
 | Nothing on the tick that may wait | capture, analysis, device listing and names stay off the tick. Records are `Copy`, at most 64 bytes |

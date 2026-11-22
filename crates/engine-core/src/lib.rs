@@ -1291,6 +1291,43 @@ mod tests {
     }
 
     #[test]
+    fn a_press_sent_before_its_boundary_but_seen_after_plays_from_the_frame() {
+        let start = |when| EngineCommand::Start {
+            play: play(0),
+            look: 7,
+            rank: Rank::Manual,
+            when,
+        };
+        let playing = PlayState::Playing;
+        // 120 BPM: beat n at n * 500 ms, a bar every 2000 ms. The wake at `missed` counted
+        // its commands before the press came in; the wake at `seen` takes it.
+        // (name, when, sent, missed, seen, state, start in beats when playing)
+        type Case = (&'static str, When, u64, u64, u64, PlayState, Option<f64>);
+        let cases: [Case; 4] = [
+            ("a beat 1 ms before beat 3", When::Beat, 1499, 1501, 1520, playing, Some(3.04)),
+            ("a beat on beat 3", When::Beat, 1500, 1501, 1520, playing, Some(3.04)),
+            ("a bar 1 ms before bar 1", When::Bar, 1999, 2001, 2020, playing, Some(4.04)),
+            (
+                "a beat 1 ms after beat 3",
+                When::Beat,
+                1501,
+                1502,
+                1520,
+                PlayState::Waiting { beat: 4 },
+                None,
+            ),
+        ];
+        for (name, when, sent, missed, seen, expected, beats) in cases {
+            let state = wake(wake(at_120(), missed, &[]), seen, &[(sent, start(when))]);
+            let play = *state.plays.iter().next().unwrap();
+            assert_eq!(play.state, expected, "{name}");
+            if let Some(beats) = beats {
+                assert!(close(play.start, beats), "{name}: {:?}", play.start);
+            }
+        }
+    }
+
+    #[test]
     fn taps_drained_in_one_wake_count_at_their_own_times() {
         let cases = [
             (
