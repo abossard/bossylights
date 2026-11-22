@@ -536,7 +536,8 @@ mod workload {
                     colour: Some(rgb),
                     ..Light::DARK
                 },
-            },
+            }
+            .into(),
         }
     }
 
@@ -660,7 +661,7 @@ mod workload {
                 .work();
             send(
                 sender,
-                Command::StartUse {
+                Command::StartLook {
                     look,
                     when: When::Now,
                     rank,

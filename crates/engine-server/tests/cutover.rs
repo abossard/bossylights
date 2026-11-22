@@ -291,7 +291,7 @@ fn an_old_retry_in_flight_at_cutover_recovers_the_reused_adapter() {
     engine.stall_reclamation(true);
     assert_eq!(
         sender.send(set(2)),
-        Err(Unsent::Refused(Refusal::CannotOpen))
+        Err(Unsent::Refused(Refusal::CannotOpen { why: engine::OpenFailure::Device { with: None } }))
     );
     let at = wakes.wake().unwrap();
     assert_eq!(attempts.recv_timeout(GUARD).unwrap(), 3);
@@ -625,7 +625,10 @@ fn an_open_begun_before_t9_waits_for_it_or_is_refused() {
     use engine::{Begun, Command, OutputNumber, Rate, Refusal, RunNumbers};
 
     // (T9 comes while the open waits, devices opened for the third route, the answer)
-    for (shown, opened, answer) in [(true, 1, Ok(())), (false, 0, Err(Refusal::CannotOpen))] {
+    let unavailable = Refusal::CannotOpen {
+        why: engine::OpenFailure::Unavailable,
+    };
+    for (shown, opened, answer) in [(true, 1, Ok(())), (false, 0, Err(unavailable))] {
         let (wire, kind) = stream::receiver(Color::Rgb);
         let (_third_wire, third_kind) = stream::receiver(Color::Rgb);
         let opens = Arc::new(AtomicUsize::new(0));

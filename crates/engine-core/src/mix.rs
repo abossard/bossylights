@@ -376,7 +376,7 @@ pub(crate) fn rest(channels: &mut Channels) {
 /// The one pass that decides each channel, once the resolver wrote the lights' bytes into
 /// `channels` (`lit`: where a light value won). Rows 1 and 2 of the table, per channel:
 /// a raw hold (`raw` at `holds`) replaces the byte, also with 0; then each follower moves
-/// toward its dark byte by the `levels` of the modifiers it follows ([`follow`]). Blackout
+/// toward its dark byte by the `levels` of the modifiers it follows ([`scale`]). Blackout
 /// is the modifier every channel follows.
 pub(crate) fn channels(
     channels: &mut Channels,
@@ -432,15 +432,6 @@ pub(crate) fn channels(
     }
 }
 
-/// A follower's byte: `value` moved toward `dark` by the `levels` of the modifiers it
-/// `follows`, `dark + (value - dark) x m1 x ... x mn / 255^n` with one rounding at the end,
-/// half away from `dark`. A channel that jumps goes all the way or not at all: `dark`
-/// when a level it follows is 0, else `value`.
-#[cfg(test)]
-fn follow(value: u8, dark: u8, flags: Flags, follows: Follows, levels: [u8; MODIFIERS]) -> u8 {
-    scale(value, dark, flags, scale_of(follows, levels))
-}
-
 /// What the levels of a set of modifier slots multiply to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Scale {
@@ -477,7 +468,10 @@ fn scale_of(follows: Follows, levels: [u8; MODIFIERS]) -> Scale {
     }
 }
 
-/// [`follow`], with the levels multiplied already.
+/// A follower's byte: `value` moved toward `dark` by the levels of the modifiers it
+/// follows, `dark + (value - dark) x m1 x ... x mn / 255^n` with one rounding at the end,
+/// half away from `dark`. A channel that jumps goes all the way or not at all: `dark`
+/// when a level it follows is 0, else `value`.
 fn scale(value: u8, dark: u8, flags: Flags, scale: Scale) -> u8 {
     match scale {
         Scale::Full => value,
@@ -793,6 +787,14 @@ mod tests {
                 with(&[(0, 128)]),
                 100,
             ),
+            // 255 x 128 / 255 = 128
+            ("full at master 128", 255, 0, fade, master, with(&[(0, 128)]), 128),
+            // 200 x 64 / 255 = 50.20
+            ("master at a quarter", 200, 0, fade, master, with(&[(0, 64)]), 50),
+            // a level at 0: dark, wherever dark is
+            ("jump at master 0", 200, 10, jump, master, with(&[(0, 0)]), 10),
+            // a slot it does not follow moves nothing
+            ("blackout on, follows master", 200, 0, fade, master, blackout(true), 200),
             (
                 "half rounds away from dark",
                 1,
@@ -876,7 +878,13 @@ mod tests {
             ),
         ];
         for (case, value, dark, flags, follows, levels, out) in cases {
-            assert_eq!(follow(value, dark, flags, follows, levels), out, "{case}");
+            // one channel as the resolver left it, through the frame's own pass
+            let mut all = Box::new(Channels::NEW);
+            all.value[0].0[6] = value;
+            (all.dark[6], all.flags[6], all.follows[6]) = (dark, flags, follows);
+            let (raw, holds) = ([Levels::ZERO], [ChannelSet::NONE]);
+            channels(&mut all, &[ChannelSet::NONE], (&raw, &holds), levels);
+            assert_eq!(all.values()[0].0[6], out, "{case}");
         }
     }
 

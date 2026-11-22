@@ -747,7 +747,8 @@ mod tests {
                     colour: Some(colour),
                     ..Light::DARK
                 },
-            },
+            }
+            .into(),
         }
     }
 
@@ -800,6 +801,7 @@ mod tests {
             look: 1,
             rank: engine::Rank::Manual,
             when: engine::When::Now,
+            usage: Default::default(),
         }) else {
             panic!("look 1 plays");
         };
@@ -905,7 +907,8 @@ mod tests {
                     colour: Some(red),
                     ..Light::DARK
                 },
-            },
+            }
+            .into(),
         };
         // (when idle look 1 is renamed from A to B, the name in the picture of that wake)
         let cases = [("before the wake", "B"), ("at its held cutoff", "A")];

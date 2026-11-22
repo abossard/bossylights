@@ -1,6 +1,6 @@
 //! Cumulative output timing, four-second windows and health transitions.
 
-use crate::{Histogram, LATENCY_BUCKETS, LATENESS_BUCKETS, Rate, Status, bucket, edge};
+use crate::{Histogram, LATENCY_BUCKETS, LATENESS_BUCKETS, Rate, Status, bound, bucket, rank};
 use core::time::Duration;
 
 /// One run's counters at an engine time and the outage history of its reused adapter.
@@ -104,27 +104,15 @@ impl<const N: usize> Difference<N> {
         Self { counts, total }
     }
 
-    /// Nearest rank: how many samples must stay at or under the percentile.
-    fn rank(&self, percent: u64) -> u128 {
-        (u128::from(percent) * self.total).div_ceil(100)
-    }
-
     fn misses_rank(&self, percent: u64, under_target: u128) -> bool {
-        under_target < self.rank(percent)
+        under_target < rank(self.total, percent)
     }
 
-    /// The window total may pass `u64`, so the rank is found here, not by [`crate::percentile`].
+    /// The same nearest rank and bucket bound as [`crate::percentile`], over the window.
     fn measurement(&self, percent: u64, cumulative_worst: Duration) -> Option<MetricWindow> {
-        // The upper edge of a bucket, never past the worst. The last bucket is open.
-        let bound = |bucket: usize| {
-            if bucket + 1 == N {
-                cumulative_worst
-            } else {
-                edge(bucket).min(cumulative_worst)
-            }
-        };
+        let bound = |bucket| bound::<N>(bucket, cumulative_worst);
         let highest = self.counts.iter().rposition(|&count| count != 0)?;
-        let rank = self.rank(percent);
+        let rank = rank(self.total, percent);
         let mut seen = 0;
         let ranked = self.counts.iter().position(|&count| {
             seen += u128::from(count);

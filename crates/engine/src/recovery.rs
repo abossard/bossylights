@@ -31,12 +31,9 @@ pub(crate) enum Event {
     WorkerGone,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Watch {
-    Unwatched,
-    /// The recovery worker holds a request for this lane. Health reads it.
-    Watched,
-}
+/// Whether the recovery worker holds a request for this lane. Health reads it: core's
+/// `Status::after` takes it with each frame's outcome.
+pub(crate) use engine_core::Watch;
 
 /// The transition function, a calculation. Every pair is in the table.
 pub(crate) const fn next(state: State, event: Event) -> State {

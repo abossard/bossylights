@@ -17,6 +17,7 @@ fn start(sender: &mut Sender, look: u16) -> engine::PlayId {
         look,
         rank: Rank::Show,
         when: When::Now,
+        usage: Default::default(),
     };
     let Begun::Started { play } = sender.begin(command, &[]).unwrap() else {
         panic!("the sequence starts")
@@ -63,7 +64,8 @@ fn retired_plan_bytes_refuse_the_next_live_edit_until_reclaimed() {
                 colour: Some(Rgb { red, ..Rgb::BLACK }),
                 ..Light::DARK
             },
-        },
+        }
+        .into(),
     };
     let items = std::array::from_fn::<_, CHILDREN, _>(|n| SequenceItem {
         look: n as u16 + 1,
@@ -199,7 +201,8 @@ fn each_live_plan_swap_reserves_a_return_and_release_keeps_its_place() {
                 intensity: Some(intensity),
                 ..Light::DARK
             },
-        },
+        }
+        .into(),
     };
     sender.send(step(0)).unwrap();
     let play = start(&mut sender, 1);
@@ -225,6 +228,7 @@ fn each_live_plan_swap_reserves_a_return_and_release_keeps_its_place() {
         look: 1,
         rank: Rank::Show,
         when: When::Now,
+        usage: Default::default(),
     };
     for refused in [step(u16::MAX), restart] {
         assert_eq!(sender.send(refused), Err(Unsent::Refused(Refusal::QueueFull)));

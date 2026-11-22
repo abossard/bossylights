@@ -37,7 +37,7 @@ An output's route lists channel spans in stream order. The tick gathers those sp
 |---|---|---|
 | 1 | `Base::prepare`, then `Sender::admit` | `prepare`: `Project::update` checks the client `Command` against a `Base` (the project, patch and looks, taken from `Sender::base`) and says what follows: an `EngineCommand` for the tick thread, keep the device, restart its lane, or open one. Only this makes an `EngineCommand`. The blocking pool prepares output, patch, group and look edits. It checks route changes against the patch outside the publisher lock, so another client can still send a press. A press is prepared and admitted under the `Sender` at once, no thread hop before the next frame. Once `Stop` is taken (under the `Sender`), a command is answered `Stopping` and changes nothing: every accepted edit is in the last save. `admit`, under the `Sender`: `Stale` when another change replaced the base (the server prepares again, three times at most), else the plays, a slot and room in the queue are checked and the command queued. `Sender::begin` does both |
 | 1b | `Opening::open` | The blocking pool starts the new lane, sizes its boxes and opens a fresh device if needed. Every due frame still uses the old lane, including a press from another client. |
-| 2 | `Sender::publish_output` | Queues the prepared lane. A failed open answers `CannotOpen` and the old lane continues. |
+| 2 | `Sender::publish_output` | Queues the prepared lane. A failed open answers `CannotOpen { why }` and the old lane continues: `Device { with }` (the device or socket refused, with the system's error number when it gave one), `Thread` (the output's thread did not start), `Unavailable` (the engine stopped, or the old device was not given back in time). |
 | 3 | Tick thread | Installs the new run and lane together. A rate change on the same run keeps the lane. |
 | 4 | Output workers | The old worker finishes its last send. The blocking pool drains the adapter and transfers a kept device to the new worker before replying. The new worker holds its frames until the transfer finishes. |
 | 5 | Free thread | Reclaims the retired lane and its boxes. |
@@ -203,6 +203,31 @@ A target is `{"Fixture": {"fixture": 1}}` (all its lights), `{"Light": {"light":
 {"Send": {"command": {"SetOutput": {"output": 1, "kind": {"Ddp": {"address": "192.168.1.50:4048", "color": "Rgbw"}}, "universes": {"first": 1, "count": 3}, "rate": null}}}}
 ```
 
+## A play on the tick
+
+The tick keeps each play in a slot: off, `Waiting { beat }`, `Playing` or `Kept`. One table, walked by `a_play_on_the_tick_follows_its_table` (`engine-core/src/lib.rs`). "Plan" is `Plays::takes_plan`: whether a new plan for this play installs, else it goes back.
+
+| State \ tick event | Start, Now | Start, Beat or Bar, not reached | Start, boundary reached | the grid reaches the beat | Keep | Release | ReleaseAll | Rules | Plan for this play |
+|---|---|---|---|---|---|---|---|---|---|
+| off | Playing | Waiting | Playing from the crossing | off | off | off | off | off | goes back |
+| Waiting | Playing (new play) | Waiting (new play) | Playing (new play) | Playing from the crossing | off (cancelled) | off | Manual: off, else Waiting | Waiting | installs |
+| Playing | Playing (new play) | Waiting (new play) | Playing (new play) | Playing | Kept | off | Manual: off, else Playing | Playing | installs |
+| Kept | Playing (new play) | Waiting (new play) | Playing (new play) | Kept | Kept | off | Manual: off, else Kept | off where the rules end its rank's stopped plays, else Kept | goes back |
+
+"For this play" is the same slot and generation. Another generation in the slot is "off" for it.
+
+| Tick event | Comes from |
+|---|---|
+| Start | `StartLook` admitted |
+| the grid reaches the beat | `Settle` at each command's send time and at the frame; `Tap` |
+| Keep | `StopLook` when the rules keep it; a once-use play's natural end when the rules keep it (the tick's `settle`) |
+| Release | `ReleaseHold`; `EndFlash` of a Manual play; `StopLook` when the rules remove it; a once-use play's natural end when the rules remove it (the tick's `settle`) |
+| ReleaseAll | `ReleaseAll` |
+| Rules | `SetMixRules` |
+| Plan | an edit of a look (`PutStep`, `PutSequence`, `PutPattern`) for each live play of it |
+
+The front never sees `Waiting`. `StopLook` on a waiting play is Keep on the tick (off, cancelled) while the front books the play as kept until it reads that the tick ended it: it over-reserves for that time, never under.
+
 ## Fixture library
 
 | | |
@@ -246,6 +271,26 @@ The open, all or nothing (`show::open`, `Sender::open`). Every `LeftAlone` row l
 | Opening | fewer than 2 queue places free | `LeftAlone(Refused(QueueFull))` | as they start |
 | Opening | all pass | `Kept` | the file's, in one chunk of 2 places |
 
+## An output in the project
+
+The front's project holds each output as one machine (`Setup` in `engine-core/src/project.rs`), walked by `an_output_in_the_project_follows_its_table`. Settled states: Empty, Kind (a device the engine opened), Attached (a test's device, its whole run), Routed (a test's device with its own route). Switching states: Opening and Restarting, each keeping `was`, the settled state the wire still shows.
+
+| State \ event | SetOutput, same kind and run | SetOutput, same kind, new run | SetOutput, other kind | RemoveOutput | Opened | OpenFailed | Attached | Routed | Restore |
+|---|---|---|---|---|---|---|---|---|---|
+| Empty | Opening, open | Opening, open | Opening, open | Empty, send the removal | same | same | Attached | Routed | refused `Stale` |
+| Kind | Kind, keep the lane | Restarting, restart | Opening, open | Empty, send the removal | same | same | Attached | Routed | back to before |
+| Attached | Opening, open | Opening, open | Opening, open | Empty, send the removal | same | same | Attached (new run) | Routed | back to before |
+| Routed | Opening, open | Opening, open | Opening, open | Empty, send the removal | same | same | Attached | Routed (new bounds) | back to before |
+| Opening | refused `Opening` | refused `Opening` | refused `Opening` | refused `Opening` | Kind, the new run | `was` | refused `Opening` | refused `Opening` | back to before |
+| Restarting | refused `Opening` | refused `Opening` | refused `Opening` | refused `Opening` | Kind, the new run | `was` | refused `Opening` | refused `Opening` | back to before |
+
+| Query | Answer |
+|---|---|
+| on the wire | Kind as `Kind`; Attached and Routed as `Attached`; switching states as `was` |
+| streams (patch checks) | Kind, Attached: their run. Routed, Empty: nothing (a route can have holes). Switching: `was` and the new run must both cover it |
+
+"Before" is the settled state the output's last switch replaced (an open, a restart, an attach). `Restore` goes back to it once, and only to it: the engine shows the project as it was until the switch is visible on the tick (`ProjectView`), and checks a patch against both sides. A failed open or a removal clears it. A new switch cannot start while the old lane still waits to serve (`Opening`), so "before" is never replaced under a switch in flight.
+
 ## Each output's states
 
 ```mermaid
@@ -253,11 +298,14 @@ stateDiagram-v2
   direction LR
   [*] --> NotFound: SetOutput
   NotFound --> Connecting: accepted, the device appeared
+  NotFound --> Reconnecting: failed, the lane is watched
   Connecting --> Running: accepted
   Connecting --> Reconnecting: failed
   Running --> Reconnecting: failed, the device is lost
   Reconnecting --> Running: accepted
 ```
+
+"Watched": the engine's recovery worker holds a request for the lane (a device carried over lost, or a refused restart, [output-cutover.md](design/output-cutover.md)). Its failed frame is a lost device, even before a frame was accepted. An outage is counted on every entry into Reconnecting.
 
 "Accepted" is the device's word: a DMX USB Pro accepts only once its adapter is found. DDP gets no answer from the device, so for it accepted, and Running, mean the frames were sent. After a refusal (nothing listens) a DDP output shows Reconnecting until 30 frames went out without one. A socket that broke (a new address), or that the system refused when the output was set, is opened again by the output's own socket thread, off the tick thread: [outputs.md](design/outputs.md).
 

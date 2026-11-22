@@ -16,6 +16,7 @@ use crate::{
     MAX_UNIVERSES, Outcome, OutputNumber, Priority, Rate, State, Status, Universes, bucket,
     percentile, update,
 };
+use engine_core::Watch;
 use engine_core::health::{HealthSample, press_is_under_target};
 use engine_core::{ChannelSet, Claims, Entry, Held, Light, show};
 use crate::life::{EngineLife, Life, TickFailed};
@@ -222,31 +223,29 @@ impl Snapshot {
         self.state = update(self.state, held, holds, &mut self.grabs, command);
     }
 
-    /// What came of a frame of the attach `generation`. Counts an outage on the transition
-    /// into reconnecting, using the core's status, only for the output's current generation.
+    /// What came of a frame of the attach `generation`, its lane watched or not. Counts an
+    /// outage on every transition into reconnecting, using the core's status, only for the
+    /// output's current generation, which alone reads the watch.
     pub(crate) fn sent(
         &mut self,
         output: OutputNumber,
-        outcome: Outcome,
+        (outcome, watch): (Outcome, Watch),
         at: Duration,
         generation: u64,
     ) {
         let slot = output.slot();
+        let current = generation == self.generation(slot);
         let status = |state: &State| state.outputs.get(slot)?.as_ref().map(|o| o.status);
         let before = status(&self.state);
         self.update(EngineCommand::Sent {
             output,
             outcome,
+            watch: if current { watch } else { Watch::Unwatched },
             at,
         });
-        if generation == self.generation(slot)
-            && matches!(
-                (before, status(&self.state)),
-                (
-                    Some(Status::Connecting | Status::Running),
-                    Some(Status::Reconnecting { .. })
-                )
-            )
+        if current
+            && !matches!(before, Some(Status::Reconnecting { .. }))
+            && matches!(status(&self.state), Some(Status::Reconnecting { .. }))
             && let Some(health) = self.output_health.get_mut(slot)
         {
             health.outages = health.outages.wrapping_add(1);
@@ -400,8 +399,8 @@ fn only_a_frame_of_the_current_generation_counts_an_outage() {
             rate: Rate::Sixty,
         });
         now.attached(output.slot());
-        now.sent(output, Outcome::Accepted, Duration::ZERO, 1);
-        now.sent(output, Outcome::Failed, Duration::ZERO, generation);
+        now.sent(output, (Outcome::Accepted, Watch::Unwatched), Duration::ZERO, 1);
+        now.sent(output, (Outcome::Failed, Watch::Unwatched), Duration::ZERO, generation);
         let health = now.output_health.first().unwrap();
         assert_eq!((health.generation, health.outages), (1, outages));
     }

@@ -435,8 +435,8 @@ impl Control {
         self.0.shared.recovery.watch();
     }
 
-    pub(crate) fn watching_loss(&self) -> bool {
-        self.0.shared.recovery.get().1 == Watch::Watched
+    pub(crate) fn watch(&self) -> Watch {
+        self.0.shared.recovery.get().1
     }
 
     #[cfg(all(test, feature = "test-support"))]
@@ -1104,7 +1104,7 @@ mod tests {
                 old.control.0.shared.life.apply(LifeEvent::StopOutputs);
             }
             assert_eq!(result.unwrap(), Some(watch));
-            assert_eq!(next.control.watching_loss(), watch);
+            assert_eq!(next.control.watch() == Watch::Watched, watch);
             assert_eq!(next.control.needs_open(), reuse && device.is_none());
 
             // A queued reused adapter already occupies the recovery slot.

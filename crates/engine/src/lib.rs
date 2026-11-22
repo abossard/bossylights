@@ -38,16 +38,22 @@ pub use engine_core::{
     ADDRESSES, API_VERSION, Adapter, BEAT, BestEffort, ChannelLevel, ChannelNumbers, Color,
     Command, Counters, Grouped, Levels, MAX_OUTPUTS, MAX_UNIVERSES, Member, MemberList, Members,
     Outcome, Output, OutputKind, OutputNumber, Patched, Priority, Project, ProjectOutput, Rate,
-    Refusal, Reply, Request, RouteFault, Run, RunNumbers, Span, State, Status, Target, Text,
+    OpenFailure, Refusal, Reply, Request, RouteFault, Run, RunNumbers, Span, State, Status, Target, Text,
     Universes, changes,
 };
+/// A test's device refused the route it was given.
+#[cfg(any(test, feature = "test-support"))]
+const REFUSED_ROUTE: Refusal = Refusal::CannotOpen {
+    why: OpenFailure::Device { with: None },
+};
+
 pub use engine_core::{
     AuthoredStep, Bpm, Brightness, GrabId, Light, ManualEnd, MixRules, OtherEnd, Palette, Pattern,
     PlayId, PlayState, Property, Rank, Repeat, Rgb, Saved, SavedLook, Sequence, SequenceItem,
     Source, Speed, Swatches, Use, Value, WaveTarget, When,
 };
 use engine_core::{
-    EngineCommand, Histogram, LATENCY_BUCKETS, LATENESS_BUCKETS, MAX_LIGHTS, bucket, due, frame,
+    EngineCommand, Histogram, LATENCY_BUCKETS, LATENESS_BUCKETS, MAX_LIGHTS, Watch, bucket, due, frame,
     percentile, update, wait,
 };
 pub use fixture_library::Fixture;
@@ -119,7 +125,6 @@ pub const fn edits(command: &Command) -> bool {
         | Command::SetGroup { .. }
         | Command::RemoveGroup { .. }
         | Command::PutStep { .. }
-        | Command::PutAuthoredStep { .. }
         | Command::PutPattern { .. }
         | Command::PutSequence { .. }
         | Command::RemoveLook { .. }
@@ -140,7 +145,6 @@ pub const fn edits(command: &Command) -> bool {
         | Command::EndGrab { .. }
         | Command::ReleaseProperty { .. }
         | Command::StartLook { .. }
-        | Command::StartUse { .. }
         | Command::StopLook { .. }
         | Command::EndFlash { .. }
         | Command::ReleaseHold { .. }
@@ -298,7 +302,7 @@ pub struct Opened {
     kind: OutputKind,
     universes: Run,
     rate: Rate,
-    opened: io::Result<()>,
+    opened: Result<(), OpenFailure>,
     reuse: bool,
 }
 
@@ -599,36 +603,17 @@ impl AttachedRoutes {
 struct PriorOutput {
     number: OutputNumber,
     generation: u64,
-    descriptor: ProjectOutput,
-    explicit: bool,
 }
 
 impl PriorOutput {
-    /// Restore both the visible descriptor and whether its bounds guarantee a stream.
-    fn restore(self, mut project: Project) -> Project {
-        let output = self.number;
-        let universes = match self.descriptor {
-            ProjectOutput::Attached { universes } | ProjectOutput::Kind { universes, .. } => {
-                universes
-            }
-        };
-        let event = if self.explicit {
-            ProjectEvent::Routed {
-                output,
-                bounds: universes,
-            }
-        } else {
-            ProjectEvent::Attached { output, universes }
-        };
-        if let Ok((cleared, _)) = project.update(ProjectEvent::OpenFailed { output })
-            && let Ok((restored, _)) = cleared.update(event)
-        {
-            project = restored;
-            if let Some(slot) = project.outputs.get_mut(output.slot()) {
-                *slot = Some(self.descriptor);
-            }
-        }
+    /// The project as it was before this output's switch: the project goes back to what
+    /// the switch replaced (`Restore`). With nothing to go back to, it stays.
+    fn restore(self, project: Project) -> Project {
         project
+            .update(ProjectEvent::Restore {
+                output: self.number,
+            })
+            .map_or(project, |(restored, _)| restored)
     }
 }
 
@@ -643,7 +628,7 @@ pub struct ProjectView {
 impl ProjectView {
     /// Whether publishing these two revisions changes an output descriptor.
     pub fn same_outputs(&self, other: &Self) -> bool {
-        self.project.outputs == other.project.outputs
+        self.project.outputs() == other.project.outputs()
     }
 
     pub fn at(&self, snapshot: &Snapshot) -> Project {
@@ -774,12 +759,18 @@ fn check_pending_patch(
                     .0;
             }
             Some(ProjectOutput::Attached { .. }) | None => {
-                if routed.0.get(slot).is_some_and(Option::is_some) {
-                    project = PriorOutput {
-                        explicit: true,
-                        ..*old
-                    }
-                    .restore(project);
+                // a route attached now: the old run is no stream to count on either
+                if routed.0.get(slot).is_some_and(Option::is_some)
+                    && let Some(
+                        ProjectOutput::Kind { universes, .. } | ProjectOutput::Attached { universes },
+                    ) = project.output(output)
+                {
+                    project = project
+                        .update(ProjectEvent::Routed {
+                            output,
+                            bounds: universes,
+                        })?
+                        .0;
                 }
             }
         }
@@ -1428,8 +1419,12 @@ impl Sender {
                 if self.open.is_none() {
                     return Err(Refusal::Opening);
                 }
-                let route = Route::of_run(universes, outputs::limits(kind))
-                    .map_err(|_| Refusal::CannotOpen)?;
+                // prepare checked the run against the kind's limits already
+                let route = Route::of_run(universes, outputs::limits(kind)).map_err(|_| {
+                    Refusal::TooManyUniverses {
+                        most: outputs::limits(kind).universes,
+                    }
+                })?;
                 let source = if project.restarting(output) {
                     if outputs::exclusive(kind) {
                         DeviceSource::Exclusive
@@ -2069,7 +2064,7 @@ impl Sender {
             reuse,
         } = opened;
         let (open, lane) = lease.finish();
-        let lane = opened.and_then(|()| lane.ok_or_else(|| io::Error::other("no lane")));
+        let lane = opened.and_then(|()| lane.ok_or(OpenFailure::Unavailable));
         self.open = Some(open.clone());
         self.commands.reserved = false;
         if !self.shared.life.get().sends() {
@@ -2093,7 +2088,7 @@ impl Sender {
             rate,
         };
         let previous = self.lanes.get(output.slot()).cloned().flatten();
-        let sent = lane.map_err(|_| Refusal::CannotOpen).and_then(|lane| {
+        let sent = lane.map_err(|why| Refusal::CannotOpen { why }).and_then(|lane| {
             let next = lane.control.clone();
             let brings = if previous.is_some() {
                 Brings::Reroute(lane, reuse)
@@ -2145,8 +2140,7 @@ impl Sender {
         universes: Run,
         rate: Rate,
     ) -> Result<(), Refusal> {
-        let route =
-            Route::of_run(universes, outputs::Limits::RAW).map_err(|_| Refusal::CannotOpen)?;
+        let route = Route::of_run(universes, outputs::Limits::RAW).map_err(|_| REFUSED_ROUTE)?;
         self.attach_device(
             output,
             device,
@@ -2169,7 +2163,7 @@ impl Sender {
         device
             .limits()
             .route(route.spans())
-            .map_err(|_| Refusal::CannotOpen)?;
+            .map_err(|_| REFUSED_ROUTE)?;
         let bounds = route.bounds();
         self.attach_device(
             output,
@@ -2223,7 +2217,9 @@ impl Sender {
             if let Some(old) = &previous {
                 old.cutover().apply(CutoverEvent::Refuse);
             }
-            Refusal::CannotOpen
+            Refusal::CannotOpen {
+                why: OpenFailure::Thread,
+            }
         })?;
         let next = lane.control.clone();
         let brings = if previous.is_some() {
@@ -2428,15 +2424,9 @@ impl Sender {
                 .project
                 .output(output)
                 .filter(|_| cutover)
-                .map(|descriptor| PriorOutput {
+                .map(|_| PriorOutput {
                     number: output,
                     generation: *generation,
-                    descriptor,
-                    explicit: self
-                        .routed
-                        .0
-                        .get(output.slot())
-                        .is_some_and(Option::is_some),
                 });
             *generation = generation.wrapping_add(1);
         }
@@ -2558,12 +2548,15 @@ impl Opening {
         // lane keeps sending until finish publishes a fully prepared replacement.
         let lane = (|| {
             if !prior_visible || !self.shared.life.get().sends() {
-                return Err(io::Error::other("output unavailable"));
+                return Err(OpenFailure::Unavailable);
             }
             let device = if reuse {
                 None
             } else {
-                Some(lease.open.device(self.kind)?)
+                let device = lease.open.device(self.kind);
+                Some(device.map_err(|error| OpenFailure::Device {
+                    with: error.raw_os_error(),
+                })?)
             };
             let lane = Lane::start(
                 device,
@@ -2573,7 +2566,8 @@ impl Opening {
                 lease.previous.as_ref(),
                 #[cfg(feature = "test-support")]
                 self.lane_pause,
-            )?;
+            )
+            .map_err(|_| OpenFailure::Thread)?;
             Ok(Box::new(lane))
         })();
         if lane.is_err()
@@ -3132,13 +3126,7 @@ impl Ticker {
         let device = match brings {
             Brings::Plan(version) => {
                 let slot = version.play.slot();
-                if self
-                    .now
-                    .state
-                    .plays
-                    .at(slot)
-                    .is_some_and(|p| p.play == version.play && p.state != PlayState::Kept)
-                {
+                if self.now.state.plays.takes_plan(version.play) {
                     self.replan(slot, Some(version));
                 } else {
                     // Its reserved return carries the unused replacement itself.
@@ -3379,11 +3367,11 @@ impl Ticker {
                 });
             }
             if let Some(Some(switch)) = self.switching.get_mut(slot) {
-                switch.schedule = switch.schedule.sent(outcome, at);
+                switch.schedule = switch.schedule.sent(outcome, Watch::Unwatched, at);
                 switch.lateness.count(at.saturating_sub(due));
             } else {
                 self.now.late(slot, at.saturating_sub(due));
-                self.now.sent(number, outcome, at, prefix.generation);
+                self.now.sent(number, (outcome, Watch::Unwatched), at, prefix.generation);
             }
         }
     }
@@ -3408,7 +3396,7 @@ impl Ticker {
             if lane.control.cutover().apply(CutoverEvent::FrameBack) != CutoverEffect::CountOld {
                 continue;
             }
-            let watching_loss = lane.control.watching_loss();
+            let watch = lane.control.watch();
             lane.back(|sent| {
                 trace.came(output, sent.outcome, sent.due);
                 #[cfg(feature = "test-support")]
@@ -3421,17 +3409,9 @@ impl Ticker {
                     });
                 }
                 now.late(output.slot(), sent.at.saturating_sub(sent.due));
-                // The recovery worker watches this adapter after a failed open.
-                // Its loss is visible even if it had only dropped frames before.
-                if sent.outcome == Outcome::Failed
-                    && watching_loss
-                    && sent.prefix.generation == now.generation(output.slot())
-                    && let Some(Some(out)) = now.state.outputs.get_mut(output.slot())
-                    && out.status == Status::NotFound
-                {
-                    out.status = Status::Connecting;
-                }
-                now.sent(output, sent.outcome, sent.at, sent.prefix.generation);
+                // A watched lane's failed frame is a lost device, even if it had only
+                // dropped frames before (core's Status::after).
+                now.sent(output, (sent.outcome, watch), sent.at, sent.prefix.generation);
                 // Reconfiguration can keep the lane with an old frame still in flight:
                 // its status, counters and lateness count, its presses and outage not.
                 if sent.outcome == Outcome::Accepted
@@ -3522,7 +3502,8 @@ mod tests {
                 step: engine_core::Step {
                     target: Target::Light { light: 1 },
                     values: Light::DARK,
-                },
+                }
+                .into(),
             })
             .unwrap();
         let rules = |other_end| Command::SetMixRules {
@@ -3536,6 +3517,7 @@ mod tests {
             look: 1,
             rank: Rank::Show,
             when: When::Now,
+            usage: Default::default(),
         };
         let Ok(Begun::Started { play }) = sender.begin(start, &[]) else {
             panic!("look 1 starts");
@@ -4910,11 +4892,18 @@ mod tests {
             let mut plays = Vec::new();
             for look in 1..=PLAYS as u16 {
                 let name = Text::new("s").unwrap();
-                sender.send(Command::PutStep { look, name, step }).unwrap();
+                sender
+                    .send(Command::PutStep {
+                        look,
+                        name,
+                        step: step.into(),
+                    })
+                    .unwrap();
                 let start = Command::StartLook {
                     look,
                     rank: Rank::Manual,
                     when: When::Now,
+                    usage: Default::default(),
                 };
                 match sender.begin(start, &[]) {
                     Ok(Begun::Started { play }) => plays.push(play),
@@ -4942,6 +4931,7 @@ mod tests {
                 look: 1,
                 rank: Rank::Manual,
                 when: When::Now,
+                usage: Default::default(),
             };
             while once_drained(&mut engine, &mut sender, restart).is_ok() {}
             assert_eq!(
@@ -5008,7 +4998,7 @@ mod tests {
             .send(Command::PutStep {
                 look: 1,
                 name,
-                step,
+                step: step.into(),
             })
             .unwrap();
         // the last generation before the counter wraps
@@ -5017,6 +5007,7 @@ mod tests {
             look: 1,
             rank: Rank::Manual,
             when: When::Now,
+            usage: Default::default(),
         };
         assert!(matches!(
             sender.begin(start, &[]),
@@ -5071,7 +5062,8 @@ mod tests {
                     intensity,
                     ..Light::DARK
                 },
-            },
+            }
+            .into(),
         };
         let sequence = |look, children: &[u16]| Command::PutSequence {
             look,
@@ -5088,7 +5080,7 @@ mod tests {
             )
             .unwrap(),
         };
-        let start = |look, rank, repeat| Command::StartUse {
+        let start = |look, rank, repeat| Command::StartLook {
             look,
             rank,
             when: When::Now,
@@ -5248,7 +5240,7 @@ mod tests {
             };
             // Hold the tick until the original device's hand-back times out. The fallback
             // opener then fails without ever obtaining the original, working device.
-            assert_eq!(sender.finish(restart.open()), Err(Unsent::Refused(Refusal::CannotOpen)));
+            assert_eq!(sender.finish(restart.open()), Err(Unsent::Refused(Refusal::CannotOpen { why: OpenFailure::Device { with: None } })));
             sender.send(hold(73)).unwrap();
             engine.latest();
             wakes.wake().unwrap();
@@ -5325,7 +5317,7 @@ mod tests {
         // (the fresh open succeeds, finish answers, accepted universe count)
         let cases = [
             (true, Ok(()), 3),
-            (false, Err(Unsent::Refused(Refusal::CannotOpen)), 2),
+            (false, Err(Unsent::Refused(Refusal::CannotOpen { why: OpenFailure::Device { with: None } })), 2),
         ];
         for (fresh, answer, count) in cases {
             let universes = Universes::new(3).unwrap();
@@ -5506,7 +5498,7 @@ mod tests {
             .send(Command::PutStep {
                 look: 1,
                 name,
-                step,
+                step: step.into(),
             })
             .unwrap();
         let rules = MixRules {
@@ -5521,6 +5513,7 @@ mod tests {
             look: 1,
             rank: Rank::Show,
             when: When::Bar,
+            usage: Default::default(),
         };
         let Ok(Begun::Started { play }) = sender.begin(start, &[]) else {
             panic!("look 1 waits");
@@ -5596,7 +5589,8 @@ mod tests {
                     intensity: Some(intensity),
                     ..Light::DARK
                 },
-            },
+            }
+            .into(),
         };
         sender.send(leaf(11)).unwrap();
         sender
@@ -5623,7 +5617,7 @@ mod tests {
                 })
                 .unwrap();
         }
-        let start = |look, rank| Command::StartUse {
+        let start = |look, rank| Command::StartLook {
             look,
             rank,
             when: When::Now,
@@ -5793,6 +5787,7 @@ mod tests {
             look,
             rank: Rank::Show,
             when: When::Now,
+            usage: Default::default(),
         };
         let clock = wakes.wake().unwrap();
         let Ok(Begun::Started { play }) = sender.begin(start(1), &[]) else {
@@ -5835,6 +5830,7 @@ mod tests {
             look: 1,
             rank: Rank::Manual,
             when: When::Now,
+            usage: Default::default(),
         };
         let Ok(Begun::Started { play }) = sender.begin(manual, &[]) else {
             panic!("the Manual Wave starts");
@@ -5893,7 +5889,8 @@ mod tests {
                             intensity: Some(intensity),
                             ..Light::DARK
                         },
-                    },
+                    }
+                    .into(),
                 })
                 .unwrap();
         }
@@ -5910,7 +5907,7 @@ mod tests {
         sender.send(link(4, 3)).unwrap();
         let start = wakes.wake().unwrap();
         let Ok(Begun::Started { play }) = sender.begin(
-            Command::StartUse {
+            Command::StartLook {
                 look: 4,
                 rank: Rank::Manual,
                 when: When::Now,

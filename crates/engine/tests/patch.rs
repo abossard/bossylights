@@ -101,7 +101,8 @@ fn sequence_on(target: Target) -> [Command; 2] {
                     }),
                     ..engine::Light::DARK
                 },
-            },
+            }
+            .into(),
         },
         Command::PutSequence {
             look: 2,
@@ -141,6 +142,7 @@ fn a_saved_sequence_must_fit_its_first_start() {
             look: 2,
             rank: engine::Rank::Show,
             when: engine::When::Now,
+            usage: Default::default(),
         };
         assert_eq!(
             sender.send(sequence),
@@ -176,6 +178,7 @@ fn a_start_between_group_prepare_and_admit_protects_its_bindings() {
         look: 2,
         rank: engine::Rank::Show,
         when: engine::When::Now,
+        usage: Default::default(),
     };
     let Begun::Started { play } = sender.begin(start, &[]).unwrap() else {
         panic!("the sequence starts");
@@ -640,7 +643,8 @@ fn a_kept_plays_frozen_lights_cannot_be_unpatched_under_it() {
                 }),
                 ..engine::Light::DARK
             },
-        },
+        }
+        .into(),
     };
     // (stopped first, unpatching A, then on A's channels)
     let cases = [
@@ -656,6 +660,7 @@ fn a_kept_plays_frozen_lights_cannot_be_unpatched_under_it() {
             look: 1,
             rank: engine::Rank::Manual,
             when: engine::When::Now,
+            usage: Default::default(),
         };
         let Ok(Begun::Started { play }) = sender.begin(start, &library()) else {
             panic!("look 1 plays");

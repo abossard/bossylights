@@ -25,7 +25,8 @@
 //! The feed list holds 1 to 5 feeds in order, Tap only last. The first with a lock
 //! drives. Tap always has a lock at the internal tempo. When one tap lapses, the
 //! clock releases it at that instant and follows the current driver. A waiting look
-//! keeps the time of a beat crossed before the lapse, even on a later wake. Each heard beat
+//! keeps the time of a beat crossed before the lapse, even on a later wake (`Dating`:
+//! Lapsed until the grid moves again). Each heard beat
 //! records its feed's lock. The driver can move the grid by up to half a beat when taps
 //! are released, the beat was heard since the last change and it keeps every beat
 //! already reached.
@@ -397,6 +398,42 @@ impl Origin {
     }
 }
 
+/// Which grid dates a time before the clock's origin: one state, one transition
+/// ([`Dating::after`]), table in `tempo-feeds.md` 4a ("Dating").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Dating {
+    /// The origin's grid: a time before it is taken at its instant.
+    Current,
+    /// A one tap lapsed and its release moved the origin: a time before the origin is
+    /// on the tapped grid, so a beat crossed before the lapse keeps its time.
+    Lapsed { tapped: Origin },
+}
+
+/// What changes the dating: the only two writers are a lapse and a rebase.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DatingEvent {
+    /// A one tap lapsed: `before` is the origin it had, `moved` whether the release
+    /// moved the origin.
+    Lapse { before: Origin, moved: bool },
+    /// The counts are taken again at a new origin (tap, release, feed, list, lock, a
+    /// heard beat off its crossing, a new tempo).
+    Rebase,
+}
+
+impl Dating {
+    /// Every transition.
+    const fn after(self, event: DatingEvent) -> Self {
+        match event {
+            DatingEvent::Lapse {
+                before,
+                moved: true,
+            } => Self::Lapsed { tapped: before },
+            DatingEvent::Lapse { moved: false, .. } => self,
+            DatingEvent::Rebase => Self::Current,
+        }
+    }
+}
+
 /// The beat clock. Every change happens at the time it was settled to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Clock {
@@ -406,8 +443,8 @@ pub struct Clock {
     /// Earlier than `at` for an event sent before a frame it missed.
     sent: Duration,
     origin: Origin,
-    /// The free-running origin replaced by an automatic release, until the next rebase.
-    before_lapse: Option<Origin>,
+    /// Which grid dates a time before the origin (`tempo-feeds.md` 4a, "Dating").
+    dating: Dating,
     /// The last change of the grid, the tempo, the list or the taps: a beat heard
     /// before it moves nothing (spec 5b, step 4). Kept apart from the origin, which a beat on
     /// its own crossing leaves alone so that no crossing moves.
@@ -432,7 +469,7 @@ impl Clock {
             grid: Count::whole(0),
             tempo: Bpm::FEED.tempo(),
         },
-        before_lapse: None,
+        dating: Dating::Current,
         changed: Duration::ZERO,
         feed: Bpm::FEED,
         feeds: FeedList::TAP,
@@ -482,17 +519,20 @@ impl Clock {
             at: lapse.max(self.origin.from),
             ..self
         };
-        let mut released = clock.follow();
-        if released.origin.from > self.origin.from {
-            released.before_lapse = Some(self.origin);
-        }
-        Some(released)
+        let released = clock.follow();
+        Some(Self {
+            dating: released.dating.after(DatingEvent::Lapse {
+                before: self.origin,
+                moved: released.origin.from > self.origin.from,
+            }),
+            ..released
+        })
     }
 
     /// The elapsed position at `t`, including the fraction of a Q32 count.
     pub fn beat_at(&self, t: Duration) -> BeatTime {
         if t < self.origin.from
-            && let Some(tapped) = self.before_lapse
+            && let Dating::Lapsed { tapped } = self.dating
         {
             let since = t.saturating_sub(tapped.from);
             return tapped.elapsed_after(tapped.tempo.travel(since));
@@ -554,7 +594,7 @@ impl Clock {
         let crossing = self.grid_crossing(beat);
         // The released grid dates every beat already reached to its own origin.
         if crossing == self.origin.from
-            && let Some(tapped) = self.before_lapse
+            && let Dating::Lapsed { tapped } = self.dating
         {
             return tapped.crossing(beat).min(crossing);
         }
@@ -819,7 +859,7 @@ impl Clock {
                 grid: self.position_at(self.at).at_tempo(self.origin.tempo, tempo),
                 tempo,
             },
-            before_lapse: None,
+            dating: self.dating.after(DatingEvent::Rebase),
             changed: self.at,
             ..self
         }
@@ -2324,5 +2364,69 @@ mod feeds {
         );
         assert!(!stopped.reached(7));
         assert_eq!(stopped.tap().crossing(7), ms(5000));
+    }
+
+    #[test]
+    fn dating_follows_its_table() {
+        let (a, b) = (Clock::START.origin, start(&[Audio]).origin);
+        let lapse = |before, moved| DatingEvent::Lapse { before, moved };
+        let lapsed = |tapped| Dating::Lapsed { tapped };
+        // (dating, event, after): every cell of tempo-feeds.md 4a, "Dating"
+        let cases = [
+            (Dating::Current, lapse(a, true), lapsed(a)),
+            (Dating::Current, lapse(a, false), Dating::Current),
+            (Dating::Current, DatingEvent::Rebase, Dating::Current),
+            (lapsed(a), lapse(b, true), lapsed(b)),
+            (lapsed(a), lapse(b, false), lapsed(a)),
+            (lapsed(a), DatingEvent::Rebase, Dating::Current),
+        ];
+        for (dating, event, after) in cases {
+            assert_eq!(dating.after(event), after, "{dating:?} + {event:?}");
+        }
+    }
+
+    #[test]
+    fn a_lapse_that_moves_the_grid_keeps_the_tapped_grid_until_the_grid_moves_again() {
+        // One tap at 100 ms at 512 ms a beat, Audio locked at 640 ms from 1000 ms: the
+        // tap lapses at 2100 ms and the release moves the origin to Audio's tempo.
+        let held = run(
+            &[Audio],
+            &[
+                Lock(0, Audio, Some(512)),
+                Tap(100),
+                Lock(1000, Audio, Some(640)),
+                Settle(2080),
+            ],
+        );
+        assert_eq!(held.dating, Dating::Current);
+        let lapsed = held.settle(ms(2200));
+        assert_eq!(
+            lapsed.dating,
+            Dating::Lapsed {
+                tapped: held.origin
+            }
+        );
+        // (step at 2300 ms, whether the grid moves, by tempo-feeds.md 4a)
+        let cases = [
+            (Settle(2300), false),                     // time alone
+            (Tap(2300), true),                         // a tap aligns the grid
+            (Release(2300), false),                    // source already Feed: stays
+            (Internal(2300, 90), false),               // Audio drives: only the internal tempo
+            (List(2300, &[TAP]), true),                // a new list: its driver at the phase now
+            (List(2300, &[Audio]), false),             // the same list: a release, stays
+            (Lock(2300, Audio, Some(700)), false),     // same driver: only its row
+            (Lock(2300, MidiClock, Some(700)), false), // not in the list: recorded
+            (Beat(Audio, 2240, 2300, 640), true),      // a beat from the driver aligns
+        ];
+        for (step, moves) in cases {
+            let clock = step.on(lapsed.settle(ms(step.at())));
+            let expected = if moves {
+                Dating::Current
+            } else {
+                lapsed.dating
+            };
+            assert_eq!(clock.origin.from != lapsed.origin.from, moves, "{step:?}");
+            assert_eq!(clock.dating, expected, "{step:?}");
+        }
     }
 }

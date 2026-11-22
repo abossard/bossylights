@@ -188,6 +188,19 @@ stateDiagram-v2
 - Setting the list that is already set is a release.
 - Each feed keeps its own lock in the clock, so the driver is found by a scan of at most 5 places, no search elsewhere.
 
+**Dating: which grid a time before the last change is on.** When a one tap lapses and its release moves the grid (the driver's tempo differs), a beat crossed before the lapse keeps its time on the tapped grid, even on a later wake. Code: `Dating` and `Dating::after` in `clock.rs`.
+
+| Dating \ event | lapse, the release moves the grid | lapse, the grid stays | the grid moves (tap, a new list, a beat from the driver, a new tempo) |
+|---|---|---|---|
+| Current | Lapsed, keeping the grid before the lapse | Current | Current |
+| Lapsed | Lapsed, keeping the grid before this lapse | Lapsed | Current |
+
+| A time before the grid's last change, read as | Current | Lapsed |
+|---|---|---|
+| beat, crossing | the instant of the change | the tapped grid |
+
+Nothing else changes it: time alone, a release while the source is already Feed, the internal tempo while another feed drives, the same list again, and a lock that keeps the driver all leave it as it is. With Tap the only feed, a lapse never moves the grid (same tempo), so Lapsed comes only with a feed list (ticket D).
+
 ### 4b. A feed's signal
 
 ```mermaid

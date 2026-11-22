@@ -238,13 +238,6 @@ impl Run {
         self.first <= first && last < self.first.saturating_add(self.count)
     }
 
-    /// This run's universes of a frame. Empty if the frame is shorter.
-    pub fn of(self, frame: &[Levels]) -> &[Levels] {
-        let start = usize::from(self.first.saturating_sub(1));
-        frame
-            .get(start..start + usize::from(self.count))
-            .unwrap_or_default()
-    }
 }
 
 /// Where an output is. One type, one transition function: [`Status::after`].
@@ -273,9 +266,18 @@ pub enum Outcome {
     Failed,
 }
 
+/// Whether the engine's recovery worker holds a request for an output's lane: a device it
+/// lost or could not reopen. A failed frame of a watched lane is a lost device, even
+/// before any frame was accepted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Watch {
+    Unwatched,
+    Watched,
+}
+
 impl Status {
     /// Every transition. A dropped frame changes nothing: the device is there, only busy.
-    pub const fn after(self, outcome: Outcome) -> Self {
+    pub const fn after(self, outcome: Outcome, watch: Watch) -> Self {
         match (self, outcome) {
             (Self::NotFound, Outcome::Accepted) => Self::Connecting,
             (Self::Connecting | Self::Running | Self::Reconnecting { .. }, Outcome::Accepted) => {
@@ -287,7 +289,10 @@ impl Status {
             (Self::Reconnecting { failures }, Outcome::Failed) => Self::Reconnecting {
                 failures: failures.saturating_add(1),
             },
-            (Self::NotFound, Outcome::Failed) => Self::NotFound,
+            (Self::NotFound, Outcome::Failed) => match watch {
+                Watch::Unwatched => Self::NotFound,
+                Watch::Watched => Self::Reconnecting { failures: 1 },
+            },
             (state, Outcome::Dropped) => state,
         }
     }
@@ -354,14 +359,14 @@ impl Output {
 
     /// What came of a frame on the output's own thread, its device handed it at `at` (or
     /// it was dropped then): state, counters and the interval since the last.
-    pub fn sent(self, outcome: Outcome, at: Duration) -> Self {
+    pub fn sent(self, outcome: Outcome, watch: Watch, at: Duration) -> Self {
         let period = self.rate.period();
         let off = self
             .last
             .is_some_and(|last| at.saturating_sub(last).abs_diff(period) > OFF_BEAT);
         let counters = self.counters;
         Self {
-            status: self.status.after(outcome),
+            status: self.status.after(outcome, watch),
             counters: Counters {
                 accepted: counters.accepted + u64::from(outcome == Outcome::Accepted),
                 dropped: counters.dropped + u64::from(outcome == Outcome::Dropped),
@@ -479,24 +484,28 @@ mod tests {
     fn every_status_and_outcome() {
         use Outcome::{Accepted, Dropped, Failed};
         use Status::{Connecting, NotFound, Running};
-        // (state, outcome, next state)
+        // (state, outcome, next state unwatched, next state watched): docs/engine.md
         let table = [
-            (NotFound, Accepted, Connecting), // the device appeared
-            (NotFound, Dropped, NotFound),
-            (NotFound, Failed, NotFound),
-            (Connecting, Accepted, Running), // first frame accepted
-            (Connecting, Dropped, Connecting),
-            (Connecting, Failed, R(1)),
-            (Running, Accepted, Running),
-            (Running, Dropped, Running),
-            (Running, Failed, R(1)), // lost
-            (R(1), Accepted, Running),
-            (R(1), Dropped, R(1)),
-            (R(1), Failed, R(2)),
-            (R(u16::MAX), Failed, R(u16::MAX)), // keeps looking, never wraps
+            (NotFound, Accepted, Connecting, Connecting), // the device appeared
+            (NotFound, Dropped, NotFound, NotFound),
+            (NotFound, Failed, NotFound, R(1)), // watched: a device known lost
+            (Connecting, Accepted, Running, Running), // first frame accepted
+            (Connecting, Dropped, Connecting, Connecting),
+            (Connecting, Failed, R(1), R(1)),
+            (Running, Accepted, Running, Running),
+            (Running, Dropped, Running, Running),
+            (Running, Failed, R(1), R(1)), // lost
+            (R(1), Accepted, Running, Running),
+            (R(1), Dropped, R(1), R(1)),
+            (R(1), Failed, R(2), R(2)),
+            (R(u16::MAX), Failed, R(u16::MAX), R(u16::MAX)), // keeps looking, never wraps
         ];
-        for (state, outcome, next) in table {
-            assert_eq!(state.after(outcome), next, "{state:?} + {outcome:?}");
+        for (state, outcome, unwatched, watched) in table {
+            let next = (
+                state.after(outcome, Watch::Unwatched),
+                state.after(outcome, Watch::Watched),
+            );
+            assert_eq!(next, (unwatched, watched), "{state:?} + {outcome:?}");
         }
     }
 
@@ -570,7 +579,7 @@ mod tests {
             ), // 1 ns more: off beat
         ];
         for (output, outcome, at, [accepted, dropped, failed, off_beat], status) in cases {
-            let sent = output.sent(outcome, at);
+            let sent = output.sent(outcome, Watch::Unwatched, at);
             let expected = Counters {
                 accepted,
                 dropped,
@@ -644,21 +653,25 @@ mod tests {
 
     #[test]
     fn a_run_takes_its_universes_of_the_frame() {
-        let frame: Vec<Levels> = (0..4).map(|n| Levels([n; crate::ADDRESSES])).collect();
+        // universe n of the frame is filled with n
+        let frame: Vec<Levels> = (1..=4).map(|n| Levels([n; crate::ADDRESSES])).collect();
         let four = Universes::new(4).unwrap();
-        // (first, count, the levels of each universe taken)
-        let cases = [(1, 1, vec![0]), (2, 3, vec![1, 2, 3]), (4, 1, vec![3])];
-        for (first, count, expected) in cases {
+        let one = NonZeroU16::MIN;
+        // (first, count, frame universes there, the first byte of each universe gathered)
+        let cases = [
+            (1, 1, 4, vec![1]),
+            (2, 3, 4, vec![2, 3, 4]),
+            (4, 1, 4, vec![4]),
+            (4, 1, 2, vec![0]), // a shorter frame gives nothing
+        ];
+        for (first, count, there, expected) in cases {
             let run = RunNumbers { first, count }.check(four).unwrap();
-            let taken: Vec<u8> = run.of(&frame).iter().map(|u| u.0[0]).collect();
+            let mut out = vec![0; usize::from(count) * crate::ADDRESSES];
+            gather(&frame[..there], &[run.span(one)], &mut out);
+            let taken: Vec<u8> = out.chunks(crate::ADDRESSES).map(|u| u[0]).collect();
             assert_eq!(run.count(), count, "{first}, {count}");
-            assert_eq!(taken, expected, "{first}, {count}");
+            assert_eq!(taken, expected, "{first}, {count}, a frame of {there}");
         }
-        let run = RunNumbers { first: 4, count: 1 }.check(four).unwrap();
-        assert!(
-            run.of(&frame[..2]).is_empty(),
-            "a shorter frame gives nothing"
-        );
     }
 
     #[test]

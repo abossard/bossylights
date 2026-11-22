@@ -43,6 +43,7 @@ fn start(look: u16, rank: Rank) -> Command {
         look,
         rank,
         when: When::Now,
+        usage: Default::default(),
     }
 }
 
@@ -82,7 +83,8 @@ fn releasing_a_full_budget_loop_leaves_room_for_the_next_manual_press() {
                     colour: Some(red),
                     ..Light::DARK
                 },
-            },
+            }
+            .into(),
         })
         .unwrap();
     let Begun::Started { play } = sender.begin(start(1, Rank::Show), &[]).unwrap() else {
@@ -118,7 +120,7 @@ fn releasing_a_full_budget_loop_leaves_room_for_the_next_manual_press() {
 fn a_palette_edit_fits_when_it_replaces_a_loop_with_the_same_work() {
     let (_engine, mut sender, wakes, heard) = wall(3000, 18);
     let target = Target::Light { light: 1 };
-    let palette = |colour| Command::PutAuthoredStep {
+    let palette = |colour| Command::PutStep {
         look: 1,
         name: Text::new("palette").unwrap(),
         step: AuthoredStep {

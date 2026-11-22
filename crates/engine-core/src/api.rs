@@ -710,6 +710,19 @@ pub enum Reply<'a> {
 /// The most fixtures one `Found` carries.
 pub const MATCHES: usize = 50;
 
+/// Why an output's device could not be opened ([`Refusal::CannotOpen`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub enum OpenFailure {
+    /// The device or socket refused, `with` the system's error number when it gave one.
+    Device { with: Option<i32> },
+    /// The output's thread could not start.
+    Thread,
+    /// Nothing could be opened now: the engine stopped, or the old device was not given
+    /// back in time.
+    Unavailable,
+}
+
 /// Why a command was not taken.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
@@ -724,8 +737,8 @@ pub enum Refusal {
     NoSuchAddress,
     /// More commands are waiting than the engine takes in one frame. Send again.
     QueueFull,
-    /// The output's device or socket could not be opened.
-    CannotOpen,
+    /// The output's device or socket could not be opened, and why.
+    CannotOpen { why: OpenFailure },
     /// The library has no fixture of that maker and model.
     NoSuchFixture,
     /// The output's device is being opened. Send again once it is open.

@@ -54,7 +54,8 @@ fn step(look: u16, [red, green, blue]: [u16; 3]) -> Command {
                 colour: Some(Rgb { red, green, blue }),
                 ..Light::DARK
             },
-        },
+        }
+        .into(),
     }
 }
 
@@ -81,7 +82,8 @@ fn on_group(look: u16) -> Command {
                 }),
                 ..Light::DARK
             },
-        },
+        }
+        .into(),
     }
 }
 
@@ -156,6 +158,7 @@ impl Front {
             look: 1,
             rank: engine::Rank::Manual,
             when: engine::When::Now,
+            usage: Default::default(),
         }) else {
             panic!("look 1 plays");
         };
@@ -209,6 +212,7 @@ impl Front {
                 look,
                 rank: engine::Rank::Manual,
                 when: engine::When::Now,
+                usage: Default::default(),
             });
             assert!(
                 matches!(started, Ok(Begun::Started { .. })),
@@ -289,6 +293,7 @@ fn a_refused_admission_keeps_the_project_the_looks_and_the_next_frame() {
                 look: 2,
                 rank: engine::Rank::Manual,
                 when: engine::When::Now,
+                usage: Default::default(),
             },
             Before::Admitted(save_three),
             Refusal::Stale,
@@ -324,6 +329,7 @@ fn a_refused_admission_keeps_the_project_the_looks_and_the_next_frame() {
                 look: 2,
                 rank: engine::Rank::Manual,
                 when: engine::When::Now,
+                usage: Default::default(),
             },
             Before::Full,
             Refusal::QueueFull,
@@ -341,6 +347,7 @@ fn a_refused_admission_keeps_the_project_the_looks_and_the_next_frame() {
                 look: 2,
                 rank: engine::Rank::Manual,
                 when: engine::When::Now,
+                usage: Default::default(),
             },
             Before::PlaysFull,
             Refusal::PlayFull,
@@ -360,7 +367,8 @@ fn a_refused_admission_keeps_the_project_the_looks_and_the_next_frame() {
                 step: Step {
                     target: Target::Fixture { fixture: 9 },
                     values: Light::DARK,
-                },
+                }
+                .into(),
             },
             Before::Nothing,
             Refusal::NotPatched,
@@ -468,6 +476,7 @@ fn with_every_play_slot_taken_a_release_and_a_fresh_start_need_only_room_in_the_
                     look: 2,
                     rank: engine::Rank::Manual,
                     when: engine::When::Now,
+                    usage: Default::default(),
                 });
                 assert!(matches!(started, Ok(Begun::Started { .. })));
             },
@@ -480,6 +489,7 @@ fn with_every_play_slot_taken_a_release_and_a_fresh_start_need_only_room_in_the_
                     look: 1,
                     rank: engine::Rank::Manual,
                     when: engine::When::Now,
+                    usage: Default::default(),
                 });
                 let Ok(Begun::Started { play: again }) = started else {
                     panic!("look 1 starts again: {:?}", started.err());
@@ -586,6 +596,7 @@ impl Served {
                 look: 1,
                 rank: engine::Rank::Manual,
                 when: engine::When::Now,
+                usage: Default::default(),
             },
             &library,
         ) else {

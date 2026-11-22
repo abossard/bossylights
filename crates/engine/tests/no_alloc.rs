@@ -68,7 +68,8 @@ fn step(red: u16) -> Command {
                 }),
                 ..Light::DARK
             },
-        },
+        }
+        .into(),
     }
 }
 
@@ -243,6 +244,7 @@ fn main() {
                 } else {
                     engine::When::Bar
                 },
+                usage: Default::default(),
             };
             let Ok(Begun::Started { play: waits }) = begin(&mut sender, start, &library) else {
                 panic!("look 1 waits at Autopilot");
@@ -263,6 +265,7 @@ fn main() {
                     look: 1,
                     rank: Rank::Manual,
                     when: engine::When::Now,
+                    usage: Default::default(),
                 },
                 &library,
             );
@@ -315,6 +318,7 @@ fn main() {
                 look: 1,
                 rank: Rank::Show,
                 when: engine::When::Now,
+                usage: Default::default(),
             };
             let Ok(Begun::Started { play: shown }) = begin(&mut sender, start, &library) else {
                 panic!("look 1 starts at Show");
@@ -328,6 +332,7 @@ fn main() {
                     look: 1,
                     rank: Rank::Autopilot,
                     when: engine::When::Bar,
+                    usage: Default::default(),
                 };
                 let Ok(Begun::Started { play: waits }) = begin(&mut sender, start, &library) else {
                     panic!("look 1 waits at Autopilot");
@@ -445,7 +450,7 @@ fn main() {
                 .unwrap();
         }
         sender
-            .send(Command::StartUse {
+            .send(Command::StartLook {
                 look: 3,
                 rank: Rank::Manual,
                 when: engine::When::Now,
@@ -496,7 +501,7 @@ fn main() {
             })
             .unwrap();
         sender
-            .send(Command::StartUse {
+            .send(Command::StartLook {
                 look: 4,
                 rank: Rank::Manual,
                 when: engine::When::Now,
@@ -518,6 +523,7 @@ fn main() {
         look: 1,
         rank: Rank::Manual,
         when: engine::When::Now,
+        usage: Default::default(),
     };
     assert!(
         matches!(
@@ -730,7 +736,7 @@ fn output_health() {
     // A refused restart keeps the old generation and its press history.
     // A successful restart serves the first press of a new generation.
     for (hand_back, result, generation, presses) in [
-        (false, Err(Refusal::CannotOpen), 2, 2),
+        (false, Err(Refusal::CannotOpen { why: engine::OpenFailure::Device { with: None } }), 2, 2),
         (true, Ok(()), 3, 1),
     ] {
         let Begun::Opening(restart) = begin(&mut sender, set_two(2, Rate::Sixty), &[]).unwrap()
@@ -972,11 +978,12 @@ fn linked_ends() {
                 intensity: Some(intensity),
                 ..Light::DARK
             },
-        },
+        }
+        .into(),
     };
     let start = |sender: &mut Sender, slot: usize, rank| match begin(
         sender,
-        Command::StartUse {
+        Command::StartLook {
             look: slot as u16 + 1,
             rank,
             when: When::Now,
@@ -1057,6 +1064,7 @@ fn linked_ends() {
             look: 0,
             rank,
             when: When::Now,
+            usage: Default::default(),
         };
         assert!(matches!(
             begin(&mut sender, extra_root, &[]),
@@ -1172,6 +1180,7 @@ fn linked_ends() {
         look: 1,
         rank: Rank::Show,
         when: When::Now,
+        usage: Default::default(),
     };
     for _ in PLAYS..engine::QUEUE + engine::MAX_OUTPUTS {
         mock::wait_until(

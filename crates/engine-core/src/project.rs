@@ -7,16 +7,8 @@
 //!                                                                 or open a device, then Opened / OpenFailed
 //! ```
 //!
-//! One output, as the project sees it:
-//!
-//! ```text
-//! None or other kind --SetOutput--> Opening --Opened--> Kind
-//!                                         --OpenFailed--> as before
-//! same kind, same run --SetOutput--> Kind (lane kept)
-//! same kind, new run  --SetOutput--> Restarting --Opened--> Kind (device kept)
-//!                                                 --OpenFailed--> old Kind
-//! any --RemoveOutput--> None        any --Attached--> Attached (a device brought by a test)
-//! ```
+//! One output, as the project sees it, is one machine (`Setup`): every state and event
+//! in the table "An output in the project" in `docs/engine.md`, walked by a test.
 
 use crate::{
     Command, EngineCommand, LookCommand, MAX_OUTPUTS, MemberList, Members, OutputKind,
@@ -28,30 +20,85 @@ use serde::Serialize;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub struct Project {
+    // made from `slots` by `with` alone
     /// The outputs, by number. `None` where none is set.
     #[cfg_attr(test, ts(type = "Array<ProjectOutput | null>"))]
-    pub outputs: [Option<ProjectOutput>; MAX_OUTPUTS],
+    outputs: [Option<ProjectOutput>; MAX_OUTPUTS],
     /// The engine's universes: what a command is checked against.
     #[serde(skip)]
     #[cfg_attr(test, ts(skip))]
     universes: Universes,
-    /// Off-wire state for each output, including its pending device change.
+    /// Each output's state, and what its last switch replaced.
     #[serde(skip)]
     #[cfg_attr(test, ts(skip))]
-    setup: [Setup; MAX_OUTPUTS],
+    slots: [Slot; MAX_OUTPUTS],
 }
 
+/// One output: its state and `before`, the settled state its last switch replaced, the
+/// only one [`ProjectEvent::Restore`] goes back to.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct Setup {
-    /// An attached route's bounds are display data. Only a run can satisfy a patch check.
-    routed: bool,
-    pending: Option<Opening>,
+struct Slot {
+    setup: Setup,
+    before: Option<Settled>,
+}
+
+/// Where one output is: settled, or switching to a device being opened.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Setup {
+    Settled(Settled),
+    /// The wire still shows `was`; `to` is what `Opened` makes it.
+    Switching { was: Settled, to: Opening },
+}
+
+impl Default for Setup {
+    fn default() -> Self {
+        Self::Settled(Settled::Empty)
+    }
 }
 
 impl Setup {
-    /// A routed attachment can have holes. Its bounds alone never guarantee a stream.
-    fn has_run(self) -> bool {
-        !self.routed
+    const fn settled(self) -> Settled {
+        match self {
+            Self::Settled(settled) | Self::Switching { was: settled, .. } => settled,
+        }
+    }
+}
+
+/// An output with no device change under way.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Settled {
+    #[default]
+    Empty,
+    /// A device the engine opened for this kind.
+    Kind { kind: OutputKind, run: Run },
+    /// A device a test brought, sending the whole run.
+    Attached { run: Run },
+    /// A device a test brought with its own route: its bounds are display data, never a
+    /// stream a patch check can count on (a route can have holes).
+    Routed { bounds: Run },
+}
+
+impl Settled {
+    const fn wire(self) -> Option<ProjectOutput> {
+        match self {
+            Self::Empty => None,
+            Self::Kind { kind, run } => Some(ProjectOutput::Kind {
+                kind,
+                universes: run,
+            }),
+            Self::Attached { run } | Self::Routed { bounds: run } => {
+                Some(ProjectOutput::Attached { universes: run })
+            }
+        }
+    }
+
+    /// What it sends that a patch check can count on: its kind, if known, and its run.
+    const fn stream(self) -> Option<(Option<OutputKind>, Run)> {
+        match self {
+            Self::Kind { kind, run } => Some((Some(kind), run)),
+            Self::Attached { run } => Some((None, run)),
+            Self::Empty | Self::Routed { .. } => None,
+        }
     }
 }
 
@@ -106,6 +153,9 @@ pub enum ProjectEvent {
         output: OutputNumber,
         universes: Run,
     },
+    /// Back to the settled state the output's last switch replaced, for a view of the
+    /// project before that switch is visible. Refused (`Stale`) when there is none.
+    Restore { output: OutputNumber },
 }
 
 /// What the front must do after an update, as data. `rate: None` is the kind's default,
@@ -152,9 +202,9 @@ impl Project {
         Self {
             outputs: [None; MAX_OUTPUTS],
             universes,
-            setup: [Setup {
-                routed: false,
-                pending: None,
+            slots: [Slot {
+                setup: Setup::Settled(Settled::Empty),
+                before: None,
             }; MAX_OUTPUTS],
         }
     }
@@ -185,11 +235,9 @@ impl Project {
                 } => {
                     let universes = run.check(universes)?;
                     self.idle(output)?;
-                    let (pending, effect) = match self.output(output) {
-                        Some(ProjectOutput::Kind {
-                            kind: was,
-                            universes: run,
-                        }) if was == kind => {
+                    let was = self.settled(output);
+                    let (to, effect) = match was {
+                        Settled::Kind { kind: same, run } if same == kind => {
                             if run == universes {
                                 return Ok((
                                     self,
@@ -211,7 +259,10 @@ impl Project {
                                 },
                             )
                         }
-                        _ => (
+                        Settled::Empty
+                        | Settled::Kind { .. }
+                        | Settled::Attached { .. }
+                        | Settled::Routed { .. } => (
                             Opening::Open(kind, universes),
                             ProjectEffect::Open {
                                 output,
@@ -221,7 +272,10 @@ impl Project {
                             },
                         ),
                     };
-                    let project = self.with(output, |_, setup| setup.pending = Some(pending));
+                    let project = self.with(output, |_| Slot {
+                        setup: Setup::Switching { was, to },
+                        before: Some(was),
+                    });
                     Ok((project, Some(effect)))
                 }
                 Command::Patch {
@@ -290,9 +344,6 @@ impl Project {
                 },
                 Command::RemoveGroup { name } => patch(PatchCommand::RemoveGroup { name }),
                 Command::PutStep { look, name, step } => {
-                    look_effect(LookCommand::Put(crate::Saved { look, name, step }.into()))
-                }
-                Command::PutAuthoredStep { look, name, step } => {
                     look_effect(LookCommand::Put(crate::SavedLook {
                         look,
                         name,
@@ -321,13 +372,7 @@ impl Project {
                     self,
                     Some(ProjectEffect::Look(LookCommand::RemoveLook { look })),
                 )),
-                Command::StartLook { look, rank, when } => look_effect(LookCommand::StartLook {
-                    look,
-                    rank,
-                    when,
-                    usage: crate::Use::default(),
-                }),
-                Command::StartUse {
+                Command::StartLook {
                     look,
                     rank,
                     when,
@@ -348,10 +393,7 @@ impl Project {
                 Command::SetMixRules { rules } => look_effect(LookCommand::SetMixRules { rules }),
                 Command::RemoveOutput { output } => {
                     self.idle(output)?;
-                    let project = self.with(output, |slot, setup| {
-                        *slot = None;
-                        *setup = Setup::default();
-                    });
+                    let project = self.with(output, |_| Slot::default());
                     Ok((
                         project,
                         Some(ProjectEffect::Send(EngineCommand::RemoveOutput { output })),
@@ -359,31 +401,47 @@ impl Project {
                 }
             },
             ProjectEvent::Opened { output, kind } => {
-                let project = self.with(output, |slot, setup| {
-                    if let Some(pending) = setup.pending.take() {
-                        let (_, universes) = pending.next();
-                        *slot = Some(ProjectOutput::Kind { kind, universes });
-                        setup.routed = false;
-                    }
+                let project = self.with(output, |slot| match slot.setup {
+                    Setup::Switching { to, .. } => Slot {
+                        setup: Setup::Settled(Settled::Kind {
+                            kind,
+                            run: to.next().1,
+                        }),
+                        ..slot
+                    },
+                    Setup::Settled(_) => slot,
                 });
                 Ok((project, None))
             }
             ProjectEvent::OpenFailed { output } => {
-                Ok((self.with(output, |_, setup| setup.pending = None), None))
+                let project = self.with(output, |slot| match slot.setup {
+                    Setup::Switching { was, .. } => Slot {
+                        setup: Setup::Settled(was),
+                        before: None,
+                    },
+                    Setup::Settled(_) => slot,
+                });
+                Ok((project, None))
             }
-            ProjectEvent::Attached { output, universes }
-            | ProjectEvent::Routed {
+            ProjectEvent::Attached {
                 output,
-                bounds: universes,
+                universes: run,
             } => {
                 self.idle(output)?;
-                Ok((
-                    self.with(output, |slot, setup| {
-                        *slot = Some(ProjectOutput::Attached { universes });
-                        setup.routed = matches!(event, ProjectEvent::Routed { .. });
-                    }),
-                    None,
-                ))
+                Ok((self.attach(output, Settled::Attached { run }), None))
+            }
+            ProjectEvent::Routed { output, bounds } => {
+                self.idle(output)?;
+                Ok((self.attach(output, Settled::Routed { bounds }), None))
+            }
+            ProjectEvent::Restore { output } => {
+                let before = self.slot(output).and_then(|slot| slot.before);
+                let before = before.ok_or(Refusal::Stale)?;
+                let project = self.with(output, |_| Slot {
+                    setup: Setup::Settled(before),
+                    before: None,
+                });
+                Ok((project, None))
             }
         }
     }
@@ -393,24 +451,24 @@ impl Project {
         self.outputs.get(output.slot()).copied().flatten()
     }
 
+    /// The outputs, by number, as the wire shows them.
+    pub const fn outputs(&self) -> &[Option<ProjectOutput>; MAX_OUTPUTS] {
+        &self.outputs
+    }
+
     /// Whether one output streams every universe from `first` to `last` as one run. An
     /// output changing kind must cover it before and after opening. A restart retains the old
-    /// run on failure, so a patch must fit either outcome.
+    /// run on failure, so a patch must fit either outcome. A routed attachment never counts.
     pub fn streams(&self, first: u16, last: u16) -> bool {
-        self.outputs.iter().zip(&self.setup).any(|(output, setup)| {
-            if !setup.has_run() {
-                return false;
-            }
-            let run = match output {
-                Some(
-                    ProjectOutput::Kind { universes, .. } | ProjectOutput::Attached { universes },
-                ) => *universes,
-                None => return false,
-            };
-            run.covers(first, last)
-                && setup
-                    .pending
-                    .is_none_or(|pending| pending.next().1.covers(first, last))
+        self.slots.iter().any(|slot| {
+            slot.setup
+                .settled()
+                .stream()
+                .is_some_and(|(_, run)| run.covers(first, last))
+                && match slot.setup {
+                    Setup::Settled(_) => true,
+                    Setup::Switching { to, .. } => to.next().1.covers(first, last),
+                }
         })
     }
 
@@ -419,52 +477,69 @@ impl Project {
     /// changing kind appears with its current and requested runs. The same holds for a
     /// restart until the new lane is ready.
     pub fn sends(&self) -> impl Iterator<Item = (u8, Option<OutputKind>, Run)> + '_ {
-        (1_u8..)
-            .zip(self.outputs.iter().zip(&self.setup))
-            .flat_map(|(number, (output, setup))| {
-                let now = output
-                    .filter(|_| setup.has_run())
-                    .map(|output| match output {
-                        ProjectOutput::Kind { kind, universes } => (number, Some(kind), universes),
-                        ProjectOutput::Attached { universes } => (number, None, universes),
-                    });
-                let next = setup
-                    .pending
-                    .map(Opening::next)
-                    .map(|(kind, universes)| (number, Some(kind), universes));
-                now.into_iter().chain(next)
-            })
+        (1_u8..).zip(&self.slots).flat_map(|(number, slot)| {
+            let next = match slot.setup {
+                Setup::Switching { to, .. } => {
+                    let (kind, run) = to.next();
+                    Some((Some(kind), run))
+                }
+                Setup::Settled(_) => None,
+            };
+            slot.setup
+                .settled()
+                .stream()
+                .into_iter()
+                .chain(next)
+                .map(move |(kind, run)| (number, kind, run))
+        })
     }
 
     /// The lane of this output is returning its device for a restart.
     pub fn restarting(&self, output: OutputNumber) -> bool {
-        self.setup
-            .get(output.slot())
-            .is_some_and(|setup| matches!(setup.pending, Some(Opening::Restart(_, _))))
+        self.slot(output).is_some_and(|slot| {
+            matches!(
+                slot.setup,
+                Setup::Switching {
+                    to: Opening::Restart(_, _),
+                    ..
+                }
+            )
+        })
+    }
+
+    fn slot(&self, output: OutputNumber) -> Option<Slot> {
+        self.slots.get(output.slot()).copied()
+    }
+
+    /// What `output` has settled on: while it switches, what it switches from.
+    fn settled(&self, output: OutputNumber) -> Settled {
+        self.slot(output)
+            .map_or(Settled::Empty, |slot| slot.setup.settled())
     }
 
     /// `Opening` while the device of `output` is being opened.
     fn idle(&self, output: OutputNumber) -> Result<(), Refusal> {
-        if self
-            .setup
-            .get(output.slot())
-            .is_some_and(|setup| setup.pending.is_some())
-        {
-            Err(Refusal::Opening)
-        } else {
-            Ok(())
+        match self.slot(output).map(|slot| slot.setup) {
+            Some(Setup::Switching { .. }) => Err(Refusal::Opening),
+            Some(Setup::Settled(_)) | None => Ok(()),
         }
     }
 
-    /// This project with `change` made to the slot of `output`.
-    fn with(
-        mut self,
-        output: OutputNumber,
-        change: impl FnOnce(&mut Option<ProjectOutput>, &mut Setup),
-    ) -> Self {
-        let slot = output.slot();
-        if let (Some(kind), Some(setup)) = (self.outputs.get_mut(slot), self.setup.get_mut(slot)) {
-            change(kind, setup);
+    /// A device a test brought: it replaces what was settled there.
+    fn attach(self, output: OutputNumber, to: Settled) -> Self {
+        self.with(output, |slot| Slot {
+            setup: Setup::Settled(to),
+            before: Some(slot.setup.settled()),
+        })
+    }
+
+    /// This project with `change` made to the slot of `output`: the one writer of an
+    /// output, so its wire value always follows its state.
+    fn with(mut self, output: OutputNumber, change: impl FnOnce(Slot) -> Slot) -> Self {
+        let index = output.slot();
+        if let (Some(wire), Some(slot)) = (self.outputs.get_mut(index), self.slots.get_mut(index)) {
+            *slot = change(*slot);
+            *wire = slot.setup.settled().wire();
         }
         self
     }
@@ -834,6 +909,98 @@ mod tests {
             assert!(!done.restarting(output));
             assert!(done.update(set(before)).is_ok());
         }
+    }
+
+    /// Every cell of "An output in the project" (`docs/engine.md`), for output 1.
+    #[test]
+    fn an_output_in_the_project_follows_its_table() {
+        use ProjectEvent::{Attached, Client, OpenFailed, Opened, Restore, Routed};
+        let two = Universes::new(2).unwrap();
+        let numbers = |count| RunNumbers { first: 1, count };
+        let (one_run, two_run) = (numbers(1).check(two).unwrap(), numbers(2).check(two).unwrap());
+        let (kind, other) = (kinds::EXAMPLE, kinds::OTHER);
+        let set_output = |kind, count| {
+            Client(Command::SetOutput {
+                output: output(1),
+                kind,
+                universes: numbers(count),
+                rate: None,
+            })
+        };
+        let opened = Opened {
+            output: output(1),
+            kind,
+        };
+        let events = [
+            ("SetOutput, same kind and run", set_output(kind, 1)),
+            ("SetOutput, same kind, new run", set_output(kind, 2)),
+            ("SetOutput, other kind", set_output(other, 1)),
+            ("RemoveOutput", Client(Command::RemoveOutput { output: output(1) })),
+            ("Opened", opened),
+            ("OpenFailed", OpenFailed { output: output(1) }),
+            ("Attached", Attached { output: output(1), universes: two_run }),
+            ("Routed", Routed { output: output(1), bounds: two_run }),
+            ("Restore", Restore { output: output(1) }),
+        ];
+        // what an event did: its effect by name, or why it was refused
+        let did = |done: &Result<(Project, Option<ProjectEffect>), Refusal>| match done {
+            Ok((_, None)) => "-",
+            Ok((_, Some(ProjectEffect::Keep { .. }))) => "Keep",
+            Ok((_, Some(ProjectEffect::Restart { .. }))) => "Restart",
+            Ok((_, Some(ProjectEffect::Open { .. }))) => "Open",
+            Ok((_, Some(ProjectEffect::Send(EngineCommand::RemoveOutput { .. })))) => "Remove",
+            Ok((_, Some(_))) => "other effect",
+            Err(Refusal::Opening) => "refused Opening",
+            Err(Refusal::Stale) => "refused Stale",
+            Err(_) => "refused",
+        };
+        let k = |run| Some(ProjectOutput::Kind { kind, universes: run });
+        let a = |run| Some(ProjectOutput::Attached { universes: run });
+        let (k1, k2, a1, a2) = (k(one_run), k(two_run), a(one_run), a(two_run));
+        let refused = "refused Opening";
+        // (state, events that make it, then per event: what it did, output 1 on the wire)
+        type Cell = (&'static str, Option<ProjectOutput>);
+        let rows: [(&str, Vec<ProjectEvent>, [Cell; 9]); 6] = [
+            ("Empty", vec![], [
+                ("Open", None), ("Open", None), ("Open", None), ("Remove", None), ("-", None),
+                ("-", None), ("-", a2), ("-", a2), ("refused Stale", None),
+            ]),
+            ("Kind", vec![set_output(kind, 1), opened], [
+                ("Keep", k1), ("Restart", k1), ("Open", k1), ("Remove", None), ("-", k1),
+                ("-", k1), ("-", a2), ("-", a2), ("-", None),
+            ]),
+            ("Attached", vec![Attached { output: output(1), universes: one_run }], [
+                ("Open", a1), ("Open", a1), ("Open", a1), ("Remove", None), ("-", a1),
+                ("-", a1), ("-", a2), ("-", a2), ("-", None),
+            ]),
+            ("Routed", vec![Routed { output: output(1), bounds: one_run }], [
+                ("Open", a1), ("Open", a1), ("Open", a1), ("Remove", None), ("-", a1),
+                ("-", a1), ("-", a2), ("-", a2), ("-", None),
+            ]),
+            ("Opening", vec![set_output(kind, 1)], [
+                (refused, None), (refused, None), (refused, None), (refused, None), ("-", k1),
+                ("-", None), (refused, None), (refused, None), ("-", None),
+            ]),
+            ("Restarting", vec![set_output(kind, 1), opened, set_output(kind, 2)], [
+                (refused, k1), (refused, k1), (refused, k1), (refused, k1), ("-", k2),
+                ("-", k1), (refused, k1), (refused, k1), ("-", k1),
+            ]),
+        ];
+        for (state, making, cells) in rows {
+            let project = making
+                .into_iter()
+                .fold(Project::new(two), |p, e| p.update(e).unwrap().0);
+            for ((event, happens), (expected, wire)) in events.iter().zip(cells) {
+                let done = project.update(*happens);
+                let after = done.map_or(project, |(after, _)| after);
+                assert_eq!((did(&done), after.output(output(1))), (expected, wire), "{state} + {event}");
+            }
+        }
+        // a restore goes back once: what the switch replaced is used up
+        let restored = [set_output(kind, 1), opened, Restore { output: output(1) }]
+            .into_iter()
+            .fold(Project::new(two), |p, e| p.update(e).unwrap().0);
+        assert_eq!(restored.update(Restore { output: output(1) }), Err(Refusal::Stale));
     }
 
     #[test]

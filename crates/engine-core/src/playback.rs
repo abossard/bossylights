@@ -1,13 +1,8 @@
 //! Saved looks and the plays of them, as the tick thread keeps them: fixed in size.
 //!
-//! ```text
-//! off --StartLook--> Playing --StopLook, the Mixer keeps it--> Kept --ReleaseHold--> off
-//!                       |  \--StopLook, the Mixer reveals; EndFlash (Manual); ReleaseHold--> off
-//!                       \--StartLook again (same look, same rank)--> Playing, a new play in the same slot
-//! Kept --StartLook again--> Playing
-//! off, Kept --StartLook on a beat or bar--> Waiting --the grid reaches it--> Playing
-//! Waiting --StopLook (cancelled), EndFlash (Manual), ReleaseHold--> off
-//! ```
+//! A play is off, `Waiting`, `Playing` or `Kept`. Every tick event and what it does to
+//! each is one table: "A play on the tick" in `docs/engine.md`, walked by a test. A new
+//! plan for a play installs only where [`Plays::takes_plan`] says so.
 //!
 //! A stop the Mixer would keep cancels a waiting play: it ends, and its plan goes back.
 //! The front cannot tell whether the stop came before the launch: it books the play as
@@ -309,6 +304,19 @@ impl Plays {
     /// The play using this reserved slot on the tick thread.
     pub fn at(&self, slot: usize) -> Option<Play> {
         self.0.get(slot).copied().flatten()
+    }
+
+    /// Whether a new plan for `play` installs ("Plan" in the table): while it waits or
+    /// plays. Kept holds its last sample, and an ended play or another in its slot takes
+    /// none: the plan goes back.
+    pub fn takes_plan(&self, play: PlayId) -> bool {
+        self.at(play.slot()).is_some_and(|now| {
+            now.play == play
+                && match now.state {
+                    PlayState::Waiting { .. } | PlayState::Playing => true,
+                    PlayState::Kept => false,
+                }
+        })
     }
 
     /// Whether a play is in `slot`.

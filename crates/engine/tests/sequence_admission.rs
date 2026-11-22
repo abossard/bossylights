@@ -103,6 +103,7 @@ fn a_saved_rgb_wave_leaves_room_to_light_its_first_pixel() {
         look: 1,
         rank: Rank::Show,
         when: When::Now,
+        usage: Default::default(),
     };
     let intensity = Command::SetIntensity {
         target: Target::Light { light: 1 },
@@ -174,7 +175,8 @@ fn playing_strip() -> (Engine, engine::Sender, engine::Wakes) {
                     }),
                     ..Light::DARK
                 },
-            },
+            }
+            .into(),
         })
         .unwrap();
     sender
@@ -193,6 +195,7 @@ fn playing_strip() -> (Engine, engine::Sender, engine::Wakes) {
             look: 2,
             rank: Rank::Show,
             when: When::Now,
+            usage: Default::default(),
         })
         .unwrap();
     engine.latest();

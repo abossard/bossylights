@@ -369,7 +369,7 @@ fn a_reopen_gives_a_closing_port_its_full_second_before_trying_again() {
         rate: None,
     };
     let before = Instant::now();
-    assert_eq!(sender.send(reopen), Err(Unsent::Refused(Refusal::CannotOpen)));
+    assert_eq!(sender.send(reopen), Err(Unsent::Refused(Refusal::CannotOpen { why: engine::OpenFailure::Device { with: None } })));
     let attempted = attempts.try_recv().unwrap();
     assert!(attempted.duration_since(before) >= Duration::from_secs(1));
 }

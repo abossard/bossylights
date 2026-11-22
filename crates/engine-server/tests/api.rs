@@ -428,7 +428,7 @@ async fn a_request_that_cannot_be_right_is_refused_and_changes_nothing() {
                 json!({"first": 1, "count": 1}),
                 json!(null),
             ),
-            refused(json!("CannotOpen")),
+            refused(json!({"CannotOpen": {"why": {"Device": {"with": null}}}})),
         ),
         (
             output(

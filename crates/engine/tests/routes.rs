@@ -37,7 +37,7 @@ fn a_failed_first_open_leaves_the_output_free_for_a_retry() {
     };
     // A failed first open has no previous lane to resume. The retry sends one attach.
     for (answer, project, sent) in [
-        (Err(Refusal::CannotOpen), None, 0),
+        (Err(Refusal::CannotOpen { why: engine::OpenFailure::Device { with: None } }), None, 0),
         (Ok(()), Some(opened), 1),
     ] {
         assert_eq!(sender.send(set), answer.map_err(Unsent::Refused));
@@ -49,7 +49,7 @@ fn a_failed_first_open_leaves_the_output_free_for_a_retry() {
 #[test]
 fn an_attached_route_must_fit_whole_rgbw_pixels() {
     let output = OutputNumber::try_from(1).unwrap();
-    for (len, answer) in [(319, Err(Refusal::CannotOpen)), (320, Ok(()))] {
+    for (len, answer) in [(319, Err(Refusal::CannotOpen { why: engine::OpenFailure::Device { with: None } })), (320, Ok(()))] {
         let (receiver, kind) = stream::receiver(Color::Rgbw);
         let (_engine, mut sender) = Engine::start(Universes::ONE).unwrap();
         let route = Route::new(outputs::Limits::RAW, &[Span { start: 0, len }]).unwrap();

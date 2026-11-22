@@ -37,7 +37,7 @@ mod show;
 
 pub use api::{
     API_VERSION, AuthoredStep, Definition, Health, HealthEvent, LateReason, LatenessWindow,
-    MATCHES, OutputHealth, OutputHealthEvent, OutputHealthState, OutputMeasurement, Palette,
+    MATCHES, OpenFailure, OutputHealth, OutputHealthEvent, OutputHealthState, OutputMeasurement, Palette,
     Pattern, PressWindow, RecoveredReason, Refusal, Repeat, Reply, Request, SavedLook, Sequence,
     SequenceItem, Speed, Swatches, Use, WaveTarget,
 };
@@ -55,7 +55,7 @@ pub use library::{
 };
 pub use output::{
     Counters, MAX_OUTPUTS, OFF_BEAT, Outcome, Output, OutputNumber, ROUTE_MOST, Rate, RouteFault,
-    Run, RunNumbers, SPANS_MOST, Span, Status, bounds, gather, route_length,
+    Run, RunNumbers, SPANS_MOST, Span, Status, Watch, bounds, gather, route_length,
 };
 pub use patch::{
     Grouped, Layout, Member, MemberList, Members, PatchCommand, Patched, Pixels, Target,
@@ -215,7 +215,7 @@ pub enum Command {
     /// Remove an output. Nothing happens if there is none.
     RemoveOutput { output: OutputNumber },
     /// Add a fixture of the library in one of its modes, from `at` on. The reply carries
-    /// its number. Another fixture on the same channels is allowed: the patch shows it.
+    /// its number. A fixture on any of the same channels is refused (`Overlaps`).
     Patch {
         #[cfg_attr(test, ts(type = "string"))]
         name: Text,
@@ -286,16 +286,7 @@ pub enum Command {
     },
     /// Save `step` as look `look` named `name`, in place of the one saved there. A
     /// playing look shows the new step in the next frame and keeps its start.
-    #[serde(skip)]
-    #[cfg_attr(test, ts(skip))]
     PutStep {
-        look: u16,
-        #[cfg_attr(test, ts(type = "string"))]
-        name: Text,
-        step: Step,
-    },
-    #[serde(rename = "PutStep")]
-    PutAuthoredStep {
         look: u16,
         #[cfg_attr(test, ts(type = "string"))]
         name: Text,
@@ -318,11 +309,7 @@ pub enum Command {
     /// Play a saved look at `rank`, Manual when not given: answered `Started` with its
     /// play. The look playing or kept at that rank already starts afresh, as the latest
     /// start; another rank plays on its own.
-    #[serde(skip)]
-    #[cfg_attr(test, ts(skip))]
-    StartLook { look: u16, rank: Rank, when: When },
-    #[serde(rename = "StartLook")]
-    StartUse {
+    StartLook {
         look: u16,
         #[serde(default, rename = "use")]
         #[cfg_attr(test, ts(optional = nullable))]
@@ -377,6 +364,7 @@ pub enum EngineCommand {
     Sent {
         output: OutputNumber,
         outcome: Outcome,
+        watch: Watch,
         at: Duration,
     },
     SetChannel {
@@ -527,11 +515,12 @@ pub fn update(
         EngineCommand::Sent {
             output,
             outcome,
+            watch,
             at,
         } => {
             let mut outputs = state.outputs;
             if let Some(Some(sent)) = outputs.get_mut(output.slot()) {
-                *sent = sent.sent(outcome, at);
+                *sent = sent.sent(outcome, watch, at);
             }
             State { outputs, ..state }
         }
@@ -578,6 +567,7 @@ pub fn update(
             blackout: on,
             ..state
         },
+        // `Plan`: the plays stay; whether its plan installs is `Plays::takes_plan`.
         EngineCommand::Writers | EngineCommand::Runs { .. } | EngineCommand::Plan { .. } => state,
         EngineCommand::Lights {
             lights: run,
@@ -814,25 +804,34 @@ pub fn percentile<const N: usize>(
     percent: u64,
     worst: Duration,
 ) -> Option<Duration> {
-    let total = histogram
-        .iter()
-        .fold(0_u64, |sum, n| sum.saturating_add(*n));
-    let above = 100_u64.saturating_sub(percent);
-    // ceil(percent / 100 × total), without overflow
-    let rank = total - (total / 100 * above + total % 100 * above / 100);
-    let mut seen = 0_u64;
+    let total = histogram.iter().map(|n| u128::from(*n)).sum::<u128>();
+    let rank = rank(total, percent);
+    let mut seen = 0_u128;
     for (bucket, count) in histogram.iter().enumerate() {
-        seen = seen.saturating_add(*count);
+        seen += u128::from(*count);
         if total > 0 && seen >= rank {
-            let last = bucket + 1 == N;
-            return Some(if last { worst } else { edge(bucket).min(worst) });
+            return Some(bound::<N>(bucket, worst));
         }
     }
     None
 }
 
-fn edge(bucket: usize) -> Duration {
-    BUCKET.saturating_mul(u32::try_from(bucket + 1).unwrap_or(u32::MAX))
+/// Nearest rank: how many of `total` counts stay at or under the `percent` percentile,
+/// ceil(percent / 100 x total). A percent above 100 is 100. A `u128` total never overflows.
+fn rank(total: u128, percent: u64) -> u128 {
+    (u128::from(percent.min(100)) * total).div_ceil(100)
+}
+
+/// The upper edge of `bucket`, never past `worst`. The last of `N` buckets holds
+/// everything later: `worst`.
+fn bound<const N: usize>(bucket: usize, worst: Duration) -> Duration {
+    if bucket + 1 == N {
+        worst
+    } else {
+        BUCKET
+            .saturating_mul(u32::try_from(bucket + 1).unwrap_or(u32::MAX))
+            .min(worst)
+    }
 }
 
 #[cfg(test)]
@@ -1169,6 +1168,86 @@ mod tests {
         // and it never sounds: past its bar, nothing launched
         let later = wake(state, 2500, &[]);
         assert!(later.plays.iter().next().is_none());
+    }
+
+    /// Every cell of "A play on the tick" (`docs/engine.md`): beat n at n * 500 ms, the
+    /// play in slot 0 set up at 1100 ms, each event in a later wake.
+    #[test]
+    fn a_play_on_the_tick_follows_its_table() {
+        let (first, second) = (play(0), PlayId::new(0, 2).unwrap());
+        let start = |play, rank, when| EngineCommand::Start {
+            play,
+            look: 7,
+            rank,
+            when,
+        };
+        let removing = MixRules {
+            manual_end: ManualEnd::UntilStop,
+            ..MixRules::default()
+        };
+        let staying = MixRules {
+            other_end: OtherEnd::Stay,
+            ..MixRules::default()
+        };
+        let set_up = |commands: &[EngineCommand]| {
+            let sent: Vec<_> = commands.iter().map(|command| (1100, *command)).collect();
+            wake(at_120(), 1100, &sent)
+        };
+        let keep = EngineCommand::Keep { play: first };
+        let manual = |when| start(first, Rank::Manual, when);
+        let (off, waiting) = (set_up(&[]), set_up(&[manual(When::Beat)]));
+        let (playing, kept) = (set_up(&[manual(When::Now)]), set_up(&[manual(When::Now), keep]));
+        // (event, wake at, its command): the table's columns, in order
+        let events = [
+            ("Start, Now", 1200, Some(start(second, Rank::Manual, When::Now))),
+            ("Start, Beat, not reached", 1200, Some(start(second, Rank::Manual, When::Beat))),
+            ("Start, boundary reached", 1500, Some(start(second, Rank::Manual, When::Beat))),
+            ("grid reaches the beat", 1600, None),
+            ("Keep", 1200, Some(keep)),
+            ("Release", 1200, Some(EngineCommand::Release { play: first })),
+            ("ReleaseAll", 1200, Some(EngineCommand::ReleaseAll)),
+            ("Rules, Manual ends on a stop", 1200, Some(EngineCommand::Rules { rules: removing })),
+            ("Rules, Manual kept", 1200, Some(EngineCommand::Rules { rules: staying })),
+        ];
+        let first_is = |state| Some((1, state));
+        let (fresh, fresh_waiting) = (
+            Some((2, PlayState::Playing)),
+            Some((2, PlayState::Waiting { beat: 3 })),
+        );
+        let (on_3, plays, held) = (
+            first_is(PlayState::Waiting { beat: 3 }),
+            first_is(PlayState::Playing),
+            first_is(PlayState::Kept),
+        );
+        // (state, slot 0 after each event as (generation, state), takes a plan for it)
+        let rows = [
+            ("off", off, [fresh, fresh_waiting, fresh, None, None, None, None, None, None], false),
+            ("Waiting", waiting, [fresh, fresh_waiting, fresh, plays, None, None, None, on_3, on_3], true),
+            ("Playing", playing, [fresh, fresh_waiting, fresh, plays, held, None, None, plays, plays], true),
+            ("Kept", kept, [fresh, fresh_waiting, fresh, held, held, None, None, None, held], false),
+        ];
+        for (name, state, after, takes_plan) in rows {
+            assert_eq!(state.plays.takes_plan(first), takes_plan, "{name}: Plan");
+            assert!(!state.plays.takes_plan(second), "{name}: Plan of another play");
+            for ((event, at, command), expected) in events.iter().zip(after) {
+                let sent: Vec<_> = command.iter().map(|command| (*at, *command)).collect();
+                let slot = wake(state, *at, &sent).plays.at(0);
+                let got = slot.map(|play| (play.play.generation, play.state));
+                assert_eq!(got, expected, "{name} + {event}");
+            }
+        }
+        // ReleaseAll lets only Manual go; the rules end a kept play of their rank only
+        let show_kept = set_up(&[start(first, Rank::Show, When::Now), keep]);
+        let show_cases = [
+            (EngineCommand::ReleaseAll, Some(PlayState::Kept)),
+            (EngineCommand::Rules { rules: staying }, Some(PlayState::Kept)),
+            (EngineCommand::Rules { rules: MixRules::default() }, None),
+        ];
+        for (command, expected) in show_cases {
+            let state = wake(show_kept, 1200, &[(1200, command)]);
+            let got = state.plays.at(0).map(|play| play.state);
+            assert_eq!(got, expected, "Show, Kept + {command:?}");
+        }
     }
 
     #[test]
@@ -2037,6 +2116,29 @@ mod tests {
     }
 
     #[test]
+    fn rank_is_the_nearest_rank() {
+        // (total, percent, rank): ceil(percent / 100 x total), the textbook nearest rank
+        let full = 501 * u128::from(u64::MAX); // every bucket of a window at its most
+        let cases = [
+            (0, 99, 0),
+            (1, 0, 0),
+            (1, 99, 1),
+            (99, 99, 99),   // 98.01
+            (100, 99, 99),  // 99
+            (101, 99, 100), // 99.99
+            (100, 95, 95),  // 95
+            (101, 95, 96),  // 95.95
+            (100, 100, 100),
+            (100, 0, 0),
+            (100, 150, 100), // above 100 is 100
+            (full, 99, 9_149_400_593_119_200_505_524),
+        ];
+        for (total, percent, expected) in cases {
+            assert_eq!(rank(total, percent), expected, "{total}, {percent}");
+        }
+    }
+
+    #[test]
     fn percentile_is_the_upper_edge_of_its_bucket_and_never_past_the_worst() {
         let last = LATENESS_BUCKETS - 1;
         let late = 30_000; // past the last edge, 25 ms
@@ -2055,7 +2157,8 @@ mod tests {
             (counts(&[(0, 1), (last, 1)]), 2_000_000, 95, Some(2_000_000)), // a stall of 2 s
             (counts(&[(last, 3)]), late, 50, Some(late)),
             (counts(&[(0, 99), (last, 1)]), late, 99, Some(100)),
-            (counts(&[(0, u64::MAX), (1, u64::MAX)]), 150, 99, Some(100)), // saturates
+            // half of 2 x u64::MAX counts in each: p99 is in the second, capped at the worst
+            (counts(&[(0, u64::MAX), (1, u64::MAX)]), 150, 99, Some(150)),
             // a total that is no multiple of 100: the rank is rounded up
             (counts(&[(0, 75), (5, 75)]), 550, 50, Some(100)), // rank 75
             (counts(&[(0, 74), (5, 76)]), 550, 50, Some(550)),
@@ -2104,6 +2207,7 @@ mod tests {
                 OutputHealthEvent::decl(&config),
                 HealthEvent::decl(&config),
                 Refusal::decl(&config),
+                OpenFailure::decl(&config),
                 State::decl(&config),
                 Priority::decl(&config),
                 BestEffort::decl(&config),

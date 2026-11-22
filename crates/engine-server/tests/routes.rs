@@ -976,7 +976,7 @@ async fn check_recovery(ever_sent: bool) {
     wakes.hold().unwrap();
     assert_eq!(
         common::command(&mut writer, set(3)).await,
-        json!({"Refused": {"reason": "CannotOpen"}})
+        json!({"Refused": {"reason": {"CannotOpen": {"why": {"Device": {"with": null}}}}}})
     );
     wakes.run();
     tokio::task::block_in_place(|| retrying.recv_timeout(usb::NEVER)).expect("retry the old run");
@@ -1057,7 +1057,7 @@ fn a_refused_restart_keeps_the_only_stream_for_a_patched_strip() {
     let result = sender.finish(restart.open());
     engine.stall_reclamation(false);
 
-    assert_eq!(result, Err(Unsent::Refused(Refusal::CannotOpen)));
+    assert_eq!(result, Err(Unsent::Refused(Refusal::CannotOpen { why: engine::OpenFailure::Device { with: None } })));
     let after = sender.project();
     assert_eq!(
         (after.output(one), sender.patch().unstreamed(&after)),
@@ -1486,7 +1486,7 @@ async fn a_refused_reroute_keeps_the_old_run_sending_during_open() {
     release.send(()).unwrap();
     assert_eq!(
         common::answer(&mut writer).await,
-        json!({"Refused": {"reason": "CannotOpen"}})
+        json!({"Refused": {"reason": {"CannotOpen": {"why": {"Device": {"with": null}}}}}})
     );
     wakes.wake_at(at + period).unwrap();
     assert_eq!(packet(&socket, 0x41, 0x0B, 0, 510).2[0], 91);
@@ -1727,7 +1727,7 @@ fn a_resize_that_will_be_refused_keeps_sending_the_old_run_while_it_opens() {
     release.send(()).unwrap();
     assert_eq!(
         sender.finish(worker.join().unwrap()),
-        Err(Unsent::Refused(Refusal::CannotOpen))
+        Err(Unsent::Refused(Refusal::CannotOpen { why: engine::OpenFailure::Device { with: None } }))
     );
     engine.stall_reclamation(false);
     wakes.wake().unwrap();
