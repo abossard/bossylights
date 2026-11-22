@@ -19,7 +19,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 /// One property of a light: one winner each, never half of one. Each gobo wheel is its
 /// own property: two wheels show two gobos at once.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum Property {
     Intensity,
     Colour,
@@ -56,7 +56,7 @@ impl Property {
 /// [`Wheel::COUNT`]. Another number is no wheel: refused where it is read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "u8", into = "u8")]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Wheel(u8);
 
 impl Wheel {
@@ -100,7 +100,7 @@ impl From<Wheel> for u8 {
 /// supplies (sparse), what a light holds, and what it shows once the Mixer decided.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Light {
     #[serde(default)]
     pub intensity: Option<u16>,
@@ -166,7 +166,7 @@ impl Light {
 
 /// One value of one property: what a direct grab holds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum Value {
     Intensity(u16),
     Colour(Rgb),
@@ -204,7 +204,7 @@ impl Value {
 /// A colour, one property of a light.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Rgb {
     pub red: u16,
     pub green: u16,
@@ -232,7 +232,7 @@ impl Rgb {
 /// Where a moving head points: pan and tilt travel together.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Position {
     pub pan: u16,
     pub tilt: u16,
@@ -241,7 +241,7 @@ pub struct Position {
 /// A gobo: the wheel and the slot on it, both counted from 1 in the definition's order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Gobo {
     pub wheel: Wheel,
     #[serde(deserialize_with = "slot")]

@@ -82,6 +82,9 @@ pub struct Limits {
     /// The run's channels go out in whole units of this many: the last channels of a run
     /// that make no whole unit are never sent. DDP: a pixel, 3 for RGB, 4 for RGBW.
     pub whole: NonZeroU16,
+    /// The fastest rate it sends at (theory.md, idea 1: a USB DMX adapter only lower
+    /// than its default).
+    pub rate: Rate,
 }
 
 /// What each kind can send: a DMX USB Pro one universe of every channel, DDP every
@@ -99,6 +102,7 @@ impl Limits {
         spans: 1,
         channels: engine_core::ADDRESSES as u32,
         whole: NonZeroU16::MIN,
+        rate: Rate::FortyFour,
     };
 
     const fn ddp(color: Color) -> Self {
@@ -114,6 +118,7 @@ impl Limits {
         spans: SPANS_MOST,
         channels: ROUTE_MOST,
         whole: NonZeroU16::MIN,
+        rate: Rate::Sixty,
     };
 
     /// The length in bytes of a route this kind can send.
@@ -121,14 +126,19 @@ impl Limits {
         route_length(spans, self.spans, self.channels, self.whole)
     }
 
-    /// The run, if all of it fits; else why not, naming the limit.
-    pub const fn check(self, run: Run) -> Result<Run, Refusal> {
-        if run.count() <= self.universes {
-            Ok(run)
-        } else {
-            Err(Refusal::TooManyUniverses {
+    /// The run, if all of it fits and the rate (`None`: the kind's default) is not
+    /// faster than the kind sends; else why not.
+    pub const fn check(self, run: Run, rate: Option<Rate>) -> Result<Run, Refusal> {
+        if run.count() > self.universes {
+            return Err(Refusal::TooManyUniverses {
                 most: self.universes,
-            })
+            });
+        }
+        match rate {
+            Some(rate) if rate.per_second() > self.rate.per_second() => {
+                Err(Refusal::TooFast { most: self.rate })
+            }
+            Some(_) | None => Ok(run),
         }
     }
 }
@@ -186,20 +196,30 @@ mod tests {
             color: Color::Rgbw,
         };
         let too_many = |most| Err(Refusal::TooManyUniverses { most });
-        // (kind, first, count, refused with, channels of a whole unit)
+        let too_fast = Err(Refusal::TooFast {
+            most: Rate::FortyFour,
+        });
+        // (kind, first, count, rate, refused with, channels of a whole unit).
+        // Rates from theory.md, idea 1: USB DMX 44 or lower, DDP 30, 44, 60.
         let cases = [
-            (pro, 1, 1, Ok(()), 1),
-            (pro, 3, 1, Ok(()), 1),
-            (pro, 1, 2, too_many(1), 1),
-            (pro, 1, MAX_UNIVERSES, too_many(1), 1),
-            (ddp, 1, 1, Ok(()), 3),
-            (ddp, 1, MAX_UNIVERSES, Ok(()), 3),
-            (rgbw, 1, MAX_UNIVERSES, Ok(()), 4),
+            (pro, 1, 1, None, Ok(()), 1),
+            (pro, 3, 1, None, Ok(()), 1),
+            (pro, 1, 1, Some(Rate::Thirty), Ok(()), 1),
+            (pro, 1, 1, Some(Rate::FortyFour), Ok(()), 1),
+            (pro, 1, 1, Some(Rate::Sixty), too_fast, 1),
+            (pro, 1, 2, None, too_many(1), 1),
+            (pro, 1, 2, Some(Rate::Sixty), too_many(1), 1),
+            (pro, 1, MAX_UNIVERSES, None, too_many(1), 1),
+            (ddp, 1, 1, None, Ok(()), 3),
+            (ddp, 1, 1, Some(Rate::Thirty), Ok(()), 3),
+            (ddp, 1, 1, Some(Rate::Sixty), Ok(()), 3),
+            (ddp, 1, MAX_UNIVERSES, None, Ok(()), 3),
+            (rgbw, 1, MAX_UNIVERSES, Some(Rate::FortyFour), Ok(()), 4),
         ];
-        for (kind, first, count, expected, whole) in cases {
+        for (kind, first, count, rate, expected, whole) in cases {
             let checked = Universes::new(MAX_UNIVERSES)
                 .and_then(|most| RunNumbers { first, count }.check(most).ok())
-                .map(|run| limits(kind).check(run).map(|_| ()));
+                .map(|run| limits(kind).check(run, rate).map(|_| ()));
             assert_eq!(checked, Some(expected), "{kind:?} {first}, {count}");
             assert_eq!(limits(kind).whole.get(), whole, "{kind:?}");
         }

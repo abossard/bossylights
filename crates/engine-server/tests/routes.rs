@@ -1570,7 +1570,7 @@ async fn accepting_a_reroute_does_not_hide_the_adapters_existing_outage() {
     let mut reader = common::connect(address).await;
     let set = |first| {
         json!({"SetOutput": {
-            "output": 1, "kind": kind, "universes": {"first": first, "count": 1}, "rate": "60"
+            "output": 1, "kind": kind, "universes": {"first": first, "count": 1}, "rate": "44"
         }})
     };
     for (universe, value) in [(1, 11), (2, 91)] {

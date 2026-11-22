@@ -804,14 +804,22 @@ fn an_edit_admitted_after_stop_is_answered_stopping_so_every_accepted_one_is_sav
             }
             // A's step is prepared on the blocking pool, which is busy: it waits there
             let release = busy().await;
-            let red = json!({"PutStep": {"look": 1, "name": "red", "step": {
+            // a name of its own: the test waits until this edit reached the pool
+            let look = format!("red, {name}");
+            let red = json!({"PutStep": {"look": 1, "name": look, "step": {
                 "target": {"Fixture": {"fixture": fixture}},
                 "values": {"intensity": null, "colour": {"red": 65535, "green": 0, "blue": 0},
                     "position": null, "zoom": null, "gobos": [null, null, null]},
             }}});
             send(&mut a, &json!({"Send": {"command": red}})).await;
-            // time for A's connection to reach the pool: nothing to observe it by
-            tokio::time::sleep(Duration::from_secs(1)).await;
+            let waiting = Instant::now();
+            while !engine_server::handed_to_the_pool(&look) {
+                assert!(
+                    waiting.elapsed() < Duration::from_secs(10),
+                    "{name}: A's step never reached the blocking pool"
+                );
+                tokio::task::yield_now().await;
+            }
             // B stops the engine: the last save is taken now
             send(&mut b, &json!("Stop")).await;
             assert_eq!(answer(&mut b).await, json!("Stopping"));

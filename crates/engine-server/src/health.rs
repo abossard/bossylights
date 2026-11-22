@@ -1,18 +1,11 @@
 //! The reader turns cumulative engine snapshots into health rows and a bounded event log.
 //! Only the view travels with a picture. The sampling history stays with this reader.
 
-use engine_core::health::{
-    self, Coverage, CoverageStep, HealthInput, HealthSample, HealthState, Verdict, WINDOW_DURATION,
-    next, status_events, window,
-};
-use engine_core::{
-    Health, MAX_OUTPUTS, OutputHealth, OutputHealthEvent, OutputHealthState, OutputMeasurement,
-    OutputNumber, Status,
-};
-use std::collections::VecDeque;
+use engine_core::health::{HealthSample, Timed, Tracker, WINDOW_DURATION};
+use engine_core::{MAX_OUTPUTS, OutputNumber, Status};
 use std::time::Duration;
+use wire::{Health, OutputHealth, OutputHealthEvent, OutputHealthState};
 
-const GRID_POINTS: usize = 9;
 const EVENTS: usize = 64;
 
 pub(super) struct Reader {
@@ -52,12 +45,28 @@ impl Reader {
         let mut changed = false;
         for (output, tracker) in &mut self.outputs {
             let present = read(*output, &mut self.sample);
-            if let Some(row) = tracker.observe(
-                *output,
-                present.then_some(&self.sample),
-                &mut view.log,
-                &mut self.events_at_read,
-            ) {
+            let observed = tracker.observe(present.then_some(&self.sample));
+            let entry = |timed: Timed| OutputHealthEvent {
+                output: *output,
+                generation: timed.generation,
+                at_ms: u64::try_from(timed.at.as_millis()).unwrap_or(u64::MAX),
+                event: timed.event.into(),
+            };
+            if let Some(crossed) = observed.crossed {
+                view.log.record(entry(crossed));
+            }
+            self.events_at_read
+                .extend(observed.at_read.into_iter().flatten().map(entry));
+            let row = observed.row.and_then(|row| {
+                Some(OutputHealth {
+                    output: *output,
+                    generation: row.generation,
+                    status: row.status,
+                    state: OutputHealthState::of(row.state)?,
+                    measurement: row.measurement.into(),
+                })
+            });
+            if let Some(row) = row {
                 let rows = view.rows.get_or_insert([row; MAX_OUTPUTS]);
                 changed |= count >= view.count || rows[count] != row;
                 rows[count] = row;
@@ -129,238 +138,16 @@ impl Log {
     }
 }
 
-struct GridPoint {
-    end: Duration,
-    sample: HealthSample,
-    verdict: Verdict,
-}
-
-struct Tracker {
-    grid: VecDeque<GridPoint>,
-    previous: Option<HealthSample>,
-    coverage: Option<Coverage>,
-    state: HealthState,
-    measurement: OutputMeasurement,
-}
-
-fn available(status: Status) -> bool {
-    matches!(status, Status::Running | Status::Connecting)
-}
-
-impl Tracker {
-    fn new() -> Self {
-        Self {
-            grid: VecDeque::with_capacity(GRID_POINTS),
-            previous: None,
-            coverage: None,
-            state: HealthState::Absent,
-            measurement: OutputMeasurement::Measuring,
-        }
-    }
-
-    fn reset(&mut self, input: HealthInput) {
-        self.coverage = None;
-        self.previous = None;
-        self.grid.clear();
-        self.measurement = OutputMeasurement::Measuring;
-        self.without_window(input);
-    }
-
-    fn without_window(&mut self, input: HealthInput) {
-        self.state = next(
-            self.state,
-            Verdict::Insufficient,
-            Verdict::Insufficient,
-            input,
-        )
-        .0;
-    }
-
-    fn observe(
-        &mut self,
-        output: OutputNumber,
-        sample: Option<&HealthSample>,
-        log: &mut Log,
-        events_at_read: &mut Vec<OutputHealthEvent>,
-    ) -> Option<OutputHealth> {
-        let Some(sample) = sample else {
-            if self.previous.is_some() {
-                self.reset(HealthInput::Removed);
-            }
-            return None;
-        };
-        if let Some(previous) = &self.previous {
-            debug_assert!(sample.at >= previous.at);
-        }
-        let entry = |at: Duration, event: health::HealthEvent| OutputHealthEvent {
-            output,
-            generation: sample.generation,
-            at_ms: u64::try_from(at.as_millis()).unwrap_or(u64::MAX),
-            event: event.into(),
-        };
-        // A reused adapter can return between two reads of different routes.
-        // Compare its device edges before discarding the old timing windows.
-        for event in status_events(self.previous.as_ref(), Some(sample))
-            .into_iter()
-            .flatten()
-        {
-            events_at_read.push(entry(sample.at, event));
-        }
-        if self
-            .previous
-            .as_ref()
-            .is_none_or(|p| p.generation != sample.generation)
-        {
-            self.reset(HealthInput::NewGeneration);
-        }
-
-        let (coverage, step) = Coverage::observe(self.coverage, sample.generation, sample.at);
-        self.coverage = Some(coverage);
-        if let Some((at, event)) = self.timing(step, sample) {
-            if at == sample.at {
-                events_at_read.push(entry(at, event));
-            } else {
-                log.record(entry(at, event));
-            }
-        }
-        // The published row follows the latest read, even between verdicts
-        // and on a repeat of a grid endpoint.
-        if !available(sample.status) {
-            self.without_window(HealthInput::Present(sample.status));
-        }
-        self.previous = Some(*sample);
-        Some(OutputHealth {
-            output,
-            generation: sample.generation,
-            status: sample.status,
-            state: Option::<OutputHealthState>::from(self.state)?,
-            measurement: self.measurement,
-        })
-    }
-
-    fn timing(
-        &mut self,
-        step: CoverageStep,
-        sample: &HealthSample,
-    ) -> Option<(Duration, health::HealthEvent)> {
-        let reached = match step {
-            CoverageStep::SameGridPoint { end } | CoverageStep::Window { end } => Some(end),
-            CoverageStep::Measuring { end } => end,
-            CoverageStep::BetweenGridPoints | CoverageStep::ClockDiscontinuity { .. } => None,
-        };
-        let judged = self.judge(step, sample);
-        // A rise in the outage count seen by the read that reaches an endpoint (on it,
-        // across it, or again at it) may lie at or before that endpoint: a loss and
-        // return between reads. Its verdict cannot confirm a later warning.
-        let lost = self
-            .previous
-            .is_some_and(|previous| previous.outages != sample.outages);
-        if let Some(point) = self
-            .grid
-            .back_mut()
-            .filter(|point| lost && Some(point.end) == reached)
-        {
-            point.verdict = Verdict::Insufficient;
-        }
-        judged
-    }
-
-    fn judge(
-        &mut self,
-        step: CoverageStep,
-        sample: &HealthSample,
-    ) -> Option<(Duration, health::HealthEvent)> {
-        use Verdict::Insufficient;
-        let end = match step {
-            CoverageStep::BetweenGridPoints => return None,
-            CoverageStep::SameGridPoint { end } => {
-                if let Some(point) = self.grid.back_mut().filter(|point| point.end == end) {
-                    if !available(sample.status) {
-                        point.verdict = Insufficient;
-                    }
-                    point.sample = *sample;
-                } else {
-                    self.restart_coverage(sample);
-                }
-                return None;
-            }
-            CoverageStep::ClockDiscontinuity { .. } => {
-                self.restart_coverage(sample);
-                return None;
-            }
-            CoverageStep::Measuring { end } => {
-                self.measurement = OutputMeasurement::Measuring;
-                end?
-            }
-            CoverageStep::Window { end } => end,
-        };
-
-        // A crossed endpoint uses the preceding read for both counters and status.
-        let endpoint = if end == sample.at {
-            sample
-        } else if let Some(previous) = self.previous.as_ref() {
-            previous
-        } else {
-            self.restart_coverage(sample);
-            return None;
-        };
-        let (verdict, earlier) = if matches!(step, CoverageStep::Window { .. }) {
-            let start = end - WINDOW_DURATION;
-            let Some(before) = self.grid.iter().find(|point| point.end == start) else {
-                self.restart_coverage(sample);
-                return None;
-            };
-            let measured = window(&before.sample, endpoint);
-            self.measurement = (end, measured).into();
-            (measured.verdict, before.verdict)
-        } else {
-            (Insufficient, Insufficient)
-        };
-        let status = endpoint.status;
-        let verdict = if available(status) {
-            verdict
-        } else {
-            Insufficient
-        };
-        self.store(end, *endpoint, verdict);
-        let (state, event) = next(self.state, verdict, earlier, HealthInput::Present(status));
-        self.state = state;
-        event.map(|event| (end, event))
-    }
-
-    /// A missing endpoint breaks coverage just like a gap between reads.
-    fn restart_coverage(&mut self, sample: &HealthSample) {
-        let (coverage, first) = Coverage::observe(None, sample.generation, sample.at);
-        self.coverage = Some(coverage);
-        self.grid.clear();
-        if let CoverageStep::Measuring { end: Some(end) } = first {
-            self.store(end, *sample, Verdict::Insufficient);
-        }
-        self.measurement = OutputMeasurement::ClockDiscontinuity;
-        self.without_window(HealthInput::Present(sample.status));
-    }
-
-    fn store(&mut self, end: Duration, sample: HealthSample, verdict: Verdict) {
-        if self.grid.len() == GRID_POINTS {
-            self.grid.pop_front();
-        }
-        self.grid.push_back(GridPoint {
-            end,
-            sample,
-            verdict,
-        });
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::Reader;
     use engine_core::health::HealthSample;
-    use engine_core::{
-        HealthEvent, LateReason, OutputHealth, OutputHealthEvent, OutputHealthState,
-        OutputMeasurement, OutputNumber, RecoveredReason, Status,
-    };
+    use engine_core::{OutputNumber, Status};
     use std::time::Duration;
+    use wire::{
+        HealthEvent, LateReason, OutputHealth, OutputHealthEvent, OutputHealthState,
+        OutputMeasurement, RecoveredReason,
+    };
 
     fn output() -> OutputNumber {
         OutputNumber::try_from(1).unwrap()
@@ -842,7 +629,8 @@ mod tests {
 
     #[test]
     fn the_largest_health_reply_fits_in_16_kib() {
-        use engine_core::{Health, LatenessWindow, MAX_OUTPUTS, PressWindow, Reply};
+        use engine_core::MAX_OUTPUTS;
+        use wire::{Health, LatenessWindow, PressWindow, Reply};
 
         let reason = LateReason::HandoffLateness;
         let rows: [_; MAX_OUTPUTS] = std::array::from_fn(|slot| OutputHealth {

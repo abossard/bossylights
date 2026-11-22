@@ -110,7 +110,7 @@ impl LightRun {
 /// A light's held parts, as the picture shows them: its number, counted from 1, and each
 /// part's value, `None` where nothing holds it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct HeldLight {
     pub light: u16,
     pub intensity: Option<u16>,

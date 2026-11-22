@@ -18,19 +18,19 @@ use serde::Serialize;
 
 /// What the front owns. Only [`Project::update`] changes it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Project {
     // made from `slots` by `with` alone
     /// The outputs, by number. `None` where none is set.
-    #[cfg_attr(test, ts(type = "Array<ProjectOutput | null>"))]
+    #[cfg_attr(feature = "ts", ts(type = "Array<ProjectOutput | null>"))]
     outputs: [Option<ProjectOutput>; MAX_OUTPUTS],
     /// The engine's universes: what a command is checked against.
     #[serde(skip)]
-    #[cfg_attr(test, ts(skip))]
+    #[cfg_attr(feature = "ts", ts(skip))]
     universes: Universes,
     /// Each output's state, and what its last switch replaced.
     #[serde(skip)]
-    #[cfg_attr(test, ts(skip))]
+    #[cfg_attr(feature = "ts", ts(skip))]
     slots: [Slot; MAX_OUTPUTS],
 }
 
@@ -118,7 +118,7 @@ impl Opening {
 
 /// What an output sends to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum ProjectOutput {
     /// A device the engine opened for this kind: where it sends is in the kind.
     Kind { kind: OutputKind, universes: Run },

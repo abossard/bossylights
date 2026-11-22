@@ -26,7 +26,7 @@ pub(super) fn colour(swatches: &[Rgb], phase: Moment, span: u128) -> Option<Rgb>
 
 #[cfg(test)]
 mod tests {
-    use crate::{Binding, Item, Light, Node, Program, Repeat, Rgb, Speed, Swatches, Use};
+    use crate::{Binding, Item, Light, Node, Percent, Program, Repeat, Rgb, Speed, Swatches, Use};
 
     const BEAT: u64 = 1 << 32;
     const PERIOD: u64 = 4 * BEAT;
@@ -119,7 +119,7 @@ mod tests {
                     &[binding(0, i, n)],
                     at,
                     Use {
-                        spread,
+                        spread: Percent::new(spread).unwrap(),
                         ..Use::default()
                     }
                 ),
@@ -135,7 +135,7 @@ mod tests {
     #[test]
     fn linked_spreads_sample_both_sides_of_a_half_tie() {
         let spread = Use {
-            spread: 100,
+            spread: Percent::MOST,
             ..Use::default()
         };
         let mut nodes = vec![wave(&[rgb(1, 0, 0), rgb(0, 1, 0)])];
@@ -228,7 +228,7 @@ mod tests {
         let once = Use {
             speed: Speed::Double,
             repeat: Repeat::Once,
-            spread: 100,
+            spread: Percent::MOST,
         };
         let nodes = [
             wave(&[RED, BLUE]),

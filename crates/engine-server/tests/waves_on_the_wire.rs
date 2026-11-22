@@ -80,7 +80,7 @@ impl Desk {
         accepted(
             &mut socket,
             json!({"SetOutput":{"output":1,"kind":{"DmxUsbPro":{"adapter":1}},
-            "universes":{"first":1,"count":1},"rate":"60"}}),
+            "universes":{"first":1,"count":1},"rate":"44"}}),
         )
         .await;
         accepted(&mut socket, json!({"SetInternalTempo":{"bpm":120}})).await;
@@ -437,7 +437,7 @@ async fn group_reorder_and_palette_edits_reach_a_wave_and_a_playing_sequence() {
             command(&mut desk.socket, edit).await,
             json!({"Refused":{"reason":reason}})
         );
-        let ms = 2020 + 20 * index as u64;
+        let ms = 2025 + 25 * index as u64;
         assert_eq!(
             desk.frame(ms).await[..12],
             [YELLOW; 4].concat(),

@@ -29,6 +29,11 @@ pub fn counts(c: Counters, late: Lateness) -> String {
     )
 }
 
+/// "the server failed while working on a device open; the picture says what is live".
+pub fn failed(work: &str) -> String {
+    format!("the server failed while working on {work}; the picture says what is live")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

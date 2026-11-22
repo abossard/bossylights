@@ -8,9 +8,10 @@
 //! Neither the tick thread nor the API thread reads a file or parses one. A file that
 //! cannot be read is a failure on the shelf; the engine runs on.
 
-use engine_core::{
-    ChannelFunction, Failure, FixtureKind, Library, MATCHES, Match, ModeChannels, ModeSize,
-    NamedChannel, Refusal, Reply, Text,
+use engine_core::{Refusal, Text};
+use wire::{
+    Asked, ChannelFunction, Failure, FixtureKind, Library, MATCHES, Match, ModeChannels,
+    ModeSize, NamedChannel, Reply, Why,
 };
 use fixture_library::{Fixture, Function, Kind, MOST_BYTES, Problem, Refused, parse, search};
 use std::collections::HashMap;
@@ -33,12 +34,42 @@ pub enum Shelf {
     },
 }
 
-/// A file under the folder that could not be read.
+/// A file under the folder that could not be read, or a mode of it.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Failed {
     file: String,
     line: Option<u32>,
-    problem: String,
+    why: Cause,
+}
+
+/// [`Why`], owned.
+#[derive(Debug, PartialEq, Eq)]
+enum Cause {
+    CannotRead(Option<i32>),
+    NotAFile,
+    Definition(Problem),
+    ModeRefused { mode: String, problem: Problem },
+    TooLong(Asked),
+    SameModelAs(String),
+}
+
+impl Cause {
+    fn why(&self) -> Why<'_> {
+        match self {
+            Self::CannotRead(with) => Why::CannotRead { with: *with },
+            Self::NotAFile => Why::NotAFile,
+            Self::Definition(problem) => Why::Definition { problem },
+            Self::ModeRefused { mode, problem } => Why::ModeRefused { mode, problem },
+            Self::TooLong(what) => Why::TooLong { what: *what },
+            Self::SameModelAs(file) => Why::SameModelAs { file },
+        }
+    }
+}
+
+impl From<io::Error> for Cause {
+    fn from(error: io::Error) -> Self {
+        Self::CannotRead(error.raw_os_error())
+    }
 }
 
 /// Starts reading `folder` on a thread of its own. The shelf says `Reading` until it is
@@ -77,10 +108,10 @@ fn read(folder: &Path) -> Shelf {
 /// The bytes of the file at `path`. Only a file is opened: a named pipe or a device could
 /// keep the reader waiting for ever. A file larger than a definition may be is not read;
 /// one that grows while it is read is read one byte past the most, which `parse` refuses.
-fn bytes(path: &Path) -> io::Result<Vec<u8>> {
+fn bytes(path: &Path) -> Result<Vec<u8>, Cause> {
     let size = fs::metadata(path)?;
     if !size.is_file() {
-        return Err(io::Error::other("not a file"));
+        return Err(Cause::NotAFile);
     }
     let most = u64::try_from(MOST_BYTES).unwrap_or(u64::MAX);
     if size.len() > most {
@@ -89,7 +120,7 @@ fn bytes(path: &Path) -> io::Result<Vec<u8>> {
             bytes,
             most: MOST_BYTES,
         };
-        return Err(io::Error::other(large.to_string()));
+        return Err(Cause::Definition(large));
     }
     let mut bytes = Vec::new();
     File::open(path)?
@@ -122,7 +153,7 @@ fn files(
 /// `folder`, with `/` between folders. Files are taken one at a time: only the fixtures
 /// read stay.
 fn shelve(
-    files: impl IntoIterator<Item = (PathBuf, io::Result<Vec<u8>>)>,
+    files: impl IntoIterator<Item = (PathBuf, Result<Vec<u8>, Cause>)>,
     unlisted: Vec<(PathBuf, io::Error)>,
     folder: &Path,
 ) -> Shelf {
@@ -140,7 +171,7 @@ fn shelve(
         .map(|(path, error)| Failed {
             file: name(&path),
             line: None,
-            problem: error.to_string(),
+            why: error.into(),
         })
         .collect();
     // Each maker and model, and the file it came from.
@@ -153,24 +184,27 @@ fn shelve(
                 .map(|r| Failed {
                     file: file.clone(),
                     line: Some(r.line),
-                    problem: format!("mode \"{}\": {}", r.mode, r.problem),
+                    why: Cause::ModeRefused {
+                        mode: r.mode.clone(),
+                        problem: r.problem.clone(),
+                    },
                 })
                 .collect()
         };
-        let one = |line, problem| {
+        let one = |line, why| {
             vec![Failed {
                 file: file.clone(),
                 line,
-                problem,
+                why,
             }]
         };
-        let read = (bytes.map_err(|error| one(None, error.to_string())))
+        let read = (bytes.map_err(|why| one(None, why)))
             .and_then(|bytes| {
                 parse(&file, &bytes).map_err(|error| {
                     if let Problem::NoModeKept(modes) = &error.problem {
                         rows(modes)
                     } else {
-                        one(error.line, error.problem.to_string())
+                        one(error.line, Cause::Definition(error.problem))
                     }
                 })
             })
@@ -197,20 +231,16 @@ fn shelve(
 /// Why `fixture` stays off the shelf, if it does: `Fixture` could not ask for it by maker
 /// and model. Its maker or model is longer than a client may send, or a fixture of the
 /// same maker and model is on the shelf already.
-fn unaskable(fixture: &Fixture, shelved: &HashMap<(String, String), String>) -> Option<String> {
-    let long = [("maker", &fixture.maker), ("model", &fixture.model)]
+fn unaskable(fixture: &Fixture, shelved: &HashMap<(String, String), String>) -> Option<Cause> {
+    let long = [(Asked::Maker, &fixture.maker), (Asked::Model, &fixture.model)]
         .into_iter()
         .find(|(_, text)| Text::new(text).is_none());
-    if let Some((what, text)) = long {
-        return Some(format!(
-            "the {what} is {} bytes, at most {}: it could not be asked for",
-            text.len(),
-            Text::MOST
-        ));
+    if let Some((what, _)) = long {
+        return Some(Cause::TooLong(what));
     }
     shelved
         .get(&(fixture.maker.clone(), fixture.model.clone()))
-        .map(|first| format!("the same maker and model as {first}"))
+        .map(|first| Cause::SameModelAs(first.clone()))
 }
 
 impl Shelf {
@@ -313,7 +343,7 @@ impl Shelf {
             .map(|failed| Failure {
                 file: &failed.file,
                 line: failed.line,
-                problem: &failed.problem,
+                why: failed.why.why(),
             })
             .collect();
         json(&Reply::Failures {
@@ -387,20 +417,24 @@ fn function(function: &Function) -> ChannelFunction<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Failed, MOST_BYTES, PathBuf, Shelf, bytes, shelve};
-    use engine_core::{Library, Text};
+    use super::{Cause, Failed, MOST_BYTES, PathBuf, Shelf, bytes, shelve};
+    use engine_core::Text;
+    use fixture_library::Problem;
     use std::io;
+    use wire::{Asked, Library};
 
     #[test]
     fn every_file_is_read_or_a_failure_that_says_why() {
         let rgb = include_bytes!("../../fixture-library/tests/definitions/Generic-Generic-RGB.qxf");
-        let gone = || io::Error::from(io::ErrorKind::NotFound);
-        let failed = |file: &str, line, problem: &str| Failed {
+        const NO_SUCH_FILE: i32 = 2; // ENOENT
+        let gone = || io::Error::from_raw_os_error(NO_SUCH_FILE);
+        let failed = |file: &str, line, why| Failed {
             file: file.into(),
             line,
-            problem: problem.into(),
+            why,
         };
-        let not_xml = "not valid xml: the root node was opened but never closed";
+        let not_xml =
+            || Cause::Definition(Problem::NotXml("the root node was opened but never closed".into()));
         let named = |maker: &str, model: &str| {
             let text = String::from_utf8(rgb.to_vec()).unwrap();
             let text = text.replace(
@@ -416,15 +450,8 @@ mod tests {
         };
         let most = "a".repeat(Text::MOST);
         let over = "a".repeat(Text::MOST + 1);
-        let too_long = |what: &str| {
-            format!(
-                "the {what} is {} bytes, at most {}: it could not be asked for",
-                Text::MOST + 1,
-                Text::MOST
-            )
-        };
         // (files, folders that could not be listed, read, failures)
-        type Files = Vec<(&'static str, io::Result<Vec<u8>>)>;
+        type Files = Vec<(&'static str, Result<Vec<u8>, Cause>)>;
         let cases: [(Files, Vec<&str>, u32, Vec<Failed>); 6] = [
             (vec![], vec![], 0, vec![]),
             (
@@ -436,20 +463,20 @@ mod tests {
             (
                 vec![
                     ("b.qxf", Ok(b"<FixtureDefinition>".to_vec())),
-                    ("a.qxf", Err(gone())),
+                    ("a.qxf", Err(gone().into())),
                 ],
                 vec![],
                 0,
                 vec![
-                    failed("a.qxf", None, &gone().to_string()),
-                    failed("b.qxf", Some(1), not_xml),
+                    failed("a.qxf", None, Cause::CannotRead(Some(NO_SUCH_FILE))),
+                    failed("b.qxf", Some(1), not_xml()),
                 ],
             ),
             (
                 vec![],
                 vec!["Locked"],
                 0,
-                vec![failed("Locked", None, &gone().to_string())],
+                vec![failed("Locked", None, Cause::CannotRead(Some(NO_SUCH_FILE)))],
             ),
             (
                 vec![
@@ -462,7 +489,7 @@ mod tests {
                 vec![failed(
                     "rgb copy.qxf",
                     None,
-                    "the same maker and model as rgb.qxf",
+                    Cause::SameModelAs("rgb.qxf".into()),
                 )],
             ),
             (
@@ -474,8 +501,8 @@ mod tests {
                 vec![],
                 1,
                 vec![
-                    failed("maker.qxf", None, &too_long("maker")),
-                    failed("model.qxf", None, &too_long("model")),
+                    failed("maker.qxf", None, Cause::TooLong(Asked::Maker)),
+                    failed("model.qxf", None, Cause::TooLong(Asked::Model)),
                 ],
             ),
         ];
@@ -503,9 +530,14 @@ mod tests {
         let folder = std::env::temp_dir().join(format!("bossylights-bytes-{}", std::process::id()));
         std::fs::create_dir_all(&folder).unwrap();
         let most = u64::try_from(MOST_BYTES).unwrap();
-        let too_large = |size: u64| Err(format!("too large: {size} bytes, at most {most}"));
+        let too_large = |size: u64| {
+            Err(Cause::Definition(Problem::TooLarge {
+                bytes: usize::try_from(size).unwrap(),
+                most: MOST_BYTES,
+            }))
+        };
         // (name, size, read)
-        let cases: [(&str, u64, Result<usize, String>); 4] = [
+        let cases: [(&str, u64, Result<usize, Cause>); 4] = [
             ("empty", 0, Ok(0)),
             ("most", most, Ok(MOST_BYTES)),
             ("one over", most + 1, too_large(most + 1)),
@@ -514,14 +546,12 @@ mod tests {
         for (name, size, read) in cases {
             let path = folder.join(name);
             std::fs::File::create(&path).unwrap().set_len(size).unwrap();
-            let got = bytes(&path)
-                .map(|bytes| bytes.len())
-                .map_err(|e| e.to_string());
+            let got = bytes(&path).map(|bytes| bytes.len());
             assert_eq!(got, read, "{name}");
         }
         assert_eq!(
-            bytes(&folder).map_err(|e| e.to_string()),
-            Err("not a file".to_owned()),
+            bytes(&folder).map(|bytes| bytes.len()),
+            Err(Cause::NotAFile),
             "a folder"
         );
         std::fs::remove_dir_all(folder).unwrap();

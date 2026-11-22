@@ -32,9 +32,6 @@ pub(crate) fn compile(
         period,
         palette,
     } = *pattern;
-    if !(1..=32).contains(&period) {
-        return Err(Refusal::InvalidTiming);
-    }
     let swatches = match palette {
         Palette::Inline(swatches) => swatches,
         Palette::Step { look } => match &looks.get(look).ok_or(Refusal::NoSuchLook)?.definition {
@@ -46,7 +43,10 @@ pub(crate) fn compile(
         return Err(Refusal::EmptyPalette);
     }
     Ok((
-        Node::Wave { period, swatches },
+        Node::Wave {
+            period: period.get(),
+            swatches,
+        },
         WaveBinding::new(target, patch)?,
     ))
 }
@@ -156,6 +156,7 @@ impl WaveBinding {
 )]
 mod tests {
     use super::*;
+    use engine_core::{Percent, Period, Width};
     use crate::tests::{item, leaf, patch, sequence};
     use crate::{WORK_LIMIT, play_work};
     use core::num::NonZeroU16;
@@ -176,7 +177,7 @@ mod tests {
             name: Text::new("wave").unwrap(),
             definition: Definition::Pattern(engine_core::Pattern::Wave {
                 target,
-                period,
+                period: Period::new(period).unwrap(),
                 palette,
             }),
         }
@@ -221,7 +222,7 @@ mod tests {
             saved
         };
         let spread = Use {
-            spread: 100,
+            spread: Percent::MOST,
             ..Use::default()
         };
         let looks = Looks::new()
@@ -234,7 +235,7 @@ mod tests {
                     3,
                     &[SequenceItem {
                         usage: spread,
-                        width: 32,
+                        width: Width::new(32).unwrap(),
                         ..item(2)
                     }],
                 ),
@@ -323,7 +324,7 @@ mod tests {
         assert!(plan.sample(
             0,
             Use {
-                spread: 100,
+                spread: Percent::MOST,
                 ..Use::default()
             },
             &mut scratch
@@ -406,8 +407,6 @@ mod tests {
             .put(sequence(2, &[item(1)]), &patch)
             .unwrap();
         for (target, period, palette, reason) in [
-            (matrix, 0, one, Refusal::InvalidTiming),
-            (matrix, 33, one, Refusal::InvalidTiming),
             (
                 WaveTarget::Group { group: empty },
                 1,

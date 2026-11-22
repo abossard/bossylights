@@ -53,7 +53,7 @@ fn wave(look: u16, palette: Palette) -> Command {
         look,
         pattern: Pattern::Wave {
             target: WaveTarget::Matrix { fixture: 1 },
-            period: 1,
+            period: engine_core::Period::new(1).unwrap(),
             palette,
         },
     }

@@ -620,7 +620,7 @@ mod workload {
         )?;
         let items = [2, 3].map(|look| SequenceItem {
             look,
-            transition: 100,
+            transition: engine_core::Percent::MOST,
             ..SequenceItem::default()
         });
         send(
@@ -641,7 +641,8 @@ mod workload {
                     name: text("Wave"),
                     pattern: Pattern::Wave {
                         target: WaveTarget::Group { group: text(WAVE) },
-                        period: if n == 0 { 4 } else { n as u8 + 1 },
+                        period: engine_core::Period::new(if n == 0 { 4 } else { n as u8 + 1 })
+                            .ok_or("a period of 1 to 32 beats")?,
                         palette,
                     },
                 },
@@ -666,7 +667,7 @@ mod workload {
                     when: When::Now,
                     rank,
                     usage: Use {
-                        spread,
+                        spread: engine_core::Percent::new(spread).ok_or("a spread of 0 to 100")?,
                         ..Use::default()
                     },
                 },

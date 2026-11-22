@@ -1,5 +1,12 @@
-//! The engine API on one WebSocket. What the messages are: `engine_core::Request` and
-//! `engine_core::Reply`. This file only moves them.
+//! The engine API on one WebSocket. What the messages are: `wire::Request` and
+//! `wire::Reply`. This file moves them, and holds four policies of its own:
+//!
+//! | Policy | Where |
+//! |---|---|
+//! | revision history: each change keeps its moment until a snapshot passes it, paid in bytes | `Moment`, `REVISION_BYTES`, `Api::history` |
+//! | an edit prepared on a base another change replaced is prepared again | `PREPARES` |
+//! | an output edit waits for the old route to finish | `CUTOVER_WAIT` |
+//! | health goes to a subscriber at most once per 500 ms of engine time | `HealthPacing` |
 //!
 //! | Route | What |
 //! |---|---|
@@ -16,6 +23,7 @@
 
 mod health;
 mod library;
+mod report_line;
 pub mod show;
 
 use axum::Router;
@@ -26,10 +34,10 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use engine::{
-    API_VERSION, Begun, ChannelLevel, Command, Engine, Grouped, Looks, Patch, Patched, Project,
-    ProjectView, Refusal, Reply, Request, SavedLook, Sender, Snapshot, changes,
+    Begun, ChannelLevel, Command, Engine, Grouped, Looks, Patch, Patched, Project, ProjectView,
+    Refusal, SavedLook, Sender, Snapshot, changes,
 };
-use engine_core::{HeldLight, Library, ShowFile, held_lights, light_changes};
+use engine_core::{HeldLight, ShowFile, Text, held_lights, light_changes};
 use library::Shelf;
 use std::collections::VecDeque;
 use std::io;
@@ -40,6 +48,7 @@ use std::time::{Duration, Instant};
 use tokio::net::TcpListener;
 use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore, mpsc, watch};
 use tokio::time::MissedTickBehavior;
+use wire::{API_VERSION, Library, Reply, Request};
 
 /// Serves the API on `listener` until a client sends `Stop`. Then every connection is
 /// closed, the last change is saved, and this returns the engine: the caller reports and
@@ -312,11 +321,11 @@ async fn read(
 
 /// The web pages that may open the API, and why. A browser always sends the page's
 /// origin; the shell, tests and scripts send none.
-const ORIGINS: [&str; 4] = [
+/// The end-to-end tests add their page by `BOSSYLIGHTS_ORIGINS` (`e2e/ports.ts`).
+const ORIGINS: [&str; 3] = [
     "tauri://localhost",      // the app window on macOS and Linux
     "http://tauri.localhost", // the app window on Windows
     "http://127.0.0.1:5174",  // the UI in a browser, `npm run ui`
-    "http://127.0.0.1:5299",  // the same UI under the end-to-end tests, `playwright.config.ts`
 ];
 
 async fn connect(
@@ -335,85 +344,233 @@ async fn connect(
     }
 }
 
-/// One connection: answers each request; once subscribed, sends what changed with every
-/// new snapshot. Never waits on the tick thread, the tick thread never waits on a client.
+/// How many requests of one connection may wait for their replies. Past it the
+/// connection is read no further until a reply goes out.
+const WAITING: usize = 32;
+
+/// A request of one connection whose reply has not gone out. Replies go out in the
+/// order of their requests.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "a search or a fixture keeps its texts in place: at most `WAITING` slots a connection"
+)]
+enum Slot {
+    Ready(Option<String>),
+    /// A `Send` on the connection's worker. Its reply comes in order on the worker's
+    /// results.
+    Working,
+    /// A request answered when its turn comes, from the newest picture or the library.
+    Later(Later),
+}
+
+#[derive(Clone, Copy)]
+enum Later {
+    Query,
+    Subscribe,
+    Search { text: Text },
+    Fixture { maker: Text, model: Text },
+    Failures,
+}
+
+/// One connection: answers each request in order; once subscribed, sends what changed
+/// with every new snapshot. Never waits on the tick thread, the tick thread never waits
+/// on a client. A pending edit or device open never stops it reading: its `Send`s go to
+/// the connection's worker, one after another (the socket table in docs/engine.md, API).
 async fn talk(mut socket: WebSocket, api: Arc<Api>) {
     let mut pictures = api.pictures.clone();
     // What a subscribed connection sent last.
     let mut subscription: Option<Subscription> = None;
     let mut stopped = api.stop.subscribe();
+    let (jobs, mut results) = worker(Arc::clone(&api));
+    let mut waiting: VecDeque<Slot> = VecDeque::with_capacity(WAITING);
     loop {
+        while let Some(slot) = waiting.pop_front() {
+            let reply = match slot {
+                Slot::Ready(reply) => reply,
+                Slot::Later(later) => answer(&api, later, &mut pictures, &mut subscription),
+                Slot::Working => {
+                    waiting.push_front(Slot::Working);
+                    break;
+                }
+            };
+            if !deliver(&mut socket, reply, &mut subscription).await {
+                return; // client gone
+            }
+        }
         let health = subscription.as_mut().and_then(|sub| {
             let now = Arc::clone(&pictures.borrow());
             sub.health(&now)
         });
-        let reply = if health.is_some() {
-            health
-        } else {
-            tokio::select! {
-                () = async { let _ = stopped.wait_for(|stop| *stop).await; } => {
-                    let _ = socket.send(Message::Close(None)).await;
+        if health.is_some() {
+            if !deliver(&mut socket, health, &mut subscription).await {
+                return;
+            }
+            continue;
+        }
+        tokio::select! {
+            () = async { let _ = stopped.wait_for(|stop| *stop).await; } => {
+                // Every request read gets its reply, then the connection closes.
+                while let Some(slot) = waiting.pop_front() {
+                    let reply = match slot {
+                        Slot::Ready(reply) => reply,
+                        Slot::Later(later) => answer(&api, later, &mut pictures, &mut subscription),
+                        Slot::Working => results.recv().await.flatten(),
+                    };
+                    if !deliver(&mut socket, reply, &mut subscription).await {
+                        return;
+                    }
+                }
+                let _ = socket.send(Message::Close(None)).await;
+                return;
+            }
+            message = socket.recv(), if waiting.len() < WAITING => match message {
+                Some(Ok(Message::Text(text))) => {
+                    let slot = take(&api, &text, &jobs, &waiting).await;
+                    waiting.push_back(slot);
+                }
+                Some(Ok(Message::Binary(_))) => {
+                    waiting.push_back(Slot::Ready(json(&Reply::Refused { reason: Refusal::NotACommand })));
+                }
+                Some(Ok(Message::Ping(_) | Message::Pong(_))) => {}
+                Some(Ok(Message::Close(_)) | Err(_)) | None => return,
+            },
+            Some(reply) = results.recv() => {
+                if let Some(slot) = waiting.iter_mut().find(|slot| matches!(slot, Slot::Working)) {
+                    *slot = Slot::Ready(reply);
+                }
+            }
+            Ok(()) = pictures.changed(), if subscription.is_some() => {
+                let now = Arc::clone(&pictures.borrow_and_update());
+                let changed = subscription.as_mut().and_then(|sub| sub.changed(now));
+                if !deliver(&mut socket, changed, &mut subscription).await {
                     return;
                 }
-                message = socket.recv() => match message {
-                    Some(Ok(Message::Text(text))) => answer(&api, &text, &mut pictures, &mut subscription).await,
-                    Some(Ok(Message::Binary(_))) => json(&Reply::Refused { reason: Refusal::NotACommand }),
-                    Some(Ok(Message::Ping(_) | Message::Pong(_))) => None,
-                    Some(Ok(Message::Close(_)) | Err(_)) | None => return,
-                },
-                Ok(()) = pictures.changed(), if subscription.is_some() => {
-                    let now = Arc::clone(&pictures.borrow_and_update());
-                    subscription.as_mut().and_then(|sub| sub.changed(now))
-                }
-            }
-        };
-        if let Some(reply) = reply {
-            if socket.send(Message::text(reply)).await.is_err() {
-                return; // client gone
-            }
-            if let Some(sub) = &mut subscription {
-                sub.sent();
             }
         }
     }
 }
 
-async fn answer(
+/// Sends `reply`, if any. `false` once the client is gone.
+async fn deliver(
+    socket: &mut WebSocket,
+    reply: Option<String>,
+    subscription: &mut Option<Subscription>,
+) -> bool {
+    let Some(reply) = reply else {
+        return true;
+    };
+    if socket.send(Message::text(reply)).await.is_err() {
+        return false;
+    }
+    if let Some(sub) = subscription {
+        sub.sent();
+    }
+    true
+}
+
+/// The slot of one request of a connection. A press while nothing of this connection
+/// is pending is admitted here, at once; every other `Send` goes to the worker, behind
+/// what is there. `Stop` stops the engine at once.
+async fn take(
     api: &Arc<Api>,
     text: &str,
+    jobs: &mpsc::UnboundedSender<Command>,
+    waiting: &VecDeque<Slot>,
+) -> Slot {
+    let Ok(request) = serde_json::from_str::<Request>(text) else {
+        return Slot::Ready(json(&Reply::Refused {
+            reason: Refusal::NotACommand,
+        }));
+    };
+    match request {
+        Request::Send { command } if waiting.is_empty() && !is_edit(&command) => {
+            Slot::Ready(json(&replied(send(api, command).await)))
+        }
+        Request::Send { command } => match jobs.send(command) {
+            Ok(()) => Slot::Working,
+            Err(_) => Slot::Ready(json(&Reply::Stopping)), // the worker ends only as the server stops
+        },
+        Request::Stop => {
+            api.stopping().await;
+            Slot::Ready(json(&Reply::Stopping))
+        }
+        Request::Query => Slot::Later(Later::Query),
+        Request::Subscribe => Slot::Later(Later::Subscribe),
+        Request::Search { text } => Slot::Later(Later::Search { text }),
+        Request::Fixture { maker, model } => Slot::Later(Later::Fixture { maker, model }),
+        Request::Failures => Slot::Later(Later::Failures),
+    }
+}
+
+/// The connection's worker: sends its commands one after another, in the order they
+/// came, and gives each reply back in that order. A command not started when the
+/// connection closes is dropped.
+fn worker(
+    api: Arc<Api>,
+) -> (
+    mpsc::UnboundedSender<Command>,
+    mpsc::UnboundedReceiver<Option<String>>,
+) {
+    let (jobs, mut todo) = mpsc::unbounded_channel::<Command>();
+    let (done, results) = mpsc::unbounded_channel();
+    tokio::spawn(async move {
+        while let Some(command) = todo.recv().await {
+            if done.is_closed() {
+                return;
+            }
+            // Its own task: a panic in it answers `Failed`, and the next command runs.
+            let job = tokio::spawn({
+                let api = Arc::clone(&api);
+                async move { send(&api, command).await }
+            });
+            let reply = match job.await {
+                Ok(sent) => replied(sent),
+                Err(_) => failed(&api, "a command"),
+            };
+            let _ = done.send(json(&reply));
+        }
+    });
+    (jobs, results)
+}
+
+fn replied(sent: Result<Reply<'static>, Refusal>) -> Reply<'static> {
+    sent.unwrap_or_else(|reason| Reply::Refused { reason })
+}
+
+/// The reply to a request answered when its turn comes.
+fn answer(
+    api: &Api,
+    later: Later,
     pictures: &mut watch::Receiver<Arc<Picture>>,
     subscription: &mut Option<Subscription>,
 ) -> Option<String> {
-    let Ok(request) = serde_json::from_str::<Request>(text) else {
-        return json(&Reply::Refused {
-            reason: Refusal::NotACommand,
-        });
-    };
-    match request {
-        Request::Send { command } => json(&match send(api, command).await {
-            Ok(reply) => reply,
-            Err(reason) => Reply::Refused { reason },
-        }),
-        Request::Query => {
+    match later {
+        Later::Query => {
             let now = Arc::clone(&pictures.borrow());
             picture(&now)
         }
-        Request::Stop => {
-            api.stopping().await;
-            json(&Reply::Stopping)
-        }
-        Request::Subscribe => {
+        // The subscription starts as its picture goes out: no change comes before it.
+        Later::Subscribe => {
             let now = Arc::clone(&pictures.borrow_and_update());
             let reply = picture(&now);
             *subscription = Some(Subscription::new(now));
             reply
         }
-        Request::Search { text } => api.shelf.borrow().found(text.as_str()),
-        Request::Fixture { maker, model } => {
+        Later::Search { text } => api.shelf.borrow().found(text.as_str()),
+        Later::Fixture { maker, model } => {
             api.shelf.borrow().fixture(maker.as_str(), model.as_str())
         }
-        Request::Failures => api.shelf.borrow().failures(),
+        Later::Failures => api.shelf.borrow().failures(),
     }
+}
+
+/// An edit is prepared off the front and may wait for a device: an engine edit
+/// ([`engine::edits`]) or an output change.
+fn is_edit(command: &Command) -> bool {
+    matches!(
+        command,
+        Command::SetOutput { .. } | Command::RemoveOutput { .. }
+    ) || engine::edits(command)
 }
 
 /// The only writer of the current revision's FIFO range.
@@ -429,6 +586,35 @@ const PREPARES: usize = 3;
 /// An output writer may wait for its previous route to finish. Other writers
 /// keep using the front, including a performer sending a press to either run.
 const CUTOVER_WAIT: Duration = Duration::from_secs(10);
+
+/// Under `test-support`, removing the group of this name panics in its prepare.
+#[cfg(feature = "test-support")]
+pub const PANICS: &str = "panics in prepare";
+
+/// Under `test-support`, the names of the looks whose edits were handed to the blocking
+/// pool, in this process.
+#[cfg(feature = "test-support")]
+static HANDED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+#[cfg(feature = "test-support")]
+fn handed(command: &Command) {
+    if let Command::PutStep { name, .. }
+    | Command::PutPattern { name, .. }
+    | Command::PutSequence { name, .. } = command
+        && let Ok(mut names) = HANDED.lock()
+    {
+        names.push(name.as_str().to_owned());
+    }
+}
+
+/// Under `test-support`: whether an edit of the look named `name` was handed to the
+/// blocking pool. A test waits on it instead of on time.
+#[cfg(feature = "test-support")]
+pub fn handed_to_the_pool(name: &str) -> bool {
+    HANDED
+        .lock()
+        .is_ok_and(|names| names.iter().any(|handed| handed == name))
+}
 
 /// Even an edit which shares all its plans needs a place in snapshot history.
 const REVISION_BYTES: usize = engine::PLAN_BYTES.div_ceil(engine::QUEUE);
@@ -448,28 +634,26 @@ fn reserve(history: &Arc<Semaphore>, bytes: usize) -> Result<OwnedSemaphorePermi
 async fn send(api: &Arc<Api>, command: Command) -> Result<Reply<'static>, Refusal> {
     let shelf = Arc::clone(&api.shelf.borrow());
     let mut credit = None;
-    let output_edit = matches!(
-        command,
-        Command::SetOutput { .. } | Command::RemoveOutput { .. }
-    );
-    let begun = if output_edit || engine::edits(&command) {
+    let begun = if is_edit(&command) {
         edit(api, command, &shelf, &mut credit).await
     } else {
         api.changing(&mut credit, |sender| {
             sender.begin(command, shelf.fixtures())
         })
         .await
+        .map_or(Edited::Stopped, Edited::Begun)
     };
     match begun {
-        None => Ok(Reply::Stopping),
-        Some(Ok(Begun::Opening(opening))) => {
-            let api = Arc::clone(api);
+        Edited::Stopped => Ok(Reply::Stopping),
+        Edited::Failed => Ok(failed(api, "an edit")),
+        Edited::Begun(Ok(Begun::Opening(opening))) => {
+            let opener = Arc::clone(api);
             let mut stopped = api.stop.subscribe();
             // Keep the opener through the handoff. A busy blocking pool cannot
             // put another job between publication and delivery of the device.
             let worker = tokio::task::spawn_blocking(move || {
                 let opened = opening.open();
-                let publish = api.changing(&mut credit, |sender| sender.publish_output(opened));
+                let publish = opener.changing(&mut credit, |sender| sender.publish_output(opened));
                 let Some(result) = tokio::runtime::Handle::current().block_on(publish) else {
                     return Ok(Reply::Stopping);
                 };
@@ -485,26 +669,45 @@ async fn send(api: &Arc<Api>, command: Command) -> Result<Reply<'static>, Refusa
             tokio::select! {
                 biased;
                 _ = stopped.wait_for(|stop| *stop) => Ok(Reply::Stopping),
-                answer = worker => answer.unwrap_or(Ok(Reply::Stopping)),
+                answer = worker => answer.unwrap_or_else(|_| Ok(failed(api, "a device open"))),
             }
         }
-        Some(Ok(Begun::Queued)) => Ok(Reply::Accepted),
-        Some(Ok(Begun::Patched { fixture })) => Ok(Reply::Patched { fixture }),
-        Some(Ok(Begun::Started { play })) => Ok(Reply::Started { play }),
-        Some(Ok(Begun::Grabbed { grab })) => Ok(Reply::Grabbed { grab }),
-        Some(Err(reason)) => Err(reason),
+        Edited::Begun(Ok(Begun::Queued)) => Ok(Reply::Accepted),
+        Edited::Begun(Ok(Begun::Patched { fixture })) => Ok(Reply::Patched { fixture }),
+        Edited::Begun(Ok(Begun::Started { play })) => Ok(Reply::Started { play }),
+        Edited::Begun(Ok(Begun::Grabbed { grab })) => Ok(Reply::Grabbed { grab }),
+        Edited::Begun(Err(reason)) => Err(reason),
     }
 }
 
+/// What sending a command came to, before its reply.
+enum Edited {
+    Begun(Result<Begun, Refusal>),
+    /// The engine stopped first: nothing changed.
+    Stopped,
+    /// The work panicked. The picture says what is live.
+    Failed,
+}
+
+/// `Failed`, told on the process's error output, or `Stopping` once the engine stops:
+/// then a cancelled task is no fault.
+fn failed(api: &Api, work: &str) -> Reply<'static> {
+    if *api.stop.borrow() {
+        return Reply::Stopping;
+    }
+    eprintln!("{}", report_line::failed(work));
+    Reply::Failed
+}
+
 /// Prepares the edit `command` on the blocking pool and admits it, again while another
-/// change replaced its base, [`PREPARES`] times at most. `None` once the engine stops.
+/// change replaced its base, [`PREPARES`] times at most.
 async fn edit(
     api: &Api,
     command: Command,
     shelf: &Arc<Shelf>,
     opening_credit: &mut Option<OwnedSemaphorePermit>,
-) -> Option<Result<Begun, Refusal>> {
-    let mut begun = Some(Err(Refusal::Stale));
+) -> Edited {
+    let mut begun = Edited::Begun(Err(Refusal::Stale));
     let waiting_since = Instant::now();
     for _ in 0..PREPARES {
         // T12. Read the base and the state of this output under the same lock.
@@ -512,7 +715,7 @@ async fn edit(
         let base = loop {
             let front = api.sender.lock().await;
             if *api.stop.borrow() {
-                return None;
+                return Edited::Stopped;
             }
             if !matches!(
                 command,
@@ -523,18 +726,24 @@ async fn edit(
             }
             drop(front);
             if waiting_since.elapsed() >= CUTOVER_WAIT {
-                return Some(Err(Refusal::Opening));
+                return Edited::Begun(Err(Refusal::Opening));
             }
             tokio::time::sleep(engine::BEAT).await;
         };
         // Bound in-flight edits too. A full history refuses before compiling.
         let mut credit = match reserve(&api.history, REVISION_BYTES) {
             Ok(credit) => credit,
-            Err(reason) => return Some(Err(reason)),
+            Err(reason) => return Edited::Begun(Err(reason)),
         };
         let shelf = Arc::clone(shelf);
         let history = Arc::clone(&api.history);
+        #[cfg(feature = "test-support")]
+        handed(&command);
         let prepared = tokio::task::spawn_blocking(move || {
+            #[cfg(feature = "test-support")]
+            if matches!(command, Command::RemoveGroup { name } if name.as_str() == PANICS) {
+                panic!("a prepare that panics, for a test");
+            }
             let prepared = base.prepare(command, shelf.fixtures())?;
             let extra = prepared
                 .replaced_plan_bytes()
@@ -556,13 +765,15 @@ async fn edit(
                     // in history until the device is ready and finish publishes it.
                     *opening_credit = credit;
                 }
-                admitted
+                admitted.map_or(Edited::Stopped, Edited::Begun)
             }
             // refused before the engine stops, or answered `Stopping` as an admitted one is
-            Ok(Err(reason)) => (!*api.stop.borrow()).then_some(Err(reason)),
-            Err(_) => None, // the task was cancelled: the engine stops
+            Ok(Err(reason)) if !*api.stop.borrow() => Edited::Begun(Err(reason)),
+            Ok(Err(_)) => Edited::Stopped,
+            Err(_) if *api.stop.borrow() => Edited::Stopped, // cancelled: the engine stops
+            Err(_) => Edited::Failed,
         };
-        if !matches!(begun, Some(Err(Refusal::Stale))) {
+        if !matches!(begun, Edited::Begun(Err(Refusal::Stale))) {
             break;
         }
     }
@@ -636,13 +847,74 @@ struct Subscription {
     pacing: HealthPacing,
 }
 
-/// A subscription Picture or Health may finish sending long after its pictured wake.
-/// A snapshot requested after delivery gives an upper bound on the engine time of the
-/// send. The host clock only orders sends and snapshot requests.
+/// When a subscriber gets health (docs/engine.md, "at most once per 500 ms"). A
+/// message may finish sending long after the wake it pictures; a snapshot requested
+/// after the send gives an upper bound on the engine time of the send. The host clock
+/// only orders sends and snapshot requests.
+///
+/// | Pacing \ event | a message went out | a picture requested after that send | a picture: health changed, 500 ms of engine time since |
+/// |---|---|---|---|
+/// | `Sending` | `AwaitingSample(send time)` | same | same |
+/// | `AwaitingSample` | same | `Since(that picture's engine time)` | same |
+/// | `Since` | same | same | send health, `Sending` |
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum HealthPacing {
     Sending,
     AwaitingSample(Instant),
     Since(Duration),
+}
+
+#[derive(Clone, Copy, Debug)]
+enum PacingEvent {
+    /// Any message went out to the subscriber at `at` on the host clock.
+    Sent { at: Instant },
+    /// A new picture: when its snapshot was requested, its engine time, and whether its
+    /// health differs from the last health this subscriber got.
+    Picture {
+        requested_at: Instant,
+        now: Duration,
+        changed: Changed,
+    },
+}
+
+/// Whether a picture's health differs from the last one a subscriber got.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Changed {
+    Yes,
+    No,
+}
+
+/// Send the health now.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SendHealth;
+
+impl HealthPacing {
+    /// The table above, as one calculation.
+    fn next(self, event: PacingEvent) -> (Self, Option<SendHealth>) {
+        const MOST_OFTEN: Duration = Duration::from_millis(500);
+        match (self, event) {
+            (Self::Sending, PacingEvent::Sent { at }) => (Self::AwaitingSample(at), None),
+            (
+                Self::AwaitingSample(sent),
+                PacingEvent::Picture {
+                    requested_at, now, ..
+                },
+            ) if requested_at > sent => (Self::Since(now), None),
+            (
+                Self::Since(sent),
+                PacingEvent::Picture {
+                    now,
+                    changed: Changed::Yes,
+                    ..
+                },
+            ) if now.saturating_sub(sent) >= MOST_OFTEN => (Self::Sending, Some(SendHealth)),
+            (Self::AwaitingSample(_) | Self::Since(_), PacingEvent::Sent { .. })
+            | (
+                Self::Sending | Self::AwaitingSample(_) | Self::Since(_),
+                PacingEvent::Picture { .. },
+            ) => (self, None),
+        }
+    }
 }
 
 impl Subscription {
@@ -656,30 +928,26 @@ impl Subscription {
     }
 
     fn sent(&mut self) {
-        if matches!(self.pacing, HealthPacing::Sending) {
-            self.pacing = HealthPacing::AwaitingSample(Instant::now());
-        }
+        self.pacing = self.pacing.next(PacingEvent::Sent { at: Instant::now() }).0;
     }
 
     fn health(&mut self, picture: &Picture) -> Option<String> {
         let view = &picture.health;
-        let now = picture.snapshot.state.now;
-        if let HealthPacing::AwaitingSample(sent) = self.pacing
-            && picture.requested_at > sent
-        {
-            self.pacing = HealthPacing::Since(now);
-        }
-        let HealthPacing::Since(sent) = self.pacing else {
-            return None;
+        let changed = if self.revision == view.revision() {
+            Changed::No
+        } else {
+            Changed::Yes
         };
-        let since = now.saturating_sub(sent);
-        if self.revision == view.revision() || since < Duration::from_millis(500) {
-            return None;
-        }
+        let (pacing, send) = self.pacing.next(PacingEvent::Picture {
+            requested_at: picture.requested_at,
+            now: picture.snapshot.state.now,
+            changed,
+        });
+        self.pacing = pacing;
+        send?;
         let (events, missed) = view.events_since(self.cursor);
         self.cursor = view.end();
         self.revision = view.revision();
-        self.pacing = HealthPacing::Sending;
         json(&Reply::Health {
             health: view.health(),
             events: &events,
@@ -1004,6 +1272,64 @@ mod tests {
             assert_eq!(moment, found, "{case}");
             let after: Vec<u64> = kept.iter().map(|moment| moment.revision).collect();
             assert_eq!(after, left, "{case}");
+        }
+    }
+
+    /// Every cell of the `HealthPacing` table. Expected answers: docs/engine.md (health
+    /// at most once per 500 ms of engine time) and the send rule written above the table.
+    #[test]
+    fn health_pacing_follows_its_table() {
+        let start = Instant::now();
+        let sent = start + Duration::from_millis(10);
+        let before = start;
+        let after = start + Duration::from_millis(20);
+        let at = |ms| Duration::from_millis(ms);
+        let picture = |requested_at, now, changed| PacingEvent::Picture {
+            requested_at,
+            now,
+            changed,
+        };
+        let send = PacingEvent::Sent { at: sent };
+        let since = HealthPacing::Since(at(1_000));
+        let awaiting = HealthPacing::AwaitingSample(sent);
+        let cases = [
+            (HealthPacing::Sending, send, (awaiting, None)),
+            (
+                HealthPacing::Sending,
+                picture(after, at(5_000), Changed::Yes),
+                (HealthPacing::Sending, None),
+            ),
+            (awaiting, PacingEvent::Sent { at: after }, (awaiting, None)),
+            (
+                awaiting,
+                picture(before, at(1_000), Changed::Yes),
+                (awaiting, None),
+            ),
+            (
+                awaiting,
+                picture(sent, at(1_000), Changed::Yes),
+                (awaiting, None),
+            ),
+            (
+                awaiting,
+                picture(after, at(1_000), Changed::No),
+                (since, None),
+            ),
+            (since, send, (since, None)),
+            (
+                since,
+                picture(after, at(1_499), Changed::Yes),
+                (since, None),
+            ),
+            (since, picture(after, at(1_500), Changed::No), (since, None)),
+            (
+                since,
+                picture(after, at(1_500), Changed::Yes),
+                (HealthPacing::Sending, Some(SendHealth)),
+            ),
+        ];
+        for (pacing, event, expected) in cases {
+            assert_eq!(pacing.next(event), expected, "{pacing:?} {event:?}");
         }
     }
 }

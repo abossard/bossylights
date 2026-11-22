@@ -45,7 +45,7 @@ use serde::{Deserialize, Serialize};
 /// that applies it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct MixRules {
     pub brightness: Brightness,
     pub manual_end: ManualEnd,
@@ -54,7 +54,7 @@ pub struct MixRules {
 
 /// Between two brightness values of one rank: the latest start, or the highest.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum Brightness {
     #[default]
     Latest,
@@ -63,7 +63,7 @@ pub enum Brightness {
 
 /// What a stopped Manual play leaves.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum ManualEnd {
     /// Its values, until released.
     #[default]
@@ -74,7 +74,7 @@ pub enum ManualEnd {
 
 /// What a stopped Show or Autopilot play leaves.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum OtherEnd {
     /// Nothing: what is underneath shows.
     #[default]
@@ -146,7 +146,7 @@ fn beats(
 /// update or end its replacement.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct GrabId {
     pub generation: u32,
 }

@@ -287,8 +287,8 @@ async fn raw_91_before_or_after_the_cutoff_is_in_each_outputs_first_frame_after_
     let cases = [
         (Side::Before, "60", "44"),
         (Side::After, "60", "44"),
-        (Side::Before, "44", "60"),
-        (Side::After, "44", "60"),
+        (Side::Before, "44", "30"),
+        (Side::After, "44", "30"),
     ];
     for (side, ddp, dmx) in cases {
         first_frame(side, ddp, dmx).await;

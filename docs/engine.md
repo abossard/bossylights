@@ -103,13 +103,14 @@ Released comes from: `ReleaseHold`, `EndFlash` of a Manual play, `StopLook` when
 
 ## API
 
-Version 11. `GET /version` returns the API version. `GET /health` returns `ok` while the engine runs. Clients send commands on the WebSocket at `GET /api`. Generate the TypeScript types in `ui/src/engine-api.ts` with `UPDATE_TS=1 cargo test -p engine-core`.
+Version 12. `GET /version` returns the API version. `GET /health` returns `ok` while the engine runs. Clients send commands on the WebSocket at `GET /api`. Generate the TypeScript types in `ui/src/engine-api.ts` with `UPDATE_TS=1 cargo test -p wire` (`crates/wire`).
 
 | Who may open `/api` | Why |
 |---|---|
 | a client that is no web page (sends no `Origin`) | the shell, tests, scripts |
 | the app window (`tauri://localhost`, `http://tauri.localhost`) | the desk itself |
-| the UI in a browser (`http://127.0.0.1:5174`, and `:5299` under the end-to-end tests) | development |
+| the UI in a browser (`http://127.0.0.1:5174`) | development |
+| the page of an end-to-end run, named in `BOSSYLIGHTS_ORIGINS` (`e2e/ports.ts`) | the tests, one page per run |
 | any other web page | refused with 403: a page must not stop or steer the lights. `/health` and `/version` stay open, they change nothing |
 
 The list is `ORIGINS` in `crates/engine-server/src/lib.rs`. No pairing or token yet: that comes with a remote on a tablet or phone.
@@ -118,10 +119,34 @@ The list is `ORIGINS` in `crates/engine-server/src/lib.rs`. No pairing or token 
 |---|---|
 | `{"Send": {"command": {"SetChannel": {"channel": {"universe": 1, "address": 1}, "value": 255}}}}` | `"Accepted"`, or `{"Refused": {"reason": "NoSuchAddress"}}` and nothing changes |
 | `{"Send": {"command": {"Patch": ...}}}` | `{"Patched": {"fixture": 1}}`: its number |
+| any `Send` | `"Stopping"` when the engine stops first: nothing changed. `"Failed"` when the server failed while working on it (API 12): the picture says what is live |
 | `"Query"` | `{"Picture": {"state": ..., "project": ..., "library": ..., "patch": [...], "universes": [[...512 levels]], "health": ...}}`. Each `project.outputs` entry is `null`, `{"Kind": {"kind": ..., "universes": {"first": 1, "count": 3}}}` or `{"Attached": {"universes": ...}}` for a test device. |
 | In every `Picture` | `health` gives each attached output's status and timing over four seconds. With no outputs it is `{"window_ms":4000,"outputs":[]}`. |
 | `"Subscribe"` | The current `Picture`, then `{"Changed": {"state": ..., "project": ..., "library": ..., "patch": ..., "channels": [...]}}` with each new frame. `patch` is `null` unless it changed since this subscriber's last frame. |
 | While subscribed | `{"Health":{"health":...,"events":[...],"missed":0}}` when health changes, at most once per 500 ms. Events report late timing, device loss and recovery since subscription or the last health delivery. The engine keeps the newest 64 events. `missed` counts older events the subscriber missed. A query leaves its place in the log intact. |
+
+Health pacing per subscriber (`HealthPacing` in `crates/engine-server/src/lib.rs`). Any message sent starts it; engine time comes from the first picture requested after the send.
+
+| Pacing \ event | a message went out | a picture requested after that send | a picture: health changed, 500 ms of engine time since |
+|---|---|---|---|
+| Sending | AwaitingSample (send time) | same | same |
+| AwaitingSample | same | Since (that picture's engine time) | same |
+| Since | same | same | send health, Sending |
+
+One connection (`talk` in `crates/engine-server/src/lib.rs`). An edit is a command that is prepared off the front or opens a device (`SetOutput`, `RemoveOutput`, patch, groups, looks). Replies go out in the order of their requests; pictures and health are no replies and never wait.
+
+| Event \ connection | Idle (nothing waiting) | Editing (an edit of this connection is pending) |
+|---|---|---|
+| a press arrives | admitted now, reply now | goes behind the edits on the connection's worker; its reply in its turn |
+| an edit arrives | the worker starts it; its reply is first in line | queued on the worker behind the one running |
+| `Query`, `Subscribe`, `Search`, `Fixture`, `Failures` | answered now | answered when its turn comes. A subscription starts as its picture goes out, so no `Changed` comes before it |
+| bad JSON or Binary | `NotACommand` now | `NotACommand` in its turn |
+| `Stop` | stops the engine, `Stopping` | stops the engine at once; `Stopping` in its turn |
+| the edit is answered | | its reply and every ready reply behind it go out; the next edit starts, or Idle |
+| a picture or health is due | sent | sent |
+| the engine stops | close | every waiting request is answered in order (an edit `Stopping`), then close |
+| the client closes | end | end; the running edit finishes alone, its reply dropped; edits not started are dropped |
+| 32 requests wait (`WAITING`) | | the connection is read no further until a reply goes out |
 
 | Command | Does |
 |---|---|
@@ -130,7 +155,7 @@ The list is `ORIGINS` in `crates/engine-server/src/lib.rs`. No pairing or token 
 | `ReleaseChannels` | lets every held raw channel go |
 | `ReleaseAll` | lets every Manual play, every direct hold (`SetIntensity`, `SetColour`) and every raw channel go. Show, Autopilot and blackout stay (API 4: in API 3 it let only the raw channels go) |
 | `Blackout` (on) | every channel goes out at zero while on, over everything; the held values stay |
-| `SetOutput` (output 1 to 16, kind, universes, rate) | adds or replaces an output. Kind `{"Ddp": {"address": "ip:port", "color": "Rgb" or "Rgbw"}}` or `{"DmxUsbPro": {"adapter": 1}}` (the first ENTTEC DMX USB Pro by USB identity, in the order of their USB serial numbers, when the output first finds one; an adapter not there yet is no error, the output is NotFound until it is plugged in; from then on the output finds that same adapter by its serial, so a lost adapter never comes back as another). Adapters count from 1: 0 is `NotACommand`. Universes `{"first": 1, "count": 3}`, sent as one stream of channels. A DMX USB Pro takes one universe: more is refused with `{"TooManyUniverses": {"most": 1}}`. DDP RGB rounds the joined run down to whole pixels (510 bytes for one universe, 1,023 for two). Rate `"30"`, `"44"`, `"60"` or `null`: 60 for DDP, 44 for the DMX USB Pro |
+| `SetOutput` (output 1 to 16, kind, universes, rate) | adds or replaces an output. Kind `{"Ddp": {"address": "ip:port", "color": "Rgb" or "Rgbw"}}` or `{"DmxUsbPro": {"adapter": 1}}` (the first ENTTEC DMX USB Pro by USB identity, in the order of their USB serial numbers, when the output first finds one; an adapter not there yet is no error, the output is NotFound until it is plugged in; from then on the output finds that same adapter by its serial, so a lost adapter never comes back as another). Adapters count from 1: 0 is `NotACommand`. Universes `{"first": 1, "count": 3}`, sent as one stream of channels. A DMX USB Pro takes one universe: more is refused with `{"TooManyUniverses": {"most": 1}}`. DDP RGB rounds the joined run down to whole pixels (510 bytes for one universe, 1,023 for two). Rate `"30"`, `"44"`, `"60"` or `null`: 60 for DDP, 44 for the DMX USB Pro. A DMX USB Pro sends at most 44 (theory.md, idea 1): `"60"` is refused with `{"TooFast": {"most": "44"}}` (API 12) |
 | `RemoveOutput` (output) | removes it. Refused with `{"StreamsFixture": {"fixture": 1}}` when a fixture over more than one universe would be left with no output that streams them all; so is a `SetOutput` that changes the run |
 
 Looks and who wins (`docs/history/looks-slice-3.md`, the Mixer's table in `engine-core/src/mix.rs`): per property of each light, Manual over Show over Autopilot, then the latest start. A direct hold is Manual. The picture's `state.plays` lists each play with its `rank`, `state` (`{"Waiting": {"beat": 12}}`, `Playing` or `Kept`) and `start` (the clock's `elapsed` at its start), `state.rules` the settings the frame applies, `state.clock` the beat clock at the frame: `bpm`, `feed`, `source` (`Feed`, `OneTap` or `Tapped`), `beat` (the grid: a whole number is a beat, a multiple of 4 a bar) and `elapsed` (beats since the engine started; a play's own beat is `elapsed` less its `start`).
@@ -138,7 +163,7 @@ Looks and who wins (`docs/history/looks-slice-3.md`, the Mixer's table in `engin
 | Command | Does | Refused |
 |---|---|---|
 | `PutStep` (look, name, step) | saves the target and sparse property values. Optional `step.swatches` holds up to four ordered RGB16 colours. A Wave can reference them by look ID | `EmptyPalette` if a saved Wave or retained play still uses the last swatch |
-| `PutPattern` (look, name, pattern) | saves a Wave on an ordered group or a fixture matrix. Its period is 1 to 32 whole beats. Each target light must support continuous colour | `NoMatrix`, `Unsupported`, `InvalidTiming`, `NoSuchLook`, `WrongLookKind`, `EmptyPalette`, `WorkLimit` |
+| `PutPattern` (look, name, pattern) | saves a Wave on an ordered group or a fixture matrix. Its period is 1 to 32 whole beats; any other is `NotACommand` (API 12). Each target light must support continuous colour | `NoMatrix`, `Unsupported`, `NoSuchLook`, `WrongLookKind`, `EmptyPalette`, `WorkLimit` |
 | `PutSequence` (look, name, sequence) | saves an ordered list of linked looks. Editing a step or sequence updates its running parents on the applying frame. Each keeps its start time and order | `NoSuchLook`, `WrongLookKind`, `LookCycle`, `InvalidTiming`, `WorkLimit` |
 | `StartLook` (look, rank, when, use) | returns `{"Started": {"play": {"slot": 0, "generation": 1}}}`. Rank defaults to `Manual`, with `Show` and `Autopilot` available. Start defaults to `Now`. `Beat` and `Bar` launch at the first matching boundary on or after the request. A fresh start replaces that look at that rank | `NoSuchLook`, `InvalidTiming`, `PlayFull`, `WorkLimit`, `QueueFull` |
 | `StopLook` (play) | Cancels a waiting play. For a playing look, `UntilRelease` keeps its Manual sample and `Stay` keeps its Show or Autopilot sample. A rest, `UntilStop` or `Reveal` ends the play | |
@@ -157,11 +182,11 @@ A sequence referencing looks 1 and 2 fades from the first into the second over o
 
 | Field | Meaning | Default |
 |---|---|---|
-| Item `width` | 1 to 65,535 sixteenths of a beat | 16 (one beat) |
-| Item `transition` | Percent of the incoming item's width spent blending common continuous properties. Discrete properties cut at entry | 0 |
+| Item `width` | 1 to 65,535 sixteenths of a beat; 0 is `NotACommand` | 16 (one beat) |
+| Item `transition` | 0 to 100 (more is `NotACommand`): percent of the incoming item's width spent blending common continuous properties. Discrete properties cut at entry | 0 |
 | `use.speed` | `Half`, `Normal` or `Double` | `Normal` |
 | `use.repeat` | `Loop` or `Once`. A nested once-use holds its last sample until the item's end. A standalone step holds until stopped or released | `Loop` |
-| `use.spread` | 0 through 100 percent across the ordered target. Timed looks offset phase. Step items delay entry | 0 |
+| `use.spread` | 0 through 100 percent across the ordered target (more is `NotACommand`). Timed looks offset phase. Step items delay entry | 0 |
 
 A Wave over a matrix can use the palette saved in step 3.
 

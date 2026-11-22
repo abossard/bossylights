@@ -8,11 +8,11 @@ use serde::{Deserialize, Serialize};
 /// What kind of output, and where it sends.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum OutputKind {
     /// DDP over UDP, as WLED takes it. `address` is `"192.168.1.50:4048"`.
     Ddp {
-        #[cfg_attr(test, ts(type = "string"))]
+        #[cfg_attr(feature = "ts", ts(type = "string"))]
         address: SocketAddrV4,
         /// Whole pixels only: RGB sends 510 of a universe's 512 channels, RGBW all 512.
         color: Color,
@@ -25,7 +25,7 @@ pub enum OutputKind {
 /// numbers. 0 does not parse.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "u8")]
-#[cfg_attr(test, derive(ts_rs::TS), ts(type = "number"))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(type = "number"))]
 pub struct Adapter(u8);
 
 impl Adapter {
@@ -50,7 +50,7 @@ impl TryFrom<u8> for Adapter {
 
 /// Channels per pixel.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum Color {
     Rgb,
     Rgbw,

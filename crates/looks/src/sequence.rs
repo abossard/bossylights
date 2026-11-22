@@ -10,8 +10,8 @@ use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
 use core::mem::size_of_val;
 use engine_core::{
-    Binding, Definition, Item, LightNumber, LightRun, Lights, MAX_DEPTH, Member, Node, Refusal,
-    Sequence, Target, Writer,
+    Binding, Definition, Item, LightNumber, LightRun, Lights, MAX_DEPTH, Member, Node, Percent,
+    Refusal, Sequence, Target, Writer,
 };
 use rig::Patch;
 
@@ -146,9 +146,6 @@ impl Builder<'_> {
         let mut seen = BTreeSet::new();
         let mut ordered = Vec::new();
         for item in references {
-            if item.width == 0 || item.transition > 100 || item.usage.spread > 100 {
-                return Err(Refusal::InvalidTiming);
-            }
             let child = self.visit(item.look)?;
             let built = self.built(child)?;
             size.expansion = limited(size.expansion.checked_add(built.size.expansion))?;
@@ -161,13 +158,13 @@ impl Builder<'_> {
                     .filter(|light| seen.insert(*light)),
             );
             end = end
-                .checked_add(u64::from(item.width) * SIXTEENTH)
+                .checked_add(u64::from(item.width.get()) * SIXTEENTH)
                 .ok_or(Refusal::InvalidTiming)?;
             items.push(Item {
                 child,
                 end,
                 settings: item.usage,
-                transition: item.transition,
+                transition: item.transition.get(),
             });
         }
 
@@ -178,7 +175,7 @@ impl Builder<'_> {
             let child = self.built(item.child)?;
             let before = self.built(previous.child)?;
             let outgoing = if item.transition > 0
-                || (item.settings.spread > 0 && matches!(child.node, Node::Step { .. }))
+                || (item.settings.spread > Percent::LEAST && matches!(child.node, Node::Step { .. }))
             {
                 before.size.visits
             } else {

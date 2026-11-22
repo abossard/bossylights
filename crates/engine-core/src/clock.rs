@@ -57,7 +57,7 @@ const LAPSE: Duration = Duration::from_secs(2);
 /// A tempo the internal feed takes: 30 to 300 beats a minute.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "u16")]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Bpm(u16);
 
 impl Bpm {
@@ -221,7 +221,7 @@ impl TryFrom<u16> for Bpm {
 /// When a play starts: at once, or on the first beat or bar of the grid on or after the
 /// request.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum When {
     #[default]
     Now,
@@ -261,13 +261,13 @@ impl Serialize for Source {
 
 /// The clock as a picture shows it, at the time it was settled to.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Reading {
     /// The tempo in charge.
     pub bpm: f64,
     /// The internal feed's tempo.
     pub feed: Bpm,
-    #[cfg_attr(test, ts(type = "\"Feed\" | \"OneTap\" | \"Tapped\""))]
+    #[cfg_attr(feature = "ts", ts(type = "\"Feed\" | \"OneTap\" | \"Tapped\""))]
     pub source: Source,
     /// Where the grid is, in beats: a whole number is a beat, a multiple of four a bar.
     pub beat: f64,

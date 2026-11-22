@@ -12,7 +12,7 @@ use outputs::dmx_usb_pro::DmxUsbPro;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
-const RATE: Rate = Rate::Sixty;
+const RATE: Rate = Rate::FortyFour;
 
 fn output() -> OutputNumber {
     OutputNumber::try_from(1).unwrap()

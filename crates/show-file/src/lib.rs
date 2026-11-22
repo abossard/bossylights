@@ -492,6 +492,7 @@ fn broken(error: serde_json::Error) -> Unopened {
 )]
 mod sequence_tests {
     use super::*;
+    use engine_core::{Percent, Period, Width};
     use engine_core::{
         Color, Light, Lights, Pixels, Position, Rgb, Saved, Step, Target, Universes, Wheel,
     };
@@ -590,7 +591,7 @@ mod sequence_tests {
             }),
             Definition::Pattern(Pattern::Wave {
                 target: WaveTarget::Group { group: name },
-                period: 32,
+                period: Period::new(32).unwrap(),
                 palette: Palette::Inline(swatches),
             }),
         ] {
@@ -609,12 +610,12 @@ mod sequence_tests {
         use engine_core::{Definition, Repeat, SequenceItem, Speed, Use};
         let item = SequenceItem {
             look: u16::MAX,
-            width: u16::MAX,
-            transition: 100,
+            width: Width::MOST,
+            transition: Percent::MOST,
             usage: Use {
                 speed: Speed::Double,
                 repeat: Repeat::Once,
-                spread: 100,
+                spread: Percent::MOST,
             },
         };
         let saved = SavedLook {

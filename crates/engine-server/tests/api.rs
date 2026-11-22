@@ -118,8 +118,12 @@ async fn subscribed_requests_skip_queued_health() {
     .expect("channel 1 reaches the DDP output");
 }
 
+/// docs/engine.md: health at most once per 500 ms of engine time. The first Health may
+/// picture an older time than the pictures after it; the second still waits 500 ms from
+/// the first one's engine time. That a snapshot requested before a send never starts the
+/// wait is the `HealthPacing` table's cell (`health_pacing_follows_its_table`).
 #[test]
-fn consecutive_health_replies_keep_their_spacing_when_the_first_snapshot_is_old() {
+fn a_second_health_comes_no_closer_than_500_ms_of_engine_time_to_the_first() {
     let reader = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -200,7 +204,7 @@ async fn check_health_spacing(request: &str, reader: &tokio::runtime::Runtime) {
         send(&mut desk, &request).await;
         assert_eq!(answer(&mut desk).await, "Accepted");
     }
-    // The subscriber cannot send Health while it waits for this open to finish.
+    // The open waits on the subscriber's worker: its socket keeps sending pictures and health.
     send(&mut subscriber, &second_attach).await;
     tokio::task::spawn_blocking(move || opened.recv_timeout(Duration::from_secs(5)))
         .await
@@ -213,16 +217,22 @@ async fn check_health_spacing(request: &str, reader: &tokio::runtime::Runtime) {
     // Fill the reader's outstanding request at the old time. Leave the reader
     // paused so it can only collect that snapshot after the first Health.
     assert_eq!(wakes.wake_at(first).unwrap(), first);
-    let now = first + Duration::from_secs(1);
+    // The first Health pictures `first` at the latest: no second one before
+    // `first` + 500 ms, whichever snapshot starts the wait.
+    let now = first + Duration::from_millis(400);
     wakes.set_time(now);
     release.send(()).unwrap();
-    assert_eq!(answer(&mut subscriber).await, "Accepted");
-    loop {
-        if let Some(reply) = next(&mut subscriber).await.get("Health") {
+    // The first Health may go out before the open's reply, or after it.
+    let (mut accepted, mut health) = (false, false);
+    while !(accepted && health) {
+        let reply = next(&mut subscriber).await;
+        if let Some(reply) = reply.get("Health") {
             let rows = reply["health"]["outputs"].as_array().unwrap();
             assert_eq!(rows.len(), 1);
             assert_eq!(rows[0]["output"], 1);
-            break;
+            health = true;
+        } else if reply == "Accepted" {
+            accepted = true;
         }
     }
     // A reply on the same socket confirms the preceding send has finished.
@@ -249,7 +259,7 @@ async fn check_health_spacing(request: &str, reader: &tokio::runtime::Runtime) {
     publish(&mut desk, now);
     assert_eq!(packet(&second_udp).await[10], 91);
     let due = now + Duration::from_millis(500);
-    for at in [now, due - Duration::from_nanos(1)] {
+    for at in [now, first + Duration::from_millis(500) - Duration::from_nanos(1)] {
         // At `now` this is a fresh snapshot requested after the first Health.
         publish(&mut desk, at);
         // One Query can race the new frame. The next drains any Health the
@@ -261,7 +271,7 @@ async fn check_health_spacing(request: &str, reader: &tokio::runtime::Runtime) {
                 assert!(
                     reply.get("Health").is_none(),
                     "second Health {:?} after the first ({request}): {reply}",
-                    at - now
+                    at - first
                 );
                 if reply.get("Picture").is_some() {
                     break;
@@ -571,7 +581,7 @@ fn output(kind: Value, universes: Value, rate: Value) -> Value {
 #[tokio::test]
 async fn the_plain_routes_answer_in_text() {
     let (address, _socket, _served) = start().await;
-    let version = engine::API_VERSION.to_string();
+    let version = wire::API_VERSION.to_string();
     // (route, body)
     let cases = [("/health", "ok"), ("/version", version.as_str())];
     for (route, body) in cases {
@@ -706,10 +716,8 @@ async fn only_the_app_and_the_dev_ui_may_open_the_api() {
             Some("http://127.0.0.1:5174"),
             StatusCode::SWITCHING_PROTOCOLS,
         ),
-        (
-            Some("http://127.0.0.1:5299"),
-            StatusCode::SWITCHING_PROTOCOLS,
-        ),
+        // the end-to-end page, only by BOSSYLIGHTS_ORIGINS
+        (Some("http://127.0.0.1:5299"), StatusCode::FORBIDDEN),
         (Some("https://evil.example"), StatusCode::FORBIDDEN),
         (Some("http://127.0.0.1:5175"), StatusCode::FORBIDDEN), // the catalog needs none
         (Some("http://localhost:5174"), StatusCode::FORBIDDEN),
@@ -857,4 +865,170 @@ async fn no_picture_shows_an_output_in_the_state_and_not_in_the_project_or_the_o
         torn.len(),
         torn.first()
     );
+}
+
+/// The socket table in docs/engine.md: a device open pending on a connection holds none
+/// of that connection's pictures, and its replies go out in the order of its requests.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_pending_open_holds_no_picture_of_its_connection_and_replies_keep_their_order() {
+    let (opening, opened) = std::sync::mpsc::channel::<()>();
+    let (release, released) = std::sync::mpsc::channel::<()>();
+    let slow_open: engine::Open = Box::new(move |kind| {
+        opening.send(()).unwrap();
+        let _ = released.recv_timeout(Duration::from_secs(5));
+        outputs::open(kind)
+    });
+    let (engine, sender) = Engine::start_with(Universes::ONE, slow_open).unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let served = tokio::spawn(engine_server::serve(listener, engine, sender, None, None));
+    let (mut desk, mut other) = (open(address).await, open(address).await);
+    send(&mut desk, &json!("Subscribe")).await;
+    assert!(answer(&mut desk).await.get("Picture").is_some());
+    let (_udp, attach) = receiver().await;
+    send(&mut desk, &attach).await;
+    tokio::task::spawn_blocking(move || opened.recv_timeout(Duration::from_secs(5)))
+        .await
+        .unwrap()
+        .unwrap();
+    send(&mut desk, &json!("Query")).await;
+    send(&mut other, &set(1, 7, 77)).await;
+    assert_eq!(answer(&mut other).await, "Accepted");
+
+    let expected = json!({"universe": 1, "address": 7, "value": 77});
+    loop {
+        let reply = next(&mut desk).await;
+        assert!(reply.get("Changed").is_some(), "only pictures before the open ends: {reply}");
+        if reply["Changed"]["channels"]
+            .as_array()
+            .is_some_and(|channels| channels.contains(&expected))
+        {
+            break;
+        }
+    }
+    release.send(()).unwrap();
+    assert_eq!(answer(&mut desk).await, "Accepted");
+    assert!(answer(&mut desk).await.get("Picture").is_some());
+    send(&mut other, &json!("Stop")).await;
+    assert_eq!(answer(&mut other).await, "Stopping");
+    served.await.unwrap().unwrap();
+}
+
+/// docs/coding.md rule 6: work that panics answers `Failed`, never `Stopping`, and the
+/// engine goes on answering the same connection.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_prepare_that_panics_answers_failed_and_the_next_press_is_taken() {
+    let (address, mut desk, served) = start().await;
+    let remove = json!({"Send": {"command": {"RemoveGroup": {"name": engine_server::PANICS}}}});
+    send(&mut desk, &remove).await;
+    assert_eq!(answer(&mut desk).await, "Failed");
+    send(&mut desk, &set(1, 1, 5)).await;
+    assert_eq!(answer(&mut desk).await, "Accepted");
+    let mut other = open(address).await;
+    send(&mut other, &json!("Stop")).await;
+    assert_eq!(answer(&mut other).await, "Stopping");
+    served.await.unwrap().unwrap();
+}
+
+/// A server whose device opens wait until the test releases them, and the release.
+async fn held_open() -> (
+    SocketAddr,
+    JoinHandle<std::io::Result<Engine>>,
+    std::sync::mpsc::Receiver<()>,
+    std::sync::mpsc::Sender<()>,
+) {
+    let (opening, opened) = std::sync::mpsc::channel::<()>();
+    let (release, released) = std::sync::mpsc::channel::<()>();
+    let slow_open: engine::Open = Box::new(move |kind| {
+        opening.send(()).unwrap();
+        let _ = released.recv_timeout(Duration::from_secs(5));
+        outputs::open(kind)
+    });
+    let (engine, sender) = Engine::start_with(Universes::ONE, slow_open).unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let served = tokio::spawn(engine_server::serve(listener, engine, sender, None, None));
+    (address, served, opened, release)
+}
+
+/// Sends the attach of a DDP output on `desk` and waits until its device open began.
+async fn attach_held(desk: &mut Socket, opened: std::sync::mpsc::Receiver<()>) -> UdpSocket {
+    let (udp, attach) = receiver().await;
+    send(desk, &attach).await;
+    tokio::task::spawn_blocking(move || opened.recv_timeout(Duration::from_secs(5)))
+        .await
+        .unwrap()
+        .unwrap();
+    udp
+}
+
+/// The socket table in docs/engine.md: at most 32 requests of a connection wait. A `Stop`
+/// past them is not read until a reply goes out, so the engine runs on meanwhile.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_request_past_the_32_waiting_is_not_read_until_a_reply_goes_out() {
+    let (address, served, opened, release) = held_open().await;
+    let (mut desk, mut other) = (open(address).await, open(address).await);
+    let _udp = attach_held(&mut desk, opened).await;
+    for _ in 1..32 {
+        send(&mut desk, &json!("Query")).await;
+    }
+    send(&mut desk, &json!("Stop")).await;
+    send(&mut other, &set(1, 1, 5)).await;
+    assert_eq!(answer(&mut other).await, "Accepted", "the Stop was read");
+    release.send(()).unwrap();
+    assert_eq!(answer(&mut desk).await, "Accepted", "the attach");
+    for query in 1..32 {
+        assert!(answer(&mut desk).await.get("Picture").is_some(), "query {query}");
+    }
+    assert_eq!(answer(&mut desk).await, "Stopping");
+    served.await.unwrap().unwrap();
+}
+
+/// The socket table in docs/engine.md: two commands on one connection's worker answer in
+/// the order they came, whichever answer is ready first.
+#[tokio::test(flavor = "multi_thread")]
+async fn commands_on_one_connections_worker_answer_in_the_order_they_came() {
+    let (address, served, opened, release) = held_open().await;
+    let mut desk = open(address).await;
+    let _udp = attach_held(&mut desk, opened).await;
+    let unpatch = json!({"Send": {"command": {"Unpatch": {"fixture": 9}}}});
+    send(&mut desk, &unpatch).await;
+    send(&mut desk, &json!("Query")).await;
+    release.send(()).unwrap();
+    assert_eq!(answer(&mut desk).await, "Accepted", "the attach");
+    assert_eq!(
+        answer(&mut desk).await,
+        json!({"Refused": {"reason": "NotPatched"}})
+    );
+    assert!(answer(&mut desk).await.get("Picture").is_some());
+    send(&mut desk, &json!("Stop")).await;
+    assert_eq!(answer(&mut desk).await, "Stopping");
+    served.await.unwrap().unwrap();
+}
+
+/// The socket table in docs/engine.md (C1): a `Subscribe` behind a pending edit starts as
+/// its picture goes out, so no `Changed` comes before that picture.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_subscribe_behind_a_pending_edit_sends_no_change_before_its_picture() {
+    let (address, served, opened, release) = held_open().await;
+    let (mut desk, mut other) = (open(address).await, open(address).await);
+    let _udp = attach_held(&mut desk, opened).await;
+    send(&mut desk, &json!("Subscribe")).await;
+    send(&mut other, &set(1, 7, 77)).await;
+    assert_eq!(answer(&mut other).await, "Accepted");
+    // a frame with the press in it is painted while the subscription waits its turn
+    loop {
+        send(&mut other, &json!("Query")).await;
+        if answer(&mut other).await["Picture"]["universes"][0][6] == 77 {
+            break;
+        }
+    }
+    release.send(()).unwrap();
+    let first = next(&mut desk).await;
+    assert_eq!(first, "Accepted", "the attach before anything else: {first}");
+    let second = next(&mut desk).await;
+    assert!(second.get("Picture").is_some(), "the picture first: {second}");
+    send(&mut other, &json!("Stop")).await;
+    assert_eq!(answer(&mut other).await, "Stopping");
+    served.await.unwrap().unwrap();
 }

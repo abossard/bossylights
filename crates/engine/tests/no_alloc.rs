@@ -437,8 +437,8 @@ fn main() {
         for (look, child) in [(2, 1), (3, 2)] {
             let item = SequenceItem {
                 look: child,
-                width: 1,
-                transition: 100,
+                width: engine_core::Width::new(1).unwrap(),
+                transition: engine_core::Percent::MOST,
                 ..Default::default()
             };
             sender
@@ -495,7 +495,7 @@ fn main() {
                     target: WaveTarget::Group {
                         group: text("ends"),
                     },
-                    period: 2,
+                    period: engine_core::Period::new(2).unwrap(),
                     palette: Palette::Inline(swatches),
                 },
             })
@@ -506,7 +506,7 @@ fn main() {
                 rank: Rank::Manual,
                 when: engine::When::Now,
                 usage: Use {
-                    spread: 100,
+                    spread: engine_core::Percent::MOST,
                     ..Use::default()
                 },
             })

@@ -151,7 +151,7 @@ impl Channels {
 /// A channel as a client sends it, counted from 1. Not checked yet.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ChannelNumbers {
     pub universe: u16,
     pub address: u16,
@@ -177,8 +177,8 @@ impl ChannelNumbers {
 
 /// The levels of one universe. Buffers of these belong to the caller.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub struct Levels(#[cfg_attr(test, ts(type = "number[]"))] pub [u8; ADDRESSES]);
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct Levels(#[cfg_attr(feature = "ts", ts(type = "number[]"))] pub [u8; ADDRESSES]);
 
 impl Levels {
     pub const ZERO: Self = Self([0; ADDRESSES]);
@@ -242,7 +242,7 @@ impl Serialize for Levels {
 
 /// A channel's new level, counted from 1, as the state stream sends it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ChannelLevel {
     pub universe: u16,
     pub address: u16,

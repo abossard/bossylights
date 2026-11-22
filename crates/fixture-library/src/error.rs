@@ -2,6 +2,7 @@ use crate::model::Layout;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt;
+use serde::Serialize;
 
 /// A definition that could not be read: which file, where in it, and what is wrong.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -12,7 +13,8 @@ pub struct Error {
     pub problem: Problem,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum Problem {
     NotText,
     NotXml(String),
@@ -55,7 +57,8 @@ pub enum Problem {
 
 /// A mode that cannot be used: which, where in the file, and why. The file's other
 /// modes are read without it.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Refused {
     pub mode: String,
     /// The line in the file, counted from 1.

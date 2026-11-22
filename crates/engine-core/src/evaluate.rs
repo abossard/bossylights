@@ -4,7 +4,7 @@
 #[path = "wave.rs"]
 mod wave;
 
-use crate::{BeatTime, Light, Position, Repeat, Rgb, Speed, Swatches, Use};
+use crate::{BeatTime, Light, Percent, Position, Repeat, Rgb, Speed, Swatches, Use};
 
 /// The maximum number of looks from the root to a leaf, counting both.
 pub const MAX_DEPTH: usize = 8;
@@ -241,7 +241,8 @@ impl Moment {
     /// product. Compiled plans fit: at depth eight their per-light visit cost
     /// caps the root at 425 lights. Eight such divisors and the smaller tap
     /// span take under 101 bits. Reject oversized caller-built programs.
-    fn shifted(mut self, span: u128, spread: u8, binding: &Binding) -> Option<Self> {
+    fn shifted(mut self, span: u128, spread: Percent, binding: &Binding) -> Option<Self> {
+        let spread = spread.get();
         if spread == 0 || binding.index == 0 || binding.count == 0 {
             return Some(self);
         }
@@ -332,7 +333,7 @@ impl Sampler<'_> {
         };
         let age = phase.since(start);
         let width = time.subcounts(incoming.end.saturating_sub(start));
-        let delay = if incoming.settings.spread != 0
+        let delay = if incoming.settings.spread != Percent::LEAST
             && matches!(
                 self.program.nodes.get(incoming.child),
                 Some(Node::Step { .. })
@@ -610,7 +611,7 @@ mod tests {
         let (a, b) = (graph.step(Some(0)), graph.step(Some(1000)));
         let normal = Use::default();
         let spread = Use {
-            spread: 100,
+            spread: Percent::MOST,
             ..normal
         };
         let steps = graph.sequence(&[(a, 16, normal, 0), (b, 32, spread, 100)]);
@@ -708,7 +709,7 @@ mod tests {
             (1, 50, 8, 20),
         ] {
             let spread = Use {
-                spread: percent,
+                spread: Percent::new(percent).unwrap(),
                 ..normal
             };
             let fade = graph.sequence(&[(dark, 16, normal, 0), (lit, 16, spread, transition)]);
@@ -733,7 +734,7 @@ mod tests {
         let lit = graph.step(Some(1));
         let normal = Use::default();
         let spread = Use {
-            spread: 100,
+            spread: Percent::MOST,
             ..normal
         };
         let root = graph.sequence(&[(lit, 16, spread, 0)]);
@@ -760,7 +761,7 @@ mod tests {
         let last = graph.step(Some(200));
         let normal = Use::default();
         let spread = Use {
-            spread: 100,
+            spread: Percent::MOST,
             ..normal
         };
         let child = graph.sequence(&[(first, 8, normal, 0), (last, 8, normal, 0)]);
@@ -784,7 +785,7 @@ mod tests {
         let last = graph.step(Some(200));
         let normal = Use::default();
         let spread = Use {
-            spread: 100,
+            spread: Percent::MOST,
             ..normal
         };
         let child = graph.sequence(&[(first, 8, normal, 0), (last, 8, normal, 0)]);

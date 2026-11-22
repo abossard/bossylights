@@ -117,7 +117,8 @@ fn window_engine(address: SocketAddr, engine: &Engine) -> String {
 }
 
 /// The page the window shows: the UI. A debug build (the tests) shows
-/// `BOSSYLIGHTS_UI=http://127.0.0.1:5299/` instead; a release build never reads it.
+/// the page in `BOSSYLIGHTS_UI` instead (the end-to-end tests set it); a release build never
+/// reads it.
 fn window_page() -> tauri::WebviewUrl {
     #[cfg(debug_assertions)]
     if let Some(page) = std::env::var("BOSSYLIGHTS_UI")
@@ -149,14 +150,14 @@ fn meet(address: SocketAddr) -> Engine {
         Found::Same => {
             eprintln!(
                 "bossylights: adopted the engine on {address} (api {})",
-                engine_core::API_VERSION
+                wire::API_VERSION
             );
             Engine::Ours
         }
         Found::Other(answer) => {
             eprintln!(
                 "bossylights: the engine on {address} speaks api {answer}, this app {}: starting nothing",
-                engine_core::API_VERSION
+                wire::API_VERSION
             );
             Engine::NotOurs
         }
@@ -221,7 +222,7 @@ fn found(answer: Option<&str>) -> Found {
     let status = head.lines().next().unwrap_or("");
     let ok = status.split_whitespace().nth(1) == Some("200");
     match (ok, body.trim()) {
-        (true, version) if version == engine_core::API_VERSION.to_string() => Found::Same,
+        (true, version) if version == wire::API_VERSION.to_string() => Found::Same,
         (true, version) => Found::Other(version.to_owned()),
         (false, _) if status.is_empty() => Found::Other("unknown".to_owned()),
         (false, _) => Found::Other(format!("unknown ({status})")),
@@ -238,8 +239,8 @@ mod tests {
 
     #[test]
     fn what_answered_on_the_engine_address() {
-        let mine = engine_core::API_VERSION.to_string();
-        let other = (engine_core::API_VERSION + 1).to_string();
+        let mine = wire::API_VERSION.to_string();
+        let other = (wire::API_VERSION + 1).to_string();
         // (answer to GET /version, found)
         let cases = [
             (None, Found::Nothing),

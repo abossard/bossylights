@@ -863,7 +863,7 @@ async fn a_return_after_the_grid_does_not_warn_at_the_unavailable_endpoint() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_fresh_engine_has_no_health_and_a_slow_socket_counts_what_it_missed_and_stays_open() {
-    assert_eq!(engine::API_VERSION, 11);
+    assert_eq!(wire::API_VERSION, 12);
     let (mut rig, picture) = Rig::start().await;
     let empty = json!({"window_ms": 4000, "outputs": []});
     assert_eq!(picture["Picture"]["health"], empty);

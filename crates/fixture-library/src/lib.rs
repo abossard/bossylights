@@ -27,7 +27,7 @@
 //!
 //! Left out: lens, bulb and dimensions.
 
-#![no_std]
+#![cfg_attr(not(any(test, feature = "ts")), no_std)] // tests and the TypeScript types may use std
 #![forbid(unsafe_code)]
 #![deny(
     clippy::unwrap_used,

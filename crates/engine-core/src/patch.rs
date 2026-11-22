@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 /// group. Counted from 1, as a client sends them. Not checked yet.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum Target {
     Light {
         light: u16,
@@ -25,7 +25,7 @@ pub enum Target {
         fixture: u16,
     },
     Group {
-        #[cfg_attr(test, ts(type = "string"))]
+        #[cfg_attr(feature = "ts", ts(type = "string"))]
         group: Text,
     },
 }
@@ -33,7 +33,7 @@ pub enum Target {
 /// One member of a group: a light, or every light of a fixture. Counted from 1.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum Member {
     Light { light: u16 },
     Fixture { fixture: u16 },
@@ -193,7 +193,7 @@ pub enum PatchCommand {
 /// How many pixels a generic strip has: 1 or more. 0 does not parse.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(try_from = "u16")]
-#[cfg_attr(test, derive(ts_rs::TS), ts(type = "number"))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(type = "number"))]
 pub struct Pixels(u16);
 
 impl Pixels {
@@ -215,7 +215,7 @@ impl TryFrom<u16> for Pixels {
 
 /// The heads of a bar or a panel in a grid: `width` by `height` cells, one per head.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Layout {
     pub width: u16,
     pub height: u16,
@@ -223,7 +223,7 @@ pub struct Layout {
 
 /// A patched fixture, as the picture shows it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Patched<'a> {
     /// Its number, from 1. Kept while it is patched.
     pub fixture: u16,
@@ -246,7 +246,7 @@ pub struct Patched<'a> {
 
 /// A group, as the picture shows it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Grouped<'a> {
     pub name: &'a str,
     /// In the order they were set.

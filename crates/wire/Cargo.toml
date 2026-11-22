@@ -1,0 +1,21 @@
+[package]
+name = "wire"
+description = "The engine API as data: what a client sends and what it gets back. The TypeScript types come from here."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+engine-core = { path = "../engine-core" }
+fixture-library = { path = "../fixture-library" } # why a definition file failed
+serde = { version = "1.0.229", default-features = false, features = ["derive"] }
+
+[dev-dependencies]
+engine-core = { path = "../engine-core", features = ["ts"] } # the generator test writes ui/src/engine-api.ts
+fixture-library = { path = "../fixture-library", features = ["ts"] }
+serde_json = "1.0.154" # the decode table of the timing numbers
+ts-rs = "12.0.1"

@@ -5,7 +5,7 @@
 //! time since the engine started. `crates/engine` is the thin action around this crate:
 //! it reads the clock, sleeps, calls [`update`] and publishes the state.
 
-#![cfg_attr(not(test), no_std)] // tests may use std
+#![cfg_attr(not(any(test, feature = "ts")), no_std)] // tests and the TypeScript types may use std
 #![forbid(unsafe_code)]
 #![deny(
     clippy::unwrap_used,
@@ -36,10 +36,8 @@ mod resolve;
 mod show;
 
 pub use api::{
-    API_VERSION, AuthoredStep, Definition, Health, HealthEvent, LateReason, LatenessWindow,
-    MATCHES, OpenFailure, OutputHealth, OutputHealthEvent, OutputHealthState, OutputMeasurement, Palette,
-    Pattern, PressWindow, RecoveredReason, Refusal, Repeat, Reply, Request, SavedLook, Sequence,
-    SequenceItem, Speed, Swatches, Use, WaveTarget,
+    AuthoredStep, Definition, OpenFailure, OutOfRange, Palette, Pattern, Percent, Period, Refusal,
+    Repeat, SavedLook, Sequence, SequenceItem, Speed, Swatches, Use, WaveTarget, Width,
 };
 pub use channel::{
     ADDRESSES, CHANNELS, Channel, ChannelLevel, ChannelNumbers, ChannelSet, Channels, Levels,
@@ -49,10 +47,7 @@ use channel::{BLACKOUT, MODIFIERS};
 pub use kinds::{Adapter, Color, OutputKind};
 #[cfg(feature = "test-support")]
 pub use kinds::{EXAMPLE as TEST_STREAM_KIND, OTHER as TEST_KIND};
-pub use library::{
-    ChannelFunction, Failure, FixtureKind, Library, Match, ModeChannels, ModeSize, NamedChannel,
-    Text,
-};
+pub use library::Text;
 pub use output::{
     Counters, MAX_OUTPUTS, OFF_BEAT, Outcome, Output, OutputNumber, ROUTE_MOST, Rate, RouteFault,
     Run, RunNumbers, SPANS_MOST, Span, Status, Watch, bounds, gather, route_length,
@@ -76,41 +71,41 @@ use serde::{Deserialize, Serialize};
 
 /// What the engine is doing now, without the levels. Sent to the UI as JSON.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct State {
     /// Frames computed since the engine started.
-    #[cfg_attr(test, ts(type = "number"))]
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub frame: u64,
     /// What the system gave the output thread. Asked once, when the thread starts.
     pub priority: Priority,
     /// While on, every channel goes out at zero. The held levels stay.
     pub blackout: bool,
     /// The outputs, by number. `None` where no output is set.
-    #[cfg_attr(test, ts(type = "Array<Output | null>"))]
+    #[cfg_attr(feature = "ts", ts(type = "Array<Output | null>"))]
     pub outputs: [Option<Output>; MAX_OUTPUTS],
     /// When the engine last woke, since it started.
     #[serde(skip)]
-    #[cfg_attr(test, ts(skip))]
+    #[cfg_attr(feature = "ts", ts(skip))]
     pub now: Duration,
     /// When it wakes next if no output is set: the state stays alive on this beat.
     #[serde(skip)]
-    #[cfg_attr(test, ts(skip))]
+    #[cfg_attr(feature = "ts", ts(skip))]
     pub beat: Duration,
     /// The looks playing or kept, by slot.
-    #[cfg_attr(test, ts(type = "Array<Play>"))]
+    #[cfg_attr(feature = "ts", ts(type = "Array<Play>"))]
     pub plays: Plays,
     /// The Mixer's settings as this frame applies them.
     pub rules: MixRules,
     /// The start order the next hold or play takes: a later start wins.
     #[serde(skip)]
-    #[cfg_attr(test, ts(skip))]
+    #[cfg_attr(feature = "ts", ts(skip))]
     pub order: u64,
     /// The start orders kept for the launches at the clock's instant.
     #[serde(skip)]
-    #[cfg_attr(test, ts(skip))]
+    #[cfg_attr(feature = "ts", ts(skip))]
     pub launches: Launches,
     /// The beat clock, settled to the frame's time.
-    #[cfg_attr(test, ts(type = "Reading"))]
+    #[cfg_attr(feature = "ts", ts(type = "Reading"))]
     pub clock: Clock,
 }
 
@@ -165,7 +160,7 @@ impl State {
 ///                                       -> no such policy ---> BestEffort { NotSupported }
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum Priority {
     /// The system's real-time class: the thread wakes on time.
     RealTime,
@@ -175,7 +170,7 @@ pub enum Priority {
 
 /// Why the output thread runs best effort.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum BestEffort {
     /// The system said no. `code` is its answer: a Mach `kern_return_t` or an `errno`.
     Refused { code: i32 },
@@ -187,7 +182,7 @@ pub enum BestEffort {
 /// against the project ([`Project::update`]); only that makes an [`EngineCommand`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[expect(
     clippy::large_enum_variant,
     reason = "a client's command has no heap: `Patch` carries its four names in place, `SetGroup` its members. Moved once per request, off the tick thread"
@@ -217,20 +212,20 @@ pub enum Command {
     /// Add a fixture of the library in one of its modes, from `at` on. The reply carries
     /// its number. A fixture on any of the same channels is refused (`Overlaps`).
     Patch {
-        #[cfg_attr(test, ts(type = "string"))]
+        #[cfg_attr(feature = "ts", ts(type = "string"))]
         name: Text,
-        #[cfg_attr(test, ts(type = "string"))]
+        #[cfg_attr(feature = "ts", ts(type = "string"))]
         maker: Text,
-        #[cfg_attr(test, ts(type = "string"))]
+        #[cfg_attr(feature = "ts", ts(type = "string"))]
         model: Text,
-        #[cfg_attr(test, ts(type = "string"))]
+        #[cfg_attr(feature = "ts", ts(type = "string"))]
         mode: Text,
         at: ChannelNumbers,
     },
     /// Add a generic strip of `pixels` pixels, each red, green, blue (and white for
     /// `Rgbw`), from `at` on: one light per pixel, no definition file. As `Patch` otherwise.
     PatchStrip {
-        #[cfg_attr(test, ts(type = "string"))]
+        #[cfg_attr(feature = "ts", ts(type = "string"))]
         name: Text,
         pixels: Pixels,
         color: Color,
@@ -242,7 +237,7 @@ pub enum Command {
     Unpatch { fixture: u16 },
     Rename {
         fixture: u16,
-        #[cfg_attr(test, ts(type = "string"))]
+        #[cfg_attr(feature = "ts", ts(type = "string"))]
         name: Text,
     },
     /// `SetProperty` of an intensity: 0 to 65 535 is 0 to 1.
@@ -274,33 +269,33 @@ pub enum Command {
     /// Make a group, or replace the one of this name. Its members are lights or fixtures,
     /// in the order given, each patched. Unpatching a fixture takes it out of its groups.
     SetGroup {
-        #[cfg_attr(test, ts(type = "string"))]
+        #[cfg_attr(feature = "ts", ts(type = "string"))]
         name: Text,
-        #[cfg_attr(test, ts(type = "Array<Member>"))]
+        #[cfg_attr(feature = "ts", ts(type = "Array<Member>"))]
         members: MemberList,
     },
     /// Remove a group. Nothing happens if there is none.
     RemoveGroup {
-        #[cfg_attr(test, ts(type = "string"))]
+        #[cfg_attr(feature = "ts", ts(type = "string"))]
         name: Text,
     },
     /// Save `step` as look `look` named `name`, in place of the one saved there. A
     /// playing look shows the new step in the next frame and keeps its start.
     PutStep {
         look: u16,
-        #[cfg_attr(test, ts(type = "string"))]
+        #[cfg_attr(feature = "ts", ts(type = "string"))]
         name: Text,
         step: AuthoredStep,
     },
     PutPattern {
         look: u16,
-        #[cfg_attr(test, ts(type = "string"))]
+        #[cfg_attr(feature = "ts", ts(type = "string"))]
         name: Text,
         pattern: Pattern,
     },
     PutSequence {
         look: u16,
-        #[cfg_attr(test, ts(type = "string"))]
+        #[cfg_attr(feature = "ts", ts(type = "string"))]
         name: Text,
         sequence: Sequence,
     },
@@ -312,15 +307,15 @@ pub enum Command {
     StartLook {
         look: u16,
         #[serde(default, rename = "use")]
-        #[cfg_attr(test, ts(optional = nullable))]
+        #[cfg_attr(feature = "ts", ts(optional = nullable))]
         usage: Use,
         #[serde(default)]
-        #[cfg_attr(test, ts(optional = nullable))]
+        #[cfg_attr(feature = "ts", ts(optional = nullable))]
         rank: Rank,
         /// At once when not given, or on the next beat or bar of the grid: then the
         /// play waits, and plays from the frame of that crossing.
         #[serde(default)]
-        #[cfg_attr(test, ts(optional = nullable))]
+        #[cfg_attr(feature = "ts", ts(optional = nullable))]
         when: When,
     },
     /// Stop a play under the Mixer's end rule ([`MixRules`]): kept, or ended. A kept or
@@ -837,7 +832,6 @@ fn bound<const N: usize>(bucket: usize, worst: Duration) -> Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ts_rs::{Config, TS};
 
     const CALM: State = State {
         frame: 7,
@@ -2173,112 +2167,5 @@ mod tests {
                 "p{percent} worst {worst:?}"
             );
         }
-    }
-
-    /// The UI's types for the engine API, generated from the types above.
-    const TYPESCRIPT: &str = "../../ui/src/engine-api.ts";
-
-    #[test]
-    fn typescript_types_match_the_rust_types() {
-        let config = Config::default();
-        let generated = format!(
-            "// Generated from crates/engine-core. Do not edit.\n\
-             // Update: UPDATE_TS=1 cargo test -p engine-core\n\n\
-             {}",
-            [
-                Request::decl(&config),
-                Command::decl(&config),
-                ChannelNumbers::decl(&config),
-                RunNumbers::decl(&config),
-                OutputNumber::decl(&config),
-                OutputKind::decl(&config),
-                Adapter::decl(&config),
-                Color::decl(&config),
-                Rate::decl(&config),
-                Reply::decl(&config),
-                Health::decl(&config),
-                OutputHealth::decl(&config),
-                OutputHealthState::decl(&config),
-                OutputMeasurement::decl(&config),
-                LatenessWindow::decl(&config),
-                PressWindow::decl(&config),
-                LateReason::decl(&config),
-                RecoveredReason::decl(&config),
-                OutputHealthEvent::decl(&config),
-                HealthEvent::decl(&config),
-                Refusal::decl(&config),
-                OpenFailure::decl(&config),
-                State::decl(&config),
-                Priority::decl(&config),
-                BestEffort::decl(&config),
-                Levels::decl(&config),
-                ChannelLevel::decl(&config),
-                HeldLight::decl(&config),
-                Rgb::decl(&config),
-                Light::decl(&config),
-                Position::decl(&config),
-                Gobo::decl(&config),
-                Wheel::decl(&config),
-                Property::decl(&config),
-                Value::decl(&config),
-                GrabId::decl(&config),
-                Step::decl(&config),
-                AuthoredStep::decl(&config),
-                Swatches::decl(&config),
-                Pattern::decl(&config),
-                WaveTarget::decl(&config),
-                Palette::decl(&config),
-                Saved::decl(&config),
-                SavedLook::decl(&config),
-                Sequence::decl(&config),
-                SequenceItem::decl(&config),
-                Use::decl(&config),
-                Speed::decl(&config),
-                Repeat::decl(&config),
-                PlayId::decl(&config),
-                Play::decl(&config),
-                Rank::decl(&config),
-                PlayState::decl(&config),
-                When::decl(&config),
-                Bpm::decl(&config),
-                Reading::decl(&config),
-                MixRules::decl(&config),
-                Brightness::decl(&config),
-                ManualEnd::decl(&config),
-                OtherEnd::decl(&config),
-                Output::decl(&config),
-                Run::decl(&config),
-                Status::decl(&config),
-                Counters::decl(&config),
-                Library::decl(&config),
-                Match::decl(&config),
-                ModeSize::decl(&config),
-                ModeChannels::decl(&config),
-                NamedChannel::decl(&config),
-                Failure::decl(&config),
-                FixtureKind::decl(&config),
-                ChannelFunction::decl(&config),
-                Project::decl(&config),
-                ProjectOutput::decl(&config),
-                Target::decl(&config),
-                Patched::decl(&config),
-                Pixels::decl(&config),
-                Layout::decl(&config),
-                Member::decl(&config),
-                Grouped::decl(&config),
-                ShowFile::decl(&config),
-                Unopened::decl(&config),
-            ]
-            .map(|declaration| format!("export {declaration}\n"))
-            .join("\n"),
-        ) + &format!("\nexport const API_VERSION = {API_VERSION};\n");
-        if std::env::var_os("UPDATE_TS").is_some() {
-            std::fs::write(TYPESCRIPT, &generated).expect("write the TypeScript types");
-        }
-        let committed = std::fs::read_to_string(TYPESCRIPT).unwrap_or_else(|_| String::new());
-        assert_eq!(
-            committed, generated,
-            "{TYPESCRIPT} is out of date: UPDATE_TS=1 cargo test -p engine-core"
-        );
     }
 }

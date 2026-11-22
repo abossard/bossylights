@@ -17,5 +17,5 @@ path = "src/main.rs"
 tauri-build = { version = "2.7.5", features = [] }
 
 [dependencies]
-engine-core = { path = "../crates/engine-core" } # the API version it speaks
+wire = { path = "../crates/wire" } # the API version it speaks
 tauri = { version = "2.12.6", features = [] }

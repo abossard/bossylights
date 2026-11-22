@@ -11,7 +11,7 @@
     "build": "tsc -p ui && vite build ui && cargo build --workspace",
     "test": "npm run test:checks && npm run test:rust && npm run test:release-shell && npm run test:ui && npm run test:e2e && npm run test:catalog && npm run test:scorecard",
     "test:checks": "node --test scripts/*.test.mjs && node scripts/check-licences.mjs && node scripts/check-layers.mjs && node scripts/check-names.mjs && node scripts/check-timing.mjs",
-    "test:rust": "cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace",
+    "test:rust": "cargo check -p engine-core -p fixture-library -p wire && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace",
     "test:release-shell": "node scripts/check-release-shell.mjs",
     "test:ui": "tsc -p ui && tsc -p e2e && oxlint --type-aware --deny-warnings -c ui/.oxlintrc.json ui/src && node --test ui/src/*.test.mjs",
     "test:e2e": "playwright install chromium && playwright test",

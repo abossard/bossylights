@@ -13,7 +13,7 @@ use serde::Serialize;
 
 /// Whether the engine keeps its patch in a show file.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum ShowFile {
     /// The engine was started without one: nothing is kept.
     None,
@@ -28,7 +28,7 @@ pub enum ShowFile {
 
 /// Why a show file was not opened.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum Unopened {
     /// It is there, but could not be read.
     CannotRead,

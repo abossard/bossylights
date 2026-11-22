@@ -224,6 +224,7 @@ impl Looks {
 )]
 mod tests {
     use super::*;
+    use engine_core::{Percent, Width};
     use core::num::NonZeroU16;
     use engine_core::{
         ChannelNumbers, Color, Definition, Light, Lights, PatchCommand, Pixels, SavedLook,
@@ -270,8 +271,8 @@ mod tests {
     pub(super) fn item(look: u16) -> SequenceItem {
         SequenceItem {
             look,
-            width: 16,
-            transition: 0,
+            width: Width::new(16).unwrap(),
+            transition: Percent::LEAST,
             usage: Use::default(),
         }
     }
@@ -305,42 +306,6 @@ mod tests {
             ("sequence to step", leaf(2).into(), Refusal::WrongLookKind),
             ("absent child", sequence(2, &[item(9)]), Refusal::NoSuchLook),
             (
-                "zero width",
-                sequence(
-                    2,
-                    &[SequenceItem {
-                        width: 0,
-                        ..item(1)
-                    }],
-                ),
-                Refusal::InvalidTiming,
-            ),
-            (
-                "transition past 100",
-                sequence(
-                    2,
-                    &[SequenceItem {
-                        transition: 101,
-                        ..item(1)
-                    }],
-                ),
-                Refusal::InvalidTiming,
-            ),
-            (
-                "spread past 100",
-                sequence(
-                    2,
-                    &[SequenceItem {
-                        usage: Use {
-                            spread: 101,
-                            ..Use::default()
-                        },
-                        ..item(1)
-                    }],
-                ),
-                Refusal::InvalidTiming,
-            ),
-            (
                 "reverse expansion past limit",
                 sequence(2, &[item(1); 64]),
                 Refusal::WorkLimit,
@@ -359,7 +324,7 @@ mod tests {
         const BEAT: u64 = 1 << 32;
         let group = Text::new("front").unwrap();
         let spread = Use {
-            spread: 100,
+            spread: Percent::MOST,
             ..Use::default()
         };
         for (members, sequence_phase, step_entry) in [

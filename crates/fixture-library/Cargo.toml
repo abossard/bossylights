@@ -12,3 +12,8 @@ workspace = true
 [dependencies]
 serde = { version = "1.0.229", default-features = false, features = ["derive", "alloc"] } # the model in a show file
 roxmltree = { version = "0.21.2", default-features = false, features = ["positions"] }
+ts-rs = { version = "12.0.1", optional = true } # only the generator test of `crates/wire` turns it on
+
+[features]
+# The TypeScript types of a library failure. No product build has it.
+ts = ["dep:ts-rs"]

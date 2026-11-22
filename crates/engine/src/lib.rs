@@ -35,10 +35,10 @@
 )]
 
 pub use engine_core::{
-    ADDRESSES, API_VERSION, Adapter, BEAT, BestEffort, ChannelLevel, ChannelNumbers, Color,
+    ADDRESSES, Adapter, BEAT, BestEffort, ChannelLevel, ChannelNumbers, Color,
     Command, Counters, Grouped, Levels, MAX_OUTPUTS, MAX_UNIVERSES, Member, MemberList, Members,
     Outcome, Output, OutputKind, OutputNumber, Patched, Priority, Project, ProjectOutput, Rate,
-    OpenFailure, Refusal, Reply, Request, RouteFault, Run, RunNumbers, Span, State, Status, Target, Text,
+    OpenFailure, Refusal, RouteFault, Run, RunNumbers, Span, State, Status, Target, Text,
     Universes, changes,
 };
 /// A test's device refused the route it was given.
@@ -795,23 +795,23 @@ impl Base {
                     output,
                     kind,
                     universes,
-                    ..
+                    rate,
                 }
                 | ProjectEffect::Restart {
                     output,
                     kind,
                     universes,
-                    ..
+                    rate,
                 }
                 | ProjectEffect::Keep {
                     output,
                     kind,
                     universes,
-                    ..
+                    rate,
                 },
             ) => {
                 let limits = outputs::limits(kind);
-                limits.check(universes)?;
+                limits.check(universes, rate)?;
                 self.routed.check_edit(
                     &self.patch,
                     &self.project,
@@ -939,7 +939,7 @@ impl Base {
                 usage,
             } => {
                 let plan = self.looks.plan(look)?;
-                if usage.spread > 100 || plan.is_step() && usage.repeat == Repeat::Once {
+                if plan.is_step() && usage.repeat == Repeat::Once {
                     return Err(Refusal::InvalidTiming);
                 }
                 Change::StartLook {
@@ -3447,6 +3447,7 @@ impl Ticker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use engine_core::{Percent, Period, Width};
 
     /// docs/engine.md, "What the front reserves for a play", one row per pair.
     #[test]
@@ -5073,7 +5074,7 @@ mod tests {
                     .iter()
                     .map(|&child| SequenceItem {
                         look: child,
-                        width: 16,
+                        width: Width::new(16).unwrap(),
                         ..Default::default()
                     })
                     .collect::<Vec<_>>(),
@@ -5610,7 +5611,7 @@ mod tests {
                     name,
                     sequence: Sequence::new(&[SequenceItem {
                         look: child,
-                        transition: 100,
+                        transition: Percent::MOST,
                         ..Default::default()
                     }])
                     .unwrap(),
@@ -5662,7 +5663,7 @@ mod tests {
                     sequence: Sequence::new(
                         &[SequenceItem {
                             look: 1,
-                            transition: 100,
+                            transition: Percent::MOST,
                             ..Default::default()
                         }; 4],
                     )
@@ -5770,7 +5771,7 @@ mod tests {
             name,
             pattern: Pattern::Wave {
                 target,
-                period: 1,
+                period: Period::new(1).unwrap(),
                 palette: Palette::Inline(Swatches::new(&[Rgb::BLACK]).unwrap()),
             },
         };

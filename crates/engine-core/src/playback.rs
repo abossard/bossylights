@@ -36,7 +36,7 @@ pub const LOOKS: usize = 1024;
 /// another source through; zero and black claim it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Step {
     pub target: Target,
     pub values: Light,
@@ -45,10 +45,10 @@ pub struct Step {
 /// A saved step row, also read from earlier show files.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Saved {
     pub look: u16,
-    #[cfg_attr(test, ts(type = "string"))]
+    #[cfg_attr(feature = "ts", ts(type = "string"))]
     pub name: Text,
     pub step: Step,
 }
@@ -99,7 +99,7 @@ pub enum LookCommand {
 #[derive(
     Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
 )]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum Rank {
     Autopilot,
     Show,
@@ -110,9 +110,9 @@ pub enum Rank {
 /// Where a play is: it waits for beat `beat` of the grid, it plays, or it was stopped
 /// and the Mixer keeps its last values until it is released or started again.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum PlayState {
-    #[cfg_attr(test, ts(type = "{ beat: number }"))]
+    #[cfg_attr(feature = "ts", ts(type = "{ beat: number }"))]
     Waiting {
         beat: u64,
     },
@@ -124,7 +124,7 @@ pub enum PlayState {
 /// nothing: a late finger-up cannot end the play that took its slot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct PlayId {
     pub slot: u8,
     pub generation: u32,
@@ -149,18 +149,18 @@ impl PlayId {
 /// A waiting play takes its order and start at its launch; until then `order` is its
 /// request's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Play {
     pub play: PlayId,
     pub look: u16,
     pub rank: Rank,
     pub state: PlayState,
     #[serde(skip)]
-    #[cfg_attr(test, ts(skip))]
+    #[cfg_attr(feature = "ts", ts(skip))]
     pub order: u64,
     /// In beats, as the picture shows it.
     #[serde(serialize_with = "in_beats")]
-    #[cfg_attr(test, ts(type = "number"))]
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub start: BeatTime,
 }
 

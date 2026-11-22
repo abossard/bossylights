@@ -79,7 +79,7 @@ async fn pixel_desk(pixels: u16) -> (Socket, Wakes, Heard, Arc<AtomicBool>, Dura
         &mut socket,
         json!({"SetOutput": {
             "output": 1, "kind": {"DmxUsbPro": {"adapter": 1}},
-            "universes": {"first": 1, "count": 1}, "rate": "60"
+            "universes": {"first": 1, "count": 1}, "rate": "44"
         }}),
     )
     .await;
@@ -220,7 +220,7 @@ async fn refused_graph_edits_keep_the_authored_looks_the_play_and_its_dmx() {
             json!({"StartLook":{"look":1,"use":{"repeat":"Once"}}}),
         ),
         (
-            "InvalidTiming",
+            "NotACommand",
             json!({"StartLook":{"look":2,"use":{"spread":101}}}),
         ),
     ];

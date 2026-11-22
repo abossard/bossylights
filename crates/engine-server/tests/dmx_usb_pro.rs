@@ -322,3 +322,38 @@ fn a_removed_dmx_usb_pro_output_frees_its_port_without_another_command() {
         thread::sleep(Duration::from_millis(10)); // poll
     }
 }
+
+/// theory.md, idea 1: a USB DMX adapter sends at 44, lower only. DDP takes 60.
+#[test]
+fn usb_dmx_refuses_a_rate_above_44() {
+    let (_engine, sender) = engine::Engine::start_with(
+        engine::Universes::new(1).unwrap(),
+        Box::new(|_| unreachable!("preparing an edit opens no device")),
+    )
+    .unwrap();
+    let base = sender.base();
+    let usb = engine::OutputKind::DmxUsbPro {
+        adapter: engine_core::Adapter::FIRST,
+    };
+    let too_fast = Err(engine::Refusal::TooFast {
+        most: engine::Rate::FortyFour,
+    });
+    let cases = [
+        (None, Ok(())),
+        (Some(engine::Rate::Thirty), Ok(())),
+        (Some(engine::Rate::FortyFour), Ok(())),
+        (Some(engine::Rate::Sixty), too_fast),
+    ];
+    for (rate, expected) in cases {
+        let prepared = base.prepare(
+            engine::Command::SetOutput {
+                output: engine::OutputNumber::try_from(1).unwrap(),
+                kind: usb,
+                universes: engine::RunNumbers { first: 1, count: 1 },
+                rate,
+            },
+            &[],
+        );
+        assert_eq!(prepared.map(|_| ()), expected, "{rate:?}");
+    }
+}

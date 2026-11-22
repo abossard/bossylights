@@ -366,7 +366,8 @@ test("the limits of the fields are the engine's: crates/engine-core/src/channel.
 test("an item's width is the engine's: u16 sixteenths of a beat in crates/engine-core/src/api.rs", () => {
   const rust = readFileSync(new URL("../../crates/engine-core/src/api.rs", import.meta.url), "utf8");
   assert.match(rust, /Width is counted in sixteenths of a beat/);
-  assert.match(rust, /pub struct SequenceItem \{[^}]*pub width: u16,/);
+  assert.match(rust, /pub struct SequenceItem \{[^}]*pub width: Width,/);
+  assert.match(rust, /Width\(u16, "u16"\), 1, u16::MAX/);
   assert.equal(WIDTH_SIXTEENTHS, 2 ** 16 - 1);
 });
 

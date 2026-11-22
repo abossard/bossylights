@@ -860,6 +860,7 @@ dependencies = [
  "axum",
  "engine",
  "engine-core",
+ "engine-server",
  "fixture-library",
  "futures-util",
  "outputs",
@@ -869,6 +870,7 @@ dependencies = [
  "show-file",
  "tokio",
  "tokio-tungstenite",
+ "wire",
 ]
 
 [[package]]
@@ -925,6 +927,7 @@ version = "0.0.0"
 dependencies = [
  "roxmltree",
  "serde",
+ "ts-rs",
 ]
 
 [[package]]
@@ -3212,9 +3215,9 @@ dependencies = [
 name = "shell"
 version = "0.0.0"
 dependencies = [
- "engine-core",
  "tauri",
  "tauri-build",
+ "wire",
 ]
 
 [[package]]
@@ -4792,6 +4795,17 @@ checksum = "7d6f32a0ff4a9f6f01231eb2059cc85479330739333e0e58cadf03b6af2cca10"
 dependencies = [
  "cfg-if",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "wire"
+version = "0.0.0"
+dependencies = [
+ "engine-core",
+ "fixture-library",
+ "serde",
+ "serde_json",
+ "ts-rs",
 ]
 
 [[package]]

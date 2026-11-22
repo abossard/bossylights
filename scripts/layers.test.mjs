@@ -33,6 +33,8 @@ for (const [name, deps, expected] of crateCases) {
 const sourceCases = [
   ["core", "#![cfg_attr(not(test), no_std)]\npub fn f() {}", []],
   ["core", "#![no_std]\n", []],
+  ["core", '#![cfg_attr(not(any(test, feature = "ts")), no_std)]\npub fn f() {}', []],
+  ["core", '#![cfg_attr(not(any(test, feature = "std")), no_std)]\npub fn f() {}', ["x has std: it needs #![no_std]"]],
   ["core", "pub fn f() {}", ["x has std: it needs #![no_std]"]],
   ["core", "#![no_std]\nextern crate alloc;", ["x has alloc: no `extern crate alloc` in a core crate"]],
   ["core", "#![no_std]\nfn f() { extern crate alloc; }", ["x has alloc: no `extern crate alloc` in a core crate"]],

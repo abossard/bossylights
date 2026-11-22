@@ -1,46 +1,103 @@
-//! The engine API as data: what a client sends and what it gets back, as JSON over
-//! one WebSocket. `crates/engine-server` moves it; this file says what it is.
-//!
-//! | Client sends | Engine answers |
-//! |---|---|
-//! | `{"Send": {"command": ...}}` | `"Accepted"`, `{"Patched": {"fixture": ...}}` for `Patch`, `{"Started": {"play": ...}}` for `StartLook`, `{"Grabbed": {"grab": ...}}` for a set, or `{"Refused": {"reason": ...}}`. `"Stopping"` once the engine stops: nothing changed |
-//! | `"Query"` | `{"Picture": ...}`: the state, the project, the patch, every level, every held light and output health |
-//! | `"Subscribe"` | `{"Picture": ...}`, then `{"Changed": ...}` for new frames and `{"Health": ...}` for output timing and events |
-//! | `"Stop"` | `"Stopping"`, then every connection closes and the engine process ends |
-//! | `{"Search": {"text": ...}}` | `{"Found": ...}`: the best matches of the fixture library |
-//! | `{"Fixture": {"maker": ..., "model": ...}}` | `{"Fixture": ...}`: its modes and channels, or `NoSuchFixture` |
-//! | `"Failures"` | `{"Failures": ...}`: the definition files that could not be read |
-//! | anything else | `{"Refused": {"reason": "NotACommand"}}` |
+//! The data the API carries that the core itself checks or keeps: timing, saved looks,
+//! why a command is refused. The messages around it (`Request`, `Reply`, the health and
+//! library views, `API_VERSION`) are in `crates/wire`.
 
-use crate::health;
-use crate::library::{Failure, FixtureKind, Library, Match, ModeChannels, Text};
-use crate::{
-    ChannelLevel, Command, GrabId, Grouped, HeldLight, Levels, Light, OutputNumber, Patched,
-    PlayId, Project, Property, Rgb, Saved, ShowFile, State, Status, Step, Target,
-};
-use core::time::Duration;
+use crate::library::Text;
+use crate::{Light, OutputNumber, Property, Rate, Rgb, Saved, Step, Target};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-/// The version of this API. `GET /version` answers it as text. A client that speaks
-/// another version does not talk to the engine. Raise it with every change a client of
-/// the old version would get wrong.
-pub const API_VERSION: u16 = 11;
+/// A number outside the range its type holds: the request is no command
+/// (`NotACommand`, docs/coding.md rule 5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OutOfRange;
+
+impl core::fmt::Display for OutOfRange {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("out of range")
+    }
+}
+
+/// A whole number from `$least` to `$most`, checked when it is built or decoded.
+macro_rules! bounded {
+    ($(#[$doc:meta])* $name:ident($int:ty, $repr:literal), $least:expr, $most:expr) => {
+        $(#[$doc])*
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+        #[serde(try_from = $repr, into = $repr)]
+        #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(type = "number"))]
+        pub struct $name($int);
+
+        impl $name {
+            pub const LEAST: Self = Self($least);
+            pub const MOST: Self = Self($most);
+
+            /// `None` outside `LEAST` to `MOST`.
+            #[allow(
+                unused_comparisons,
+                clippy::absurd_extreme_comparisons,
+                reason = "some bounds are the integer's own"
+            )]
+            pub const fn new(value: $int) -> Option<Self> {
+                if value >= $least && value <= $most {
+                    Some(Self(value))
+                } else {
+                    None
+                }
+            }
+
+            pub const fn get(self) -> $int {
+                self.0
+            }
+        }
+
+        impl TryFrom<$int> for $name {
+            type Error = OutOfRange;
+            fn try_from(value: $int) -> Result<Self, OutOfRange> {
+                Self::new(value).ok_or(OutOfRange)
+            }
+        }
+
+        impl From<$name> for $int {
+            fn from(value: $name) -> Self {
+                value.0
+            }
+        }
+    };
+}
+
+bounded!(
+    /// A percentage, 0 to 100: the spread of a play, the transition of a sequence item.
+    Percent(u8, "u8"), 0, 100
+);
+bounded!(
+    /// The width of a sequence item in sixteenths of a beat: at least one.
+    Width(u16, "u16"), 1, u16::MAX
+);
+bounded!(
+    /// The period of a wave in beats, 1 to 32.
+    Period(u8, "u8"), 1, 32
+);
+
+impl Default for Percent {
+    fn default() -> Self {
+        Self::LEAST
+    }
+}
 
 /// Local time and phase of a root or a reference. Spread is a percentage.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Use {
-    #[cfg_attr(test, ts(optional = nullable))]
+    #[cfg_attr(feature = "ts", ts(optional = nullable))]
     pub speed: Speed,
-    #[cfg_attr(test, ts(optional = nullable))]
+    #[cfg_attr(feature = "ts", ts(optional = nullable))]
     pub repeat: Repeat,
-    #[cfg_attr(test, ts(optional = nullable))]
-    pub spread: u8,
+    #[cfg_attr(feature = "ts", ts(optional = nullable))]
+    pub spread: Percent,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum Speed {
     Half,
     #[default]
@@ -49,7 +106,7 @@ pub enum Speed {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum Repeat {
     #[default]
     Loop,
@@ -60,22 +117,22 @@ pub enum Repeat {
 /// item's width spent moving from the preceding item.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct SequenceItem {
     pub look: u16,
     #[serde(default = "one_beat")]
-    #[cfg_attr(test, ts(optional = nullable))]
-    pub width: u16,
+    #[cfg_attr(feature = "ts", ts(optional = nullable))]
+    pub width: Width,
     #[serde(default)]
-    #[cfg_attr(test, ts(optional = nullable))]
-    pub transition: u8,
+    #[cfg_attr(feature = "ts", ts(optional = nullable))]
+    pub transition: Percent,
     #[serde(default, rename = "use")]
-    #[cfg_attr(test, ts(optional = nullable))]
+    #[cfg_attr(feature = "ts", ts(optional = nullable))]
     pub usage: Use,
 }
 
-const fn one_beat() -> u16 {
-    16
+const fn one_beat() -> Width {
+    Width(16)
 }
 
 impl Default for SequenceItem {
@@ -83,7 +140,7 @@ impl Default for SequenceItem {
         Self {
             look: 0,
             width: one_beat(),
-            transition: 0,
+            transition: Percent::LEAST,
             usage: Use::default(),
         }
     }
@@ -93,9 +150,9 @@ impl Default for SequenceItem {
 /// oversized command reaches admission as WorkLimit without allocating a list.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Sequence {
-    #[cfg_attr(test, ts(type = "Array<SequenceItem>"))]
+    #[cfg_attr(feature = "ts", ts(type = "Array<SequenceItem>"))]
     items: Items,
 }
 
@@ -170,7 +227,7 @@ impl<'de> Deserialize<'de> for Items {
 
 /// Ordered RGB16 stops. The decoder rejects a fifth swatch before storing it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(test, derive(ts_rs::TS), ts(type = "Array<Rgb>"))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(type = "Array<Rgb>"))]
 pub struct Swatches {
     colours: [Rgb; Self::MOST],
     len: u8,
@@ -250,12 +307,12 @@ impl<'de> Deserialize<'de> for Swatches {
 /// A step may also lend its swatches to a Wave. Only its target and values play directly.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct AuthoredStep {
     pub target: Target,
     pub values: Light,
     #[serde(default, skip_serializing_if = "Swatches::is_empty")]
-    #[cfg_attr(test, ts(optional = nullable))]
+    #[cfg_attr(feature = "ts", ts(optional = nullable))]
     pub swatches: Swatches,
 }
 
@@ -280,21 +337,21 @@ impl From<Step> for AuthoredStep {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum Pattern {
     Wave {
         target: WaveTarget,
-        period: u8,
+        period: Period,
         palette: Palette,
     },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum WaveTarget {
     Group {
-        #[cfg_attr(test, ts(type = "string"))]
+        #[cfg_attr(feature = "ts", ts(type = "string"))]
         group: Text,
     },
     Matrix {
@@ -304,7 +361,7 @@ pub enum WaveTarget {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum Palette {
     Inline(Swatches),
     Step { look: u16 },
@@ -325,7 +382,7 @@ pub enum Definition {
 /// Each saved row contains exactly one definition, under `step`, `sequence` or `pattern`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(
-    test,
+    feature = "ts",
     derive(ts_rs::TS),
     ts(
         type = "{ look: number, name: string, step: AuthoredStep } | { look: number, name: string, sequence: Sequence } | { look: number, name: string, pattern: Pattern }"
@@ -408,48 +465,6 @@ impl<'de> Deserialize<'de> for SavedLook {
     }
 }
 
-/// What a client sends. A key it does not know, here or in any type it carries, refuses
-/// the request: a misspelled field would otherwise be ignored without a word.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-#[expect(
-    clippy::large_enum_variant,
-    reason = "a client's command has no heap: `Patch` carries its four names in place, `SetGroup` its members. Moved once per request, off the tick thread"
-)]
-pub enum Request {
-    /// Change the state. Answered at once, before the frame that carries it.
-    Send { command: Command },
-    /// The whole picture, once.
-    Query,
-    /// The whole picture, then what changed with every frame.
-    Subscribe,
-    /// Stop the engine in an orderly way: answer, close every connection, end.
-    Stop,
-    /// The fixtures of the library whose maker and model match `text`, best first.
-    Search {
-        #[cfg_attr(test, ts(type = "string"))]
-        text: Text,
-    },
-    /// One fixture of the library: its modes, each channel by name and function.
-    Fixture {
-        #[cfg_attr(test, ts(type = "string"))]
-        maker: Text,
-        #[cfg_attr(test, ts(type = "string"))]
-        model: Text,
-    },
-    /// The definition files that could not be read, and why.
-    Failures,
-}
-
-/// Timing and device status for each attached output, in output number order.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub struct Health<'a> {
-    pub window_ms: u16,
-    pub outputs: &'a [OutputHealth],
-}
-
 // Commands read a one-based output number. Replies write it with the same numbering.
 impl Serialize for OutputNumber {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
@@ -457,262 +472,9 @@ impl Serialize for OutputNumber {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub struct OutputHealth {
-    pub output: OutputNumber,
-    #[cfg_attr(test, ts(type = "number"))]
-    pub generation: u64,
-    pub status: Status,
-    pub state: OutputHealthState,
-    pub measurement: OutputMeasurement,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub enum OutputHealthState {
-    Measuring,
-    Healthy,
-    Late { reason: LateReason },
-    Recovering { reason: LateReason },
-}
-
-impl From<health::HealthState> for Option<OutputHealthState> {
-    fn from(state: health::HealthState) -> Self {
-        Some(match state {
-            health::HealthState::Absent => return None,
-            health::HealthState::Measuring => OutputHealthState::Measuring,
-            health::HealthState::Healthy => OutputHealthState::Healthy,
-            health::HealthState::Late(reason) => OutputHealthState::Late {
-                reason: reason.into(),
-            },
-            health::HealthState::Recovering(reason) => OutputHealthState::Recovering {
-                reason: reason.into(),
-            },
-        })
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub enum OutputMeasurement {
-    Measuring,
-    ClockDiscontinuity,
-    Window {
-        #[cfg_attr(test, ts(type = "number"))]
-        end_ms: u64,
-        lateness: Option<LatenessWindow>,
-        press_to_light: Option<PressWindow>,
-        press_missing: u32,
-        dropped: u32,
-        failed: u32,
-        off_beat: u32,
-        frames_handed: u32,
-    },
-}
-
-impl From<(Duration, health::Window)> for OutputMeasurement {
-    fn from((end, window): (Duration, health::Window)) -> Self {
-        Self::Window {
-            end_ms: u64::try_from(end.as_millis()).unwrap_or(u64::MAX),
-            lateness: window.lateness.map(Into::into),
-            press_to_light: window.press_to_light.map(Into::into),
-            press_missing: window.press_missing,
-            dropped: window.dropped,
-            failed: window.failed,
-            off_beat: window.off_beat,
-            frames_handed: window.frames_handed,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub struct LatenessWindow {
-    pub p99_us: u32,
-    pub worst_us: u32,
-    pub samples: u32,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub struct PressWindow {
-    pub p95_us: u32,
-    pub worst_us: u32,
-    pub samples: u32,
-}
-
-fn micros(time: Duration) -> u32 {
-    u32::try_from(time.as_micros()).unwrap_or(u32::MAX)
-}
-
-impl From<health::MetricWindow> for LatenessWindow {
-    fn from(metric: health::MetricWindow) -> Self {
-        Self {
-            p99_us: micros(metric.percentile),
-            worst_us: micros(metric.worst),
-            samples: metric.samples,
-        }
-    }
-}
-
-impl From<health::MetricWindow> for PressWindow {
-    fn from(metric: health::MetricWindow) -> Self {
-        Self {
-            p95_us: micros(metric.percentile),
-            worst_us: micros(metric.worst),
-            samples: metric.samples,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub enum LateReason {
-    HandoffLateness,
-    PressToLight,
-    Both,
-}
-
-impl From<health::LateReason> for LateReason {
-    fn from(reason: health::LateReason) -> Self {
-        match reason {
-            health::LateReason::HandoffLateness => Self::HandoffLateness,
-            health::LateReason::PressToLight => Self::PressToLight,
-            health::LateReason::Both => Self::Both,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub enum RecoveredReason {
-    WithinTargets,
-    OutputAvailable,
-}
-
-impl From<health::RecoveredReason> for RecoveredReason {
-    fn from(reason: health::RecoveredReason) -> Self {
-        match reason {
-            health::RecoveredReason::WithinTargets => Self::WithinTargets,
-            health::RecoveredReason::OutputAvailable => Self::OutputAvailable,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub struct OutputHealthEvent {
-    pub output: OutputNumber,
-    #[cfg_attr(test, ts(type = "number"))]
-    pub generation: u64,
-    #[cfg_attr(test, ts(type = "number"))]
-    pub at_ms: u64,
-    pub event: HealthEvent,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub enum HealthEvent {
-    RunningLate { reason: LateReason },
-    Recovered { reason: RecoveredReason },
-    OutputLost,
-}
-
-impl From<health::HealthEvent> for HealthEvent {
-    fn from(event: health::HealthEvent) -> Self {
-        match event {
-            health::HealthEvent::RunningLate(reason) => Self::RunningLate {
-                reason: reason.into(),
-            },
-            health::HealthEvent::Recovered(reason) => Self::Recovered {
-                reason: reason.into(),
-            },
-            health::HealthEvent::OutputLost => Self::OutputLost,
-        }
-    }
-}
-
-/// What the engine sends back.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
-pub enum Reply<'a> {
-    /// The command is queued for the very next frame.
-    Accepted,
-    /// The fixture is patched as `fixture`; its writers are queued for the very next frame.
-    Patched { fixture: u16 },
-    /// The look plays as `play` from the very next frame.
-    Started { play: PlayId },
-    /// The grab holds from the very next frame.
-    Grabbed { grab: GrabId },
-    /// The engine stops: every connection closes, then the process ends.
-    Stopping,
-    /// The command was not taken. Nothing changed.
-    Refused { reason: Refusal },
-    /// The state, the project, the held levels of every universe and the held parts of
-    /// every light.
-    Picture {
-        state: State,
-        project: Project,
-        library: Library,
-        /// Every patched fixture, by number.
-        patch: &'a [Patched<'a>],
-        /// Every group, in the order they were made.
-        groups: &'a [Grouped<'a>],
-        /// Every saved look, by number.
-        looks: &'a [SavedLook],
-        /// Whether the patch, the groups and the looks are kept in a show file.
-        show: ShowFile,
-        universes: &'a [Levels],
-        /// Every light that holds a part, by number.
-        lights: &'a [HeldLight],
-        health: Health<'a>,
-    },
-    /// Current rows and the events since this subscriber's last health delivery.
-    Health {
-        health: Health<'a>,
-        events: &'a [OutputHealthEvent],
-        missed: u32,
-    },
-    /// A new frame: the state, and the channels and the lights whose held values changed
-    /// since the last message.
-    Changed {
-        state: State,
-        project: Project,
-        library: Library,
-        /// The whole patch when it changed since the last message, else `None`.
-        patch: Option<&'a [Patched<'a>]>,
-        /// Every group when the patch changed since the last message, else `None`.
-        groups: Option<&'a [Grouped<'a>]>,
-        /// Every saved look when they changed since the last message, else `None`.
-        looks: Option<&'a [SavedLook]>,
-        /// Whether the patch, the groups and the looks are kept in a show file.
-        show: ShowFile,
-        channels: &'a [ChannelLevel],
-        /// Every light whose held parts changed, as it holds them now: a part let go is
-        /// `None`.
-        lights: &'a [HeldLight],
-    },
-    /// The answer to `Search`: at most [`MATCHES`], best first. Empty while the library
-    /// is not read.
-    Found { fixtures: &'a [Match<'a>] },
-    /// The answer to `Fixture`.
-    Fixture {
-        maker: &'a str,
-        model: &'a str,
-        kind: FixtureKind<'a>,
-        modes: &'a [ModeChannels<'a>],
-    },
-    /// The answer to `Failures`, in the order of the files' names.
-    Failures { failures: &'a [Failure<'a>] },
-}
-
-/// The most fixtures one `Found` carries.
-pub const MATCHES: usize = 50;
-
 /// Why an output's device could not be opened ([`Refusal::CannotOpen`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum OpenFailure {
     /// The device or socket refused, `with` the system's error number when it gave one.
     Device { with: Option<i32> },
@@ -725,7 +487,7 @@ pub enum OpenFailure {
 
 /// Why a command was not taken.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum Refusal {
     /// Not one of the listed requests or commands, or not in their shape.
     NotACommand,
@@ -743,6 +505,10 @@ pub enum Refusal {
     NoSuchFixture,
     /// The output's device is being opened. Send again once it is open.
     Opening,
+    /// This kind of output sends at most `most` frames a second (a USB DMX adapter 44).
+    TooFast {
+        most: Rate,
+    },
     /// This kind of output takes at most `most` universes.
     TooManyUniverses {
         most: u16,
@@ -831,46 +597,4 @@ pub enum Refusal {
     GrabFull {
         most: u32,
     },
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{LatenessWindow, PressWindow};
-    use crate::health::MetricWindow;
-    use core::time::Duration;
-
-    #[test]
-    fn metric_times_are_whole_microseconds_saturated_to_u32() {
-        for (percentile, worst, p_us, worst_us) in [
-            (Duration::from_nanos(999), Duration::from_nanos(2_999), 0, 2),
-            (
-                Duration::from_micros(u64::from(u32::MAX) + 1),
-                Duration::MAX,
-                u32::MAX,
-                u32::MAX,
-            ),
-        ] {
-            let metric = MetricWindow {
-                percentile,
-                worst,
-                samples: 20,
-            };
-            assert_eq!(
-                LatenessWindow::from(metric),
-                LatenessWindow {
-                    p99_us: p_us,
-                    worst_us,
-                    samples: 20
-                }
-            );
-            assert_eq!(
-                PressWindow::from(metric),
-                PressWindow {
-                    p95_us: p_us,
-                    worst_us,
-                    samples: 20
-                }
-            );
-        }
-    }
 }

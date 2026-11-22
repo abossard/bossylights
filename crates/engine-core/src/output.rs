@@ -131,7 +131,7 @@ pub const OFF_BEAT: Duration = Duration::from_millis(2);
 /// Which output, 1 to [`MAX_OUTPUTS`] as a client counts. Anything else does not parse.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(try_from = "u8")]
-#[cfg_attr(test, derive(ts_rs::TS), ts(type = "number"))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(type = "number"))]
 pub struct OutputNumber(u8);
 
 impl OutputNumber {
@@ -154,7 +154,7 @@ impl TryFrom<u8> for OutputNumber {
 
 /// Frames a second.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum Rate {
     #[serde(rename = "30")]
     Thirty,
@@ -181,7 +181,7 @@ impl Rate {
 /// A run of universes as a client sends it: `count` universes from `first`, counted from 1.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct RunNumbers {
     pub first: u16,
     pub count: u16,
@@ -190,7 +190,7 @@ pub struct RunNumbers {
 /// A run of this engine's universes, sent as one stream of channels. Until the Rig
 /// exists, this is how an output knows what to send.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Run {
     /// Counted from 1, as the client sent it.
     first: u16,
@@ -242,7 +242,7 @@ impl Run {
 
 /// Where an output is. One type, one transition function: [`Status::after`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum Status {
     /// No frame accepted since the output was set. Served like any other status: it
     /// stays so the user tells a device never seen from one lost (`Reconnecting`).
@@ -300,22 +300,22 @@ impl Status {
 
 /// Frames counted since the output was set.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Counters {
-    #[cfg_attr(test, ts(type = "number"))]
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub accepted: u64,
-    #[cfg_attr(test, ts(type = "number"))]
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub dropped: u64,
-    #[cfg_attr(test, ts(type = "number"))]
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub failed: u64,
     /// Intervals more than [`OFF_BEAT`] away from the period.
-    #[cfg_attr(test, ts(type = "number"))]
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub off_beat: u64,
 }
 
 /// One output as the engine knows it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Output {
     pub universes: Run,
     pub rate: Rate,
@@ -323,11 +323,11 @@ pub struct Output {
     pub counters: Counters,
     /// When its next frame is due, since the engine started.
     #[serde(skip)]
-    #[cfg_attr(test, ts(skip))]
+    #[cfg_attr(feature = "ts", ts(skip))]
     pub due: Duration,
     /// When its last frame reached its device, or was dropped.
     #[serde(skip)]
-    #[cfg_attr(test, ts(skip))]
+    #[cfg_attr(feature = "ts", ts(skip))]
     pub last: Option<Duration>,
 }
 

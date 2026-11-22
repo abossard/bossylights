@@ -16,22 +16,23 @@
  * or log (docs/coding.md, rule 7), so each is listed.
  */
 export const CRATES = {
-  "engine-core": { kind: "core", deps: ["serde"] },
-  "fixture-library": { kind: "calc", deps: ["roxmltree", "serde"] }, // QLC+ fixture definitions in, a model out. Reads no files
+  "engine-core": { kind: "core", deps: ["serde", "ts-rs"] }, // ts-rs: optional, feature `ts`, only the generator test of wire turns it on
+  "fixture-library": { kind: "calc", deps: ["roxmltree", "serde", "ts-rs"] }, // QLC+ fixture definitions in, a model out. Reads no files. ts-rs: optional, feature `ts`, as in engine-core
   rig: { kind: "calc", deps: ["engine-core", "fixture-library"] }, // a mode at an address becomes writers: only it knows an address belongs to a fixture
   looks: { kind: "calc", deps: ["engine-core", "rig"] }, // saved looks: checked against the patch, compiled into plans for the core
   "show-file": { kind: "calc", deps: ["engine-core", "fixture-library", "rig", "looks", "serde", "serde_json"] }, // the patch as a show file's text and back, checked as the commands check. Reads no files
+  wire: { kind: "calc", deps: ["engine-core", "fixture-library", "serde"] }, // the app's messages: Request, Reply, the health and library views. The core knows only commands and channels (Q16)
   "rt-thread": { kind: "tick", deps: ["engine-core", "libc"] }, // the only unsafe: asks for real-time priority
   outputs: { kind: "tick", deps: ["engine-core", "nix", "rtrb", "serialport"] }, // opens devices, takes frames: only it knows bytes
   engine: { kind: "tick", deps: ["engine-core", "rt-thread", "outputs", "rig", "looks", "fixture-library", "rtrb"] }, // the front owns the patch: it checks a patch against the library and compiles writers
   "audio-in": { kind: "calc", deps: [] }, // samples and the caller's clock in, levels and beats out. Capture is its own action crate
-  "engine-server": { kind: "action", deps: ["engine", "engine-core", "fixture-library", "looks", "show-file"] }, // reads the fixture folder, answers the library, opens and saves the show file
-  shell: { kind: "action", deps: ["engine-core"] }, // knows the API version it speaks, nothing more
+  "engine-server": { kind: "action", deps: ["engine", "engine-core", "fixture-library", "looks", "show-file", "wire"] }, // reads the fixture folder, answers the library, opens and saves the show file
+  shell: { kind: "action", deps: ["wire"] }, // knows the API version it speaks, nothing more
 };
 
 /** Every source file in ui/src and its layer. A new file is added here. A name that ends in "/" is a folder: all of it. */
 export const UI_FILES = {
-  "engine-api.ts": "data", // generated from crates/engine-core
+  "engine-api.ts": "data", // generated from crates/wire
   "connection.ts": "calc",
   "picture.ts": "calc",
   "engine.ts": "engine", // the only module that talks to the engine
@@ -60,7 +61,7 @@ export const UI_LAYERS = {
   test: ["data", "calc", "controls", "kit", "catalog"], // node tests of calculations. No engine, no view
 };
 
-const NO_STD = /^#!\[(?:no_std|cfg_attr\(not\(test\),\s*no_std\))\]/m;
+const NO_STD = /^#!\[(?:no_std|cfg_attr\(not\((?:test|any\(test,\s*feature\s*=\s*"ts"\))\),\s*no_std\))\]/m;
 const ALLOC = /\bextern\s+crate\s+alloc\b/;
 
 /** What is wrong with a crate's dependencies. `deps`: [{ name, workspace }]. */

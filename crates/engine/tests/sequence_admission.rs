@@ -95,7 +95,7 @@ fn a_saved_rgb_wave_leaves_room_to_light_its_first_pixel() {
         name,
         pattern: Pattern::Wave {
             target: WaveTarget::Matrix { fixture: 1 },
-            period: 1,
+            period: engine_core::Period::new(1).unwrap(),
             palette: Palette::Inline(Swatches::new(&[colour, Rgb::BLACK]).unwrap()),
         },
     };

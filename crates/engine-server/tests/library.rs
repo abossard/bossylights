@@ -140,13 +140,8 @@ async fn patch_each(case: usize, files: &[String], modes: &[&str]) -> (Vec<Value
     (replies, failures["Failures"]["failures"].clone())
 }
 
-/// The files' modes, the modes patched, each reply, the Failures rows (file, line, problem).
-type MixedCase<'a> = (
-    Vec<String>,
-    Vec<&'a str>,
-    Vec<Value>,
-    Vec<(&'a str, Option<u32>, &'a str)>,
-);
+/// The files' modes, the modes patched, each reply, the Failures rows (file, line, why).
+type MixedCase<'a> = (Vec<String>, Vec<&'a str>, Vec<Value>, Vec<(&'a str, Option<u32>, Value)>);
 
 // the files' modes, the modes patched, each reply, the Failures rows
 #[tokio::test]
@@ -159,13 +154,17 @@ async fn a_refused_mode_is_listed_and_the_files_other_modes_patch() {
     let good = "\n <Mode Name=\"Good\"><Channel Number=\"0\">Red</Channel></Mode>";
     let patched = json!({"Patched": {"fixture": 1}});
     let refused = |reason: &str| json!({"Refused": {"reason": reason}});
-    let past = "mode \"Broken\": head 0 names channel 1, the mode has 1";
+    // A head of one channel that names channel 1 (counted from 0): past the mode's end.
+    let past_end = |mode: &str| {
+        json!({"ModeRefused": {"mode": mode, "problem": {"HeadPastEnd": {"head": 0, "channel": 1, "channels": 1}}}})
+    };
+    let past = past_end("Broken");
     let cases: [MixedCase; 5] = [
         (
             vec![format!("{}{good}", mode("Broken", "1"))],
             vec!["Broken", "Good"],
             vec![refused("NoSuchMode"), patched.clone()],
-            vec![("mixed.qxf", Some(4), past)],
+            vec![("mixed.qxf", Some(4), past.clone())],
         ),
         (
             vec![format!("{}{good}", mode("Broken", "bad"))],
@@ -174,7 +173,7 @@ async fn a_refused_mode_is_listed_and_the_files_other_modes_patch() {
             vec![(
                 "mixed.qxf",
                 Some(4),
-                "mode \"Broken\": Head channel=\"bad\" is not a number in range",
+                json!({"ModeRefused": {"mode": "Broken", "problem": {"BadNumber": {"what": "Head channel", "text": "bad"}}}}),
             )],
         ),
         (
@@ -182,19 +181,15 @@ async fn a_refused_mode_is_listed_and_the_files_other_modes_patch() {
             vec!["Broken"],
             vec![refused("NoSuchFixture")],
             vec![
-                ("mixed.qxf", Some(4), past),
-                (
-                    "mixed.qxf",
-                    Some(5),
-                    "mode \"Also\": head 0 names channel 1, the mode has 1",
-                ),
+                ("mixed.qxf", Some(4), past.clone()),
+                ("mixed.qxf", Some(5), past_end("Also")),
             ],
         ),
         (
             vec![String::new()],
             vec!["Good"],
             vec![refused("NoSuchFixture")],
-            vec![("mixed.qxf", Some(1), "the file has no <Mode>")],
+            vec![("mixed.qxf", Some(1), json!({"Definition": {"problem": "NoMode"}}))],
         ),
         // a second file of the same maker and model stays off the shelf, its refused mode listed
         (
@@ -202,14 +197,14 @@ async fn a_refused_mode_is_listed_and_the_files_other_modes_patch() {
             vec!["Good", "Broken"],
             vec![patched, refused("NoSuchMode")],
             vec![
-                ("twin.qxf", None, "the same maker and model as mixed.qxf"),
+                ("twin.qxf", None, json!({"SameModelAs": {"file": "mixed.qxf"}})),
                 ("twin.qxf", Some(5), past),
             ],
         ),
     ];
     for (case, (files, modes, replies, rows)) in cases.into_iter().enumerate() {
         let rows: Vec<Value> = (rows.into_iter())
-            .map(|(file, line, problem)| json!({"file": file, "line": line, "problem": problem}))
+            .map(|(file, line, why)| json!({"file": file, "line": line, "why": why}))
             .collect();
         let answer = patch_each(case, &files, &modes).await;
         assert_eq!(answer, (replies, Value::from(rows)), "{files:?}");
@@ -268,12 +263,12 @@ async fn the_library_answers_search_fixture_and_failures() {
         {
             "file": "Broken/broken.qxf",
             "line": 1,
-            "problem": "not valid xml: the root node was opened but never closed",
+            "why": {"Definition": {"problem": {"NotXml": "the root node was opened but never closed"}}},
         },
         {
             "file": "Eurolite-LED-IP-PIX-Strobe-Frost.qxf",
             "line": 475,
-            "problem": "mode \"32 Channel\": head 11 names channel 32, the mode has 32",
+            "why": {"ModeRefused": {"mode": "32 Channel", "problem": {"HeadPastEnd": {"head": 11, "channel": 32, "channels": 32}}}},
         },
     ]);
     // (request, where in the answer, expected)
@@ -339,7 +334,7 @@ async fn a_named_pipe_is_a_failure_and_the_rest_is_read() {
     assert_eq!(
         failures,
         json!({"Failures": {"failures": [
-            {"file": "pipe.qxf", "line": null, "problem": "not a file"},
+            {"file": "pipe.qxf", "line": null, "why": "NotAFile"},
         ]}})
     );
 }

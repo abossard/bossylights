@@ -1,5 +1,5 @@
-// Generated from crates/engine-core. Do not edit.
-// Update: UPDATE_TS=1 cargo test -p engine-core
+// Generated from crates/wire. Do not edit.
+// Update: UPDATE_TS=1 cargo test -p wire
 
 export type Request = { "Send": { command: Command, } } | "Query" | "Subscribe" | "Stop" | { "Search": { text: string, } } | { "Fixture": { maker: string, model: string, } } | "Failures";
 
@@ -28,7 +28,7 @@ export type Color = "Rgb" | "Rgbw";
 
 export type Rate = "30" | "44" | "60";
 
-export type Reply = "Accepted" | { "Patched": { fixture: number, } } | { "Started": { play: PlayId, } } | { "Grabbed": { grab: GrabId, } } | "Stopping" | { "Refused": { reason: Refusal, } } | { "Picture": { state: State, project: Project, library: Library, 
+export type Reply = "Accepted" | { "Patched": { fixture: number, } } | { "Started": { play: PlayId, } } | { "Grabbed": { grab: GrabId, } } | "Stopping" | "Failed" | { "Refused": { reason: Refusal, } } | { "Picture": { state: State, project: Project, library: Library, 
 /**
  * Every patched fixture, by number.
  */
@@ -91,7 +91,7 @@ export type OutputHealthEvent = { output: OutputNumber, generation: number, at_m
 
 export type HealthEvent = { "RunningLate": { reason: LateReason, } } | { "Recovered": { reason: RecoveredReason, } } | "OutputLost";
 
-export type Refusal = "NotACommand" | { "NoSuchUniverse": { universes: number, } } | "NoSuchAddress" | "QueueFull" | { "CannotOpen": { why: OpenFailure, } } | "NoSuchFixture" | "Opening" | { "TooManyUniverses": { most: number, } } | "NoSuchMode" | { "PastTheEnd": { channels: number, } } | { "NotStreamed": { first: number, last: number, } } | { "NotSent": { output: number, universe: number, address: number, } } | { "StreamsFixture": { fixture: number, } } | { "Overlaps": { fixture: number, } } | "NoLightsLeft" | "NotPatched" | "NoSuchLight" | "NoSuchGroup" | { "TooManyMembers": { most: number, } } | { "ShowFileFull": { most: number, } } | "NoSuchLook" | "WrongLookKind" | "LookCycle" | "InvalidTiming" | "EmptyPalette" | "NoMatrix" | "WorkLimit" | { "LookInUse": { look: number, } } | { "TooManyLooks": { most: number, } } | "PlayFull" | { "Unsupported": { light: number, property: Property, } } | "Stale" | "EmptyGroup" | { "OtherProperty": { property: Property, } } | { "GrabFull": { most: number, } };
+export type Refusal = "NotACommand" | { "NoSuchUniverse": { universes: number, } } | "NoSuchAddress" | "QueueFull" | { "CannotOpen": { why: OpenFailure, } } | "NoSuchFixture" | "Opening" | { "TooFast": { most: Rate, } } | { "TooManyUniverses": { most: number, } } | "NoSuchMode" | { "PastTheEnd": { channels: number, } } | { "NotStreamed": { first: number, last: number, } } | { "NotSent": { output: number, universe: number, address: number, } } | { "StreamsFixture": { fixture: number, } } | { "Overlaps": { fixture: number, } } | "NoLightsLeft" | "NotPatched" | "NoSuchLight" | "NoSuchGroup" | { "TooManyMembers": { most: number, } } | { "ShowFileFull": { most: number, } } | "NoSuchLook" | "WrongLookKind" | "LookCycle" | "InvalidTiming" | "EmptyPalette" | "NoMatrix" | "WorkLimit" | { "LookInUse": { look: number, } } | { "TooManyLooks": { most: number, } } | "PlayFull" | { "Unsupported": { light: number, property: Property, } } | "Stale" | "EmptyGroup" | { "OtherProperty": { property: Property, } } | { "GrabFull": { most: number, } };
 
 export type OpenFailure = { "Device": { with: number | null, } } | "Thread" | "Unavailable";
 
@@ -161,7 +161,7 @@ export type AuthoredStep = { target: Target, values: Light, swatches?: Swatches,
 
 export type Swatches = Array<Rgb>;
 
-export type Pattern = { "Wave": { target: WaveTarget, period: number, palette: Palette, } };
+export type Pattern = { "Wave": { target: WaveTarget, period: Period, palette: Palette, } };
 
 export type WaveTarget = { "Group": { group: string, } } | { "Matrix": { fixture: number, } };
 
@@ -173,9 +173,15 @@ export type SavedLook = { look: number, name: string, step: AuthoredStep } | { l
 
 export type Sequence = { items: Array<SequenceItem>, };
 
-export type SequenceItem = { look: number, width?: number, transition?: number, use?: Use, };
+export type SequenceItem = { look: number, width?: Width, transition?: Percent, use?: Use, };
 
-export type Use = { speed?: Speed, repeat?: Repeat, spread?: number, };
+export type Use = { speed?: Speed, repeat?: Repeat, spread?: Percent, };
+
+export type Percent = number;
+
+export type Width = number;
+
+export type Period = number;
 
 export type Speed = "Half" | "Normal" | "Double";
 
@@ -249,7 +255,19 @@ export type ModeChannels = { name: string, channels: Array<NamedChannel>, };
 
 export type NamedChannel = { name: string, function: ChannelFunction, };
 
-export type Failure = { file: string, line: number | null, problem: string, };
+export type Failure = { file: string, line: number | null, why: Why, };
+
+export type Why = { "CannotRead": { with: number | null, } } | "NotAFile" | { "Definition": { problem: Problem, } } | { "ModeRefused": { mode: string, problem: Problem, } } | { "TooLong": { what: Asked, } } | { "SameModelAs": { file: string, } };
+
+export type Asked = "Maker" | "Model";
+
+export type Problem = "NotText" | { "NotXml": string } | "Declarations" | { "TooLarge": { bytes: number, most: number, } } | { "WrongRoot": string } | { "Missing": string } | { "BadNumber": { what: string, text: string, } } | { "UnknownChannel": string } | { "DuplicateNumber": number } | { "SkippedNumber": number } | { "BackwardsRange": { min: number, max: number, } } | { "HeadPastEnd": { head: number, channel: number, channels: number, } } | { "ActsOnPastEnd": { channel: number, channels: number, } } | "NoMode" | { "NoModeKept": Array<Refused> };
+
+export type Refused = { mode: string, 
+/**
+ * The line in the file, counted from 1.
+ */
+line: number, problem: Problem, };
 
 export type FixtureKind = "ColorChanger" | "Dimmer" | "Effect" | "Fan" | "Flower" | "Hazer" | "Laser" | "LedBarBeams" | "LedBarPixels" | "MovingHead" | "Other" | "Scanner" | "Smoke" | "Strobe" | { "Unlisted": { name: string, } };
 
@@ -304,4 +322,4 @@ export type ShowFile = "None" | "Kept" | "NotSaved" | { "LeftAlone": { why: Unop
 
 export type Unopened = "CannotRead" | { "Broken": { line: number, column: number, } } | { "Newer": { version: number, } } | { "Older": { version: number, } } | { "Taken": { fixture: number, } } | { "LookTaken": { look: number, } } | { "Refused": { reason: Refusal, } } | { "TooBig": { most: number, } };
 
-export const API_VERSION = 11;
+export const API_VERSION = 12;

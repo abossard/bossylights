@@ -25,7 +25,7 @@ const BLUE: [u8; 3] = [0, 0, 255];
 /// One desk at a time: frames on four fake adapters at once miss the wire under load.
 static ONE_AT_A_TIME: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-/// A served engine on a stepped clock with the PAR, the fake adapter at 60 Hz, and
+/// A served engine on a stepped clock with the PAR, the fake adapter at 44 Hz, and
 /// looks 1 red, 2 green, 3 blue on the PAR. Times are in ms from `zero`.
 struct Desk {
     _turn: tokio::sync::MutexGuard<'static, ()>,
@@ -88,7 +88,7 @@ impl Desk {
             s,
             json!({"SetOutput": {
                 "output": 1, "kind": {"DmxUsbPro": {"adapter": 1}},
-                "universes": {"first": 1, "count": 1}, "rate": "60",
+                "universes": {"first": 1, "count": 1}, "rate": "44",
             }}),
         )
         .await;
@@ -197,10 +197,23 @@ impl Desk {
         served.then_some(last).flatten()
     }
 
-    /// What the PAR shows at `ms`, in a frame handed over then.
+    /// What the PAR shows at `ms`, in a frame handed over then. Every check at a beat
+    /// is one: a frame missing there fails it.
     async fn shows(&mut self, ms: u64) -> [u8; 3] {
         let shown = self.at(ms).await;
         shown.unwrap_or_else(|| panic!("no frame at {ms} ms"))
+    }
+
+    /// What the PAR shows in the first frame handed over from `ms` on, for a check
+    /// between beats. The adapter sends 44 a second (a frame every 22 727 272 ns), so
+    /// one comes within 23 ms.
+    async fn shows_from(&mut self, ms: u64) -> [u8; 3] {
+        for at in ms..=ms + 23 {
+            if let Some(shown) = self.at(at).await {
+                return shown;
+            }
+        }
+        panic!("no frame from {ms} ms to {} ms", ms + 23)
     }
 
     /// The state of the picture painted last.
@@ -293,7 +306,7 @@ async fn taps_set_the_tempo_and_launches_land_on_the_tapped_and_the_fed_beat() {
     desk.at(760).await;
     desk.start(2, "Beat").await;
     assert_eq!(desk.shows(780).await, RED);
-    assert_eq!(desk.shows(1480).await, RED);
+    assert_eq!(desk.shows(1475).await, RED);
     assert_eq!(desk.shows(1500).await, GREEN);
     // released at 1500: the feed's beat at 2000; blue asked at 1520
     desk.send(json!("ReleaseTempo")).await;
@@ -301,8 +314,8 @@ async fn taps_set_the_tempo_and_launches_land_on_the_tapped_and_the_fed_beat() {
     assert_eq!(state["clock"]["bpm"], 120.0, "{state}");
     assert_eq!(state["clock"]["source"], "Feed");
     desk.start(3, "Beat").await;
-    assert_eq!(desk.shows(1540).await, GREEN);
-    assert_eq!(desk.shows(1980).await, GREEN);
+    assert_eq!(desk.shows_from(1540).await, GREEN);
+    assert_eq!(desk.shows(1975).await, GREEN);
     assert_eq!(desk.shows(2000).await, BLUE);
     desk.stop().await;
 }
@@ -340,7 +353,7 @@ async fn a_bar_waits_two_crossings_in_one_wake_start_in_order_and_a_tap_moves_on
     assert_eq!(desk.shows(beat_at(first, bar + 4) + 20).await, BLUE);
     // green launched too: blue let go, green is on the wire
     desk.send(json!({"ReleaseHold": {"play": blue}})).await;
-    assert_eq!(desk.shows(beat_at(first, bar + 4) + 40).await, GREEN);
+    assert_eq!(desk.shows(beat_at(first, bar + 4) + 45).await, GREEN);
     desk.send(json!({"ReleaseHold": {"play": green}})).await;
     // green on the next bar, at 4 bars on; a tap 200 ms past a beat moves the grid on
     // by 0.6 beats once: green comes 300 ms early, and red's own beat runs on
@@ -357,7 +370,7 @@ async fn a_bar_waits_two_crossings_in_one_wake_start_in_order_and_a_tap_moves_on
         "red's beat jumped: {before} to {after}"
     );
     let moved = beat_at(first, bar + 4) - 300;
-    assert_eq!(desk.shows(moved - 20).await, RED);
+    assert_eq!(desk.shows(moved - 25).await, RED);
     assert_eq!(desk.shows(moved).await, GREEN);
     // once: at the bar it waited for, the same play from the same start
     let greens = |state: &Value| -> Vec<_> {
@@ -379,7 +392,7 @@ async fn a_bar_waits_two_crossings_in_one_wake_start_in_order_and_a_tap_moves_on
     let state = desk.picture(beat_at(first, bar + 4)).await;
     assert_eq!(greens(&state), launched, "{state}");
     assert_eq!(launched.first().map(|play| &play.0), Some(&green));
-    assert_eq!(desk.shows(beat_at(first, bar + 4) + 20).await, GREEN);
+    assert_eq!(desk.shows_from(beat_at(first, bar + 4) + 20).await, GREEN);
     desk.stop().await;
 }
 
@@ -397,7 +410,7 @@ async fn two_taps_drained_in_one_wake_count_at_the_times_they_were_sent() {
     assert_eq!(state["clock"]["source"], "Tapped");
     // the beat the second tap marked was at 750: the next at 1500
     desk.start(2, "Beat").await;
-    assert_eq!(desk.shows(1480).await, RED);
+    assert_eq!(desk.shows(1475).await, RED);
     assert_eq!(desk.shows(1500).await, GREEN);
     desk.stop().await;
 }
@@ -483,7 +496,7 @@ async fn a_feed_edit_off_the_beat_launches_on_the_beat_worked_out_from_it() {
     desk.at(100).await;
     desk.send(json!({"SetInternalTempo": {"bpm": 60}})).await;
     desk.start(2, "Beat").await;
-    assert_eq!(desk.shows(880).await, RED);
+    assert_eq!(desk.shows(875).await, RED);
     assert_eq!(desk.shows(900).await, GREEN);
     desk.stop().await;
 }
