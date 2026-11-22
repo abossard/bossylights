@@ -256,9 +256,15 @@ async fn patch_stop_start_the_patch_and_groups_are_there_and_light_up_without_th
 #[tokio::test]
 async fn a_file_the_engine_cannot_open_is_left_alone_and_the_picture_says_why() {
     let mode = r#"{"name":"RGB","channels":[],"pixels":[],"layout":null,"degrees":null}"#;
-    let empty = r#"{"version":1,"patch":[],"groups":[],"modes":{}}"#;
+    let rules =
+        r#""rules":{"brightness":"Latest","manual_end":"UntilRelease","other_end":"Reveal"}"#;
+    let empty = format!(
+        r#"{{"version":{},"patch":[],"groups":[],"looks":[],{rules},"modes":{{}}}}"#,
+        show_file::VERSION
+    );
     let past = format!(
-        r#"{{"version":1,"patch":[{{"fixture":1,"name":"PAR","mode":"m","at":{{"universe":9,"address":1}},"first":1}}],"groups":[],"modes":{{"m":{{"maker":"Generic","model":"Generic RGB","mode":{mode}}}}}}}"#
+        r#"{{"version":{},"patch":[{{"fixture":1,"name":"PAR","mode":"m","at":{{"universe":9,"address":1}},"first":1}}],"groups":[],"looks":[],{rules},"modes":{{"m":{{"maker":"Generic","model":"Generic RGB","mode":{mode}}}}}}}"#,
+        show_file::VERSION
     );
     // (case, the file, why)
     let cases = [
@@ -269,6 +275,14 @@ async fn a_file_the_engine_cannot_open_is_left_alone_and_the_picture_says_why() 
                 show_file::VERSION + 1
             ),
             json!({"Newer": {"version": show_file::VERSION + 1}}),
+        ),
+        (
+            "older",
+            empty.replace(
+                &format!(r#""version":{}"#, show_file::VERSION),
+                r#""version":5"#,
+            ),
+            json!({"Older": {"version": 5}}),
         ),
         (
             "broken",
@@ -282,7 +296,7 @@ async fn a_file_the_engine_cannot_open_is_left_alone_and_the_picture_says_why() 
         ),
         (
             "one_byte_over_the_most",
-            empty.to_string() + &" ".repeat(show_file::MOST_BYTES + 1 - empty.len()),
+            empty.clone() + &" ".repeat(show_file::MOST_BYTES + 1 - empty.len()),
             json!({"TooBig": {"most": show_file::MOST_BYTES}}),
         ),
     ];
@@ -473,49 +487,6 @@ fn red_step(look: u16, name: &str) -> Value {
 }
 
 #[test]
-fn a_v4_show_with_room_for_steps_can_still_edit_a_step() {
-    use engine_core::{LOOKS, ShowFile};
-    use engine_server::show::open;
-    use std::io::Write;
-
-    // Version 4 reserved 2048 bytes per look, plus line separators and the rules.
-    let v4_patch_limit = show_file::MOST_BYTES - LOOKS * (2048 + 6) - 128;
-    let path = show_file("v4_step_room");
-    let mut file = std::io::BufWriter::new(std::fs::File::create(&path).unwrap());
-    let mut look = red_step(1, "red");
-    let row = look["PutStep"].take();
-    let header = format!(
-        r#"{{"version":4,"patch":[{{"fixture":1,"name":"PAR","mode":"m","at":{{"universe":1,"address":1}},"first":1}}],"groups":[],"looks":[{row}],"modes":{{"m":{{"maker":"Generic","model":"PAR","mode":{{"name":"RGB","channels":[{{"name":"Red"#
-    );
-    let trailer = r#"","function":"Red","byte":"Coarse","default":null,"direction":null,"ranges":[]}],"pixels":[],"layout":null,"degrees":null}}}}"#;
-    let padding = v4_patch_limit - 4096 - header.len() - trailer.len();
-    file.write_all(header.as_bytes()).unwrap();
-    for chunk in (0..padding).step_by(8192) {
-        file.write_all(&[b'x'; 8192][..(padding - chunk).min(8192)])
-            .unwrap();
-    }
-    file.write_all(trailer.as_bytes()).unwrap();
-    file.flush().unwrap();
-    drop(file);
-
-    let (_engine, mut sender) = engine::Engine::start(engine::Universes::new(1).unwrap()).unwrap();
-    let opened = open(&path, &mut sender);
-    std::fs::remove_file(&path).unwrap();
-    assert_eq!(opened, ShowFile::Kept);
-    assert_eq!(sender.looks().get(1).unwrap().name.as_str(), "red");
-    assert!(
-        show_file::write(&sender.patch(), &sender.looks())
-            .unwrap()
-            .len()
-            < v4_patch_limit
-    );
-
-    let rename = serde_json::from_value(red_step(1, "new")).unwrap();
-    assert_eq!(sender.send(rename), Ok(()));
-    assert_eq!(sender.looks().get(1).unwrap().name.as_str(), "new");
-}
-
-#[test]
 fn patch_and_sequence_edits_share_the_bytes_above_the_step_reserve() {
     use engine_core::{LOOKS, SavedLook, Sequence};
     let (_engine, mut sender) = engine::Engine::start(engine::Universes::new(1).unwrap()).unwrap();
@@ -542,7 +513,11 @@ fn patch_and_sequence_edits_share_the_bytes_above_the_step_reserve() {
         1,
     );
     let (patch, _) = show_file::read(&padded, &empty).unwrap();
-    sender.load(patch.kept_in(show_file::LIMIT)).unwrap();
+    // an open takes a front as it starts
+    let (_opened, mut sender) = engine::Engine::start(engine::Universes::new(1).unwrap()).unwrap();
+    sender
+        .open(patch.kept_in(show_file::LIMIT), engine::Looks::new())
+        .unwrap();
     let full = Err(engine_core::Refusal::ShowFileFull {
         most: show_file::LIMIT.most as u32,
     });
@@ -795,4 +770,230 @@ async fn an_edit_admitted_before_the_keeper_first_looks_is_saved_on_stop() {
         "the first edit is saved: {saved:?}"
     );
     let _ = std::fs::remove_file(&file);
+}
+
+#[test]
+fn a_show_open_is_atomic_if_admission_runs_out_of_room() {
+    use engine::{Engine, Looks, QUEUE, Refusal, Universes};
+    use engine_core::{
+        ChannelNumbers, Color, Command, PatchCommand, Pixels, ShowFile, Text, Unopened,
+    };
+
+    let actual: Vec<_> = [QUEUE - 2, QUEUE - 1]
+        .into_iter()
+        .map(|filled| {
+            let (_engine, mut sender, wakes) = Engine::start_stepped(
+                Universes::new(1).unwrap(),
+                Box::new(|_| unreachable!("a one-universe patch needs no output")),
+            )
+            .unwrap();
+            wakes.hold().unwrap();
+            let at = ChannelNumbers {
+                universe: 1,
+                address: 1,
+            };
+            let patch = sender
+                .patch()
+                .update(
+                    PatchCommand::PatchStrip {
+                        name: Text::new("Strip").unwrap(),
+                        pixels: Pixels::try_from(1).unwrap(),
+                        color: Color::Rgb,
+                        at,
+                    },
+                    &[],
+                )
+                .unwrap()
+                .0
+                .unwrap();
+            let path = show_file("review-atomic");
+            std::fs::write(&path, show_file::write(&patch, &Looks::new()).unwrap()).unwrap();
+            for _ in 0..filled {
+                sender
+                    .send(Command::SetChannel {
+                        channel: at,
+                        value: 7,
+                    })
+                    .unwrap();
+            }
+            let result = engine_server::show::open(&path, &mut sender);
+            std::fs::remove_file(&path).unwrap();
+            (result, sender.patch().fixtures().len())
+        })
+        .collect();
+    assert_eq!(
+        actual,
+        [
+            (ShowFile::Kept, 1),
+            (
+                ShowFile::LeftAlone {
+                    why: Unopened::Refused {
+                        reason: Refusal::QueueFull
+                    },
+                },
+                0,
+            ),
+        ]
+    );
+}
+
+/// What a show file holds, for the rows of the open.
+#[derive(Clone, Copy)]
+enum Holds {
+    NotThere,
+    AFolder,
+    NotJson,
+    /// A strip from 1:510 into universe 2: no output streams them at start.
+    AcrossTwoUniverses,
+    /// A dimmer, look 1 on it, and Mixer settings other than the defaults.
+    ADimmerAndALook,
+}
+
+/// Every row of the open (`docs/engine.md`, Show file): all or nothing. Each
+/// `LeftAlone` row leaves the patch, the looks and the Mixer's settings as they start;
+/// only `Kept` takes them, together. The open takes 2 places of the queue (writers and
+/// settings in one chunk).
+#[test]
+fn a_show_opens_whole_or_not_at_all() {
+    use engine::{Command, Engine, Looks, QUEUE, Refusal, Universes};
+    use engine_core::{
+        Brightness, ChannelNumbers, Color, ManualEnd, MixRules, OtherEnd, PatchCommand, Pixels,
+        ShowFile, Text, Unopened,
+    };
+
+    let dimmer = format!(
+        r#"{{
+          "version": {},
+          "patch": [{{"fixture":1,"name":"Dimmer","mode":"m","at":{{"universe":1,"address":1}},"first":1}}],
+          "groups": [],
+          "looks": [{{"look":1,"name":"Full","step":{{"target":{{"Fixture":{{"fixture":1}}}},"values":{{"intensity":65535}}}}}}],
+          "rules": {{"brightness":"Highest","manual_end":"UntilStop","other_end":"Stay"}},
+          "modes": {{"m":{{"maker":"Example","model":"Dimmer","mode":{{
+            "name":"1ch","channels":[{{"name":"Dimmer","function":"Dimmer","byte":"Coarse","default":null,"direction":null,"ranges":[]}}],
+            "pixels":[],"layout":null,"degrees":null
+          }}}}}}
+        }}"#,
+        show_file::VERSION
+    );
+    let set = MixRules {
+        brightness: Brightness::Highest,
+        manual_end: ManualEnd::UntilStop,
+        other_end: OtherEnd::Stay,
+    };
+    let unset = MixRules::default();
+    let left = |reason| ShowFile::LeftAlone {
+        why: Unopened::Refused { reason },
+    };
+    // (case, what the file holds, queue places taken before the open, the answer,
+    // fixtures, looks and settings after)
+    let cases = [
+        ("not there", Holds::NotThere, 0, ShowFile::Kept, 0, 0, unset),
+        (
+            "not there, no room",
+            Holds::NotThere,
+            QUEUE - 1,
+            left(Refusal::QueueFull),
+            0,
+            0,
+            unset,
+        ),
+        (
+            "a folder",
+            Holds::AFolder,
+            0,
+            ShowFile::LeftAlone {
+                why: Unopened::CannotRead,
+            },
+            0,
+            0,
+            unset,
+        ),
+        (
+            "not JSON",
+            Holds::NotJson,
+            0,
+            ShowFile::LeftAlone {
+                why: Unopened::Broken { line: 1, column: 1 },
+            },
+            0,
+            0,
+            unset,
+        ),
+        (
+            "a strip no output streams",
+            Holds::AcrossTwoUniverses,
+            0,
+            left(Refusal::NotStreamed { first: 1, last: 2 }),
+            0,
+            0,
+            unset,
+        ),
+        (
+            "a dimmer and a look",
+            Holds::ADimmerAndALook,
+            QUEUE - 2,
+            ShowFile::Kept,
+            1,
+            1,
+            set,
+        ),
+        (
+            "a dimmer and a look, no room",
+            Holds::ADimmerAndALook,
+            QUEUE - 1,
+            left(Refusal::QueueFull),
+            0,
+            0,
+            unset,
+        ),
+    ];
+    for (case, holds, taken, answer, fixtures, looks, rules) in cases {
+        let (_engine, mut sender, wakes) = Engine::start_stepped(
+            Universes::new(2).unwrap(),
+            Box::new(|_| unreachable!("the open opens no output")),
+        )
+        .unwrap();
+        wakes.hold().unwrap();
+        let path = show_file("open-rows");
+        match holds {
+            Holds::NotThere => {}
+            Holds::AFolder => std::fs::create_dir(&path).unwrap(),
+            Holds::NotJson => std::fs::write(&path, "x").unwrap(),
+            Holds::AcrossTwoUniverses => {
+                let strip = PatchCommand::PatchStrip {
+                    name: Text::new("Across").unwrap(),
+                    pixels: Pixels::try_from(2).unwrap(),
+                    color: Color::Rgb,
+                    at: ChannelNumbers {
+                        universe: 1,
+                        address: 510,
+                    },
+                };
+                let patch = sender.patch().update(strip, &[]).unwrap().0.unwrap();
+                let text = show_file::write(&patch, &Looks::new()).unwrap();
+                std::fs::write(&path, text).unwrap();
+            }
+            Holds::ADimmerAndALook => std::fs::write(&path, &dimmer).unwrap(),
+        }
+        for _ in 0..taken {
+            sender.send(Command::Blackout { on: false }).unwrap();
+        }
+        let opened = engine_server::show::open(&path, &mut sender);
+        if path.is_dir() {
+            std::fs::remove_dir(&path).unwrap();
+        } else if path.exists() {
+            std::fs::remove_file(&path).unwrap();
+        }
+        let now = sender.looks();
+        assert_eq!(
+            (
+                opened,
+                sender.patch().fixtures().len(),
+                now.rows().count(),
+                now.rules()
+            ),
+            (answer, fixtures, looks, rules),
+            "{case}"
+        );
+    }
 }

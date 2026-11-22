@@ -300,6 +300,6 @@ members: Array<Member>, };
 
 export type ShowFile = "None" | "Kept" | "NotSaved" | { "LeftAlone": { why: Unopened, } };
 
-export type Unopened = "CannotRead" | { "Broken": { line: number, column: number, } } | { "Newer": { version: number, } } | { "Taken": { fixture: number, } } | { "Refused": { reason: Refusal, } } | { "TooBig": { most: number, } };
+export type Unopened = "CannotRead" | { "Broken": { line: number, column: number, } } | { "Newer": { version: number, } } | { "Older": { version: number, } } | { "Taken": { fixture: number, } } | { "LookTaken": { look: number, } } | { "Refused": { reason: Refusal, } } | { "TooBig": { most: number, } };
 
 export const API_VERSION = 11;

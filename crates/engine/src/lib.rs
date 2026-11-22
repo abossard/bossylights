@@ -1823,18 +1823,43 @@ impl Sender {
         Ok(())
     }
 
-    /// Takes `looks` in place of the saved looks, as a show file brings them: refused
-    /// when one names nothing in the patch. No play uses them yet.
-    pub fn load_looks(&mut self, looks: Looks) -> Result<(), Refusal> {
-        let looks = looks.rebind(&self.patch)?;
-        self.push(
-            EngineCommand::Rules {
-                rules: looks.rules(),
-            },
-            Brings::Nothing,
+    /// Takes `patch` and `looks` in place of the empty patch and no looks, as a show file
+    /// brings them: all of it in one chunk of the queue, or nothing. `patch` is made
+    /// from [`Sender::patch`], so it has this engine's universes and lights.
+    ///
+    /// | The front | `patch` and `looks` | Result |
+    /// |---|---|---|
+    /// | not as it starts: a fixture patched, or Mixer settings other than the defaults | any | `Stale`: an open never replaces work |
+    /// | as it starts | refused as a change of the patch, or a look names nothing in it | that refusal |
+    /// | as it starts | fine, but no room in the queue | `QueueFull` |
+    /// | as it starts | fine | writers and rules in one chunk, then the patch and looks |
+    ///
+    /// Every refusal leaves the front as it was.
+    pub fn open(&mut self, patch: Patch, looks: Looks) -> Result<(), Refusal> {
+        if !self.as_it_starts() {
+            return Err(Refusal::Stale);
+        }
+        check_pending_patch(&patch, self.project, &self.pending_outputs(), &self.routed)?;
+        let looks = looks.rebind(&patch)?;
+        self.publish(
+            vec![
+                PatchEffect::Writers(patch.writers().to_vec()),
+                PatchEffect::Send(EngineCommand::Rules {
+                    rules: looks.rules(),
+                }),
+            ],
+            None,
         )?;
+        self.patch = Arc::new(patch);
         self.looks = Arc::new(looks);
         Ok(())
+    }
+
+    /// No fixture patched and the Mixer's default settings: nothing an open could
+    /// replace. A saved look, a play and a live or kept grab each need a patched fixture
+    /// (an unpatch lets the grabs of its lights go), so none is left either.
+    fn as_it_starts(&self) -> bool {
+        self.patch.fixtures().is_empty() && self.looks.rules() == MixRules::default()
     }
 
     /// The saved looks as they are now.
@@ -2236,16 +2261,6 @@ impl Sender {
         {
             *slot = spans;
         }
-    }
-
-    /// Takes `patch` in place of the patch, as a show file brings it: made from
-    /// [`Sender::patch`], so it has this engine's universes and lights. Its writers go to
-    /// the tick thread. Refused as a change of the patch is: nothing changes.
-    pub fn load(&mut self, patch: Patch) -> Result<(), Refusal> {
-        check_pending_patch(&patch, self.project, &self.pending_outputs(), &self.routed)?;
-        self.publish(vec![PatchEffect::Writers(patch.writers().to_vec())], None)?;
-        self.patch = Arc::new(patch);
-        Ok(())
     }
 
     /// The project with each route as of its last visible switch.

@@ -193,7 +193,7 @@ The patch: a fixture of the library at an address. The front checks each command
 | `SetGroup` (name, members) | makes a group, or replaces the one of that name in its place. Members in order, at most 512: `{"Fixture": {"fixture": 1}}` or `{"Light": {"light": 7}}` | `NotPatched`, `NoSuchLight` |
 | `RemoveGroup` (name) | removes it. No such group: nothing changes | |
 
-A target is `{"Fixture": {"fixture": 1}}` (all its lights), `{"Light": {"light": 7}}` or `{"Group": {"group": "front"}}` (every light of every member). The picture carries `groups`: name and members, in the order they were made; `Changed` carries them with the patch. Nothing uses the order yet. Fixtures and lights count from 1. A fixture with heads (a bar, a panel, a strip) is one light per head in the order of its definition, after the fixture itself when it has a channel in no head (a master dimmer); its `patch` row has `layout`, `{"width": 8, "height": 1}`, or `null`. Past address 512 a fixture runs on at address 1 of the next universe: `PastTheEnd` only past the engine's last universe. No invalid patch: a fixture over more than one universe needs one output whose run streams them all (`NotStreamed` names the universes), and that output cannot go or lose them while it is patched (`StreamsFixture`). Every channel of a fixture an output streams is one it sends: DDP sends whole pixels, so RGB on universes 1 and 2 sends 1023 channels, and a fixture on 2:512 is `NotSent`; an output change that would leave one is `StreamsFixture`. A fixture in one universe needs no output. No two fixtures share a channel: `Patch` or `Move` onto a channel of another fixture is `Overlaps`, and a show file that has one is left alone (`Refused` with `Overlaps`). Who wins on a channel is decided in one place, the Mixer in `engine-core` (`docs/design/who-wins.md`): a held value of a light over a default, then one pass per channel: a held raw channel over the light that writes it, and Blackout, a modifier every channel follows, over everything.
+A target is `{"Fixture": {"fixture": 1}}` (all its lights), `{"Light": {"light": 7}}` or `{"Group": {"group": "front"}}` (every light of every member). The picture carries `groups`: name and members, in the order they were made; `Changed` carries them with the patch. A Wave on a group follows member order. Fixtures and lights count from 1. A fixture with heads (a bar, a panel, a strip) is one light per head in the order of its definition, after the fixture itself when it has a channel in no head (a master dimmer); its `patch` row has `layout`, `{"width": 8, "height": 1}`, or `null`. Past address 512 a fixture runs on at address 1 of the next universe: `PastTheEnd` only past the engine's last universe. No invalid patch: a fixture over more than one universe needs one output whose run streams them all (`NotStreamed` names the universes), and that output cannot go or lose them while it is patched (`StreamsFixture`). Every channel of a fixture an output streams is one it sends: DDP sends whole pixels, so RGB on universes 1 and 2 sends 1023 channels, and a fixture on 2:512 is `NotSent`; an output change that would leave one is `StreamsFixture`. A fixture in one universe needs no output. No two fixtures share a channel: `Patch` or `Move` onto a channel of another fixture is `Overlaps`, and a show file that has one is left alone (`Refused` with `Overlaps`). Who wins on a channel is decided in one place, the Mixer in `engine-core` (`docs/design/who-wins.md`): a held value of a light over a default, then one pass per channel: a held raw channel over the light that writes it, and Blackout, a modifier every channel follows, over everything.
 
 ```json
 {"Send": {"command": {"Patch": {"name": "PAR 3", "maker": "Generic", "model": "Generic RGB", "mode": "RGB", "at": {"universe": 1, "address": 37}}}}}
@@ -229,8 +229,22 @@ stateDiagram-v2
 | Start | `npm run engine -- --show <file>`: the patch and the groups, opened at start, saved after every change and on `Stop` |
 | Holds | each fixture by number with its mode whole (opens without the library), its first light, the groups in order. Not the outputs yet |
 | A save | a new file `<file>.saving`, then renamed over the file, on the blocking pool. Never half written, never on the tick thread |
-| Opening | Show file v6 stores Waves and step swatches. It reads v1 through v5 with their original schemas and applies the same checks as the commands. A file that fails one is left alone: empty patch, never written. Format: `crates/show-file` |
-| State | `show` in `Picture` and `Changed`: `None`, `Kept`, `NotSaved`, `LeftAlone { why }`: `CannotRead`, `Broken { line, column }`, `Newer { version }`, `Taken { fixture }`, `Refused { reason }` |
+| Opening | Show file v6 stores Waves and step swatches. It reads v6 only: an older file is left alone (`Older`), no migration. It applies the same checks as the commands. A file that fails one is left alone: empty patch, never written. Nothing half opens: the patch, the looks and the Mixer's settings go to the tick in one chunk (2 places of the queue) or not at all, and only onto a front as it starts (no fixture, the default Mixer settings; else `Stale`). Every row: the table below. Format: `crates/show-file` |
+| State | `show` in `Picture` and `Changed`: `None`, `Kept`, `NotSaved`, `LeftAlone { why }`: `CannotRead`, `Broken { line, column }`, `Newer { version }`, `Older { version }`, `Taken { fixture }`, `LookTaken { look }`, `Refused { reason }` |
+
+The open, all or nothing (`show::open`, `Sender::open`). Every `LeftAlone` row leaves the patch, the looks and the Mixer's settings as they start; only `Kept` writes to the queue.
+
+| State | Event | Next | Patch, looks, settings after |
+|---|---|---|---|
+| Reading | file not there | Opening (empty patch, no looks) | |
+| Reading | cannot read (a folder, no rights) | `LeftAlone(CannotRead)` | as they start |
+| Reading | over the most bytes, broken, newer, older, taken, refused by a check | `LeftAlone(why)` | as they start |
+| Reading | read | Opening (the file's patch and looks) | |
+| Opening | front not as it starts: a fixture patched, or Mixer settings other than the defaults | `LeftAlone(Refused(Stale))` | unchanged |
+| Opening | patch refused as a change of the patch (`NotStreamed`, …) | `LeftAlone(Refused(reason))` | as they start |
+| Opening | a look names nothing in the patch | `LeftAlone(Refused(LookInUse))` | as they start |
+| Opening | fewer than 2 queue places free | `LeftAlone(Refused(QueueFull))` | as they start |
+| Opening | all pass | `Kept` | the file's, in one chunk of 2 places |
 
 ## Each output's states
 

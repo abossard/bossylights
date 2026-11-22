@@ -24,6 +24,15 @@ use rig::Patch;
 
 pub use compile::{PLAN_BYTES, Plan, WORK_LIMIT, compile, play_work};
 
+/// Why the saved looks of a show file are not restored.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Unrestored {
+    /// Two saved looks have this number.
+    Taken(u16),
+    /// Saved, a look would be refused for this reason.
+    Refused(Refusal),
+}
+
 /// Edges of the authored graph, including a Wave that reads a step's swatches.
 fn references(definition: &Definition, mut uses: impl FnMut(u16) -> bool) -> bool {
     match definition {
@@ -131,20 +140,21 @@ impl Looks {
         saved: impl IntoIterator<Item = SavedLook>,
         rules: MixRules,
         patch: &Patch,
-    ) -> Result<Self, Refusal> {
+    ) -> Result<Self, Unrestored> {
         let mut all = Self {
             rules,
             ..Self::default()
         };
         for saved in saved {
             if all.saved.contains_key(&saved.look) {
-                return Err(Refusal::LookInUse { look: saved.look });
+                return Err(Unrestored::Taken(saved.look));
             }
-            Self::room(all.saved.len())?;
+            Self::room(all.saved.len()).map_err(Unrestored::Refused)?;
             all.saved.insert(saved.look, Arc::new(saved));
         }
         let ids = all.saved.keys().copied().collect();
-        all.recompile(patch, &ids, false)?;
+        all.recompile(patch, &ids, false)
+            .map_err(Unrestored::Refused)?;
         Ok(all)
     }
 

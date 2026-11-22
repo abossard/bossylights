@@ -10,13 +10,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::watch;
 
-/// Opens the show file at `path` into the patch of `sender`. A file that is not there:
-/// the patch stays empty and the first change makes the file. Either way the patch is
-/// kept in the file from now on ([`show_file::LIMIT`]): a change that would not fit in it
-/// is refused. A file that cannot be opened is left alone, and the patch stays empty.
-/// Reads at most one byte over [`show_file::MOST_BYTES`]: enough for `read` to say the
-/// file is too big, never a file of gigabytes.
-/// The looks of the file come after its patch, checked against it.
+/// Opens the show file at `path` into the patch and looks of `sender`, whole or not at
+/// all ([`Sender::open`]). A file that is not there: the patch stays empty and the first
+/// change makes the file. Either way the patch is kept in the file from now on
+/// ([`show_file::LIMIT`]): a change that would not fit in it is refused. A file that
+/// cannot be opened is left alone: nothing half opens, the patch and the looks stay
+/// empty. Reads at most one byte over [`show_file::MOST_BYTES`]: enough for `read` to
+/// say the file is too big, never a file of gigabytes.
 pub fn open(path: &Path, sender: &mut Sender) -> ShowFile {
     let mut text = String::new();
     let most = u64::try_from(show_file::MOST_BYTES).unwrap_or(u64::MAX);
@@ -31,8 +31,7 @@ pub fn open(path: &Path, sender: &mut Sender) -> ShowFile {
     };
     let opened = read.and_then(|(patch, looks)| {
         sender
-            .load(patch.kept_in(show_file::LIMIT))
-            .and_then(|()| sender.load_looks(looks))
+            .open(patch.kept_in(show_file::LIMIT), looks)
             .map_err(|reason| Unopened::Refused { reason })
     });
     match opened {

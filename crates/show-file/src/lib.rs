@@ -34,11 +34,11 @@
 //!
 //! | Key | Holds |
 //! |---|---|
-//! | `version` | [`VERSION`]. A newer one is not read |
+//! | `version` | [`VERSION`]. A newer or an older one is not read: no reader, no migration |
 //! | `patch` | each fixture by number: its name, its mode (a key of `modes`), where, its first light |
 //! | `groups` | in the order they were made, each member a light or a fixture |
-//! | `looks` | each saved look by number: its name and a Wave (v6), a sequence (v5), or a step. Steps can store up to four RGB swatches from v6 and the slot of each gobo wheel in `gobos`. Version 1 has none. Versions 2 and 3 hold one `gobo` of a wheel and a slot, read and checked as those engines did: read as that wheel's slot. A gobo a light with a gobo wheel cannot show is refused, a wheel past 3 among them (no wheel past 3 is shown now); on lights without a gobo wheel it showed nothing and is left out |
-//! | `rules` | the Mixer's three settings. Versions 1 and 2 have none: the defaults |
+//! | `looks` | each saved look by number: its name and a Wave, a sequence, or a step. A step can store up to four RGB swatches and the slot of each gobo wheel in `gobos` |
+//! | `rules` | the Mixer's three settings |
 //! | `modes` | each mode a fixture is patched in, with its maker and model, by key |
 //!
 //! Reading checks what the commands check: a fixture is placed as patch places it, a
@@ -67,11 +67,11 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::num::{NonZeroU16, NonZeroU32};
 use engine_core::{
-    ChannelNumbers, LOOKS, Light, Member, Members, MixRules, PatchCommand, Position, Refusal, Rgb,
-    Saved, SavedLook, Sequence, Step, Target, Text, Unopened, Wheel,
+    ChannelNumbers, LOOKS, Member, Members, MixRules, PatchCommand, Refusal, SavedLook, Sequence,
+    Text, Unopened,
 };
 use fixture_library::Mode;
-use looks::Looks;
+use looks::{Looks, Unrestored};
 use rig::{Limit, Patch, Placed, Unplaced};
 use serde::de::{IgnoredAny, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -105,7 +105,7 @@ pub const LIMIT: Limit = Limit {
     encode,
 };
 
-/// Version 4's allowance per step, including its escaped name, target and properties.
+/// The allowance per step, including its escaped name, target and properties.
 const STEP_MOST: usize = 2048;
 
 /// Room for a look's escaped name, target and properties, or its 64 full references.
@@ -116,7 +116,7 @@ pub const LOOK_MOST: usize = STEP_MOST + 112 * Sequence::MOST;
 /// which a patch is measured with.
 pub const RULES_MOST: usize = 128;
 
-/// The space guaranteed in version 4 for every step row, line separators and settings.
+/// The space guaranteed for every step row, line separators and settings.
 pub const LOOKS_ROOM: usize = LOOKS * (STEP_MOST + 6) + RULES_MOST;
 
 fn fits(patch: &Patch, looks: &mut dyn Iterator<Item = &SavedLook>) -> bool {
@@ -276,7 +276,7 @@ fn parts(patch: &Patch) -> Option<Parts> {
 
 /// The patch and the looks of `text`: `empty` with the file's fixtures and groups, and
 /// the file's looks, each checked as `PutStep` checks it, or why not. Two looks of one
-/// number: `LookInUse`. `empty`
+/// number: `LookTaken`. `empty`
 /// is the engine's patch with nothing in it, so the file is checked against its
 /// universes and lights. A file whose patch would be written back over [`MOST_BYTES`]
 /// (one with less space in it than this engine writes) is too big too: it could not be
@@ -288,47 +288,20 @@ pub fn read(text: &str, empty: &Patch) -> Result<(Patch, Looks), Unopened> {
     if text.len() > MOST_BYTES {
         return Err(too_big);
     }
-    let (version, look_count) = match serde_json::from_str::<Counts>(text) {
-        Ok(head) => (head.version, head.looks),
-        Err(error) => {
-            // A newer version may give "looks" an entirely different shape.
-            let Head { version } = serde_json::from_str(text).map_err(broken)?;
-            if version.get() <= VERSION {
-                return Err(broken(error));
-            }
-            (version, 0)
-        }
-    };
-    if version.get() > VERSION {
-        return Err(Unopened::Newer {
-            version: version.get(),
-        });
+    let Head { version } = serde_json::from_str(text).map_err(broken)?;
+    let version = version.get();
+    if version > VERSION {
+        return Err(Unopened::Newer { version });
     }
+    if version < VERSION {
+        return Err(Unopened::Older { version });
+    }
+    let Counts { looks: look_count } = serde_json::from_str(text).map_err(broken)?;
     if look_count > LOOKS {
         return Err(Unopened::Refused {
             reason: Refusal::TooManyLooks { most: LOOKS as u16 },
         });
     }
-    let file = if version.get() < 4 {
-        serde_json::from_str::<File<Before4>>(text)
-            .map_err(broken)?
-            .with_looks(|old| {
-                let (saved, gobo) = old.now();
-                (saved.into(), gobo.map(|one| (saved.step.target, one)))
-            })
-    } else if version.get() == 4 {
-        serde_json::from_str::<File<Saved>>(text)
-            .map_err(broken)?
-            .with_looks(|saved| (saved.into(), None))
-    } else if version.get() == 5 {
-        serde_json::from_str::<File<Before6>>(text)
-            .map_err(broken)?
-            .with_looks(|old| (old.0, None))
-    } else {
-        serde_json::from_str::<File<SavedLook>>(text)
-            .map_err(broken)?
-            .with_looks(|saved| (saved, None))
-    };
     let File {
         version: _,
         patch,
@@ -336,7 +309,7 @@ pub fn read(text: &str, empty: &Patch) -> Result<(Patch, Looks), Unopened> {
         looks: saved,
         rules,
         modes,
-    } = file;
+    } = serde_json::from_str(text).map_err(broken)?;
     let placed = patch
         .into_iter()
         .map(|row| {
@@ -370,100 +343,11 @@ pub fn read(text: &str, empty: &Patch) -> Result<(Patch, Looks), Unopened> {
             patch = changed;
         }
     }
-    let refused = |reason| Unopened::Refused { reason };
-    let mut rows = Vec::with_capacity(saved.len());
-    for (row, legacy) in saved {
-        if let Some((target, OneGobo { wheel, slot })) = legacy {
-            let runs = patch.runs(target).map_err(refused)?;
-            rig::shows_one_gobo(patch.writers(), &runs, wheel, slot).map_err(refused)?;
-        }
-        rows.push(row);
-    }
-    let looks = Looks::restore(rows, rules, &patch).map_err(refused)?;
+    let looks = Looks::restore(saved, rules, &patch).map_err(|why| match why {
+        Unrestored::Taken(look) => Unopened::LookTaken { look },
+        Unrestored::Refused(reason) => Unopened::Refused { reason },
+    })?;
     write(&patch, &looks).map(|_| (patch, looks)).ok_or(too_big)
-}
-
-/// V5 accepted sequences and plain steps. Both decode into the current model.
-#[derive(Deserialize)]
-struct Before6(#[serde(deserialize_with = "SavedLook::deserialize_v5")] SavedLook);
-
-/// A look of a file before version 4: one `gobo`, a wheel and a slot, read as that
-/// engine read it.
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Before4 {
-    look: u16,
-    name: Text,
-    step: StepBefore4,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct StepBefore4 {
-    target: Target,
-    values: LightBefore4,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct LightBefore4 {
-    #[serde(default)]
-    intensity: Option<u16>,
-    #[serde(default)]
-    colour: Option<Rgb>,
-    #[serde(default)]
-    position: Option<Position>,
-    #[serde(default)]
-    zoom: Option<u16>,
-    #[serde(default)]
-    gobo: Option<OneGobo>,
-}
-
-/// The one gobo of a look before version 4.
-#[derive(Clone, Copy, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct OneGobo {
-    wheel: u8,
-    slot: u8,
-}
-
-impl Before4 {
-    /// The look now, its gobo as the slot of its wheel, and the gobo to check as that
-    /// engine checked it. A gobo no wheel can hold now (a wheel past [`Wheel::COUNT`],
-    /// slot 0) is left out: the check refuses it on a light with a gobo wheel.
-    fn now(self) -> (Saved, Option<OneGobo>) {
-        let LightBefore4 {
-            intensity,
-            colour,
-            position,
-            zoom,
-            gobo,
-        } = self.step.values;
-        let mut gobos = [None; Wheel::COUNT];
-        if let Some(OneGobo { wheel, slot }) = gobo
-            && slot > 0
-            && let Some(held) = Wheel::new(wheel).and_then(|wheel| gobos.get_mut(wheel.index()))
-        {
-            *held = Some(slot);
-        }
-        let values = Light {
-            intensity,
-            colour,
-            position,
-            zoom,
-            gobos,
-        };
-        let step = Step {
-            target: self.step.target,
-            values,
-        };
-        let saved = Saved {
-            look: self.look,
-            name: self.name,
-            step,
-        };
-        (saved, gobo)
-    }
 }
 
 /// A fixture as the file has it.
@@ -502,12 +386,11 @@ struct Head {
     version: NonZeroU32,
 }
 
-/// Count the rows while inspecting the version. All other fields are skipped during
-/// this pass, so an oversized look list never materializes a typed project.
+/// Count the looks before reading them. All other fields are skipped during this pass,
+/// so an oversized look list never materializes a typed project.
 #[derive(Deserialize)]
 struct Counts {
-    version: NonZeroU32,
-    #[serde(default, deserialize_with = "count_looks")]
+    #[serde(deserialize_with = "count_looks")]
     looks: usize,
 }
 
@@ -533,32 +416,14 @@ fn count_looks<'de, D: Deserializer<'de>>(d: D) -> Result<usize, D::Error> {
 /// broken.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct File<L> {
-    /// Read first, by `Head`: here so the key is known.
+struct File {
+    #[expect(dead_code, reason = "read first, by `Head`: here so the key is known")]
     version: NonZeroU32,
     patch: Vec<RowIn>,
     groups: Vec<GroupIn>,
-    /// Version 1 has none.
-    #[serde(default = "Vec::new")]
-    looks: Vec<L>,
-    /// Versions 1 and 2 have none: the defaults.
-    #[serde(default)]
+    looks: Vec<SavedLook>,
     rules: MixRules,
     modes: BTreeMap<String, DefinitionIn>,
-}
-
-impl<L> File<L> {
-    /// The file with each look made by `now`.
-    fn with_looks<M>(self, now: impl Fn(L) -> M) -> File<M> {
-        File {
-            version: self.version,
-            patch: self.patch,
-            groups: self.groups,
-            looks: self.looks.into_iter().map(now).collect(),
-            rules: self.rules,
-            modes: self.modes,
-        }
-    }
 }
 
 #[derive(Deserialize)]
@@ -627,7 +492,9 @@ fn broken(error: serde_json::Error) -> Unopened {
 )]
 mod sequence_tests {
     use super::*;
-    use engine_core::{Color, Lights, Pixels, Universes};
+    use engine_core::{
+        Color, Light, Lights, Pixels, Position, Rgb, Saved, Step, Target, Universes, Wheel,
+    };
     use rig::Whole;
 
     #[test]
@@ -818,7 +685,7 @@ mod sequence_tests {
                     assert!(canonical.contains(r#""version": 6"#));
                     assert_eq!(read(&canonical, &empty), Ok((rig, looks)));
                 } else {
-                    assert!(matches!(opened, Err(Unopened::Broken { .. })), "v{version}");
+                    assert_eq!(opened, Err(Unopened::Older { version }), "v{version}");
                 }
             }
         }

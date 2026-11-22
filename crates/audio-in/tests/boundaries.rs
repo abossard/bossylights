@@ -272,8 +272,14 @@ fn a_gap_partway_through_a_stereo_hop_starts_a_new_meter_pair() {
 
 #[test]
 fn rounded_hops_and_the_meter_ceiling() {
-    // Rate, frames in two hops, amplitude, level. A half frame rounds up.
-    for (rate, frames, value, level) in [(11_049, 220, 0.5, 50), (11_050, 222, 1.5, 100)] {
+    // Rate, frames in two hops, amplitude, level. A half frame rounds up, and so does a
+    // half level: 12.5 and 37.5 are exact.
+    for (rate, frames, value, level) in [
+        (11_049, 220, 0.5, 50),
+        (11_050, 222, 1.5, 100),
+        (11_049, 220, 0.125, 13),
+        (11_049, 220, 0.375, 38),
+    ] {
         let mut tracker = Tracker::new(Format::new(rate, 1).unwrap());
         let mut events = Vec::new();
         tracker
@@ -292,6 +298,32 @@ fn rounded_hops_and_the_meter_ceiling() {
             "{rate} Hz, amplitude {value}"
         );
     }
+}
+
+/// The level of a hop of one amplitude, every 1/2000 from 0 to 1.2: the same as the
+/// meter with `std`, `100 * sqrt(energy)` rounded, at most 100.
+#[test]
+fn the_level_is_the_rounded_root_of_the_energy() {
+    let mut wrong = Vec::new();
+    for step in 0..=2_400u16 {
+        let value = f32::from(step) / 2_000.0;
+        let mut tracker = Tracker::new(Format::new(11_049, 1).unwrap());
+        let mut events = Vec::new();
+        tracker
+            .push(START, Samples::F32(&[value; 220]), &mut events)
+            .unwrap();
+        let x = f64::from(value);
+        let energy = (0..110).map(|_| x * x).sum::<f64>() / 110.0;
+        let meter = (100.0 * energy.sqrt()).round().min(100.0) as u8;
+        let level = events.iter().rev().find_map(|event| match event {
+            Event::Reading { level, .. } => Some(*level),
+            Event::Onset { .. } | Event::Beat { .. } => None,
+        });
+        if level != Some(meter) {
+            wrong.push((value, level, meter));
+        }
+    }
+    assert_eq!(wrong, [], "(amplitude, level, with std)");
 }
 
 #[test]

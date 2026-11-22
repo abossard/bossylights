@@ -18,6 +18,7 @@
 //! | Locked | Weak | Locked | Locked | Locked | Lost | Lost |
 //! | Lost   | Weak | Weak   | Weak   | Lost   | Lost | Lost |
 
+#![no_std]
 #![forbid(unsafe_code)]
 #![deny(
     clippy::unwrap_used,
@@ -25,6 +26,8 @@
     clippy::panic,
     clippy::indexing_slicing
 )]
+
+extern crate alloc;
 
 mod estimate;
 mod tracker;

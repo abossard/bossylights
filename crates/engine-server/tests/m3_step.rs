@@ -188,51 +188,20 @@ async fn a_saved_red_step_plays_255_0_0_releases_and_replays_after_a_restart() {
     stop(&mut socket, served).await;
 
     stop_adapter.store(true, Ordering::Relaxed);
-    let saved: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
-    for version in (1..=show_file::VERSION).rev() {
-        if version < show_file::VERSION {
-            let mut old = saved.clone();
-            old["version"] = json!(version);
-            if version < 3 {
-                old.as_object_mut().unwrap().remove("rules");
-            }
-            if version == 1 {
-                old.as_object_mut().unwrap().remove("looks");
-            } else if version < 4 {
-                let values = old["looks"][0]["step"]["values"].as_object_mut().unwrap();
-                values.remove("gobos");
-                values.insert("gobo".into(), Value::Null);
-            }
-            std::fs::write(&file, old.to_string()).unwrap();
-        }
-        // Restart without the library. Each adapter hears only its own engine.
-        let heard = Heard::default();
-        let stop_adapter = Arc::new(AtomicBool::new(false));
-        let (served, mut socket) = serve(&file, false, &heard, &stop_adapter).await;
-        send(&mut socket, &json!("Query")).await;
-        assert_eq!(
-            answer(&mut socket).await["Picture"]["show"],
-            json!("Kept"),
-            "v{version}"
-        );
-        until_dmx(&heard, [0, 0, 0]).await;
-        until_picture(&mut socket, "/state/plays", &json!([])).await;
-        if version == 1 {
-            // V1 restored the patch alone. Author a step on that patch before playing it.
-            until_picture(&mut socket, "/looks", &json!([])).await;
-            assert_eq!(command(&mut socket, step.clone()).await, json!("Accepted"));
-        } else {
-            until_picture(&mut socket, "/looks/0/name", &json!("red")).await;
-        }
-        assert!(taken(&command(&mut socket, full.clone()).await));
-        let started = command(&mut socket, start.clone()).await;
-        assert!(
-            started["Started"]["play"].is_object(),
-            "v{version}: {started}"
-        );
-        until_dmx(&heard, [255, 0, 0]).await;
-        stop(&mut socket, served).await;
-        stop_adapter.store(true, Ordering::Relaxed);
-    }
+    // Restart without the library. Each adapter hears only its own engine.
+    let heard = Heard::default();
+    let stop_adapter = Arc::new(AtomicBool::new(false));
+    let (served, mut socket) = serve(&file, false, &heard, &stop_adapter).await;
+    send(&mut socket, &json!("Query")).await;
+    assert_eq!(answer(&mut socket).await["Picture"]["show"], json!("Kept"));
+    until_dmx(&heard, [0, 0, 0]).await;
+    until_picture(&mut socket, "/state/plays", &json!([])).await;
+    until_picture(&mut socket, "/looks/0/name", &json!("red")).await;
+    assert!(taken(&command(&mut socket, full.clone()).await));
+    let started = command(&mut socket, start.clone()).await;
+    assert!(started["Started"]["play"].is_object(), "{started}");
+    until_dmx(&heard, [255, 0, 0]).await;
+    stop(&mut socket, served).await;
+    stop_adapter.store(true, Ordering::Relaxed);
     let _ = std::fs::remove_dir_all(file.parent().unwrap());
 }

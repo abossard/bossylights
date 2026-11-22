@@ -8,8 +8,8 @@ mod stream;
 
 use engine::Unsent;
 use engine::{
-    Begun, ChannelNumbers, Color, Command, Engine, Levels, MAX_OUTPUTS, OutputNumber, QUEUE, Rate,
-    Refusal, RunNumbers, Sender, Snapshot, Status, Universes,
+    Begun, ChannelNumbers, Color, Command, Engine, Levels, Looks, MAX_OUTPUTS, OutputNumber, QUEUE,
+    Rate, Refusal, RunNumbers, Sender, Snapshot, Status, Universes,
 };
 use mock::Heard;
 use std::sync::{Arc, mpsc};
@@ -323,13 +323,16 @@ fn removing_an_output_needs_a_free_return_only_if_it_has_a_device() {
         if n % (QUEUE / 2) == 0 {
             engine.fresh().unwrap();
         }
-        sender.load((*patch).clone()).unwrap();
+        sender.open((*patch).clone(), Looks::new()).unwrap();
     }
     engine.fresh().unwrap();
     let Begun::Opening(restart) = sender.begin(set(2), &[]).unwrap() else {
         panic!("the longer route needs to reopen");
     };
-    assert_eq!(sender.load((*patch).clone()), Err(Refusal::QueueFull));
+    assert_eq!(
+        sender.open((*patch).clone(), Looks::new()),
+        Err(Refusal::QueueFull)
+    );
     for (number, expected) in [(1, Ok(())), (2, Err(Refusal::QueueFull))] {
         let sent = sender.sent();
         let project = sender.project();

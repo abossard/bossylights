@@ -36,8 +36,12 @@ pub enum Unopened {
     Broken { line: u32, column: u32 },
     /// Written by a newer engine, in this `version` of the file.
     Newer { version: u32 },
+    /// Written by an older engine, in this `version` of the file: not read.
+    Older { version: u32 },
     /// The fixture has the number or one of the lights of another fixture.
     Taken { fixture: u16 },
+    /// Another saved look has this number.
+    LookTaken { look: u16 },
     /// A fixture or a group of the file is refused as its command would be.
     Refused { reason: Refusal },
     /// Longer than the `most` bytes a show file has.

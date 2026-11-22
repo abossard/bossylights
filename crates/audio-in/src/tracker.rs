@@ -1,5 +1,6 @@
 use super::estimate::{Estimate, Gaps};
 use super::{Event, Format, PartialFrame, Samples, Signal, Step, Tempo};
+use alloc::vec::Vec;
 
 const MIN_ENERGY: f64 = 0.0025;
 const MIN_ONSET_GAP: u64 = 100_000_000;
@@ -136,7 +137,14 @@ impl Tracker {
         let time_of = |index| u64::try_from(frame_time(first, index, rate)).unwrap_or(u64::MAX);
         let hop_size = (rate + 50) / 100;
         for (index, frame) in frames.enumerate() {
-            let energy = frame.iter().map(|&x| value(x).powi(2)).sum::<f64>() / f64::from(channels);
+            let energy = frame
+                .iter()
+                .map(|&x| {
+                    let x = value(x);
+                    x * x
+                })
+                .sum::<f64>()
+                / f64::from(channels);
             if energy > MIN_ENERGY {
                 self.hop.first_loud_at.get_or_insert_with(|| time_of(index));
             }
@@ -150,7 +158,7 @@ impl Tracker {
     }
 
     fn finish_hop(&mut self, end: u64, out: &mut Vec<Event>) {
-        let hop = std::mem::take(&mut self.hop);
+        let hop = core::mem::take(&mut self.hop);
         let energy = hop.energy_sum / f64::from(hop.frames);
         let previous = self.history.newest_first[0];
         let onset = hop
@@ -172,7 +180,7 @@ impl Tracker {
             self.quiet_through = self.quiet_through.max(end);
         }
         if self.second_hop {
-            let level = (100.0 * energy.max(previous).sqrt()).round().min(100.0) as u8;
+            let level = level(energy.max(previous));
             self.age_onsets(self.quiet_through);
             out.push(Event::Reading {
                 at: end,
@@ -222,4 +230,17 @@ impl Tracker {
 
 fn frame_time(first: u64, index: usize, rate: u32) -> u128 {
     u128::from(first) + index as u128 * 1_000_000_000 / u128::from(rate)
+}
+
+/// The meter level of `energy`, a mean of squares: `100 * sqrt(energy)` rounded half
+/// away from zero, at most 100. The smallest `n` with `10000 * energy < (n + 0.5)^2`,
+/// so no square root (`core` has none).
+fn level(energy: f64) -> u8 {
+    let scaled = 10_000.0 * energy;
+    (0..100u8)
+        .find(|&n| {
+            let edge = f64::from(n) + 0.5;
+            scaled < edge * edge
+        })
+        .unwrap_or(100)
 }

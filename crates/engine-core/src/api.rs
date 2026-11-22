@@ -400,15 +400,6 @@ impl SavedLook {
     pub fn has_swatches(&self) -> bool {
         matches!(&self.definition, Definition::Step(step) if !step.swatches.is_empty())
     }
-
-    /// Read a v5 step or sequence with that version's step schema.
-    pub fn deserialize_v5<'de, D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        let row = Row::<Step>::deserialize(d)?;
-        if row.pattern.is_some() {
-            return Err(serde::de::Error::custom("patterns require show file v6"));
-        }
-        row.checked()
-    }
 }
 
 impl<'de> Deserialize<'de> for SavedLook {

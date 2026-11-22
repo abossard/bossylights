@@ -6,10 +6,11 @@ mod mock;
 
 use engine::Unsent;
 use engine::{
-    Begun, ChannelNumbers, Color, Command, Engine, Fixture, GrabId, Member, MemberList, Members,
-    Property, QUEUE, Rate, Refusal, Rgb, RunNumbers, Sender, Target, Text, Universes, Value,
+    Begun, ChannelNumbers, Color, Command, Engine, Fixture, GrabId, Looks, Member, MemberList,
+    Members, Patch, Property, QUEUE, Rate, Refusal, Rgb, RunNumbers, Sender, Target, Text,
+    Universes, Value,
 };
-use engine_core::{Pixels, Sequence, SequenceItem, Step};
+use engine_core::{Brightness, MixRules, PatchCommand, Pixels, Sequence, SequenceItem, Step};
 use mock::Heard;
 use std::sync::Arc;
 
@@ -267,6 +268,120 @@ fn a_patch_the_front_refuses_changes_nothing() {
     assert_eq!(sender.patch(), before);
     heard.took_everything_sent(&mut engine, &sender);
     assert_eq!(bytes(&heard, 1, 37), [255, 0, 0]);
+}
+
+/// A strip of one pixel at 2:1, made from the patch of `sender` outside the front, as a
+/// show file brings it.
+fn a_strip_from(sender: &Sender) -> Patch {
+    let strip = PatchCommand::PatchStrip {
+        name: text("Strip"),
+        pixels: Pixels::try_from(1).unwrap(),
+        color: Color::Rgb,
+        at: at(2, 1),
+    };
+    sender.patch().update(strip, &[]).unwrap().0.unwrap()
+}
+
+/// Look 1 on fixture 2 of another engine's patch: it names nothing in a patch of only
+/// the strip (fixture 1).
+fn looks_of_another_patch() -> Looks {
+    let (_engine, mut other, _heard) = start();
+    assert_eq!(send(&mut other, par("PAR 1", 1, 1)), Ok(Some(1)));
+    assert_eq!(send(&mut other, par("PAR 2", 1, 4)), Ok(Some(2)));
+    let [step, _] = sequence_on(Target::Fixture { fixture: 2 });
+    assert_eq!(send(&mut other, step), Ok(None));
+    Looks::clone(&other.looks())
+}
+
+#[derive(Clone, Copy, Debug)]
+enum Front {
+    AsItStarts,
+    Patched,
+    GrabbedThenUnpatched,
+    OtherMixerSettings,
+}
+
+/// The rows of the open in `docs/engine.md` (Show file): a front not as it starts (a
+/// fixture, Mixer settings other than the defaults) is refused `Stale`, a look that names
+/// nothing in the patch is refused as a rebind is (the look that would no longer play),
+/// and a refused open changes nothing. An unpatch lets its grabs go: nothing is left to
+/// replace.
+#[test]
+fn an_open_takes_patch_and_looks_whole_on_a_front_as_it_starts_or_changes_nothing() {
+    // (case, the front before, looks of another patch, answer, fixtures after)
+    let cases = [
+        ("as it starts", Front::AsItStarts, false, Ok(()), 1),
+        (
+            "a fixture patched",
+            Front::Patched,
+            false,
+            Err(Refusal::Stale),
+            1,
+        ),
+        (
+            "a grab made, then its fixture unpatched",
+            Front::GrabbedThenUnpatched,
+            false,
+            Ok(()),
+            1,
+        ),
+        (
+            "other Mixer settings",
+            Front::OtherMixerSettings,
+            false,
+            Err(Refusal::Stale),
+            0,
+        ),
+        (
+            "as it starts, looks of another patch",
+            Front::AsItStarts,
+            true,
+            Err(Refusal::LookInUse { look: 1 }),
+            0,
+        ),
+    ];
+    for (case, front, foreign, answer, fixtures) in cases {
+        let (_engine, mut sender, _heard) = start();
+        match front {
+            Front::AsItStarts => {}
+            Front::Patched => assert_eq!(send(&mut sender, par("PAR", 1, 1)), Ok(Some(1))),
+            Front::GrabbedThenUnpatched => {
+                assert_eq!(send(&mut sender, par("PAR", 1, 1)), Ok(Some(1)));
+                for command in red(1) {
+                    assert_eq!(send(&mut sender, command), Ok(None), "{case}");
+                }
+                let unpatch = Command::Unpatch { fixture: 1 };
+                assert_eq!(send(&mut sender, unpatch), Ok(None), "{case}");
+            }
+            Front::OtherMixerSettings => {
+                let rules = MixRules {
+                    brightness: Brightness::Highest,
+                    ..MixRules::default()
+                };
+                let set = Command::SetMixRules { rules };
+                assert_eq!(send(&mut sender, set), Ok(None), "{case}");
+            }
+        }
+        let (patch, looks) = (sender.patch(), sender.looks());
+        let brought = if foreign {
+            looks_of_another_patch()
+        } else {
+            Looks::new()
+        };
+        let opened = sender.open(a_strip_from(&sender), brought);
+        assert_eq!(opened, answer, "{case}");
+        if opened.is_err() {
+            assert!(
+                Arc::ptr_eq(&patch, &sender.patch()),
+                "{case}: the patch changed"
+            );
+            assert!(
+                Arc::ptr_eq(&looks, &sender.looks()),
+                "{case}: the looks changed"
+            );
+        }
+        assert_eq!(sender.patch().fixtures().len(), fixtures, "{case}");
+    }
 }
 
 #[test]

@@ -3,8 +3,8 @@
 
 use engine_core::{
     Brightness, ChannelNumbers, Color, Light, Lights, ManualEnd, Member, Members, MixRules,
-    OtherEnd, PatchCommand, Pixels, Position, Property, Refusal, Rgb, Saved, Target, Text,
-    Universes, Unopened, Wheel,
+    OtherEnd, PatchCommand, Pixels, Position, Refusal, Rgb, Saved, Target, Text, Universes,
+    Unopened, Wheel,
 };
 use fixture_library::{Fixture, parse};
 use looks::Looks;
@@ -91,7 +91,7 @@ fn empty() -> Patch {
 }
 
 #[test]
-fn v5_show_with_many_sequences_still_opens() {
+fn a_show_with_many_sequences_opens() {
     let empty = Patch::new(
         Universes::new(18).unwrap(),
         Lights::MOST,
@@ -112,7 +112,6 @@ fn v5_show_with_many_sequences_still_opens() {
         .unwrap();
     let mut project: serde_json::Value =
         serde_json::from_str(&show_file::write(&patch, &Looks::new()).unwrap()).unwrap();
-    project["version"] = 5.into();
     let mut rows = vec![serde_json::json!({
         "look": 1, "name": "red",
         "step": {
@@ -697,60 +696,6 @@ fn looks_written_and_read_back_are_the_same_looks() {
     }
 }
 
-/// `file`, as written now, as version 1 wrote it: no looks and no rules.
-fn as_version_1(file: &str) -> String {
-    let mut v1 = file.to_string();
-    for (line, to) in [
-        (
-            format!("  \"version\": {},\n", show_file::VERSION),
-            "  \"version\": 1,\n",
-        ),
-        ("  \"looks\": [],\n".to_string(), ""),
-        (
-            format!(
-                "  \"rules\": {},\n",
-                r#"{"brightness":"Latest","manual_end":"UntilRelease","other_end":"Reveal"}"#
-            ),
-            "",
-        ),
-    ] {
-        assert!(v1.contains(&line), "{line} in {file}");
-        v1 = v1.replacen(&line, to, 1);
-    }
-    v1
-}
-
-#[test]
-fn a_file_of_version_1_has_no_looks() {
-    let patch = patched(vec![lib(par("PAR 1", 1))]);
-    let v1 = as_version_1(&show_file::write(&patch, &Looks::new()).unwrap());
-    let (read, looks) = show_file::read(&v1, &empty()).unwrap();
-    assert_v6_patch(&read, &patch);
-    assert_eq!(looks, Looks::new());
-}
-
-#[test]
-fn sequence_rows_first_open_in_version_5() {
-    let patch = patched(vec![lib(par("PAR", 1))]);
-    let mut file: serde_json::Value = serde_json::from_str(&write(&patch).unwrap()).unwrap();
-    file["looks"] = serde_json::json!([
-        {"look": 1, "name": "red", "step": {"target": {"Fixture": {"fixture": 1}}, "values": RED}},
-        {"look": 2, "name": "sequence", "sequence": {"items": [{"look": 1}]}}
-    ]);
-    for (version, opens) in [(4, false), (5, true)] {
-        file["version"] = version.into();
-        let opened = show_file::read(&file.to_string(), &empty());
-        if opens {
-            assert!(opened.unwrap().1.plan(2).is_ok(), "v{version}");
-        } else {
-            assert!(
-                matches!(opened, Err(Unopened::Broken { .. })),
-                "v{version}: {opened:?}"
-            );
-        }
-    }
-}
-
 #[test]
 fn a_look_the_patch_refuses_is_not_read() {
     let patch = patched(vec![lib(par("PAR 1", 1))]);
@@ -780,7 +725,7 @@ fn a_look_the_patch_refuses_is_not_read() {
         (
             "two of one number",
             format!("{whole},\n    {row}"),
-            refused(Refusal::LookInUse { look: 1 }),
+            Err(Unopened::LookTaken { look: 1 }),
         ),
     ];
     for (case, to, why) in cases {
@@ -790,7 +735,7 @@ fn a_look_the_patch_refuses_is_not_read() {
 }
 
 #[test]
-fn a_file_one_byte_over_the_most_is_not_read_in_any_version() {
+fn a_file_one_byte_over_the_most_is_not_read() {
     let most = show_file::MOST_BYTES;
     let too_big = Err(Unopened::TooBig {
         most: u32::try_from(most).unwrap(),
@@ -799,14 +744,9 @@ fn a_file_one_byte_over_the_most_is_not_read_in_any_version() {
     let at_most = write(&par_with_a_longer_name(most - short)).unwrap();
     assert_eq!(at_most.len(), most);
     assert!(read(&at_most, &empty()).is_ok());
-    // one byte longer: as it is, and as version 1, which is shorter on disk but is
-    // written back as the version now
     let over = at_most.replacen("\"name\": \"Red", "\"name\": \"Redx", 1);
     assert_eq!(over.len(), most + 1);
-    let v1 = as_version_1(&over);
-    assert!(v1.len() <= most, "{}", v1.len());
     assert_eq!(read(&over, &empty()), too_big);
-    assert_eq!(read(&v1, &empty()), too_big);
 }
 
 #[test]
@@ -840,267 +780,59 @@ fn the_longest_look_fits_its_room() {
 }
 
 #[test]
-fn the_mixer_settings_are_saved_and_a_file_without_them_has_the_defaults() {
+fn the_mixer_settings_are_saved_and_read_back() {
     let changed = MixRules {
         brightness: Brightness::Highest,
         manual_end: ManualEnd::UntilStop,
         other_end: OtherEnd::Stay,
     };
-    // (settings saved, the version the file says, whether it has the rules, read back)
-    let cases = [
-        (MixRules::default(), 3, true, MixRules::default()),
-        (changed, 3, true, changed),
-        (changed, 2, false, MixRules::default()),
-        (changed, 1, false, MixRules::default()),
-    ];
-    for (rules, version, kept, back) in cases {
-        let mut file = show_file::write(&empty(), &Looks::new().with_rules(rules)).unwrap();
-        if !kept {
-            let start = file.find("  \"rules\"").unwrap();
-            let end = start + file[start..].find('\n').unwrap() + 1;
-            file.replace_range(start..end, "");
-        }
-        let now = format!("\"version\": {}", show_file::VERSION);
-        let file = file.replace(&now, &format!("\"version\": {version}"));
+    for rules in [MixRules::default(), changed] {
+        let file = show_file::write(&empty(), &Looks::new().with_rules(rules)).unwrap();
         let (_, looks) = show_file::read(&file, &empty()).unwrap();
-        assert_eq!(looks.rules(), back, "{rules:?} in version {version}");
+        assert_eq!(looks.rules(), rules);
     }
 }
 
-/// The Shehds spot (gobo wheels 1 and 2) at 1.1, a PAR (no wheel) at 1.50, and the Shehds
-/// with two more copies of its first wheel, wheels 3 and 4, at 1.100.
-fn wheels() -> Patch {
-    let shehds = definition("Shehds-LED-Spot-100W.qxf");
-    let mut four = shehds.clone();
-    four.model = "LED Spot 100W, four wheels".to_string();
-    for mode in &mut four.modes {
-        let first = mode.channels[6].clone();
-        mode.channels.extend([first.clone(), first]);
-    }
-    let spot = |name, model: &str, address| {
-        let command = PatchCommand::Patch {
-            name: text(name),
-            maker: text("Shehds"),
-            model: text(model),
-            mode: text("14 Channel"),
-            at: at(1, address),
-        };
-        (command, vec![shehds.clone(), four.clone()])
-    };
-    patched(vec![
-        spot("Spot", "LED Spot 100W", 1),
-        lib(par("PAR", 50)),
-        spot("Four", "LED Spot 100W, four wheels", 100),
-    ])
-}
-
-/// A look of version 3 holds one gobo, a wheel and a slot: read and checked as version 3
-/// read and checked it (the reader of 5ae0048 ran each text), as the slot of its wheel
-/// (#179). A wheel no light shows now is refused where a light has a gobo wheel.
+/// Every key of a v6 file is required: a file without one is broken where it ends, at
+/// its last line (serde names a missing key at the closing brace).
 #[test]
-fn a_gobo_of_version_3_is_read_as_version_3_read_it() {
-    let patch = wheels();
-    let gobos = |gobos| Light {
-        gobos,
-        ..Light::DARK
-    };
-    let written = |fixture| {
-        let look = saved(1, Target::Fixture { fixture }, Light::DARK);
-        let looks = Looks::new().put(look, &patch).unwrap();
-        show_file::write(&patch, &looks).unwrap()
-    };
-    let now = format!("\"version\": {}", show_file::VERSION);
-    let none = r#""gobos":[null,null,null]"#;
-    let values =
-        r#"{"intensity":null,"colour":null,"position":null,"zoom":null,"gobos":[null,null,null]}"#;
-    let refused = |light, wheel| {
-        Err(Unopened::Refused {
-            reason: Refusal::Unsupported {
-                light,
-                property: Property::Gobo(Wheel::new(wheel).unwrap()),
-            },
-        })
-    };
-    let broken = |line, column| Err(Unopened::Broken { line, column });
-    // (case, fixture, the text of version 4, the text of version 3 in its place, read back)
-    type Case<'a> = (&'a str, u16, &'a str, &'a str, Result<Light, Unopened>);
-    let cases: [Case; 19] = [
-        (
-            "wheel 1",
-            1,
-            none,
-            r#""gobo":{"wheel":1,"slot":3}"#,
-            Ok(gobos([Some(3), None, None])),
-        ),
-        (
-            "wheel 2",
-            1,
-            none,
-            r#""gobo":{"wheel":2,"slot":7}"#,
-            Ok(gobos([None, Some(7), None])),
-        ),
-        ("no gobo", 1, none, r#""gobo":null"#, Ok(Light::DARK)),
-        ("no key", 1, &format!(",{none}"), "", Ok(Light::DARK)),
-        // a light with a gobo wheel refuses a gobo it cannot show
-        (
-            "no wheel 3 on the spot",
-            1,
-            none,
-            r#""gobo":{"wheel":3,"slot":1}"#,
-            refused(1, 3),
-        ),
-        (
-            "no slot 40",
-            1,
-            none,
-            r#""gobo":{"wheel":1,"slot":40}"#,
-            refused(1, 1),
-        ),
-        (
-            "slot 0",
-            1,
-            none,
-            r#""gobo":{"wheel":1,"slot":0}"#,
-            refused(1, 1),
-        ),
-        // no light shows a wheel past 3 now: named as wheel 3
-        (
-            "a fifth wheel on the spot",
-            1,
-            none,
-            r#""gobo":{"wheel":5,"slot":2}"#,
-            refused(1, 3),
-        ),
-        (
-            "wheel 4 of four",
-            3,
-            none,
-            r#""gobo":{"wheel":4,"slot":1}"#,
-            refused(3, 3),
-        ),
-        (
-            "wheel 3 of four",
-            3,
-            none,
-            r#""gobo":{"wheel":3,"slot":3}"#,
-            Ok(gobos([None, None, Some(3)])),
-        ),
-        // a light without a gobo wheel showed nothing: a gobo no wheel holds is left out
-        (
-            "a fifth wheel on the PAR",
-            2,
-            none,
-            r#""gobo":{"wheel":5,"slot":2}"#,
-            Ok(Light::DARK),
-        ),
-        (
-            "slot 0 on the PAR",
-            2,
-            none,
-            r#""gobo":{"wheel":2,"slot":0}"#,
-            Ok(Light::DARK),
-        ),
-        (
-            "wheel 2 on the PAR",
-            2,
-            none,
-            r#""gobo":{"wheel":2,"slot":7}"#,
-            Ok(gobos([None, Some(7), None])),
-        ),
-        // every shape version 3 read
-        (
-            "values in order",
-            1,
-            values,
-            r#"[null,null,null,null,{"wheel":1,"slot":3}]"#,
-            Ok(gobos([Some(3), None, None])),
-        ),
-        (
-            "a gobo in order",
-            1,
-            none,
-            r#""gobo":[2,7]"#,
-            Ok(gobos([None, Some(7), None])),
-        ),
-        // and what it did not
-        (
-            "a slot twice",
-            1,
-            none,
-            r#""gobo":{"wheel":2,"slot":7,"slot":1}"#,
-            broken(10, 172),
-        ),
-        (
-            "gobos",
-            1,
-            none,
-            r#""gobos":[null,7,null]"#,
-            broken(10, 146),
-        ),
-        (
-            "gobo and gobos",
-            1,
-            none,
-            r#""gobo":null,"gobos":[null,7,null]"#,
-            broken(10, 158),
-        ),
-        (
-            "not a gobo",
-            1,
-            none,
-            r#""gobo":{"wheel":1}"#,
-            broken(10, 157),
-        ),
-    ];
-    for (case, fixture, from, to, back) in cases {
-        let file = written(fixture);
-        assert!(file.contains(from), "{file}");
-        let v3 = file.replace(&now, "\"version\": 3").replace(from, to);
-        let read = show_file::read(&v3, &empty()).map(|(_, looks)| looks);
-        let expected = back.map(|light| {
-            let look = saved(1, Target::Fixture { fixture }, light);
-            Looks::new().put(look, &patch).unwrap()
-        });
-        assert_eq!(read, expected, "{case}");
-    }
-}
-
-/// A file of version 3 the reader of version 3 did not read is not read, broken where the
-/// text is: the looks twice, and a broken look after a look with a gobo.
-#[test]
-fn a_file_of_version_3_broken_is_broken_where_the_text_is() {
-    let patch = wheels();
-    let fixture = Target::Fixture { fixture: 1 };
-    let looks = [1, 2].into_iter().fold(Looks::new(), |looks, look| {
-        looks
-            .put(saved(look, fixture, Light::DARK), &patch)
-            .unwrap()
-    });
-    let file = show_file::write(&patch, &looks).unwrap();
-    let now = format!("\"version\": {}", show_file::VERSION);
-    let v3 = file.replace(&now, "\"version\": 3");
-    let none = r#""gobos":[null,null,null]"#;
-    let gobo = r#""gobo":{"wheel":1,"slot":3}"#;
-    // (case, version 3, where it is broken)
-    let cases = [
-        (
-            "the looks twice",
-            v3.replace(none, r#""gobo":null"#)
-                .replace("\"rules\": ", "\"looks\": [],\n  \"rules\": "),
-            (13, 9),
-        ),
-        (
-            "look 2 broken after a gobo in look 1",
-            v3.replacen(none, gobo, 1)
-                .replacen(none, r#""gobo":{"wheel":1,"slot":"3"}"#, 1),
-            (11, 167),
-        ),
-    ];
-    for (case, text, (line, column)) in cases {
+fn a_file_without_one_of_its_keys_is_broken() {
+    let file = show_file::write(&empty(), &Looks::new()).unwrap();
+    for key in ["patch", "groups", "looks", "rules", "modes"] {
+        let start = file.find(&format!("  \"{key}\"")).unwrap();
+        let end = start + file[start..].find('\n').unwrap() + 1;
+        let mut without = file.clone();
+        without.replace_range(start..end, "");
+        let last = u32::try_from(without.trim_end().lines().count()).unwrap();
         assert_eq!(
-            show_file::read(&text, &empty()),
-            Err(Unopened::Broken { line, column }),
-            "{case}"
+            read(&without, &empty()),
+            Err(Unopened::Broken {
+                line: last,
+                column: 1
+            }),
+            "without {key}"
         );
+    }
+}
+
+/// No reader for an older file, no migration (owner): it is left alone, and says which
+/// version it is in (show-file-format.md, "Older, newer and broken files").
+#[test]
+fn an_older_file_is_left_alone() {
+    let file = write(&patched(vec![lib(par("PAR", 1))])).unwrap();
+    let now = format!("\"version\": {}", show_file::VERSION);
+    // (version, read)
+    let cases = [
+        (1, Err(Unopened::Older { version: 1 })),
+        (2, Err(Unopened::Older { version: 2 })),
+        (3, Err(Unopened::Older { version: 3 })),
+        (4, Err(Unopened::Older { version: 4 })),
+        (5, Err(Unopened::Older { version: 5 })),
+        (6, Ok(1)),
+    ];
+    for (version, answer) in cases {
+        let text = file.replace(&now, &format!("\"version\": {version}"));
+        let read = show_file::read(&text, &empty()).map(|(patch, _)| patch.fixtures().len());
+        assert_eq!(read, answer, "version {version}");
     }
 }
