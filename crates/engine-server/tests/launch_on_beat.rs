@@ -491,10 +491,13 @@ async fn a_frame_the_adapter_drops_on_its_own_thread_shows_nothing() {
     let mut desk = Desk::dropping().await;
     desk.at(0).await;
     desk.start(1, "Now").await;
-    // a frame due at each, 60 a second: every other one dropped, the others red
+    // 44 a second, due 22.7 ms apart: one frame due at each wake. Every other one
+    // dropped (the first or the second, by the frames sent before), the others red
     let mut shown = Vec::new();
-    for ms in [20, 40, 60, 80] {
+    for ms in [25, 50, 75, 100] {
+        let handed = desk.handed;
         shown.push(desk.at(ms).await);
+        assert_eq!(desk.handed, handed + 1, "one frame due at {ms} ms");
     }
     for pair in shown.windows(2) {
         assert_ne!(pair[0].is_some(), pair[1].is_some(), "{shown:?}");
