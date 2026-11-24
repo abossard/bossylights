@@ -17,6 +17,7 @@
  */
 export const CRATES = {
   "engine-core": { kind: "core", deps: ["serde", "ts-rs"] }, // ts-rs: optional, feature `ts`, only the generator test of wire turns it on
+  effects: { kind: "core", deps: [] }, // the four effects as math and a colour lowered to a cell's lanes
   "fixture-library": { kind: "calc", deps: ["roxmltree", "serde", "ts-rs"] }, // QLC+ fixture definitions in, a model out. Reads no files. ts-rs: optional, feature `ts`, as in engine-core
   rig: { kind: "calc", deps: ["engine-core", "fixture-library"] }, // a mode at an address becomes writers: only it knows an address belongs to a fixture
   looks: { kind: "calc", deps: ["engine-core", "rig"] }, // saved looks: checked against the patch, compiled into plans for the core

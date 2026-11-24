@@ -410,6 +410,7 @@ Owner answers live on the [decisions page](https://claude.ai/artifact/KBkqWhcVWn
 | No default virtual dimmer; add one in Patch | brightness of a dimmerless light is in its colour bytes | #239 (cx-4, q3) |
 | A look follows its light when it moves | looks name lights, never addresses | #239 (q2) |
 | Screens build curves and keep the recipe; the engine plays curves | the engine has no wave or palette | #239 (ch-5, ch-6) |
+| Effects (Wave, Stripes, Plasma, Sparkle) are a kind of look in the engine, painting channels through the one mixer | the owner's wish; replaces "no wave" in the row above, built in five steps | decisions page (matrix-effects), [effects.md](effects.md) |
 | A fresh show file (v7) | derived data rebuilt on open | #239 (ch-7), #253 |
 | Master scales, never caps | like QLC+ and ONYX; hue stays on dimmerless lights | decisions page (cm-master-scale-or-cap, cm-master-ceiling), #251 |
 | No Cmyk compound | no fixture file has a black channel; back with the first one | decisions page (cm-cmyk) |

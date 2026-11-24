@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/engine-core", "crates/fixture-library", "crates/rig", "crates/looks", "crates/show-file", "crates/wire", "crates/rt-thread", "crates/outputs", "crates/engine", "crates/audio-in", "crates/engine-server", "shell"]
+members = ["crates/engine-core", "crates/effects", "crates/fixture-library", "crates/rig", "crates/looks", "crates/show-file", "crates/wire", "crates/rt-thread", "crates/outputs", "crates/engine", "crates/audio-in", "crates/engine-server", "shell"]
 exclude = ["spikes"] # throwaway spikes build on their own, outside the product checks
 
 [workspace.package]

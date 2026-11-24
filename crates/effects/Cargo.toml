@@ -1,0 +1,13 @@
+[package]
+name = "effects"
+description = "The four effects (Wave, Stripes, Plasma, Sparkle) as pure math, and a colour lowered to a cell's channels. No std, no alloc."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+rt-thread = { path = "../rt-thread" } # the cost example measures on a thread with the engine's real-time policy

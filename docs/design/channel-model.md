@@ -268,6 +268,7 @@ flowchart LR
 
 - A chase is Hold segments. A wave is Linear segments with offsets from the screens. A pan sweep is a word curve.
 - The engine has no wave, pattern, palette or swatch. The screens build the curve and keep the recipe (ch-6).
+- Replaced by [effects.md](effects.md) (owner `matrix-effects`, 24 Nov): Wave, Stripes, Plasma and Sparkle are effects in the engine. The wave lines above change with E3.
 - Work is bounded: visits per frame and plan bytes are reserved at admission, exactly as today.
 
 ## A press is in the very next frame
