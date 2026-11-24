@@ -675,6 +675,7 @@ const pictured = [
   ["looks.pattern.shape", ["Plasma", "Stripes", "Wave", "Sparkle"], 4],
   ["patch.panel.wiring", ["Snake", "Zigzag"], 2],
   ["patch.add.model", ["LED PAR 64", "Moving head 250", "Strobe 1500"], 3],
+  ["looks.step.colour.slot", ["Open", "Red", "Amber", "Green", "Blue", "Red and blue"], 6],
 ] as const;
 for (const [id, names, pictures] of pictured) {
   test(`UX-10, UX-27 ${id} shows its real choices, each with a picture`, async ({ page }) => {

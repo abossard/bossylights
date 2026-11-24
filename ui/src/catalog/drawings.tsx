@@ -45,7 +45,13 @@ export const WHEEL: readonly (readonly [string, readonly string[]])[] = [
   ["Blue", ["#2a4bff"]],
   ["Red and blue", ["#ff2a2a", "#2a4bff"]],
 ];
-export const wheelSlots = (): PickOption[] => WHEEL.map(([name, colours]) => ({ name, picture: () => <Disc colours={colours} /> }));
+/** Options with the slot of their name as the picture. A name that is not on the wheel has none. */
+const slots = (names: readonly string[]): PickOption[] =>
+  names.map((name) => {
+    const colours = WHEEL.find(([slot]) => slot === name)?.[1];
+    return { name, ...(colours ? { picture: () => <Disc colours={colours} /> } : {}) };
+  });
+export const wheelSlots = (): PickOption[] => slots(WHEEL.map(([name]) => name));
 
 const wave = (x: number) => (Math.sin(x) + 1) / 2;
 const light = (hue: number, level: number) => `hsl(${Math.round(hue)} 90% ${Math.round(level * 55)}%)`;
@@ -112,6 +118,7 @@ const models = (names: readonly string[]): PickOption[] => names.map((name) => (
 /** The pictures of a control's options, by its row. Not listed: its options have none. */
 export const PICTURES: Record<string, (names: readonly string[]) => PickOption[]> = {
   "looks.step.gobo": gobos,
+  "looks.step.colour.slot": slots,
   "looks.pattern.shape": patterns,
   "patch.panel.wiring": wirings,
   "patch.add.model": models,

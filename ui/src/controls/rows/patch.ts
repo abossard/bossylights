@@ -1,7 +1,7 @@
 // Patch: universes, the universe grid, the fixtures, and the two flows that add things.
 // Rows are checked with the sample patch: 15 lights on universe 1, one address clash, a pixel panel on 2 to 4.
 import { gone, off, works, type Cell, type SituationId } from "../situations.ts";
-import { button, change, choice, control, draggable, field, keep, liveToggle, no, remove, select, toggle, NOT_A_BUTTON, NOT_A_LIST, ONLY_DRAGGED, PIXELS, UNIVERSES, type Control, type Row } from "../spec.ts";
+import { button, change, choice, control, draggable, field, keep, liveButton, liveToggle, no, remove, select, toggle, NOT_A_BUTTON, NOT_A_LIST, ONLY_DRAGGED, PIXELS, UNIVERSES, type Control, type Row } from "../spec.ts";
 
 const NO_LIGHTS = gone("No lights yet. 'Add lights' is the one thing to do");
 const ON_SCREEN = no("Patching is done on screen");
@@ -27,6 +27,30 @@ const flow = (row: Omit<Row, "screen" | "kind" | "part" | "machine">): Control =
 /** A field of the Add a pixel panel form: a draft on screen until 'Add the panel'. */
 const panel = (row: Omit<Row, "screen" | "kind" | "part">): Control =>
   control({ learn: ON_SCREEN, ...row, screen: "Patch", part: "Add a pixel panel", kind: "view", in: { empty: works("Works. A panel can be the first thing patched"), ...row.in } });
+
+/** A thing the light's file names that is done to the light, outside any look (#296). There only when the file names it. */
+const fixtureAction = (id: string, name: string, does: string, undo: string): Control =>
+  control({
+    id: `patch.details.${id}`,
+    name,
+    screen: "Patch",
+    part: "Details",
+    from: [],
+    decided: "#296",
+    kit: "Button.action",
+    kind: "play",
+    does: `${does}. There only when the light's file names it. Only here, never in a look`,
+    sends: ["RunFixtureAction"],
+    gestures: liveButton(does),
+    undo: no(undo),
+    learn: ON_SCREEN,
+    in: {
+      recording: works("Works. It is not recorded"),
+      holding: works("Works. Nothing is held: the light gets its channel back when it is done"),
+      empty: NO_LIGHTS,
+      "output-lost": works("Works. A light on the lost output does not get it"),
+    },
+  });
 
 export const PATCH: Control[] = [
   view({
@@ -436,6 +460,9 @@ export const PATCH: Control[] = [
     gestures: button("Removes the light"),
     in: { empty: NO_LIGHTS, "live-on": works("Works mid-show. Its channels go to zero in the next frame") },
   }),
+  fixtureAction("reset", "Reset", "The light resets. On the Varytec Hero: 'Reset after 3 seconds'", "Not a change to the show file. A reset has no opposite"),
+  fixtureAction("lamp-on", "Lamp on", "The lamp strikes", "Not a change to the show file. Lamp off is its opposite"),
+  fixtureAction("lamp-off", "Lamp off", "The lamp goes out. It needs to cool before it strikes again", "Not a change to the show file. Lamp on is its opposite, once the lamp is cool"),
   view({
     id: "patch.panel.change",
     name: "Change panel",

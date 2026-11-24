@@ -117,6 +117,7 @@ export const COMMANDS = {
   SetFixtureMode: command("Another mode of the same model. Refused where its channels do not fit", "fixture, mode"),
   SetFixtureGroup: command("A light joins another group, as its last", "fixture, group"),
   RemoveFixture: command("A light leaves the patch", "fixture"),
+  RunFixtureAction: command("A light does one thing its file names, outside any look: reset, lamp on, lamp off", "fixture, action"),
   RemovePanel: command("A pixel panel leaves the patch", "panel"),
   AddPanel: command("A pixel panel, spread over as many universes as it needs", "name, columns, rows, wiring, pixel, order, start universe"),
 

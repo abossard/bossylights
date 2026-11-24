@@ -5,7 +5,7 @@ The catalog shows the same as live pages, primitives first: `npm run catalog`.
 
 ```mermaid
 flowchart LR
-  R["213 controls<br/>one row each"] --> K["11 primitives<br/>named by what they are for"]
+  R["228 controls<br/>one row each"] --> K["11 primitives<br/>named by what they are for"]
   K --> V["25 kinds in use"]
   K --> C["colour<br/>one prop on all of them"]
   R -. "where it lives" .-> T["a tag:<br/>the screen"]
@@ -22,13 +22,13 @@ flowchart LR
 
 | Primitive | Is for | Kinds | Controls | Carried inside |
 | --- | --- | --- | --- | --- |
-| **Button** | Do it, or switch it | action, toggle | 106 | 9 |
+| **Button** | Do it, or switch it | action, toggle | 110 | 9 |
 | **Pad** | Play a look | one | 3 | – |
-| **Fader** | Set one value | percent, byte | 8 | – |
+| **Fader** | Set one value | percent, byte | 14 | – |
 | **XY** | Set two values at once | position, colour | 3 | – |
-| **Picker** | Choose one of a few | tabs, segments, cards, pictures, list | 40 | – |
+| **Picker** | Choose one of a few | tabs, segments, cards, pictures, list | 45 | – |
 | **Field** | Give a value in words or in steps | text, search, steps | 25 | – |
-| **Status** | Read a state. Never pressed: no control is one, many carry one | lamp, pill, flag, value | – | 31 |
+| **Status** | Read a state. Never pressed: no control is one, many carry one | lamp, pill, flag, value | – | 37 |
 | **Item** | A thing where it lives: pick it, open it, take it out | row, tile, cell, entry, chip, strip | 19 | – |
 | **Block** | A thing placed in time or on a grid: arrange it | bar, frame | 5 | – |
 | **Handle** | The edge of a thing: only dragged | edge, corner | 4 | – |
@@ -50,7 +50,7 @@ flowchart LR
 
 Fixed props are the ones that never change for the control. Its words, its state and its value come from the row.
 
-### Button, action (76)
+### Button, action (79)
 
 | Control | Name | Where | Colour | Fixed props | Carries |
 | --- | --- | --- | --- | --- | --- |
@@ -114,6 +114,9 @@ Fixed props are the ones that never change for the control. Its words, its state
 | Start over | `patch.add.start-over` | Patch | plain |  |  |
 | Add the panel | `patch.panel.add` | Patch | plain |  |  |
 | Remove light | `patch.details.remove` | Patch | plain |  |  |
+| Reset | `patch.details.reset` | Patch | plain | fires: down |  |
+| Lamp on | `patch.details.lamp-on` | Patch | plain | fires: down |  |
+| Lamp off | `patch.details.lamp-off` | Patch | plain | fires: down |  |
 | Change panel | `patch.panel.change` | Patch | plain |  |  |
 | Remove panel | `patch.panel.remove` | Patch | plain |  |  |
 | Zero | `dmx.channel.zero` | DMX | plain | fires: down |  |
@@ -131,7 +134,7 @@ Fixed props are the ones that never change for the control. Its words, its state
 | Trace a press | `modules.trace` | Modules | plain |  |  |
 | Screen that uses a module | `modules.jump` | Modules | plain |  |  |
 
-### Button, toggle (30)
+### Button, toggle (31)
 
 | Control | Name | Where | Colour | Fixed props | Carries |
 | --- | --- | --- | --- | --- | --- |
@@ -151,6 +154,7 @@ Fixed props are the ones that never change for the control. Its words, its state
 | Widen the library | `looks.library.widen` | Looks | plain | holds: 3 lines |  |
 | Fold a group | `looks.library.group.fold` | Looks | plain | mark: chevron, quiet |  |
 | Which fixtures | `looks.step.fixtures` | Looks | plain |  |  |
+| Shake | `looks.step.gobo.shake` | Looks | plain |  |  |
 | Lights it may use | `looks.autopilot.lights` | Looks | plain |  |  |
 | Other colour | `looks.step.colour.other` | Looks | plain | holds: 2 lines |  |
 | Pixel panel in the list | `patch.universes.panel` | Patch | plain | mark: chevron, quiet |  |
@@ -174,13 +178,19 @@ Fixed props are the ones that never change for the control. Its words, its state
 | Play on lights | `looks.try` | Looks | plain |  | Status.flag + Status.pill |
 | Pad to try | `how.pad` | How it works | plain |  | Status.flag + Status.pill |
 
-### Fader, percent (7)
+### Fader, percent (13)
 
 | Control | Name | Where | Colour | Fixed props | Carries |
 | --- | --- | --- | --- | --- | --- |
 | Fader | `console.fader` | Console | plain |  | Status.value |
 | Step dimmer | `looks.step.dimmer` | Looks | plain |  | Status.value |
 | Step spin | `looks.step.spin` | Looks | plain |  | Status.value |
+| Dimmer of a part | `looks.step.dimmer.part` | Looks | plain |  | Status.value |
+| Prism speed | `looks.step.prism.speed` | Looks | plain |  | Status.value |
+| Focus | `looks.step.focus` | Looks | plain |  | Status.value |
+| Zoom | `looks.step.zoom` | Looks | plain |  | Status.value |
+| Strobe speed | `looks.step.strobe` | Looks | plain |  | Status.value |
+| Channel of its own | `looks.step.channel` | Looks | plain |  | Status.value |
 | Spread | `looks.seq.spread` | Looks | plain |  | Status.value |
 | Transition | `looks.seq.transition` | Looks | plain |  | Status.value |
 | How wild | `looks.autopilot.wild` | Looks | plain |  | Status.value |
@@ -213,13 +223,16 @@ Fixed props are the ones that never change for the control. Its words, its state
 | Console pages | `console.pages` | Console | plain |  |  |
 | Universe tabs | `dmx.universe` | DMX | plain |  |  |
 
-### Picker, segments (15)
+### Picker, segments (18)
 
 | Control | Name | Where | Colour | Fixed props | Carries |
 | --- | --- | --- | --- | --- | --- |
 | Speed | `console.speed` | Console | plain | fires: down |  |
 | Looks or Autopilot | `looks.part` | Looks | plain |  |  |
 | Type filter | `looks.library.type` | Looks | plain |  |  |
+| Spin direction | `looks.step.spin.direction` | Looks | plain |  |  |
+| Prism | `looks.step.prism` | Looks | plain |  |  |
+| Shutter | `looks.step.shutter` | Looks | plain |  |  |
 | Item speed | `looks.seq.speed` | Looks | plain |  |  |
 | Loop or once | `looks.seq.repeat` | Looks | plain |  |  |
 | Runs on | `looks.pattern.runs-on` | Looks | plain |  |  |
@@ -242,13 +255,14 @@ Fixed props are the ones that never change for the control. Its words, its state
 | Pick a mode | `patch.add.mode` | Patch | plain |  |  |
 | Tempo feed | `inout.tempo.feed` | In/Out | plain |  |  |
 
-### Picker, pictures (1)
+### Picker, pictures (2)
 
 | Control | Name | Where | Colour | Fixed props | Carries |
 | --- | --- | --- | --- | --- | --- |
 | Gobo | `looks.step.gobo` | Looks | plain |  |  |
+| Colour wheel slot | `looks.step.colour.slot` | Looks | plain |  |  |
 
-### Picker, list (17)
+### Picker, list (18)
 
 | Control | Name | Where | Colour | Fixed props | Carries |
 | --- | --- | --- | --- | --- | --- |
@@ -257,6 +271,7 @@ Fixed props are the ones that never change for the control. Its words, its state
 | Target of a slider | `console.widget.moves` | Console | plain |  |  |
 | Add a look to the cue list | `console.cue.add` | Console | plain |  |  |
 | Add to a group | `looks.groups.add` | Looks | plain |  |  |
+| Macro | `looks.step.macro` | Looks | plain |  |  |
 | Colours from | `looks.pattern.colours` | Looks | plain |  |  |
 | Rule: when | `looks.autopilot.rule.when` | Looks | plain |  |  |
 | Rule: pick one from | `looks.autopilot.rule.pick` | Looks | plain |  |  |

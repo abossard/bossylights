@@ -6,11 +6,11 @@ This is the paper form of the storyboard catalog of issue #102. The catalog show
 ```mermaid
 flowchart LR
   M["8 mockups<br/>281 elements in the code"] --> I["Inventory<br/>by script"]
-  I --> R["213 controls<br/>one row each"]
+  I --> R["228 controls<br/>one row each"]
   I --> N["37 not controls<br/>each with a reason"]
-  R --> C["102 commands"]
+  R --> C["103 commands"]
   R --> S["9 state machines"]
-  R --> F["Function first<br/>166 keep, 40 change, 7 remove"]
+  R --> F["Function first<br/>181 keep, 40 change, 7 remove"]
 ```
 
 | Where | What |
@@ -196,7 +196,7 @@ A thing the product needs and no mockup shows. The owner's decision 29: it goes 
 | Screen | What cannot be done | Engine command that waits |
 | --- | --- | --- |
 
-## Commands: 102
+## Commands: 103
 
 The union of what the controls send: the first list of engine commands. A proposal for the engine, not a design of it.
 
@@ -257,7 +257,7 @@ The union of what the controls send: the first list of engine commands. A propos
 | `UndoLastPass` | Remove the newest finished pass from the Recorded row | song |  | `songs.recorded.undo-last-pass` |
 | `ClearRecorded` | Empty the Recorded row | song |  | `songs.recorded.clear` |
 | `SetStepFixtures` | Which groups of lights a step sets | step, groups |  | `looks.step.fixtures` |
-| `SetStepProperty` | Set one property of a step, or leave it alone | step, property, value or not set |  | `looks.step.set` `looks.step.clear` `looks.step.colour.remove` `looks.step.colour.add` `looks.step.position` `looks.step.gobo` `looks.step.dimmer` `looks.step.spin` `looks.step.colour.add-other` |
+| `SetStepProperty` | Set one property of a step, or leave it alone | step, property, value or not set |  | `looks.step.set` `looks.step.clear` `looks.step.colour.remove` `looks.step.colour.add` `looks.step.position` `looks.step.gobo` `looks.step.dimmer` `looks.step.spin` `looks.step.dimmer.part` `looks.step.colour.slot` `looks.step.gobo.shake` `looks.step.spin.direction` `looks.step.prism` `looks.step.prism.speed` `looks.step.focus` `looks.step.zoom` `looks.step.shutter` `looks.step.strobe` `looks.step.channel` `looks.step.macro` `looks.step.colour.add-other` |
 | `SetSequenceEntry` | Change one item of a sequence: start, width, speed, loop, spread, transition | sequence, entry, change |  | `looks.seq.bar` `looks.seq.bar.edge` `looks.seq.width` `looks.seq.speed` `looks.seq.repeat` `looks.seq.spread` `looks.seq.transition` |
 | `SetPattern` | Change a pattern: shape, measure, colours from, runs on | pattern, change |  | `looks.pattern.shape` `looks.pattern.measure` `looks.pattern.colours` `looks.pattern.runs-on` |
 | `AddLook` | A new step, sequence or pattern | kind |  | `looks.library.new-look` |
@@ -288,6 +288,7 @@ The union of what the controls send: the first list of engine commands. A propos
 | `SetFixtureMode` | Another mode of the same model. Refused where its channels do not fit | fixture, mode |  | `patch.details.mode` |
 | `SetFixtureGroup` | A light joins another group, as its last | fixture, group |  | `patch.details.group` |
 | `RemoveFixture` | A light leaves the patch | fixture |  | `patch.details.remove` |
+| `RunFixtureAction` | A light does one thing its file names, outside any look: reset, lamp on, lamp off | fixture, action |  | `patch.details.reset` `patch.details.lamp-on` `patch.details.lamp-off` |
 | `RemovePanel` | A pixel panel leaves the patch | panel |  | `patch.panel.remove` |
 | `AddPanel` | A pixel panel, spread over as many universes as it needs | name, columns, rows, wiring, pixel, order, start universe |  | `patch.panel.add` |
 | `SetChannel` | Hold one channel by hand at a value | channel, value | yes | `dmx.channel.fader` `dmx.channel.zero` `dmx.channel.full` |
@@ -1510,7 +1511,7 @@ stateDiagram-v2
 
 ## Looks
 
-61 controls.
+73 controls.
 
 | Control | Name | Does | Sends | Kind |
 | --- | --- | --- | --- | --- |
@@ -1537,9 +1538,21 @@ stateDiagram-v2
 | Remove a colour | `looks.step.colour.remove` | Takes one colour out of the step. The chip is the colour, with a cross | `SetStepProperty` | edit |
 | Add a colour | `looks.step.colour.add` | Adds one of twelve colours to the step. Four at most | `SetStepProperty` | edit |
 | Step position | `looks.step.position` | Where the step aims: pan left to right, tilt bottom to top | `SetStepProperty` | edit |
-| Gobo | `looks.step.gobo` | Picks the gobo of the step, by its picture. The slots are the ones of the light's gobo wheel | `SetStepProperty` | edit |
+| Gobo | `looks.step.gobo` | Picks the gobo of the step, by its picture. One picker per gobo wheel of the light, titled with its channel name: 'Static gobo', 'Gobo wheel'. The slots are the ones of that wheel | `SetStepProperty` | edit |
 | Step dimmer | `looks.step.dimmer` | How bright the step is, in percent | `SetStepProperty` | edit |
-| Step spin | `looks.step.spin` | How fast the gobo turns: slow, medium, fast | `SetStepProperty` | edit |
+| Step spin | `looks.step.spin` | How fast it turns: slow, medium, fast. One per thing that turns, titled from the file: 'Gobo rotation', 'Colour wheel' | `SetStepProperty` | edit |
+| Dimmer of a part | `looks.step.dimmer.part` | How bright one part of the light is. A light with two dimmers and no master gets one fader per part instead of the Step dimmer, named from its file: 'Spot', 'Wash' | `SetStepProperty` | edit |
+| Colour wheel slot | `looks.step.colour.slot` | Picks a slot of the light's own wheel: a swatch of its colour each, split for two, the name under it. A colour from the swatches or from 'Colour wheel' takes the nearest slot, never a split one; a pale colour takes the open slot. The slot taken shows picked. The wheel jumps, it never fades | `SetStepProperty` | edit |
+| Shake | `looks.step.gobo.shake` | The picked gobo shakes: the same gobo, its shaking range from the file. There when the wheel has one | `SetStepProperty` | edit |
+| Spin direction | `looks.step.spin.direction` | Which way it turns. One per thing that turns, beside its Step spin, titled from the file: 'Gobo rotation', 'Colour wheel' | `SetStepProperty` | edit |
+| Prism | `looks.step.prism` | The prism out, in, or in and turning. The words are the file's ranges, shortened: 'White (open)' reads 'Open'. 'Prism turning' shows Prism speed | `SetStepProperty` | edit |
+| Prism speed | `looks.step.prism.speed` | How fast the prism turns, slow to fast. There while 'Prism turning' is picked | `SetStepProperty` | edit |
+| Focus | `looks.step.focus` | Focus, near to far | `SetStepProperty` | edit |
+| Zoom | `looks.step.zoom` | How wide the beam is, narrow to wide | `SetStepProperty` | edit |
+| Shutter | `looks.step.shutter` | Open, or flashing. The options are the ranges the file names, shortened. One per strobe channel, named from the file: 'Spot', 'Wash'. 'Strobe' shows Strobe speed. It never makes the light dark: the dimmer does | `SetStepProperty` | edit |
+| Strobe speed | `looks.step.strobe` | How fast it flashes, slow to fast. One per strobe channel, beside its Shutter. There while 'Strobe' is picked, or alone when the file's strobe channel names no ranges | `SetStepProperty` | edit |
+| Channel of its own | `looks.step.channel` | One fader for a channel no other control takes: a speed, the fan, the flash length, the colour temperature. Its name is the channel's, the file's range label under it. Also under a Macro whose picked range runs low to high: where in that range | `SetStepProperty` | edit |
+| Macro | `looks.step.macro` | Picks what the light runs on its own: a colour macro, a sequence, an auto show, sound. The list is the channel's named ranges, 'No function' first. Never Reset or a lamp: those are buttons in Patch. Untouched unless a step picks one | `SetStepProperty` | edit |
 | Sequence item | `looks.seq.item` | Selects one item of the sequence. Its use settings show below the grid | nothing: the selected item | view |
 | Open an item | `looks.seq.open` | Opens the step or the inner sequence the item uses. The breadcrumb leads back | nothing: the path of open looks | view |
 | Item bar | `looks.seq.bar` | Moves an item on the beat grid, in quarter beats | `SetSequenceEntry` | edit |
@@ -1606,6 +1619,18 @@ stateDiagram-v2
 | Gobo | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ● | ● | ● | ● | – |
 | Step dimmer | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ● | ● | ● | ● | – |
 | Step spin | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ● | ● | ● | ● | – |
+| Dimmer of a part | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ● | ● | ● | ● | – |
+| Colour wheel slot | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ● | ● | ● | ● | – |
+| Shake | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ● | ● | ● | ● | – |
+| Spin direction | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ● | ● | ● | ● | – |
+| Prism | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ● | ● | ● | ● | – |
+| Prism speed | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ● | ● | ● | ● | – |
+| Focus | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ● | ● | ● | ● | – |
+| Zoom | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ● | ● | ● | ● | – |
+| Shutter | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ● | ● | ● | ● | – |
+| Strobe speed | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ● | ● | ● | ● | – |
+| Channel of its own | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ● | ● | ● | ● | – |
+| Macro | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ◆ | ● | ● | ● | – |
 | Sequence item | ● | ● | ● | ● | ● | ● | ● | – | ● | ◆ | ● | ● | ● | – |
 | Open an item | ● | ● | ● | ● | ● | ● | ● | – | ● | ◆ | ● | ● | ● | – |
 | Item bar | ● | ● | ● | ● | ● | ◆ | ○ | – | ● | ◆ | ● | ● | ● | – |
@@ -1694,6 +1719,31 @@ stateDiagram-v2
 | Step dimmer | Nothing patched | not there | No look is open. An empty show file has none: 'New step' in the library makes the first |
 | Step spin | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
 | Step spin | Nothing patched | not there | No look is open. An empty show file has none: 'New step' in the library makes the first |
+| Dimmer of a part | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
+| Dimmer of a part | Nothing patched | not there | No look is open. An empty show file has none: 'New step' in the library makes the first |
+| Colour wheel slot | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
+| Colour wheel slot | Nothing patched | not there | No look is open. An empty show file has none: 'New step' in the library makes the first |
+| Shake | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
+| Shake | Nothing patched | not there | No look is open. An empty show file has none: 'New step' in the library makes the first |
+| Spin direction | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
+| Spin direction | Nothing patched | not there | No look is open. An empty show file has none: 'New step' in the library makes the first |
+| Prism | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
+| Prism | Nothing patched | not there | No look is open. An empty show file has none: 'New step' in the library makes the first |
+| Prism speed | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
+| Prism speed | Nothing patched | not there | No look is open. An empty show file has none: 'New step' in the library makes the first |
+| Focus | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
+| Focus | Nothing patched | not there | No look is open. An empty show file has none: 'New step' in the library makes the first |
+| Zoom | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
+| Zoom | Nothing patched | not there | No look is open. An empty show file has none: 'New step' in the library makes the first |
+| Shutter | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
+| Shutter | Nothing patched | not there | No look is open. An empty show file has none: 'New step' in the library makes the first |
+| Strobe speed | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
+| Strobe speed | Nothing patched | not there | No look is open. An empty show file has none: 'New step' in the library makes the first |
+| Channel of its own | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
+| Channel of its own | Nothing patched | not there | No look is open. An empty show file has none: 'New step' in the library makes the first |
+| Macro | Something held | works | Works. If you hold this look by hand, the change is on the lights at once |
+| Macro | Nothing patched | not there | No look is open. An empty show file has none: 'New step' in the library makes the first |
+| Macro | Learn mode | works | Not picked: a list that opens has no pad or fader to stand for it. It works as usual and Learn keeps waiting |
 | Sequence item | Nothing patched | not there | No look is open. An empty show file has none: 'New step' in the library makes the first |
 | Sequence item | Learn mode | works | Not picked: selecting in the editor is done on screen. It works as usual and Learn keeps waiting |
 | Open an item | Nothing patched | not there | No look is open. An empty show file has none: 'New step' in the library makes the first |
@@ -1795,6 +1845,18 @@ stateDiagram-v2
 | Gobo | Picks that gobo. Fires on the way up | Nothing more | As one press: the choice is already made | Nothing. Sliding to another option picks nothing | Tab to the group, arrows move and pick | As a press. 44 px |
 | Step dimmer | A press on the track jumps the dimmer to that place | Nothing more | Two jumps to the same place | the dimmer follows the finger, also when it leaves the track | Arrows change it by 1, with Shift by 10. Page up and down by 10, Home and End to the ends | As a drag. The track is 44 px wide |
 | Step spin | A press on the track jumps the spin to that place | Nothing more | Two jumps to the same place | the spin follows the finger, also when it leaves the track | Arrows change it by 1, with Shift by 10. Page up and down by 10, Home and End to the ends | As a drag. The track is 44 px wide |
+| Dimmer of a part | A press on the track jumps that part's dimmer to that place | Nothing more | Two jumps to the same place | that part's dimmer follows the finger, also when it leaves the track | Arrows change it by 1, with Shift by 10. Page up and down by 10, Home and End to the ends | As a drag. The track is 44 px wide |
+| Colour wheel slot | Picks that slot. Fires on the way up | Nothing more | As one press: the choice is already made | Nothing. Sliding to another option picks nothing | Tab to the group, arrows move and pick | As a press. 44 px |
+| Shake | The gobo shakes. Pressed again: it stands still. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
+| Spin direction | Turns that way, or stops. Fires on the way up | Nothing more | As one press: the choice is already made | Nothing. Sliding to another option picks nothing | Tab to the group, arrows move and pick | As a press. 44 px |
+| Prism | Puts the prism that way. Fires on the way up | Nothing more | As one press: the choice is already made | Nothing. Sliding to another option picks nothing | Tab to the group, arrows move and pick | As a press. 44 px |
+| Prism speed | A press on the track jumps the prism speed to that place | Nothing more | Two jumps to the same place | the prism speed follows the finger, also when it leaves the track | Arrows change it by 1, with Shift by 10. Page up and down by 10, Home and End to the ends | As a drag. The track is 44 px wide |
+| Focus | A press on the track jumps the focus to that place | Nothing more | Two jumps to the same place | the focus follows the finger, also when it leaves the track | Arrows change it by 1, with Shift by 10. Page up and down by 10, Home and End to the ends | As a drag. The track is 44 px wide |
+| Zoom | A press on the track jumps the zoom to that place | Nothing more | Two jumps to the same place | the zoom follows the finger, also when it leaves the track | Arrows change it by 1, with Shift by 10. Page up and down by 10, Home and End to the ends | As a drag. The track is 44 px wide |
+| Shutter | The shutter is open, or flashes. Fires on the way up | Nothing more | As one press: the choice is already made | Nothing. Sliding to another option picks nothing | Tab to the group, arrows move and pick | As a press. 44 px |
+| Strobe speed | A press on the track jumps the strobe speed to that place | Nothing more | Two jumps to the same place | the strobe speed follows the finger, also when it leaves the track | Arrows change it by 1, with Shift by 10. Page up and down by 10, Home and End to the ends | As a drag. The track is 44 px wide |
+| Channel of its own | A press on the track jumps the channel to that place | Nothing more | Two jumps to the same place | the channel follows the finger, also when it leaves the track | Arrows change it by 1, with Shift by 10. Page up and down by 10, Home and End to the ends | As a drag. The track is 44 px wide |
+| Macro | Opens the list. A press on an entry: the light runs that | Nothing more | Opens and closes the list | Nothing | Tab to it, arrows change the choice, Enter opens the list | Opens the system's picker. 44 px high |
 | Sequence item | Selects that item. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
 | Open an item | Opens that look. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
 | Item bar | Selects the item | Nothing more. A drag needs 8 px of movement, not a wait | Two presses | Moves the item along the beats. Escape puts it back | Arrows move it by a quarter beat, Shift and arrows change its width | As press and drag. 44 px |
@@ -1861,6 +1923,18 @@ stateDiagram-v2
 | Gobo | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | yes. A button or a value: one mapping | **change**. Pictures with no word in the mockup. The name of the gobo goes under each picture |
 | Step dimmer | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
 | Step spin | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
+| Dimmer of a part | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
+| Colour wheel slot | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
+| Shake | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
+| Spin direction | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
+| Prism | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
+| Prism speed | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
+| Focus | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
+| Zoom | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
+| Shutter | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
+| Strobe speed | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
+| Channel of its own | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | yes. A button or a value: one mapping | **keep**. It says what it is and what a press does |
+| Macro | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | no. A list that opens has no pad or fader to stand for it | **keep**. It says what it is and what a press does |
 | Sequence item | At once: the screen owns this state | None | no. Nothing in the show file changes | no. Selecting in the editor is done on screen | **keep**. It says what it is and what a press does |
 | Open an item | At once: the screen owns this state | None | no. Nothing in the show file changes | no. Finding your way in the editor is done on screen | **keep**. It says what it is and what a press does |
 | Item bar | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | no. Arranging is done on screen, not from a controller | **keep**. It says what it is and what a press does |
@@ -1899,7 +1973,7 @@ stateDiagram-v2
 
 ## Patch
 
-36 controls.
+39 controls.
 
 | Control | Name | Does | Sends | Kind |
 | --- | --- | --- | --- | --- |
@@ -1937,6 +2011,9 @@ stateDiagram-v2
 | Mode of the light | `patch.details.mode` | Another mode of the same model: it needs other channels. A mode that does not fit at this address is off and says so | `SetFixtureMode` | edit |
 | Group of the light | `patch.details.group` | Moves the selected light into another group, as its last. Looks that set the group set this light too | `SetFixtureGroup` | edit |
 | Remove light | `patch.details.remove` | Takes the selected light out of the patch. Its channels are free. Looks keep what they set for it, in case it comes back | `RemoveFixture` | edit |
+| Reset | `patch.details.reset` | The light resets. On the Varytec Hero: 'Reset after 3 seconds'. There only when the light's file names it. Only here, never in a look | `RunFixtureAction` | play |
+| Lamp on | `patch.details.lamp-on` | The lamp strikes. There only when the light's file names it. Only here, never in a look | `RunFixtureAction` | play |
+| Lamp off | `patch.details.lamp-off` | The lamp goes out. It needs to cool before it strikes again. There only when the light's file names it. Only here, never in a look | `RunFixtureAction` | play |
 | Change panel | `patch.panel.change` | Opens the form the panel was made with, filled with its values. 'Add the panel' says 'Save' then | nothing: the panel form, filled with the selected panel | view |
 | Remove panel | `patch.panel.remove` | Takes the selected pixel panel out of the patch and frees its universes | `RemovePanel` | edit |
 
@@ -1978,6 +2055,9 @@ stateDiagram-v2
 | Mode of the light | ● | ◆ | ● | ● | ● | ● | ○ | – | ● | ◆ | ● | ● | ● | – |
 | Group of the light | ● | ◆ | ● | ● | ● | ● | ○ | – | ● | ◆ | ● | ● | ● | – |
 | Remove light | ● | ◆ | ● | ● | ● | ● | ○ | – | ● | ◆ | ● | ● | ● | – |
+| Reset | ● | ● | ● | ◆ | ● | ◆ | ○ | – | ● | ◆ | ● | ● | ◆ | – |
+| Lamp on | ● | ● | ● | ◆ | ● | ◆ | ○ | – | ● | ◆ | ● | ● | ◆ | – |
+| Lamp off | ● | ● | ● | ◆ | ● | ◆ | ○ | – | ● | ◆ | ● | ● | ◆ | – |
 | Change panel | ● | ● | ● | ● | ● | ● | ● | – | ● | ◆ | ● | ● | ● | – |
 | Remove panel | ● | ◆ | ● | ● | ● | ● | ○ | – | ● | ◆ | ● | ● | ● | – |
 
@@ -2079,6 +2159,21 @@ stateDiagram-v2
 | Remove light | LIVE on | works | Works mid-show. Its channels go to zero in the next frame |
 | Remove light | Nothing patched | not there | No lights yet. 'Add lights' is the one thing to do |
 | Remove light | Learn mode | works | Not picked: patching is done on screen. It works as usual and Learn keeps waiting |
+| Reset | Recording on | works | Works. It is not recorded |
+| Reset | Something held | works | Works. Nothing is held: the light gets its channel back when it is done |
+| Reset | Nothing patched | not there | No lights yet. 'Add lights' is the one thing to do |
+| Reset | Learn mode | works | Not picked: patching is done on screen. It works as usual and Learn keeps waiting |
+| Reset | An output lost | works | Works. A light on the lost output does not get it |
+| Lamp on | Recording on | works | Works. It is not recorded |
+| Lamp on | Something held | works | Works. Nothing is held: the light gets its channel back when it is done |
+| Lamp on | Nothing patched | not there | No lights yet. 'Add lights' is the one thing to do |
+| Lamp on | Learn mode | works | Not picked: patching is done on screen. It works as usual and Learn keeps waiting |
+| Lamp on | An output lost | works | Works. A light on the lost output does not get it |
+| Lamp off | Recording on | works | Works. It is not recorded |
+| Lamp off | Something held | works | Works. Nothing is held: the light gets its channel back when it is done |
+| Lamp off | Nothing patched | not there | No lights yet. 'Add lights' is the one thing to do |
+| Lamp off | Learn mode | works | Not picked: patching is done on screen. It works as usual and Learn keeps waiting |
+| Lamp off | An output lost | works | Works. A light on the lost output does not get it |
 | Change panel | Nothing patched | not there | No panel yet |
 | Change panel | Learn mode | works | Not picked: patching is done on screen. It works as usual and Learn keeps waiting |
 | Remove panel | LIVE on | works | Works mid-show. Its pixels go dark in the next frame |
@@ -2123,6 +2218,9 @@ stateDiagram-v2
 | Mode of the light | Opens the list. A press on an entry: the light is patched in that mode | Nothing more | Opens and closes the list | Nothing | Tab to it, arrows change the choice, Enter opens the list | Opens the system's picker. 44 px high |
 | Group of the light | Opens the list. A press on an entry: the light joins that group | Nothing more | Opens and closes the list | Nothing | Tab to it, arrows change the choice, Enter opens the list | Opens the system's picker. 44 px high |
 | Remove light | Removes the light. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
+| Reset | The light resets. On the Varytec Hero: 'Reset after 3 seconds'. Fires on the way down | Nothing more: it fired on the way down | Two presses | Nothing. Sliding off does not take it back | Tab to it, then Enter or Space | As a press. 44 px or more |
+| Lamp on | The lamp strikes. Fires on the way down | Nothing more: it fired on the way down | Two presses | Nothing. Sliding off does not take it back | Tab to it, then Enter or Space | As a press. 44 px or more |
+| Lamp off | The lamp goes out. It needs to cool before it strikes again. Fires on the way down | Nothing more: it fired on the way down | Two presses | Nothing. Sliding off does not take it back | Tab to it, then Enter or Space | As a press. 44 px or more |
 | Change panel | Opens the panel form. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
 | Remove panel | Removes the panel. Fires on the way up | Nothing more | Two presses | Sliding off before lifting cancels the press | Tab to it, then Enter or Space | As a press. 44 px |
 
@@ -2164,6 +2262,9 @@ stateDiagram-v2
 | Mode of the light | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | no. A list that opens has no pad or fader to stand for it | **keep**. It says what it is and what a press does |
 | Group of the light | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | no. A list that opens has no pad or fader to stand for it | **keep**. It says what it is and what a press does |
 | Remove light | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | no. Patching is done on screen | **keep**. It says what it is and what a press does |
+| Reset | Pressed look on the way down, before the engine answers. Its state when the engine reports it, in the same screen frame | The mapped control shows the same state | no. Not a change to the show file. A reset has no opposite | no. Patching is done on screen | **keep**. It says what it is and what a press does |
+| Lamp on | Pressed look on the way down, before the engine answers. Its state when the engine reports it, in the same screen frame | The mapped control shows the same state | no. Not a change to the show file. Lamp off is its opposite | no. Patching is done on screen | **keep**. It says what it is and what a press does |
+| Lamp off | Pressed look on the way down, before the engine answers. Its state when the engine reports it, in the same screen frame | The mapped control shows the same state | no. Not a change to the show file. Lamp on is its opposite, once the lamp is cool | no. Patching is done on screen | **keep**. It says what it is and what a press does |
 | Change panel | At once: the screen owns this state | None | no. Nothing in the show file changes | no. Patching is done on screen | **keep**. It says what it is and what a press does |
 | Remove panel | The change shows when the engine reports it, in the same screen frame | None | yes. One step in Undo | no. Patching is done on screen | **keep**. It says what it is and what a press does |
 
