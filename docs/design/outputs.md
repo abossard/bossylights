@@ -123,7 +123,9 @@ TIOCOUTQ answers the bytes in the output queue (tty_ioctl(4); on macOS `sys/ttyc
 
 **The bound.** `FINISH_WITHIN = 3 x (STALLED_FOR + QUEUE_FULL + LINK_TIME)`, about 1.55 s: the message being written when the finish is asked, the one queued behind it, then the drain. Not covered: a USB port listing that hangs while the adapter is lost. Then the opener gives up and the output keeps dropping frames until the port thread answered.
 
-## DDP
+## Every UDP output (DDP, Art-Net, sACN)
+
+One lane (`udp.rs`) for every protocol over UDP. A protocol only cuts a frame into packets and writes them.
 
 ### Health: what the engine sees, frame by frame
 

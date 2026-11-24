@@ -21,6 +21,7 @@
 
 mod ddp;
 pub mod dmx_usb_pro;
+mod udp;
 
 pub use engine_core::{Adapter, Color, Levels, Outcome, OutputKind, Rate, Refusal, Run};
 use engine_core::{ROUTE_MOST, RouteFault, SPANS_MOST, Span, route_length};
