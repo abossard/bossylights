@@ -1,6 +1,6 @@
 # sACN (ANSI E1.31): the wire
 
-Status: not built. This page is our summary, in our words. The standard sits behind a sign-in, so every row below is checked against ETC's Apache-2.0 reference library and the Wireshark decoder, not against the standard's text. Rows nothing confirmed are marked ❔.
+Status: bytes and device built (`crates/outputs/src/sacn.rs`, #290); not in the app until the wiring ticket (#211). This page is our summary, in our words. The standard sits behind a sign-in, so every row below is checked against ETC's Apache-2.0 reference library and the Wireshark decoder, not against the standard's text. Rows nothing confirmed are marked ❔.
 
 ```mermaid
 flowchart LR
@@ -86,6 +86,34 @@ Sync packet (49 bytes, root vector `0x00000008`, vector `0x00000001`, sequence, 
 | Priority | 100 | ✅ default |
 | Source name | `Bossylights` and the output's number | ✅ |
 | CID | one UUID per engine, kept | see the plan |
-| Stop or reroute | 3 terminated packets per universe | ✅ |
+| Sequence start | 0, then +1, 255 wraps to 0 | ✅ as the `sacn` crate |
+| Stop | 3 rounds of terminated packets, start code only, per universe of the last frame, back to back. Best effort: a busy socket drops the rest of a round | ✅ as the `sacn` crate |
+| Reroute | nothing terminated: the device moves with its output, its counters carry on. A universe a shorter route leaves goes silent; receivers drop it after 2.5 s | ✅ |
+| Multicast interface | the one of the default route, TTL 1 (one network). A lighting network without a gateway has no route, so multicast cannot leave there. Choosing the interface: the wiring ticket | ❔ needed on most desks |
 | Discovery | every 10 s (second step) | ❔ required |
 | Sync, preview | not sent | optional |
+
+## The stream machine
+
+One function in `sacn.rs`, every pair walked by a table test. `terminate` is called off the output thread when the output is removed or the engine stops; it sends the closing frames itself.
+
+```mermaid
+stateDiagram-v2
+  direction LR
+  [*] --> Live
+  Live --> Terminating1: terminate
+  Terminating1 --> Terminating2: frame (round 1)
+  Terminating2 --> Terminating3: frame (round 2)
+  Terminating3 --> Ended: frame (round 3)
+```
+
+| state \ event | frame | terminate |
+|---|---|---|
+| Live | Live, data packets | Terminating 1 |
+| Terminating n (1, 2) | Terminating n+1, round n of terminated packets | the same |
+| Terminating 3 | Ended, round 3 | the same |
+| Ended | Ended, nothing sent (the engine is told Accepted: nothing failed; unreachable, the output is gone) | Ended |
+
+## Checked by hand
+
+`multicast_sends_each_universe_to_its_own_group` probes first. Linux CI sends and loops multicast back, so there it must pass. A Mac often lets the test binary through only now and then, a CI Mac sends no multicast at all: there the test says so and checks nothing. Then: receiver joined to `239.255.0.1` on another machine (or Wireshark), one output of 2 universes from universe 1: only universe 1 arrives.

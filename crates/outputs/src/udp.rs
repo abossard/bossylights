@@ -29,6 +29,12 @@ pub(crate) trait Protocol: Send {
     /// Writes the packet at `cut` into the protocol's own buffer. `None` cannot happen: a cut
     /// of the frame fits the buffer and the stream.
     fn packet(&mut self, cut: Self::Cut, stream: &[u8]) -> Option<&[u8]>;
+
+    /// Ends the stream for good: how many closing frames `frame` and `packet` make now,
+    /// each sent as a frame of no channels. Most protocols just go quiet.
+    fn stop(&mut self) -> u8 {
+        0
+    }
 }
 
 /// Frames that must go out without a refusal before a device that refused counts as there
@@ -402,6 +408,14 @@ impl<P: Protocol> Device for Udp<P> {
         self.protocol.limits()
     }
 
+    /// Sends the protocol's closing frames back to back. Best effort: a busy link drops
+    /// the rest of a closing frame as it would any frame's.
+    fn terminate(&mut self) {
+        for _ in 0..self.protocol.stop() {
+            let _ = self.take(&[]);
+        }
+    }
+
     /// Sends the frame as packets. A busy link drops the rest of the frame. A device that
     /// refused stays failed until `CLEAN` frames went out without a refusal. Running means
     /// frames were sent: the device does not answer.
@@ -684,6 +698,20 @@ mod tests {
             assert_eq!(sends.load(Ordering::SeqCst), tried, "{at} {with:?}");
             assert_eq!(udp.health, health, "{at} {with:?}");
         }
+    }
+
+    #[test]
+    fn terminate_sends_nothing_for_a_protocol_without_a_stop() {
+        let sends = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let link = FailsAt {
+            at: usize::MAX,
+            with: None,
+            tried: Arc::clone(&sends),
+        };
+        let reopen: Reopen = Box::new(|| Err(io::Error::other("not needed")));
+        let mut udp = Udp::<Numbered>::with(Some(Box::new(link)), reopen, 4).unwrap();
+        udp.terminate();
+        assert_eq!(sends.load(Ordering::SeqCst), 0);
     }
 
     /// A link that is always broken and counts where it was dropped: on the socket thread

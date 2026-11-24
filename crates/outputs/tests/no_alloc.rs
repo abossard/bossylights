@@ -78,15 +78,35 @@ fn main() {
     .unwrap();
     let art_net =
         outputs::artnet::open(address, outputs::artnet::PortAddress::new(1).unwrap()).unwrap();
+    let sacn = |to| {
+        let first = outputs::sacn::Universe::new(1).unwrap();
+        let output = engine_core::OutputNumber::try_from(1).unwrap();
+        outputs::sacn::open(to, first, [7; 16], output).unwrap()
+    };
+    let sacn_unicast = sacn(outputs::sacn::Destination::Unicast(address));
+    // A machine that sends no multicast (no route, or a CI Mac) checks unicast only.
+    let multicast_route = UdpSocket::bind("0.0.0.0:0")
+        .and_then(|socket| {
+            socket.send_to(
+                b"",
+                (std::net::Ipv4Addr::new(239, 255, 0, 1), address.port()),
+            )
+        })
+        .is_ok();
     // (kind, the device, an outcome it must give)
     // All stay open until every one was measured: a dropped DDP output's socket thread
     // frees as it ends.
-    let mut devices: [(&str, Box<dyn Device>, Outcome); 4] = [
+    let mut devices: Vec<(&str, Box<dyn Device>, Outcome)> = vec![
         ("DDP", ddp, Outcome::Accepted),
         ("Art-Net", art_net, Outcome::Accepted),
+        ("sACN unicast", sacn_unicast, Outcome::Accepted),
         ("DDP nobody listens to", refused, Outcome::Failed),
         ("DMX USB Pro", Box::new(pro), Outcome::Accepted),
     ];
+    if multicast_route {
+        let to = outputs::sacn::Destination::Multicast(address.port());
+        devices.push(("sACN multicast", sacn(to), Outcome::Accepted));
+    }
     for (kind, device, expected) in &mut devices {
         let expected = *expected;
         let (allocated, freed) = (counting::allocations(), counting::frees());

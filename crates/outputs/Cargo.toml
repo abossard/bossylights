@@ -1,6 +1,6 @@
 [package]
 name = "outputs"
-description = "Every output kind and its bytes: open a device off the output thread, then take frames on it without waiting. DDP, Art-Net, DMX USB Pro."
+description = "Every output kind and its bytes: open a device off the output thread, then take frames on it without waiting. DDP, Art-Net, sACN, DMX USB Pro."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -17,6 +17,7 @@ nix = { version = "0.26.4", default-features = false, features = ["fs"] }
 
 [dev-dependencies]
 artnet_protocol = "0.4.4" # MIT: an outside decoder for the Art-Net tests
+sacn = "0.11.1" # MIT OR Apache-2.0: an outside decoder for the sACN tests
 
 [[test]]
 name = "no_alloc"

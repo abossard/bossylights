@@ -22,6 +22,7 @@
 pub mod artnet;
 mod ddp;
 pub mod dmx_usb_pro;
+pub mod sacn;
 mod udp;
 
 pub use engine_core::{Adapter, Color, Levels, Outcome, OutputKind, Rate, Refusal, Run};
@@ -45,6 +46,12 @@ pub trait Device: Send {
     /// Finishes accepted writes before a reroute. A lost port discards old-route retries.
     /// Called off the output thread, with exclusive access after the last `take`.
     fn finish_route(&mut self) {}
+
+    /// Ends the output's stream for good: a protocol that tells its receivers so sends it
+    /// now (sACN: three rounds of "stream terminated", and nothing after). Others do nothing.
+    /// Called off the output thread, with exclusive access after the last `take`, when the
+    /// output is removed or the engine stops; never on a reroute.
+    fn terminate(&mut self) {}
 
     /// Takes the route's bytes in order, without waiting or allocating. A busy device drops the frame.
     fn take(&mut self, stream: &[u8]) -> Outcome;
