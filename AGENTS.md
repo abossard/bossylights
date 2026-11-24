@@ -13,6 +13,7 @@ Rust engine, web UI in a Tauri shell, Apache-2.0. Where the project stands: the 
 | The same on one commit, in a clean copy | `npm run verify -- <commit>` |
 | Land a reviewed `wip/` branch on `main` | `npm run land -- wip/<ticket> <message-file>` |
 | Scorecard with timings / mutation score | `npm run scorecard` / `npm run mutants` (needs `cargo-mutants`) |
+| What each test reaches and kills, which tests overlap (`docs/testing.md`) | `npm run test-reach -- rust\|node\|kills <crate>\|report` |
 | Build | `npm run build` |
 | Engine alone / UI alone | `npm run engine` / `npm run ui` (browser at http://127.0.0.1:5174) |
 

@@ -165,6 +165,7 @@ Needs Rust, Node 24 and npm. On Linux also the [Tauri system libraries](https://
 |---|---|
 | [docs/engine.md](docs/engine.md) | the engine in detail: API, commands, output states, DMX port thread, hand checks, what `npm test` proves |
 | [docs/coding.md](docs/coding.md) | how we write code |
+| [docs/testing.md](docs/testing.md) | which test proves what, and when a test may go |
 | [The map issue](https://github.com/abossard/bossylights/issues?q=is%3Aissue+label%3Amap) | every area, feature, requirement and task |
 | [docs/plan/requirements.md](docs/plan/requirements.md) | requirements |
 | [docs/plan/capability-map.md](docs/plan/capability-map.md) | what QLC+, BlinderKitten, Chataigne, Mizer and xLights can do |
