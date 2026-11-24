@@ -24,7 +24,7 @@ fn bytes(file: &str, name: &str, intensity: u16, (red, green, blue): (u16, u16, 
         ..Light::DARK
     }];
     let mut out = [Levels::ZERO];
-    resolve(&shown, &rigged.writers, &mut out);
+    common::shown(&shown, &rigged, &mut out);
     out[0].0[36..36 + mode.channels.len()].to_vec()
 }
 

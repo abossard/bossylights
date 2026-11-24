@@ -7,11 +7,12 @@
 //! ```
 //!
 //! What the text looks like. One line per fixture and per group, so moving one fixture
-//! changes one line. Each mode is kept whole, so a show opens without the library.
+//! changes one line. Each mode is kept whole, with what each channel declares, so a show
+//! opens without the library and lowers like the show that was saved.
 //!
 //! ```text
 //! {
-//!   "version": 6,
+//!   "version": 7,
 //!   "patch": [
 //!     {"fixture":1,"name":"PAR 1","mode":"Generic / Generic RGB / RGB","at":{"universe":1,"address":37},"first":1}
 //!   ],
@@ -78,7 +79,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 /// The version of the file this engine writes and reads. Raise it with every change an
 /// engine of the old version would read wrong. An engine never reads a newer file.
-pub const VERSION: u32 = 6;
+pub const VERSION: u32 = 7;
 
 /// The longest file, in bytes: 64 MiB. Far over any show, so no show meets it, and a file
 /// of gigabytes is not read whole at start.
@@ -632,7 +633,7 @@ mod sequence_tests {
         clippy::indexing_slicing,
         reason = "the JSON fixture uses named fields"
     )]
-    fn waves_and_swatches_first_open_in_v6_and_round_trip_together() {
+    fn waves_and_swatches_open_only_in_this_version_and_round_trip_together() {
         let empty = Patch::new(
             Universes::new(1).unwrap(),
             Lights::new(8).unwrap(),
@@ -677,13 +678,13 @@ mod sequence_tests {
             serde_json::json!([parent, wave, step]),
         ] {
             file["looks"] = looks;
-            for version in [4, 5, 6] {
+            for version in [5, 6, VERSION] {
                 file["version"] = version.into();
                 let opened = read(&file.to_string(), &empty);
-                if version == 6 {
+                if version == VERSION {
                     let (rig, looks) = opened.unwrap();
                     let canonical = write(&rig, &looks).unwrap();
-                    assert!(canonical.contains(r#""version": 6"#));
+                    assert!(canonical.contains(r#""version": 7"#));
                     assert_eq!(read(&canonical, &empty), Ok((rig, looks)));
                 } else {
                     assert_eq!(opened, Err(Unopened::Older { version }), "v{version}");

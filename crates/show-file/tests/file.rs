@@ -152,7 +152,9 @@ fn lib(command: PatchCommand) -> Step {
 }
 
 #[test]
-fn v6_keeps_the_old_channel_schema_for_tagged_emitters() {
+fn a_reopened_fixture_keeps_what_each_channel_declares() {
+    // The rig lowers a mode by what each channel declares (its role): a reopened show must
+    // lower like the one that was saved, without the library.
     let fixture = definition("Cameo-CLBARL10RGBA.qxf");
     let patch = patched(vec![(
         PatchCommand::Patch {
@@ -164,26 +166,31 @@ fn v6_keeps_the_old_channel_schema_for_tagged_emitters() {
         },
         vec![fixture],
     )]);
-    let saved = write(&patch).unwrap();
-    let show: serde_json::Value = serde_json::from_str(&saved).unwrap();
-    assert_eq!(show["version"], 6);
+    let saved_text = write(&patch).unwrap();
+    let show: serde_json::Value = serde_json::from_str(&saved_text).unwrap();
+    assert_eq!(show["version"], 7);
     let mode = show["modes"].as_object().unwrap().values().next().unwrap();
     let channels = mode["mode"]["channels"].as_array().unwrap();
-    assert_eq!(channels.len(), 19);
-    for channel in channels {
-        for field in ["colour", "declared"] {
-            assert!(
-                channel.get(field).is_none(),
-                "{field} on {}",
-                channel["name"]
-            );
-        }
-    }
-    assert_eq!(write(&read(&saved, &empty()).unwrap()).unwrap(), saved);
+    assert_eq!(
+        channels[3]["declared"],
+        serde_json::json!({"group": "Intensity", "colour": "Red"})
+    );
+    let read = read(&saved_text, &empty()).unwrap();
+    assert_eq!(write(&read).unwrap(), saved_text);
+    let (saved, reopened) = (patch.mode(1).unwrap(), read.mode(1).unwrap());
+    let roles = |mode: &fixture_library::Mode| -> Vec<_> {
+        mode.channels
+            .iter()
+            .map(fixture_library::Channel::role)
+            .collect()
+    };
+    assert_eq!(roles(reopened), roles(saved));
+    assert_eq!(reopened, saved);
 }
 
-const V6_DIMMER: &str = r#"{
-        "version": 6,
+/// A channel that declares nothing: no `declared` in the file.
+const DIMMER: &str = r#"{
+        "version": 7,
         "patch": [{"fixture":1,"name":"Dimmer","mode":"Generic / Dimmer / 1ch","at":{"universe":1,"address":1},"first":1}],
         "groups": [], "looks": [],
         "rules": {"brightness":"Latest","manual_end":"UntilRelease","other_end":"Reveal"},
@@ -194,55 +201,48 @@ const V6_DIMMER: &str = r#"{
     }"#;
 
 #[test]
-fn a_v6_channel_written_without_declarations_still_opens() {
-    let restored = read(V6_DIMMER, &empty()).unwrap();
+fn a_channel_that_declares_nothing_opens_and_is_written_the_same() {
+    let restored = read(DIMMER, &empty()).unwrap();
     let channel = &restored.mode(1).unwrap().channels[0];
     assert_eq!(channel.function, fixture_library::Function::Dimmer);
     assert_eq!(
         channel.role(),
         fixture_library::Function::Other(String::new())
     );
-    let original: serde_json::Value = serde_json::from_str(V6_DIMMER).unwrap();
+    let original: serde_json::Value = serde_json::from_str(DIMMER).unwrap();
     let written: serde_json::Value = serde_json::from_str(&write(&restored).unwrap()).unwrap();
     assert_eq!(written, original);
 }
 
 #[test]
-fn v6_rejects_channel_fields_outside_the_v6_schema() {
+fn a_channel_field_the_file_does_not_know_is_refused() {
     for (field, value) in [
         ("colour", serde_json::json!("Red")),
-        ("declared", serde_json::json!({})),
         (
             "declared",
-            serde_json::json!({
-                "preset": "IntensityRed", "group": null, "colour": "Red", "smoke": false
-            }),
+            serde_json::json!({"preset": "IntensityRed", "smoke": false}),
         ),
     ] {
-        let mut show: serde_json::Value = serde_json::from_str(V6_DIMMER).unwrap();
+        let mut show: serde_json::Value = serde_json::from_str(DIMMER).unwrap();
         show["modes"]["Generic / Dimmer / 1ch"]["mode"]["channels"][0][field] = value;
         assert!(
             matches!(
                 read(&show.to_string(), &empty()),
                 Err(Unopened::Broken { .. })
             ),
-            "v6 accepted channel field {field}"
+            "accepted channel field {field}"
         );
     }
 }
 
-/// V6 keeps the mode and all of its v11 writers; declarations first persist in v7.
-fn assert_v6_patch(read: &Patch, original: &Patch) {
+/// The file keeps the mode whole, its declarations included, and so every writer.
+fn assert_same_patch(read: &Patch, original: &Patch) {
     assert_eq!(read.prepare(), original.prepare());
     assert_eq!(read.groups(), original.groups());
     assert_eq!(read.fixtures(), original.fixtures());
     for fixture in original.fixtures() {
         let number = fixture.fixture;
-        let mut mode = original.mode(number).unwrap().clone();
-        for channel in &mut mode.channels {
-            channel.declared = Default::default();
-        }
-        assert_eq!(read.mode(number), Some(&mode));
+        assert_eq!(read.mode(number), original.mode(number));
         assert_eq!(
             read.definition_text(number),
             original.definition_text(number)
@@ -298,7 +298,7 @@ fn a_patch_written_and_read_back_is_the_same_patch() {
         let patch = patched(commands);
         let file = write(&patch).unwrap();
         let read = read(&file, &empty()).unwrap_or_else(|why| panic!("{case}: {why:?}\n{file}"));
-        assert_v6_patch(&read, &patch);
+        assert_same_patch(&read, &patch);
         assert_eq!(write(&read).unwrap(), file, "{case}: written again");
     }
 }
@@ -339,7 +339,7 @@ fn a_file_that_fails_a_check_of_the_commands_is_not_read() {
             versioned.as_str(),
             "",
             Unopened::Broken {
-                line: 47,
+                line: 56,
                 column: 1,
             },
         ),
@@ -519,7 +519,7 @@ fn a_file_of_the_most_bytes_is_written_and_read_and_one_byte_more_is_neither() {
         );
         // the file at the most, and spaces after it
         let text = format!("{file}{}", " ".repeat(over));
-        let opened = crate::read(&text, &empty()).map(|read| assert_v6_patch(&read, &at_most));
+        let opened = crate::read(&text, &empty()).map(|read| assert_same_patch(&read, &at_most));
         assert_eq!(opened, read, "{case}: read");
     }
 }
@@ -554,7 +554,7 @@ fn a_patch_kept_in_its_file_refuses_the_command_that_would_take_the_file_over_th
             let patch = patch.unwrap();
             let file = write(&patch).unwrap();
             let read = read(&file, &empty()).unwrap();
-            assert_v6_patch(&read.kept_in(show_file::LIMIT), &patch);
+            assert_same_patch(&read.kept_in(show_file::LIMIT), &patch);
             file.len()
         });
         assert_eq!(file, bytes, "{case}");
@@ -793,7 +793,7 @@ fn the_mixer_settings_are_saved_and_read_back() {
     }
 }
 
-/// Every key of a v6 file is required: a file without one is broken where it ends, at
+/// Every key of the file is required: a file without one is broken where it ends, at
 /// its last line (serde names a missing key at the closing brace).
 #[test]
 fn a_file_without_one_of_its_keys_is_broken() {
@@ -828,7 +828,8 @@ fn an_older_file_is_left_alone() {
         (3, Err(Unopened::Older { version: 3 })),
         (4, Err(Unopened::Older { version: 4 })),
         (5, Err(Unopened::Older { version: 5 })),
-        (6, Ok(1)),
+        (6, Err(Unopened::Older { version: 6 })),
+        (7, Ok(1)),
     ];
     for (version, answer) in cases {
         let text = file.replace(&now, &format!("\"version\": {version}"));

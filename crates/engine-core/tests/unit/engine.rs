@@ -1073,13 +1073,32 @@ fn frame_resolves_the_lights_and_mix_decides_each_channel() {
         let (universes, holds) = raw(raw_held);
         let mut channels = Box::new(Channels::NEW);
         channels.value[0].0[8] = 9; // whatever was there before
-        frame(&state, &universes, &holds, &red, writers, &mut channels);
+        frame(
+            &state,
+            &universes,
+            &holds,
+            (&two(), writers),
+            &red,
+            &mut channels,
+        );
         assert_eq!(channels.values()[..2], expected, "{row}");
         assert!(
             channels.values()[2..].iter().all(|u| *u == Levels::ZERO),
             "{row}"
         );
     }
+}
+
+/// Every channel of universes 1 and 2 patched, at rest 0.
+fn two() -> Vec<Configured> {
+    (0..2 * 512)
+        .map(|at| Configured {
+            at,
+            rest: 0,
+            dark: 0,
+            flags: Flags::NONE,
+        })
+        .collect()
 }
 
 #[test]
@@ -1162,7 +1181,14 @@ fn frame_says_who_set_each_channel_and_a_release_gives_it_back() {
             state = update(state, &mut universes, &mut holds, &mut [], command);
         }
         let mut channels = Box::new(Channels::NEW);
-        frame(&state, &universes, &holds, &lit, &writers, &mut channels);
+        frame(
+            &state,
+            &universes,
+            &holds,
+            (&two(), &writers),
+            &lit,
+            &mut channels,
+        );
         let seen = [(1, 1), (1, 2), (2, 512)].map(|(universe, address)| {
             let at = channel(universe, address);
             let byte = channels.values()[usize::from(universe - 1)].0[usize::from(address - 1)];

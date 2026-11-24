@@ -17,3 +17,6 @@ ts-rs = { version = "12.0.1", optional = true } # only the generator test of `cr
 [features]
 # The TypeScript types of a library failure. No product build has it.
 ts = ["dep:ts-rs"]
+
+[dev-dependencies]
+serde_json = { version = "1.0.154", default-features = false, features = ["alloc"] }

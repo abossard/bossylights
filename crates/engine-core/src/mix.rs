@@ -314,8 +314,8 @@ pub const fn mix(first: Want, then: Want) -> Want {
 mod tests {
     use super::*;
     use crate::channel::{
-        ADDRESSES, BLACKOUT, ChannelNumbers, ChannelSet, Channels, Flags, Follows, Levels,
-        MODIFIERS, Scale, SourceTag, Universes, scale_of,
+        ADDRESSES, BLACKOUT, ChannelNumbers, ChannelSet, Channels, Configured, Flags, Follows,
+        Levels, MODIFIERS, Scale, SourceTag, Universes, scale_of,
     };
     use Want::{Default, Light};
 
@@ -451,21 +451,29 @@ mod tests {
         }
         .check(Universes::ONE)
         .unwrap();
+        // channels 7 and 8 of universe 1 are patched, at rest 0
+        let patched = [6, 7].map(|at| Configured {
+            at,
+            rest: 0,
+            dark: 0,
+            flags: Flags::NONE,
+        });
         for (row, wrote, hold, dark, out, source) in cases {
             let mut all = Box::new(Channels::NEW);
-            all.value[0].0[8] = 3; // whatever the frame before left
-            all.reset_frame();
-            let mut lit = [ChannelSet::NONE];
+            all.value[0].0[7] = 3; // whatever the frame before left
+            all.reset(&patched);
             if let Some(want) = wrote {
                 all.value[0].0[6] = want.level();
-                at.mark(&mut lit, matches!(want, Light(_)));
+                if matches!(want, Light(_)) {
+                    all.source[6] = SourceTag::LIGHTS;
+                }
             }
             let (mut raw, mut holds) = ([Levels::ZERO], [ChannelSet::NONE]);
             if let Some(level) = hold {
                 raw[0].0[6] = level;
                 at.mark(&mut holds, true);
             }
-            all.apply_winners(&lit, &raw, &holds, blackout(dark));
+            all.apply_winners(&patched, &raw, &holds, blackout(dark));
             assert_eq!(
                 (all.values()[0].0[6], all.source(at)),
                 (out, source),
@@ -495,9 +503,8 @@ mod tests {
         let cases = [(false, 255), (true, 0)];
         for (dark, out) in cases {
             let mut all = Box::new(Channels::NEW);
-            all.reset_frame();
-            let lit = [ChannelSet::NONE; crate::MAX_UNIVERSES as usize];
-            all.apply_winners(&lit, &raw, &holds, blackout(dark));
+            all.reset(&[]);
+            all.apply_winners(&[], &raw, &holds, blackout(dark));
             let missed = all
                 .values()
                 .iter()
@@ -526,19 +533,50 @@ mod tests {
             ("released", None, 40, SourceTag::REST),
         ];
         for (frame, hold, out, source) in frames {
-            all.reset_frame();
+            all.reset(&[]);
             let (mut raw, mut holds) = ([Levels::ZERO], [ChannelSet::NONE]);
             if let Some(level) = hold {
                 raw[0].0[6] = level;
                 at.mark(&mut holds, true);
             }
-            all.apply_winners(&[ChannelSet::NONE], &raw, &holds, blackout(false));
+            all.apply_winners(&[], &raw, &holds, blackout(false));
             assert_eq!(
                 (all.values()[0].0[6], all.source(at)),
                 (out, source),
                 "{frame}"
             );
         }
+    }
+
+    #[test]
+    fn a_patched_channel_a_raw_hold_sets_moves_by_its_levels_once() {
+        // channel 7 of universe 1, patched, fades, follows Blackout at half: the held 200
+        // shows 200 x 128 / 255 = 100.4, so 100; moved twice it would be 50
+        let patched = [Configured {
+            at: 6,
+            rest: 0,
+            dark: 0,
+            flags: Flags::FADE,
+        }];
+        let at = ChannelNumbers {
+            universe: 1,
+            address: 7,
+        }
+        .check(Universes::ONE)
+        .unwrap();
+        let mut all = Box::new(Channels::NEW);
+        all.configure(&[], &patched);
+        all.reset(&patched);
+        let (mut raw, mut holds) = ([Levels::ZERO], [ChannelSet::NONE]);
+        raw[0].0[6] = 200;
+        at.mark(&mut holds, true);
+        let mut levels = [u8::MAX; MODIFIERS];
+        levels[BLACKOUT] = 128;
+        all.apply_winners(&patched, &raw, &holds, levels);
+        assert_eq!(
+            (all.values()[0].0[6], all.source(at)),
+            (100, SourceTag::RAW)
+        );
     }
 
     #[test]
@@ -738,7 +776,13 @@ mod tests {
             all.value[0].0[6] = value;
             (all.dark[6], all.flags[6], all.follows[6]) = (dark, flags, follows);
             let (raw, holds) = ([Levels::ZERO], [ChannelSet::NONE]);
-            all.apply_winners(&[ChannelSet::NONE], &raw, &holds, levels);
+            let patched = [Configured {
+                at: 6,
+                rest: 0,
+                dark,
+                flags,
+            }];
+            all.apply_winners(&patched, &raw, &holds, levels);
             assert_eq!(all.values()[0].0[6], out, "{case}");
         }
     }

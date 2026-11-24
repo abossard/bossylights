@@ -127,7 +127,7 @@ flowchart LR
 
 ### Rig: a mode becomes channels (channel model, #239)
 
-`rig::channels::lower` is a calculation off the tick. `resolve` (writers per light) goes when the tick runs on channels (#250).
+`rig::channels::lower` is a calculation off the tick. Since #250 L1 it gives every patched channel its rest, dark, fade and pair on the tick, and the writers join a fine only where it pairs. `resolve` (writers per light) goes when the tick runs on channels (#250 L3).
 
 ```mermaid
 flowchart LR

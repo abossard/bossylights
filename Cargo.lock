@@ -926,6 +926,7 @@ version = "0.0.0"
 dependencies = [
  "roxmltree",
  "serde",
+ "serde_json",
  "ts-rs",
 ]
 

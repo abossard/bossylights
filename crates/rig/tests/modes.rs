@@ -2,8 +2,8 @@
 
 mod common;
 
-use common::{all, at, light, lights, mode, say};
-use engine_core::{Levels, Light, Refusal, Rgb, Universes, Writer, resolve};
+use common::{all, at, light, lights, mode, said};
+use engine_core::{Levels, Light, Refusal, Rgb, Universes, Writer};
 use rig::{Unfit, compile};
 
 #[test]
@@ -200,7 +200,7 @@ fn a_mode_at_an_address_becomes_writers() {
             lights(),
         )
         .unwrap_or_else(|e| panic!("{file} {name}: {e:?}"));
-        let said: Vec<String> = rigged.writers.iter().map(say).collect();
+        let said: Vec<String> = said(&rigged);
         assert_eq!(said, expected, "{file} {name}");
         assert_eq!(rigged.lights, count, "{file} {name}");
     }
@@ -216,7 +216,7 @@ fn the_lights_are_numbered_from_the_first() {
         lights(),
     )
     .unwrap();
-    let said: Vec<String> = rigged.writers.iter().map(say).collect();
+    let said: Vec<String> = said(&rigged);
     assert_eq!(
         said,
         [
@@ -230,15 +230,16 @@ fn the_lights_are_numbered_from_the_first() {
 
 #[test]
 fn a_mode_that_does_not_fit_is_refused() {
-    let martin = mode("Martin-Rush-MH6-Wash.qxf", "Standard"); // 14 channels, 11 writers
-    let bar = mode("XStatic-X-240Bar-RGB.qxf", "26 Channel"); // 9 lights
+    // 14 channels, 8 writers: no light writes the other 6, they show their rest
+    let martin = mode("Martin-Rush-MH6-Wash.qxf", "Standard");
+    let bar = mode("XStatic-X-240Bar-RGB.qxf", "26 Channel"); // 9 lights, 25 writers
     let two = Universes::new(2).unwrap();
     // (mode, universe, address, first light, result)
     let cases = [
-        (&martin, 1, 499, 0, Ok(11)),
-        (&martin, 2, 499, 0, Ok(11)),
+        (&martin, 1, 499, 0, Ok(8)),
+        (&martin, 2, 499, 0, Ok(8)),
         // past 512 it runs on at the next universe's address 1, but there is no third
-        (&martin, 1, 500, 0, Ok(11)),
+        (&martin, 1, 500, 0, Ok(8)),
         (&martin, 2, 500, 0, Err(Unfit::PastTheEnd { channels: 14 })),
         (
             &martin,
@@ -254,7 +255,7 @@ fn a_mode_that_does_not_fit_is_refused() {
             0,
             Err(Unfit::Refused(Refusal::NoSuchUniverse { universes: 2 })),
         ),
-        (&bar, 1, 1, 16_375, Ok(26)),
+        (&bar, 1, 1, 16_375, Ok(25)),
         (&bar, 1, 1, 16_376, Err(Unfit::TooManyLights { needs: 9 })),
     ];
     for (mode, universe, address, first, expected) in cases {
@@ -268,10 +269,11 @@ fn a_mode_that_does_not_fit_is_refused() {
     }
 }
 
-/// Every channel of every mode of the test definitions is written by exactly one writer.
-/// A mode refused for a colour it cannot show (`mover_properties_to_bytes`) has no writers.
+/// Every channel of every mode of the test definitions has its rest, and no two writers
+/// write one channel. A mode refused for a colour it cannot show
+/// (`mover_properties_to_bytes`) has no writers.
 #[test]
-fn every_channel_is_written_once() {
+fn every_channel_rests_and_is_written_at_most_once() {
     for (file, fixture) in all() {
         for mode in &fixture.modes {
             let rigged = match compile(mode, at(1), light(0), Universes::ONE, lights()) {
@@ -295,8 +297,12 @@ fn every_channel_is_written_once() {
                 })
                 .collect();
             written.sort_unstable();
-            let all: Vec<u16> = (1..).take(mode.channels.len()).collect();
-            assert_eq!(written, all, "{file} {}", mode.name);
+            let once = written.len();
+            written.dedup();
+            assert_eq!(written.len(), once, "{file} {}", mode.name);
+            let rests: Vec<u32> = rigged.configured.iter().map(|c| c.at).collect();
+            let all: Vec<u32> = (0..).take(mode.channels.len()).collect();
+            assert_eq!(rests, all, "{file} {}", mode.name);
         }
     }
 }
@@ -374,13 +380,98 @@ fn a_channel_two_heads_name_is_the_fixtures_own() {
         )
         .unwrap();
         assert_eq!(rigged.lights, 3, "{kind}: the fixture, then each head");
-        assert_eq!(
-            rigged.writers.iter().map(say).collect::<Vec<_>>(),
-            writers,
-            "{kind}"
-        );
+        assert_eq!(said(&rigged), writers, "{kind}");
         let mut out = [Levels::ZERO];
-        resolve(&[FULL, RED, Light::DARK], &rigged.writers, &mut out);
+        common::shown(&[FULL, RED, Light::DARK], &rigged, &mut out);
         assert_eq!(out[0].0[36..39], bytes, "{kind}");
     }
+}
+
+/// A fine joins its coarse only where the file pairs them (#249). Showtec 41377 manual:
+/// DMX 1/4 Pan #1, 2/5 Tilt, 3/6 Pan #2; the definition does not say which pan fine is
+/// whose, so both stay single bytes at rest and each pan moves in 8-bit steps.
+#[test]
+fn a_fine_joins_its_coarse_only_where_the_file_pairs_them() {
+    let rigged = compile(
+        &mode("Showtec-Acrobat.qxf", "16 Channel"),
+        at(1),
+        light(0),
+        Universes::ONE,
+        lights(),
+    )
+    .unwrap();
+    let expected = [
+        "1 light 0: pan",
+        "2+5 light 0: tilt",
+        "3 light 0: pan",
+        "4 = 0",
+        "6 = 0",
+    ];
+    assert_eq!(said(&rigged)[..5], expected);
+}
+
+/// A dimmerless CMY colour changer: subtractive colour, nothing carries it.
+const CMY: &str = r#"<?xml version="1.0"?>
+<FixtureDefinition xmlns="http://www.qlcplus.org/FixtureDefinition">
+ <Manufacturer>Test</Manufacturer><Model>CMY</Model><Type>Color Changer</Type>
+ <Channel Name="Cyan" Preset="IntensityCyan"/>
+ <Channel Name="Magenta" Preset="IntensityMagenta"/>
+ <Channel Name="Yellow" Preset="IntensityYellow"/>
+ <Mode Name="CMY">
+  <Channel Number="0">Cyan</Channel>
+  <Channel Number="1">Magenta</Channel>
+  <Channel Number="2">Yellow</Channel>
+ </Mode>
+</FixtureDefinition>"#;
+
+/// Where Blackout takes a channel while every channel still follows it (#251 narrows
+/// that): the dark its file gives where the file has it follow Blackout, else 0
+/// (docs/design/channel-model.md, Rules).
+#[test]
+fn a_channel_goes_to_its_files_dark_only_where_the_file_has_it_follow_blackout() {
+    let cmy = fixture_library::parse("cmy.qxf", CMY.as_bytes())
+        .unwrap()
+        .modes[0]
+        .clone();
+    // (case, mode, channel counted from 1, dark)
+    let cases = [
+        (
+            "a shutter, Closed at 3 to 5",
+            mode("Vari-Lite-VL2202-Spot.qxf", "Standard 8bit"),
+            8,
+            3,
+        ),
+        ("cyan without a dimmer: subtractive", cmy, 1, 255),
+        (
+            "cyan its dimmer carries: no follow",
+            mode("Ayrton-Mistral.qxf", "Standard"),
+            16,
+            0,
+        ),
+        ("a dimmer", mode("Ayrton-Mistral.qxf", "Standard"), 7, 0),
+    ];
+    for (case, mode, channel, dark) in cases {
+        let rigged = compile(&mode, at(1), light(0), Universes::ONE, lights()).unwrap();
+        let configured = rigged.configured.iter().find(|c| c.at + 1 == channel);
+        assert_eq!(configured.map(|c| c.dark), Some(dark), "{case}");
+    }
+}
+
+/// Both bytes of a pair carry the pair flag. Martin Rush MH6 Wash, Standard: 1 strobe,
+/// 2 dimmer, 3 dimmer fine; a dimmer fades, a strobe jumps
+/// (docs/design/channel-model.md, "Bit of flags").
+#[test]
+fn both_bytes_of_a_pair_are_flagged() {
+    use engine_core::Flags;
+    let rigged = compile(
+        &mode("Martin-Rush-MH6-Wash.qxf", "Standard"),
+        at(1),
+        light(0),
+        Universes::ONE,
+        lights(),
+    )
+    .unwrap();
+    let pair = Flags::FADE.with(Flags::PAIR);
+    let flags: Vec<Flags> = rigged.configured[..3].iter().map(|c| c.flags).collect();
+    assert_eq!(flags, [Flags::NONE, pair, pair]);
 }

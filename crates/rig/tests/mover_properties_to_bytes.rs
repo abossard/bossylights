@@ -161,7 +161,7 @@ fn each_property_goes_to_its_channels() {
     ];
     for (mode, light, bytes) in cases {
         let mut out = [Levels::ZERO];
-        resolve(&[light], &rigged(mode).writers, &mut out);
+        common::shown(&[light], &rigged(mode), &mut out);
         for &(channel, byte) in bytes {
             assert_eq!(
                 out[0].0.get(channel - 1),
@@ -371,7 +371,7 @@ fn a_hybrid_binds_its_companions_to_neutral_or_is_refused() {
                 ..Light::DARK
             };
             let mut out = [Levels::ZERO];
-            resolve(&[light], &rigged.writers, &mut out);
+            common::shown(&[light], &rigged, &mut out);
             [out[0].0[0], out[0].0[1]]
         });
         assert_eq!(found, expected, "{names:?} {colour:?}");
@@ -433,7 +433,7 @@ fn a_hybrid_macro_at_0_is_neutral_by_its_label() {
                 ..Light::DARK
             };
             let mut out = [Levels::ZERO];
-            resolve(&[red], &rigged.writers, &mut out);
+            common::shown(&[red], &rigged, &mut out);
             [out[0].0[0], out[0].0[1]]
         });
         assert_eq!(found, expected, "{label}");
@@ -641,7 +641,7 @@ fn each_hybrid_holds_its_wheel_where_the_mix_goes_through() {
             }
             let held = compile(mode, at(1), light(0), Universes::ONE, lights()).map(|rigged| {
                 let mut out = [Levels::ZERO];
-                resolve(&[red], &rigged.writers, &mut out);
+                common::shown(&[red], &rigged, &mut out);
                 out[0]
             });
             for (index, channel) in channels.iter().enumerate().filter(|(_, c)| is_wheel(c)) {

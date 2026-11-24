@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::{fixture, lights, say};
+use common::{fixture, lights, said};
 use engine_core::{
     ChannelNumbers, Color, LightNumber, Lights, PatchCommand, Pixels, Refusal, Text, Universes,
     Writer,
@@ -38,7 +38,7 @@ fn strip(pixels: u16, color: Color, universe: u16, address: u16) -> PatchCommand
     }
 }
 
-/// The light of each writer in order, `-` for a fixed one: `0 1 1 1 -`.
+/// The light of each writer in order, `-` for a wheel's slot: `0 1 1 1 -`.
 fn owners(writers: &[Writer]) -> String {
     writers
         .iter()
@@ -70,7 +70,7 @@ fn a_fixture_with_heads_is_one_light_per_head_in_the_order_of_the_definition() {
             "X-240Bar RGB, 26 Channel",
             9,
             Some((8, 1)),
-            "0 1 1 1 2 2 2 3 3 3 4 4 4 5 5 5 6 6 6 7 7 7 8 8 8 -",
+            "0 1 1 1 2 2 2 3 3 3 4 4 4 5 5 5 6 6 6 7 7 7 8 8 8",
         ),
         (
             // the third head lists its channels 8 9 7, the fourth 12 10 11: each head is
@@ -80,7 +80,7 @@ fn a_fixture_with_heads_is_one_light_per_head_in_the_order_of_the_definition() {
             "X-240Bar RGB, 14 Channel",
             5,
             None,
-            "0 1 1 1 2 2 2 3 3 3 4 4 4 -",
+            "0 1 1 1 2 2 2 3 3 3 4 4 4",
         ),
         (par, "Generic RGB, RGB", 1, None, "0 0 0"),
         (
@@ -162,7 +162,7 @@ fn a_strip_is_written_like_a_par_without_a_dimmer() {
             lights(),
         )
         .unwrap();
-        let said: Vec<String> = rigged.writers.iter().map(say).collect();
+        let said: Vec<String> = said(&rigged);
         assert_eq!(said, expected, "{color:?}");
     }
 }

@@ -23,7 +23,7 @@
 //! A value of 16 bits goes out as one byte (its high byte) or as a coarse and a fine
 //! byte. So an 8-bit channel always shows the coarse byte of the same value.
 
-use crate::channel::{Channel, ChannelSet, Levels, MAX_UNIVERSES};
+use crate::channel::{Channel, ChannelSet, Levels, MAX_UNIVERSES, SourceTag};
 use crate::mix::{Want, mix};
 use crate::{Gobo, Light, LightNumber, MAX_LIGHTS, Rgb};
 use serde::Serialize;
@@ -258,16 +258,46 @@ pub fn resolve(lights: &[Light], writers: &[Writer], out: &mut [Levels]) {
         lights,
         writers,
         out,
-        &mut [ChannelSet::NONE; MAX_UNIVERSES as usize],
+        &mut [ChannelSet::NONE; MAX_UNIVERSES as usize][..],
     );
 }
 
+/// Which channels a light wrote: a set per universe, or the frame's source tags.
+pub(crate) trait Lit {
+    fn lit(&self, at: Channel) -> bool;
+    fn light(&mut self, at: Channel, lit: bool);
+}
+
+impl Lit for [ChannelSet] {
+    fn lit(&self, at: Channel) -> bool {
+        at.marked(self)
+    }
+
+    fn light(&mut self, at: Channel, lit: bool) {
+        at.mark(self, lit);
+    }
+}
+
+impl Lit for [SourceTag] {
+    fn lit(&self, at: Channel) -> bool {
+        self.get(at.index()) == Some(&SourceTag::LIGHTS)
+    }
+
+    /// A default never takes a channel from a light ([`mix`]), so an unlit channel is
+    /// still at rest: only a light's write is tagged.
+    fn light(&mut self, at: Channel, lit: bool) {
+        if lit && let Some(source) = self.get_mut(at.index()) {
+            *source = SourceTag::LIGHTS;
+        }
+    }
+}
+
 /// [`resolve`], and the channels a light wrote go into `lit`.
-pub(crate) fn write(
+pub(crate) fn write<L: Lit + ?Sized>(
     lights: &[Light],
     writers: &[Writer],
     out: &mut [Levels],
-    lit: &mut [ChannelSet],
+    lit: &mut L,
 ) {
     for (index, writer) in writers.iter().enumerate() {
         match *writer {
@@ -318,8 +348,8 @@ pub(crate) fn write(
 }
 
 /// `want` against what `at` has: `mix` decides.
-fn put(at: Channel, want: Want, out: &mut [Levels], lit: &mut [ChannelSet]) {
-    let was_lit = at.marked(lit);
+fn put<L: Lit + ?Sized>(at: Channel, want: Want, out: &mut [Levels], lit: &mut L) {
+    let was_lit = lit.lit(at);
     if let Some(level) = at.level(out) {
         let had = if was_lit {
             Want::Light(*level)
@@ -328,7 +358,7 @@ fn put(at: Channel, want: Want, out: &mut [Levels], lit: &mut [ChannelSet]) {
         };
         let won = mix(had, want);
         *level = won.level();
-        at.mark(lit, matches!(won, Want::Light(_)));
+        lit.light(at, matches!(won, Want::Light(_)));
     }
 }
 

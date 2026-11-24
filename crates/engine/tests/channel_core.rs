@@ -5,7 +5,9 @@
 
 mod mock;
 
-use engine::{ChannelNumbers, Command, Engine, Rate, RunNumbers, Sender, Universes, Wakes};
+use engine::{
+    Begun, ChannelNumbers, Command, Engine, Rate, RunNumbers, Sender, Text, Universes, Wakes,
+};
 use mock::Heard;
 use std::sync::Arc;
 
@@ -130,6 +132,45 @@ fn a_raw_hold_and_blackout_are_in_the_frame_after_the_cutoff() {
         let mut desk = Desk::new(rate);
         for (step, commands, sent, frame) in &steps {
             assert_eq!(desk.wake(commands, *sent), *frame, "{rate:?}: {step}");
+        }
+    }
+}
+
+/// A Vari-Lite VL2202 Spot: its strobe channel (8 in mode Standard 8bit) is Open at 0 to 2
+/// and Closed at 3 to 5.
+const VL2202: &[u8] = include_bytes!("../../rig/tests/definitions/Vari-Lite-VL2202-Spot.qxf");
+
+#[test]
+fn blackout_sends_each_channel_to_the_dark_its_fixture_file_gives() {
+    // (step, commands, intensity at 1 and the shutter at 8 in that wake's frame).
+    // Expected from the file: the shutter rests at its first Open byte, 0; its dark is the
+    // first byte of its Closed range, 3 (docs/design/channel-model.md, Rules).
+    let blackout = |on| vec![Command::Blackout { on }];
+    let steps = [
+        ("nothing plays: the shutter rests open", vec![], (0, 0)),
+        ("blackout closes the shutter", blackout(true), (0, 3)),
+        ("blackout off: open again", blackout(false), (0, 0)),
+    ];
+    let library = [fixture_library::parse("Vari-Lite-VL2202-Spot.qxf", VL2202).unwrap()];
+    let text = |text| Text::new(text).unwrap();
+    for rate in [Rate::FortyFour, Rate::Sixty] {
+        let mut desk = Desk::new(rate);
+        let patch = Command::Patch {
+            name: text("Spot"),
+            maker: text("Vari-Lite"),
+            model: text("VL2202 Spot"),
+            mode: text("Standard 8bit"),
+            at: FIRST,
+        };
+        let begun = desk.sender.begin(patch, &library);
+        assert!(
+            matches!(begun, Ok(Begun::Patched { fixture: 1 })),
+            "{rate:?}"
+        );
+        for (step, commands, (intensity, shutter)) in &steps {
+            desk.wake(commands, Sent::Before);
+            let frame = (desk.heard.level(1, 1), desk.heard.level(1, 8));
+            assert_eq!(frame, (*intensity, *shutter), "{rate:?}: {step}");
         }
     }
 }

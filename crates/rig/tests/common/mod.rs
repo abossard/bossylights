@@ -3,11 +3,11 @@
 #![allow(dead_code, reason = "each test file uses its own part")]
 
 use engine_core::{
-    Channel, ChannelNumbers, Color, Less, LightNumber, Lights, MAX_LIGHTS, OutputKind, Part, Place,
-    Scale, Sense, Take, Travel, Universes, Writer,
+    Channel, ChannelNumbers, Color, Less, Levels, Light, LightNumber, Lights, MAX_LIGHTS,
+    OutputKind, Part, Place, Scale, Sense, Take, Travel, Universes, Writer, resolve,
 };
 use fixture_library::{Fixture, Mode, parse};
-use rig::Whole;
+use rig::{Rigged, Whole};
 use std::num::NonZeroU16;
 use std::path::PathBuf;
 
@@ -92,6 +92,57 @@ pub fn address(channel: Channel) -> u16 {
     (1..=512)
         .find(|&a| at(a).check(Universes::ONE) == Ok(channel))
         .expect("a channel of universe 1")
+}
+
+/// A compiled mode of universe 1 in words, in channel order: each writer by [`say`], and
+/// `37 = 8` for a channel no writer writes, which shows its rest.
+pub fn said(rigged: &Rigged) -> Vec<String> {
+    let mut lines: Vec<(u16, String)> = Vec::new();
+    let mut written = Vec::new();
+    let mut last = 0;
+    for writer in &rigged.writers {
+        let at = match *writer {
+            Writer::Takes {
+                at: Place::Byte(at),
+                ..
+            }
+            | Writer::Picks { at, .. }
+            | Writer::Fixed { at, .. } => {
+                written.push(address(at));
+                address(at)
+            }
+            Writer::Takes {
+                at: Place::Pair { coarse, fine },
+                ..
+            } => {
+                written.extend([address(coarse), address(fine)]);
+                address(coarse)
+            }
+            Writer::ColourSlot { .. } | Writer::GoboSlot { .. } => last,
+        };
+        last = at;
+        lines.push((at, say(writer)));
+    }
+    for configured in &rigged.configured {
+        let at = u16::try_from(configured.at % 512 + 1).unwrap();
+        if !written.contains(&at) {
+            lines.push((at, format!("{at} = {}", configured.rest)));
+        }
+    }
+    lines.sort_by_key(|(at, _)| *at);
+    lines.into_iter().map(|(_, line)| line).collect()
+}
+
+/// What `rigged` sends for `lights` into `out`, as a frame makes it: each channel of the
+/// mode at its rest, then what the writers write.
+pub fn shown(lights: &[Light], rigged: &Rigged, out: &mut [Levels]) {
+    for configured in &rigged.configured {
+        let at = configured.at as usize;
+        if let Some(row) = out.get_mut(at / 512) {
+            row.0[at % 512] = configured.rest;
+        }
+    }
+    resolve(lights, &rigged.writers, out);
 }
 
 /// A writer in words: `37 = 8`, `38 light 0: intensity`, `38+39 light 0: red - shared`,

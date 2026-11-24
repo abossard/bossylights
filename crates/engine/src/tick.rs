@@ -733,6 +733,8 @@ impl Ticker {
             }
             Brings::Writers(writers) => {
                 let old = std::mem::replace(&mut self.writers, writers);
+                self.channels
+                    .configure(old.configured(), self.writers.configured());
                 let _ = self.retired.push(Retired::Writers(old));
                 return;
             }

@@ -539,3 +539,37 @@ fn patches_never_overlap() {
         assert_eq!(updated, expected, "{name}");
     }
 }
+
+/// The prepared plan carries every patched channel as its file says, and its frame shows
+/// each at its rest. Ayrton Mistral, Standard: channel 6 is Shutter / Strobe, closed at 0
+/// to 10 and open at 11 to 20, so it rests open at 11.
+#[test]
+fn a_prepared_patch_frames_each_channel_at_its_files_rest() {
+    use engine_core::{ChannelSet, Channels, Levels, Priority, State};
+    let mistral = vec![fixture("Ayrton-Mistral.qxf")];
+    let empty = Patch::new(Universes::ONE, Lights::new(16).unwrap(), common::whole());
+    let (patched, _) = empty
+        .update(
+            PatchCommand::Patch {
+                name: text("Spot"),
+                maker: text("Ayrton"),
+                model: text("Mistral"),
+                mode: text("Standard"),
+                at: at(1, 1),
+            },
+            &mistral,
+        )
+        .unwrap();
+    let plan = patched.unwrap().prepare();
+    let mut channels = Box::new(Channels::NEW);
+    channels.configure(&[], plan.configured());
+    let state = State::new(Priority::RealTime);
+    plan.frame(
+        &state,
+        &[Levels::ZERO],
+        &[ChannelSet::NONE],
+        &[],
+        &mut channels,
+    );
+    assert_eq!(channels.values()[0].0[5], 11);
+}

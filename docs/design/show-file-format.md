@@ -1,10 +1,12 @@
-# The show file, v7
+# The show file, version 8
+
+Today the engine reads and writes version 7 (#250): the version 6 layout, with each channel's `declared` so a reopened show lowers like the saved one. This page designs the next number, version 8 (#253). Older numbers are `LeftAlone`.
 
 Issue #199 (fourth revision), parent #198. Built by #253 (T7). Every field traces to [channel-model.md](channel-model.md), section "Show file v7". The file is written by hand or by the app (D14): our own format, not QLC+.
 
 ```mermaid
 flowchart LR
-  F[("show file v7<br/>text JSON")] --> R["read<br/>strict, 64 MiB cap"] --> C["check<br/>same checks as a new edit"] --> D["derive<br/>channel config, pairs,<br/>compounds, followers, plans"] --> S["swap in once"]
+  F[("show file v8<br/>text JSON")] --> R["read<br/>strict, 64 MiB cap"] --> C["check<br/>same checks as a new edit"] --> D["derive<br/>channel config, pairs,<br/>compounds, followers, plans"] --> S["swap in once"]
   D -. "never stored" .-> F
 ```
 
@@ -12,7 +14,7 @@ flowchart LR
 
 | Key | Holds | Left out means | From |
 |---|---|---|---|
-| `show` | the number `7` | not read (`LeftAlone`) | Show file v7 |
+| `show` | the number `8` | not read (`LeftAlone`) | Show file v7 |
 | `outputs` | kind, rate, route spans | no outputs | Adapters |
 | `modes` | each pinned mode once, by key | no modes | Show file v7 |
 | `fixtures` | id, name, mode or strip, position | no fixtures | API v12 `Patch`, `PatchStrip` |
@@ -29,11 +31,11 @@ flowchart LR
 
 ## The example show
 
-The test of #199 opens this block with the v7 reader and checks the bytes it names.
+The test of #199 opens this block with the version 8 reader and checks the bytes it names.
 
 ```json
 {
-  "show": 7,
+  "show": 8,
   "outputs": [
     { "id": 1, "kind": { "DmxUsbPro": { "adapter": 1 } }, "rate": 44,
       "route": [ { "universe": 1, "address": 1, "count": 512 } ] },
@@ -161,7 +163,7 @@ The test of #199 opens this block with the v7 reader and checks the bytes it nam
 | `mode` | the fixture-library `Mode`: `name`, `channels`, `pixels`, `layout`, `degrees`. Each channel with `name`, `function`, `byte`, `default`, `direction`, `ranges` **and `declared`** |
 
 - Pinned: a show opens without the library and lowers the same way every time.
-- `declared` is stored in v7: the lowering reads only it for a channel's role and fine partner (#249). Without it every channel would be `Other` and no pair would form. v6 does not write it; v7 must.
+- `declared` is stored since version 7 (#250): the lowering reads only it for a channel's role and fine partner (#249). Without it every channel would be `Other` and no pair would form.
 - A mode no fixture uses is not written.
 
 ### `fixtures`
@@ -281,8 +283,8 @@ The test of #199 opens this block with the v7 reader and checks the bytes it nam
 
 | File | Result |
 |---|---|
-| has `version` (v1 to v6) | `LeftAlone`: "an older show file". Bytes kept, autosave to it suppressed |
-| `show` above 7 | `LeftAlone`: "a newer show file" |
+| has `version` (1 to 7) | `LeftAlone`: "an older show file". Bytes kept, autosave to it suppressed |
+| `show` above 8 | `LeftAlone`: "a newer show file" |
 | over 64 MiB, or would encode over it | `LeftAlone`: "too big" |
 | unknown key, bad value, a check refused | not opened. The reason and where; the running show keeps running |
 

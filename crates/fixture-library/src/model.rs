@@ -147,9 +147,9 @@ pub enum LeftOut {
 pub struct Channel {
     pub name: String,
     pub function: Function,
-    /// QXF declarations live only in memory. A v6 channel has none, starts with
-    /// role `Other("")` and stays a single byte.
-    #[serde(skip)]
+    /// The QXF declarations, kept in a show file so a show lowers the same without the
+    /// library. Left out of the file when it declares nothing.
+    #[serde(default, skip_serializing_if = "Declared::is_empty")]
     pub declared: Declared,
     /// The high byte, or the second byte of a 16-bit value.
     pub byte: Byte,
@@ -175,21 +175,34 @@ impl Channel {
 }
 
 /// The channel's QLC+ declarations and how its fixture and heads use a dimmer.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Declared {
     /// The preset as written, including its `Fine` suffix.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preset: Option<String>,
     /// The text of the `<Group>` child.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group: Option<String>,
     /// The emitter or subtractive colour named by the `<Colour>` child.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub colour: Option<Function>,
     /// The mode's `ActsOn`: the channel number (counted from 0) this channel acts on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub acts_on: Option<u16>,
+    #[serde(default, skip_serializing_if = "Dimming::is_preset")]
     pub(crate) dimming: Dimming,
 }
 
+impl Declared {
+    /// Nothing declared: what a file leaves out.
+    fn is_empty(&self) -> bool {
+        self == &Self::default()
+    }
+}
+
 /// Which declarations identify a light dimmer at this channel.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) enum Dimming {
     /// A dimmer preset controls light.
     #[default]
@@ -199,6 +212,12 @@ pub(crate) enum Dimming {
     /// A Smoke or Hazer channel with steps, or without an emitter in its head
     /// (in its mode when headless). A dimmer preset here controls fog.
     Fog,
+}
+
+impl Dimming {
+    fn is_preset(&self) -> bool {
+        *self == Self::Preset
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

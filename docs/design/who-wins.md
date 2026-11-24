@@ -44,7 +44,7 @@ flowchart LR
 | Modifier slot | Level | Who follows | Today |
 |---|---|---|---|
 | 0 Master | a command, default 255 | dimmers, and emitters no dimmer carries (from the fixture file) | no command, always full (#251) |
-| 1 Blackout | 0 while on, 255 while off | as Master, plus a shutter with a Closed range | built, every channel follows (rules from the file: #251) |
+| 1 Blackout | 0 while on, 255 while off | as Master, plus a shutter with a Closed range | built, every channel follows (rules from the file: #251); a channel the file has follow it goes to the file's dark (#250) |
 | 2 to 7 virtual dimmers | the value of a control channel | the channels the user picks in Patch. None by default | none yet (#251) |
 
 A source may offer nothing at a moment (a gap). Then the next one down shows through.
@@ -102,9 +102,9 @@ Decided with the owner on 2026-11-19 (decision 48). Nothing decides between two 
 | Who wins | per property of each light, before the Rig (`engine-core/src/mix.rs`) | per channel (#250) |
 | Highest | a brightness setting per light property | a flag per channel, set on every dimmer (#250) |
 | Writing channels | per-light writers through `resolve`, as source `2` | offers per channel (#250) |
-| Rest | 0, plus the writer's default (an open shutter) | the file's default per channel (#251) |
+| Rest | the file's rest per channel, from the lowering (#250): an open shutter, a wheel's bypass, the default; 0 where nothing is patched | overrides in Patch (#251) |
 | One pass per channel: raw hold, Blackout (#247) | built | |
-| Blackout | every channel follows | followers from the file (#251) |
+| Blackout | every channel follows; to the file's dark where the file has it follow (a shutter closes, CMY on a fixture without a dimmer goes to 255), else 0 | followers from the file (#251) |
 | Master, virtual dimmers | none | #251 |
 | Grabs and kept offers when a light moves | per light | per channel (#250, #251) |
 | Identify | none | #254 |

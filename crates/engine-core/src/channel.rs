@@ -98,10 +98,30 @@ impl Flags {
     /// Jumps, latest wins, no pair.
     pub const NONE: Self = Self(0);
     pub const FADE: Self = Self(1);
+    pub const HIGHEST: Self = Self(1 << 1);
+    pub const PAIR: Self = Self(1 << 2);
+
+    /// These flags and `other`'s.
+    #[must_use]
+    pub const fn with(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
 
     pub(crate) const fn fades(self) -> bool {
         self.0 & Self::FADE.0 != 0
     }
+}
+
+/// One patched channel as its fixture's file says (the Rig's lowering): what shows when
+/// nothing plays, where a modifier at 0 takes it, how it moves. Every channel nobody
+/// patched rests at 0, dark 0, jumping.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Configured {
+    /// The channel, counted from 0 over the whole space.
+    pub at: u32,
+    pub rest: u8,
+    pub dark: u8,
+    pub flags: Flags,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -150,6 +170,10 @@ fn scale(value: u8, dark: u8, flags: Flags, scale: Scale) -> u8 {
 /// Every channel of the space, 8 bytes each, as a struct of arrays: a pass touches only
 /// the arrays it needs. Made once, before the tick starts; the frame writes `value` and
 /// `source`, the patch the others (owner decision q1, `docs/design/channel-model.md`).
+///
+/// A frame visits only the patched channels and the raw holds, so its work follows the
+/// rig, not the size of the space: a channel nobody patched or holds stays at its rest, 0,
+/// which is also its dark.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Channels {
     /// The byte that goes out. Kept as rows of a universe while outputs take rows.
@@ -163,6 +187,17 @@ pub struct Channels {
     pub(crate) source: [SourceTag; CHANNELS],
     /// Zero: room for the next rule.
     reserved: [u8; CHANNELS],
+    /// The channels a raw hold set in the last frame: the next frame starts them at rest.
+    raw: Raw,
+}
+
+/// The raw holds of the last frame, and whether there was one at all: most frames have
+/// none, and then the reset and the modifiers walk no universe for them. Applying the
+/// holds still looks at each universe's set once.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Raw {
+    sets: [ChannelSet; MAX_UNIVERSES as usize],
+    any: bool,
 }
 
 impl Channels {
@@ -175,6 +210,10 @@ impl Channels {
         follows: [Follows::BLACKOUT; CHANNELS],
         source: [SourceTag::REST; CHANNELS],
         reserved: [0; CHANNELS],
+        raw: Raw {
+            sets: [ChannelSet::NONE; MAX_UNIVERSES as usize],
+            any: false,
+        },
     };
 
     /// The bytes that go out, universe by universe.
@@ -190,50 +229,89 @@ impl Channels {
             .unwrap_or(SourceTag::REST)
     }
 
+    /// The patch's channels: those of `old` go back to rest 0, dark 0, jumping, and show 0;
+    /// then each of `new` takes its rest, dark and flags. Every channel still follows
+    /// Blackout (rules per channel: #251). Called when the patch changes, not each frame.
+    pub fn configure(&mut self, old: &[Configured], new: &[Configured]) {
+        for at in old.iter().filter_map(|c| usize::try_from(c.at).ok()) {
+            self.set(at, 0, 0, Flags::NONE);
+            if let Some(value) = byte(&mut self.value, at) {
+                *value = 0;
+            }
+            if let Some(source) = self.source.get_mut(at) {
+                *source = SourceTag::REST;
+            }
+        }
+        for c in new {
+            if let Ok(at) = usize::try_from(c.at) {
+                self.set(at, c.rest, c.dark, c.flags);
+            }
+        }
+    }
+
+    fn set(&mut self, at: usize, rest: u8, dark: u8, flags: Flags) {
+        if let (Some(r), Some(d), Some(f)) = (
+            self.rest.get_mut(at),
+            self.dark.get_mut(at),
+            self.flags.get_mut(at),
+        ) {
+            (*r, *d, *f) = (rest, dark, flags);
+        }
+    }
+
+    /// One frame over the `patched` channels (the list the patch configured, which the
+    /// writers write) and the raw holds: back to rest, `write` (which tags what a light
+    /// wrote), then the winners.
     pub(crate) fn render(
         &mut self,
+        patched: &[Configured],
         raw: &[Levels],
         holds: &[ChannelSet],
         levels: [u8; MODIFIERS],
-        write: impl FnOnce(&mut [Levels], &mut [ChannelSet]),
+        write: impl FnOnce(&mut [Levels], &mut [SourceTag]),
     ) {
-        let mut lit = [ChannelSet::NONE; MAX_UNIVERSES as usize];
-        self.reset_frame();
-        write(&mut self.value, &mut lit);
-        self.apply_winners(&lit, raw, holds, levels);
+        self.reset(patched);
+        write(&mut self.value, &mut self.source);
+        self.apply_winners(patched, raw, holds, levels);
     }
 
-    pub(crate) fn reset_frame(&mut self) {
-        for (row, rest) in self.value.iter_mut().zip(self.rest.chunks_exact(ADDRESSES)) {
-            row.0.copy_from_slice(rest);
+    /// Every patched channel, and every channel a raw hold set last frame, back to its
+    /// rest and nobody's. Every other channel is at rest already.
+    pub(crate) fn reset(&mut self, patched: &[Configured]) {
+        let held = held(&self.raw);
+        let ats = patched.iter().filter_map(|c| usize::try_from(c.at).ok());
+        for at in ats.chain(held) {
+            if let (Some(value), Some(rest), Some(source)) = (
+                byte(&mut self.value, at),
+                self.rest.get(at),
+                self.source.get_mut(at),
+            ) {
+                (*value, *source) = (*rest, SourceTag::REST);
+            }
         }
-        self.source.fill(SourceTag::REST);
     }
 
     pub(crate) fn apply_winners(
         &mut self,
-        lit: &[ChannelSet],
+        patched: &[Configured],
         raw: &[Levels],
         holds: &[ChannelSet],
         levels: [u8; MODIFIERS],
     ) {
+        // the raw holds, a universe that has one at a time; `reset` gave last frame's back
+        if self.raw.any {
+            self.raw.sets.fill(ChannelSet::NONE);
+            self.raw.any = false;
+        }
         let rows = self
             .value
             .iter_mut()
             .zip(self.source.chunks_exact_mut(ADDRESSES));
-        for (universe, (value, source)) in rows.enumerate() {
-            for address in lit
-                .get(universe)
-                .into_iter()
-                .flat_map(ChannelSet::addresses)
-            {
-                if let Some(source) = source.get_mut(address) {
-                    *source = SourceTag::LIGHTS;
-                }
-            }
-            let (Some(raw), Some(holds)) = (raw.get(universe), holds.get(universe)) else {
+        let held_rows = raw.iter().zip(holds).zip(self.raw.sets.iter_mut());
+        for ((value, source), ((raw, holds), last)) in rows.zip(held_rows) {
+            if *holds == ChannelSet::NONE {
                 continue;
-            };
+            }
             for address in holds.addresses() {
                 if let (Some(value), Some(source), Some(raw)) = (
                     value.0.get_mut(address),
@@ -244,23 +322,48 @@ impl Channels {
                     *source = SourceTag::RAW;
                 }
             }
+            *last = *holds;
+            self.raw.any = true;
         }
         if levels == [u8::MAX; MODIFIERS] {
             return;
         }
+        // each channel once: a held one in the second pass, the other patched in the first
         let by = scales(levels);
-        let bytes = self.value.iter_mut().flat_map(|row| row.0.iter_mut());
-        for (value, ((dark, flags), follows)) in bytes.zip(
-            self.dark
-                .iter()
-                .zip(self.flags.iter())
-                .zip(self.follows.iter()),
-        ) {
-            if let Some(by) = by.get(usize::from(follows.0)) {
+        let patched = patched
+            .iter()
+            .filter_map(|c| usize::try_from(c.at).ok())
+            .filter(|at| self.source.get(*at) != Some(&SourceTag::RAW));
+        for at in patched.chain(held(&self.raw)) {
+            if let (Some(value), Some(dark), Some(flags), Some(follows)) = (
+                byte(&mut self.value, at),
+                self.dark.get(at),
+                self.flags.get(at),
+                self.follows.get(at),
+            ) && let Some(by) = by.get(usize::from(follows.0))
+            {
                 *value = scale(*value, *dark, *flags, *by);
             }
         }
     }
+}
+
+/// The byte of channel `at` (counted from 0 over the space) in rows of a universe.
+fn byte(rows: &mut [Levels], at: usize) -> Option<&mut u8> {
+    rows.get_mut(at / ADDRESSES)?.0.get_mut(at % ADDRESSES)
+}
+
+/// The channels raw holds set in the last frame, counted from 0 over the space. None at
+/// all when there was none: no universe is walked.
+fn held(raw: &Raw) -> impl Iterator<Item = usize> + '_ {
+    let sets: &[ChannelSet] = if raw.any { &raw.sets } else { &[] };
+    (0..)
+        .zip(sets)
+        .filter(|(_, set)| **set != ChannelSet::NONE)
+        .flat_map(|(universe, set)| {
+            set.addresses()
+                .map(move |address| universe * ADDRESSES + address)
+        })
 }
 
 /// A channel as a client sends it, counted from 1. Not checked yet.
@@ -461,7 +564,7 @@ mod tests {
     #[test]
     fn a_channel_takes_8_bytes() {
         assert_eq!(CHANNELS, 32_768);
-        assert_eq!(size_of::<Channels>(), 8 * CHANNELS);
+        assert_eq!(size_of::<Channels>(), 8 * CHANNELS + size_of::<Raw>());
         // (array, bytes per channel)
         let one = Channels::NEW;
         let cases = [
@@ -476,6 +579,63 @@ mod tests {
         for (array, bytes) in cases {
             assert_eq!(bytes, CHANNELS, "{array}");
         }
+    }
+
+    #[test]
+    fn flags_are_the_bits_of_the_design() {
+        // docs/design/channel-model.md, "Bit of flags": 0 fade, 1 highest, 2 pair
+        // (case, flags, byte)
+        let cases = [
+            ("fade", Flags::FADE, 0b001),
+            ("highest", Flags::HIGHEST, 0b010),
+            ("pair", Flags::PAIR, 0b100),
+            ("fade and pair", Flags::FADE.with(Flags::PAIR), 0b101),
+            ("fade twice", Flags::FADE.with(Flags::FADE), 0b001),
+            ("none", Flags::NONE.with(Flags::NONE), 0),
+        ];
+        for (case, flags, byte) in cases {
+            assert_eq!(flags.0, byte, "{case}");
+        }
+    }
+
+    #[test]
+    fn a_patch_configures_its_channels_and_gives_the_old_ones_back() {
+        let one = |at, rest, dark, flags| Configured {
+            at,
+            rest,
+            dark,
+            flags,
+        };
+        let old = [one(0, 200, 3, Flags::NONE), one(1, 7, 0, Flags::FADE)];
+        let pair = Flags::FADE.with(Flags::PAIR);
+        let new = [one(1, 9, 255, pair), one(2, 4, 0, Flags::HIGHEST)];
+        let mut all = Box::new(Channels::NEW);
+        all.configure(&[], &old);
+        all.reset(&old);
+        assert_eq!(all.values()[0].0[..3], [200, 7, 0], "the old patch at rest");
+        all.configure(&old, &new);
+        // (channel, byte out before the next frame, rest, dark, flags)
+        let cases = [
+            (0, 0, 0, 0, Flags::NONE),
+            (1, 0, 9, 255, pair),
+            (2, 0, 4, 0, Flags::HIGHEST),
+            (3, 0, 0, 0, Flags::NONE),
+        ];
+        for (at, out, rest, dark, flags) in cases {
+            let seen = (
+                all.value[0].0[at],
+                all.rest[at],
+                all.dark[at],
+                all.flags[at],
+            );
+            assert_eq!(seen, (out, rest, dark, flags), "channel {at}");
+        }
+        all.reset(&new);
+        assert_eq!(
+            all.values()[0].0[..4],
+            [0, 9, 4, 0],
+            "the new patch at rest"
+        );
     }
 
     #[test]

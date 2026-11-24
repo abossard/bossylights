@@ -40,10 +40,10 @@ use core::fmt;
 use core::mem::size_of;
 use core::num::NonZeroU16;
 use engine_core::{
-    ChannelNumbers, ChannelSet, Channels, EngineCommand, Entry as BoundEntry, Grouped, Levels,
-    Light, LightChange, LightNumber, LightRun, Lights, Member, OutputKind, Part, PatchCommand,
-    Patched, Project, Property, Refusal, SavedLook, State, Step, Target, Universes, Value,
-    WaveTarget, Writer,
+    ChannelNumbers, ChannelSet, Channels, Configured, EngineCommand, Entry as BoundEntry, Grouped,
+    Levels, Light, LightChange, LightNumber, LightRun, Lights, Member, OutputKind, Part,
+    PatchCommand, Patched, Project, Property, Refusal, SavedLook, State, Step, Target, Universes,
+    Value, WaveTarget, Writer,
 };
 use fixture_library::{Fixture, Mode};
 
@@ -122,13 +122,16 @@ struct Entry {
     first: LightNumber,
     lights: u16,
     writers: Vec<Writer>,
+    /// Its channels as its file says.
+    configured: Vec<Configured>,
 }
 
-/// A prepared writer plan ready to cross to the tick thread. Its representation stays
-/// inside the Rig.
+/// A prepared writer plan ready to cross to the tick thread: the writers and every
+/// patched channel as its file says. Its representation stays inside the Rig.
 #[derive(Clone, Default, PartialEq, Eq)]
 pub struct WriterPlan {
     writers: Vec<Writer>,
+    configured: Vec<Configured>,
 }
 
 impl fmt::Debug for WriterPlan {
@@ -138,8 +141,16 @@ impl fmt::Debug for WriterPlan {
 }
 
 impl WriterPlan {
-    const fn from(writers: Vec<Writer>) -> Self {
-        Self { writers }
+    const fn from(writers: Vec<Writer>, configured: Vec<Configured>) -> Self {
+        Self {
+            writers,
+            configured,
+        }
+    }
+
+    /// Every patched channel as its file says, for [`engine_core::Channels::configure`].
+    pub fn configured(&self) -> &[Configured] {
+        &self.configured
     }
 
     /// Resolve the prepared writers into caller-owned universe levels.
@@ -156,7 +167,8 @@ impl WriterPlan {
         lights: &[Light],
         channels: &mut Channels,
     ) {
-        engine_core::frame(state, universes, holds, lights, &self.writers, channels);
+        let plan = (self.configured.as_slice(), self.writers.as_slice());
+        engine_core::frame(state, universes, holds, plan, lights, channels);
     }
 }
 
@@ -216,7 +228,7 @@ impl Patch {
             universes,
             lights,
             fixtures: Vec::new(),
-            plan: WriterPlan::from(Vec::new()),
+            plan: WriterPlan::from(Vec::new(), Vec::new()),
             groups: Vec::new(),
             limit: None,
             whole,
@@ -338,6 +350,7 @@ impl Patch {
                 let patch = self.changed(fixture, |entry| {
                     entry.at = at;
                     entry.writers = rigged.writers;
+                    entry.configured = rigged.configured;
                 });
                 let writers = PatchEffect::Writers(patch.prepare());
                 Ok((Some(patch), vec![writers]))
@@ -430,6 +443,7 @@ impl Patch {
                 first,
                 lights: rigged.lights,
                 writers: rigged.writers,
+                configured: rigged.configured,
             };
             if fixtures
                 .iter()
@@ -475,6 +489,7 @@ impl Patch {
             first,
             lights: rigged.lights,
             writers: rigged.writers,
+            configured: rigged.configured,
         };
         let mut fixtures = self.fixtures.clone();
         let place = fixtures.partition_point(|e| e.number < number);
@@ -759,6 +774,10 @@ impl Patch {
                 fixtures
                     .iter()
                     .flat_map(|e| e.writers.iter().copied())
+                    .collect(),
+                fixtures
+                    .iter()
+                    .flat_map(|e| e.configured.iter().copied())
                     .collect(),
             ),
             fixtures,

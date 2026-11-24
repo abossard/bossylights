@@ -136,7 +136,7 @@ Today the core still holds lights and per-light writers. They leave with the tic
 
 | Rule | State |
 |---|---|
-| Blackout at 0 gives `dark` exactly | built; today every channel follows it |
+| Blackout at 0 gives `dark` exactly | built; today every channel follows it. Rest, dark, fade and pair come from the fixture file (#250) |
 | Master scales: a dimmer at 70% under Master 50% sends 35% | designed (#251); today Master stays full |
 | A jump channel (wheel, shutter) is all or nothing, so it never passes through a strobe range | designed (#251) |
 | Which channels follow comes from the fixture file; unknown channels start independent | designed (#251) |

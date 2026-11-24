@@ -49,8 +49,8 @@ pub use api::{
     SavedLook, Sequence, SequenceItem, Speed, Step, Swatches, Use, WaveTarget, Width,
 };
 pub use channel::{
-    ADDRESSES, CHANNELS, Channel, ChannelLevel, ChannelNumbers, ChannelSet, Channels, Levels,
-    MAX_UNIVERSES, SourceTag, Universes, changes,
+    ADDRESSES, CHANNELS, Channel, ChannelLevel, ChannelNumbers, ChannelSet, Channels, Configured,
+    Flags, Levels, MAX_UNIVERSES, SourceTag, Universes, changes,
 };
 use channel::{BLACKOUT, MODIFIERS};
 pub use model_failure::{OpenFailure, Refusal};
@@ -824,22 +824,28 @@ impl State {
 }
 
 /// The bytes that go out now, written into `channels`, which the caller owns. Every
-/// channel starts at its rest; the resolver writes what the `writers` make of the
-/// `lights`; then one pass decides each channel: the raw channels held (`universes` at
-/// `holds`) replace their bytes, and every follower moves by its modifiers, Blackout
-/// among them. No level depends on time yet: the first that does takes the time as an
-/// argument.
+/// `patched` channel starts at its rest; the resolver writes what the `writers` make of
+/// the `lights`, on patched channels only; then one pass decides each channel: the raw
+/// channels held (`universes` at `holds`) replace their bytes, and every follower moves
+/// by its modifiers, Blackout among them. No level depends on time yet: the first that
+/// does takes the time as an argument.
 pub fn frame(
     state: &State,
     universes: &[Levels],
     holds: &[ChannelSet],
+    (patched, writers): (&[Configured], &[Writer]),
     lights: &[Light],
-    writers: &[Writer],
     channels: &mut Channels,
 ) {
-    channels.render(universes, holds, modifiers(state), |levels, lit| {
-        resolve::write(lights, writers, levels, lit);
-    });
+    channels.render(
+        patched,
+        universes,
+        holds,
+        modifiers(state),
+        |levels, source| {
+            resolve::write(lights, writers, levels, source);
+        },
+    );
 }
 
 /// The level of each modifier slot this frame: Master full until `SetMaster` comes,

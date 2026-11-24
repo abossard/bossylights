@@ -456,7 +456,7 @@ Rules for every ticket:
 | T9 | `engine-core/src/channel.rs`, `outputs/`, scorecard | T8 |
 
 - `engine/src/lib.rs` and `engine-core/src/{api,lib}.rs` are shared hot files: tickets that touch them run one at a time. Only T3 runs beside T1 and T2.
-- T4 is built by Codex astra ultra from the reviewers' red tests and verified by Opus. It lands as one commit. If it proves too big, the only safe split is by crate behind one mixer: never two mixers on the production path.
+- T4 lands in three commits behind one mixer (#250): L1 each patched channel takes its rest, dark, fade and pair from the lowering; L2 a light's value as channel offers, a calculation; L3 the per-channel mixer. Never two mixers on the production path.
 - Product UI tickets stay behind the storyboard catalog approval (#102). They start when T5, T6 and T7 have landed.
 
 ### Tests that change
