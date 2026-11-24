@@ -29,7 +29,7 @@
 //! output streams is one it sends. What an output sends is the outputs' to know
 //! (`crates/outputs`), so [`Whole`] brings it in.
 
-use crate::{ADDRESSES, Unfit, compile, flat, lights_of, strip, supports, unflat};
+use crate::{ADDRESSES, LightFields, Unfit, compile, flat, lights_of, strip, supports, unflat};
 use alloc::boxed::Box;
 use alloc::collections::BTreeSet;
 use alloc::string::{String, ToString};
@@ -124,6 +124,8 @@ struct Entry {
     writers: Vec<Writer>,
     /// Its channels as its file says.
     configured: Vec<Configured>,
+    /// One per light, in light order.
+    fields: Vec<LightFields>,
 }
 
 /// A prepared writer plan ready to cross to the tick thread: the writers and every
@@ -351,6 +353,7 @@ impl Patch {
                     entry.at = at;
                     entry.writers = rigged.writers;
                     entry.configured = rigged.configured;
+                    entry.fields = rigged.fields;
                 });
                 let writers = PatchEffect::Writers(patch.prepare());
                 Ok((Some(patch), vec![writers]))
@@ -444,6 +447,7 @@ impl Patch {
                 lights: rigged.lights,
                 writers: rigged.writers,
                 configured: rigged.configured,
+                fields: rigged.fields,
             };
             if fixtures
                 .iter()
@@ -460,6 +464,15 @@ impl Patch {
     /// The mode fixture `fixture` is patched in.
     pub fn mode(&self, fixture: u16) -> Option<&Mode> {
         self.entry(fixture).ok().map(|e| &e.mode)
+    }
+
+    /// The fields of `light` and what a value offers on them. `None` for a light no
+    /// fixture has.
+    pub fn fields(&self, light: LightNumber) -> Option<&LightFields> {
+        self.fixtures.iter().find_map(|e| {
+            let from = light.index().checked_sub(e.first.index())?;
+            e.fields.get(usize::from(from))
+        })
     }
 
     /// Adds `mode` at `at` under the lowest free number, on the first free lights.
@@ -490,6 +503,7 @@ impl Patch {
             lights: rigged.lights,
             writers: rigged.writers,
             configured: rigged.configured,
+            fields: rigged.fields,
         };
         let mut fixtures = self.fixtures.clone();
         let place = fixtures.partition_point(|e| e.number < number);

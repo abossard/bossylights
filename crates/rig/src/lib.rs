@@ -3,9 +3,13 @@
 //! the heap. The core runs the writers every frame (`engine_core::resolve`).
 //!
 //! ```text
-//! mode + address + first light --compile--> writers + how many lights | Unfit
+//! mode + address + first light --compile--> writers + how many lights + fields | Unfit
 //! patch + command + library --Patch::update--> new patch + effects | Refusal
 //! ```
+//!
+//! Each light's fields ([`LightFields`]) say what a value of it offers on each channel:
+//! the bytes its writers write, but a colour alone is not dimmed (cx-4). The tick does
+//! not use them until one mixer decides per channel (#250).
 //!
 //! A fixture is one or more lights. A mode without heads is one light. A mode with N
 //! heads (pixels) is one light per head in the order of the definition, after the fixture
@@ -46,9 +50,11 @@ extern crate alloc;
 
 mod capabilities;
 pub mod channels;
+mod fields;
 mod patch;
 
 pub use capabilities::{shows_one_gobo, supports};
+pub use fields::LightFields;
 pub use patch::{Limit, Patch, PatchEffect, Placed, Unplaced, WaveBinding, Whole, WriterPlan};
 
 use capabilities::Wheels;
@@ -56,6 +62,7 @@ use capabilities::Wheels;
 use alloc::format;
 use alloc::vec;
 use alloc::vec::Vec;
+use channels::Field;
 use engine_core::{
     ADDRESSES, Channel, ChannelNumbers, Color, Configured, Flags, Less, LightNumber, Lights, Part,
     Pixels, Place, Refusal, Scale, Sense, Take, Travel, Universes, Writer,
@@ -72,6 +79,8 @@ pub struct Rigged {
     pub lights: u16,
     /// Each channel of the mode as its file says ([`channels::lower`]), in channel order.
     pub configured: Vec<Configured>,
+    /// One per light, in light order: its fields and what a value offers on them.
+    pub fields: Vec<LightFields>,
 }
 
 /// Why a mode does not fit where it was put.
@@ -122,7 +131,16 @@ pub fn compile(
             channels.push((index, channel));
         }
     }
+    let field = |index: usize| {
+        let at = u32::try_from(first_channel + index).unwrap_or(u32::MAX);
+        lowered
+            .pairs
+            .iter()
+            .find(|pair| pair.coarse == at)
+            .map_or(Field::Byte(at), |&pair| Field::Word(pair))
+    };
     let mut writers: Vec<(usize, Writer)> = Vec::new();
+    let mut fields = Vec::with_capacity(needs);
     for (channels, number) in of_light.iter().zip(&numbers) {
         let has = Has::of(channels.iter().map(|(_, c)| *c));
         let wheels = Wheels::of(channels);
@@ -140,6 +158,12 @@ pub fn compile(
                 },
             )
             .collect::<Result<_, _>>()?;
+        fields.push(LightFields::of(
+            channels
+                .iter()
+                .zip(&bound)
+                .map(|(&(index, _), bound)| (field(index), bound.as_slice())),
+        ));
         writers.extend(
             channels
                 .iter()
@@ -170,6 +194,7 @@ pub fn compile(
         writers: writers.into_iter().map(|(_, writer)| writer).collect(),
         lights: u16::try_from(needs).unwrap_or(u16::MAX),
         configured: configured(&lowered),
+        fields,
     })
 }
 

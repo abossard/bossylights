@@ -153,7 +153,7 @@ For a channel with value `v`, dark `d`, following modifiers with levels `m1..mn`
 - **Owner (cm-master-scale-or-cap, cm-master-ceiling, 2026-11-21): Master scales, with the formula above** (like QLC+'s default and ONYX): a dimmer at 70% under Master 50% sends 35%. On a fixture with head dimmers and a shared dimmer, Master follows the head dimmers only and the shared dimmer keeps its value. On a fixture with no dimmer, Master scales the colour bytes, so the hue stays. T5 builds it. Sources: #251.
 - Master and the virtual dimmers apply to the winner and the raw hold. Identify is written after them and before Blackout, so a low Master never hides it, and Blackout always does. A raw hold on one byte of a pair under Master shows the assembled, scaled word. Explain gives both the held byte and the sent one.
 
-Default rules, from the fixture file (cx-3: unknown channels start independent):
+Default rules, from the fixture file (cx-3: unknown channels start independent). The table says what follows Master and Blackout, not where a v11 brightness goes:
 
 | Function of the channel | Master | Blackout | Dark |
 |---|---|---|---|
@@ -169,6 +169,7 @@ Default rules, from the fixture file (cx-3: unknown channels start independent):
 - Brightness on a dimmerless fixture is baked into the emitter bytes (cx-4) unless such a virtual dimmer exists.
 - Every default is only a default: Patch stores the changes as overrides (`rest`, `follows`, `dark`, `fade`, `highest`) per channel.
 - The Who wins row "highest wins for brightness" is a bulk edit of `highest` on every channel whose function is Dimmer. `SetMixRules` loses its brightness field in v12. Until T7 the v11 field stays on the wire and the front turns it into this bulk edit, so the flag on the channel is the only truth. A pair has one policy for both halves.
+- Where a v11 brightness goes is an interim rule until light values leave (#253): it is baked into the colour of every light without a dimmer channel of its own, a head beside a shared dimmer too (planner, 24 Nov). A colour with no brightness is not dimmed. The lasting rule for a bar with a shared dimmer (today a bar at 50% gives 25%) comes with the controls kit.
 - A v11 step that sets only brightness on a fixture without a dimmer compiles to **no offers** (there is no brightness channel to hold). A step with colour and brightness compiles to the colour scaled by the brightness. `Highest` has no effect on such fixtures: their colour is latest-wins, and `highest` needs a virtual dimmer, whose control channel can be `highest`. The `who_wins_on_the_wire` expectations on dimmerless pars are rewritten in T4.
 - A consequence of cx-4, stated for the owner: on a fixture without a dimmer a colour press at Manual also holds that fixture's brightness, because brightness is in the emitter bytes. "Red alert over the autopilot chase" holds the colour and the level together. A virtual dimmer for a group brings the split back.
 - More cases later (a haze kill, a group master) are more slots or a wider mask, never new code paths.
