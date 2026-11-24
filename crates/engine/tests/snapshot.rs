@@ -35,11 +35,11 @@ fn every_picture_is_one_wake_its_frame_outputs_and_levels_belong_together() {
             // Reads while the tick thread applies the commands, every picture checked.
             mock::wait_until("the command never reached a picture", || {
                 let picture = engine.latest();
-                if picture.state.outputs[0].is_none() {
+                if picture.output(output).is_none() {
                     return false;
                 }
                 let handed = picture.handed(output);
-                let frame = picture.state.frame;
+                let frame = picture.frame();
                 let before = *wakes_before.get_or_insert(frame - handed);
                 assert_eq!(frame - handed, before, "{rate:?}: frame {frame}");
                 let held = picture.universes()[0].0[0];
@@ -82,7 +82,7 @@ fn a_fresh_picture_carries_every_command_sent_before() {
         }
         let picture = engine.fresh().unwrap();
         assert_eq!(picture.universes()[0].0[0], held, "{commands:?}");
-        assert_eq!(picture.state.blackout, on, "{commands:?}");
+        assert_eq!(picture.blackout(), on, "{commands:?}");
     }
 }
 

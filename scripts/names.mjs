@@ -3,7 +3,7 @@
 
 /** Folders checked, and the files in them that may name protocols and devices. */
 export const CHECKED = ["crates/engine-core", "crates/engine"];
-export const KINDS = "crates/engine-core/src/kinds.rs"; // the list of kinds
+export const KINDS = "crates/engine-core/src/model/kinds.rs"; // the list of kinds
 export const ALLOWED = [
   KINDS,
   "crates/engine/clippy.toml", // the ban list names the std socket types it bans

@@ -92,14 +92,7 @@ fn releasing_a_full_budget_loop_leaves_room_for_the_next_manual_press() {
     };
     engine.latest();
     wakes.wake().unwrap();
-    assert!(
-        engine
-            .latest()
-            .state
-            .plays
-            .iter()
-            .any(|row| row.play == play)
-    );
+    assert!(engine.latest().active_plays().any(|row| row.play == play));
     mock::wait_until("the first Wave frame did not arrive", || {
         heard.frames() == 1
     });

@@ -10,7 +10,7 @@
 //! device fails: OutputLost --> device takes frames again: Recovered(OutputAvailable)
 //! ```
 
-mod common;
+use crate::wire_common as common;
 
 use common::{Heard, Socket, command, connect, send, serve};
 use engine::{Adapter, Device, Engine, Event, Open, Outcome, OutputKind, Universes, Wakes};

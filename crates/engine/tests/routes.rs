@@ -37,7 +37,13 @@ fn a_failed_first_open_leaves_the_output_free_for_a_retry() {
     };
     // A failed first open has no previous lane to resume. The retry sends one attach.
     for (answer, project, sent) in [
-        (Err(Refusal::CannotOpen { why: engine::OpenFailure::Device { with: None } }), None, 0),
+        (
+            Err(Refusal::CannotOpen {
+                why: engine::OpenFailure::Device { with: None },
+            }),
+            None,
+            0,
+        ),
         (Ok(()), Some(opened), 1),
     ] {
         assert_eq!(sender.send(set), answer.map_err(Unsent::Refused));
@@ -49,7 +55,15 @@ fn a_failed_first_open_leaves_the_output_free_for_a_retry() {
 #[test]
 fn an_attached_route_must_fit_whole_rgbw_pixels() {
     let output = OutputNumber::try_from(1).unwrap();
-    for (len, answer) in [(319, Err(Refusal::CannotOpen { why: engine::OpenFailure::Device { with: None } })), (320, Ok(()))] {
+    for (len, answer) in [
+        (
+            319,
+            Err(Refusal::CannotOpen {
+                why: engine::OpenFailure::Device { with: None },
+            }),
+        ),
+        (320, Ok(())),
+    ] {
         let (receiver, kind) = stream::receiver(Color::Rgbw);
         let (_engine, mut sender) = Engine::start(Universes::ONE).unwrap();
         let route = Route::new(outputs::Limits::RAW, &[Span { start: 0, len }]).unwrap();
@@ -129,10 +143,14 @@ fn a_grab_update_can_fill_the_last_place_left_by_an_output_resize() {
     sender.finish(opened).unwrap();
     let snapshot = engine.fresh().unwrap();
     assert_eq!(snapshot.applied(), sender.sent());
-    assert_eq!(snapshot.lights()[0].intensity, Some(1234));
     assert_eq!(
-        snapshot.state.outputs[output.slot()]
-            .unwrap()
+        snapshot.light(1).and_then(|light| light.intensity),
+        Some(1234)
+    );
+    assert_eq!(
+        snapshot
+            .output(output)
+            .expect("output is attached")
             .universes
             .count(),
         2

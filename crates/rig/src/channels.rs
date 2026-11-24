@@ -494,6 +494,18 @@ impl<'a> PairChannel<'a> {
         }
     }
 
+    fn of_mode(mode: &'a Mode) -> Vec<Self> {
+        let mut channels: Vec<_> = mode.channels.iter().map(Self::new).collect();
+        for (head, numbers) in mode.pixels.iter().enumerate() {
+            for &number in numbers {
+                if let Some(channel) = channels.get_mut(usize::from(number)) {
+                    channel.heads.push(head);
+                }
+            }
+        }
+        channels
+    }
+
     fn open(&self, i: usize, coarse: &Self, taken: &BTreeMap<usize, usize>) -> bool {
         coarse.byte == Byte::Coarse
             && coarse.heads == self.heads
@@ -516,11 +528,11 @@ impl<'a> PairChannel<'a> {
 
     fn acts_on_partner(
         &self,
-        named: u16,
         fine: usize,
         channels: &[Self],
         taken: &BTreeMap<usize, usize>,
     ) -> Option<usize> {
+        let named = self.acts_on?;
         // Even a fine sibling means the parent itself is not the target.
         let mut siblings = channels
             .iter()
@@ -545,9 +557,12 @@ impl<'a> PairChannel<'a> {
         fine: usize,
         channels: &[Self],
         taken: &BTreeMap<usize, usize>,
-    ) -> PresetMatch {
+    ) -> Option<PresetMatch> {
+        if self.acts_on.is_some() {
+            return None;
+        }
         let Some(family) = &self.family else {
-            return PresetMatch::TryAdjacent;
+            return Some(PresetMatch::TryAdjacent);
         };
         let matches = |i, c: &Self| c.family.as_ref() == Some(family) && self.free(i, c, taken);
         let mut matching = channels
@@ -555,27 +570,27 @@ impl<'a> PairChannel<'a> {
             .enumerate()
             .filter_map(|(i, c)| matches(i, c).then_some(i));
         let Some(first) = matching.next() else {
-            return PresetMatch::TryAdjacent;
+            return Some(PresetMatch::TryAdjacent);
         };
         let second = matching.next();
         let adjacent = before(channels, fine);
         if second.is_some_and(|i| i < fine) {
             let fine_after = channels.get(fine + 1).is_some_and(|c| c.byte == Byte::Fine);
-            return match adjacent {
+            return Some(match adjacent {
                 Some((i, c)) if !fine_after && matches(i, c) => PresetMatch::Join(i),
                 _ => PresetMatch::Ambiguous,
-            };
+            });
         }
         if first < fine || (first == fine + 1 && second.is_none()) {
             // Even a selector beside an index fine casts doubt on a distant preset.
-            return match adjacent {
+            return Some(match adjacent {
                 Some((i, c)) if i != first && self.open(i, c, taken) && self.same_group(c) => {
                     PresetMatch::Ambiguous
                 }
                 _ => PresetMatch::Join(first),
-            };
+            });
         }
-        PresetMatch::TryAdjacent
+        Some(PresetMatch::TryAdjacent)
     }
 
     fn adjacent_partner(
@@ -618,33 +633,24 @@ fn before<T>(channels: &[T], i: usize) -> Option<(usize, &T)> {
 /// Coarse index to fine index. Only a fine that claims a coarse removes it from later choices.
 fn pair_bytes(mode: &Mode) -> BTreeMap<usize, usize> {
     let mut fine_of = BTreeMap::new();
-    let mut channels: Vec<_> = mode.channels.iter().map(PairChannel::new).collect();
-    for (head, numbers) in mode.pixels.iter().enumerate() {
-        for &number in numbers {
-            if let Some(channel) = channels.get_mut(usize::from(number)) {
-                channel.heads.push(head);
-            }
-        }
-    }
+    let channels = PairChannel::of_mode(mode);
     let fines = channels
         .iter()
         .enumerate()
         .filter(|(_, c)| c.byte == Byte::Fine);
     for (fine, channel) in fines.clone() {
-        if let Some(named) = channel.acts_on
-            && let Some(coarse) = channel.acts_on_partner(named, fine, &channels, &fine_of)
-        {
+        if let Some(coarse) = channel.acts_on_partner(fine, &channels, &fine_of) {
             fine_of.insert(coarse, fine);
         }
     }
     let mut adjacent = Vec::new();
-    for (fine, channel) in fines.filter(|(_, c)| c.acts_on.is_none()) {
+    for (fine, channel) in fines {
         match channel.preset_partner(fine, &channels, &fine_of) {
-            PresetMatch::Join(coarse) => {
+            Some(PresetMatch::Join(coarse)) => {
                 fine_of.insert(coarse, fine);
             }
-            PresetMatch::Ambiguous => {}
-            PresetMatch::TryAdjacent => adjacent.push((fine, channel)),
+            Some(PresetMatch::Ambiguous) | None => {}
+            Some(PresetMatch::TryAdjacent) => adjacent.push((fine, channel)),
         }
     }
     for (fine, channel) in adjacent {

@@ -1,7 +1,7 @@
 //! A whole performance, heard on the adapter and DDP, then reopened and played again.
 //! The second pixel shows where the sequence is while the first is held by hand.
 
-mod common;
+use crate::wire_common as common;
 
 use common::{Heard, Socket, answer, command, connect, open, send};
 use engine::{Engine, Event, Outcome, Universes, Wakes};

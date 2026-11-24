@@ -28,8 +28,8 @@ mod mock;
 use engine::Unsent;
 use engine::{
     Begun, Brightness, ChannelNumbers, Color, Command, Engine, Fixture, Light, ManualEnd, Member,
-    MemberList, Members, MixRules, OtherEnd, PlayId, Property, Rank, Rate, Refusal, Rgb,
-    RunNumbers, Sender, Target, Text, Universes, Value,
+    MemberList, Members, MixRules, OtherEnd, OutputNumber, PlayId, Property, Rank, Rate, Refusal,
+    Rgb, RunNumbers, Sender, Target, Text, Universes, Value,
 };
 use engine_core::{Pixels, Step};
 
@@ -129,8 +129,8 @@ fn main() {
         assert!(send(&mut sender, full, &library), "light {n} is lit");
         if n % 64 == 63 {
             // the queue takes a wake's worth: let the tick apply them
-            let seen = engine.latest().state.frame;
-            mock::wait_until("no frame went by", || engine.latest().state.frame > seen);
+            let seen = engine.latest().frame();
+            mock::wait_until("no frame went by", || engine.latest().frame() > seen);
         }
     }
     // and a strip of 100 pixels that runs from universe 3 into 4, lit
@@ -184,17 +184,20 @@ fn main() {
     };
     // Thread start-up may allocate: wait until both outputs were served.
     mock::wait_until("the outputs were never served", || {
-        let outputs = engine.latest().state.outputs;
-        outputs[..2]
-            .iter()
-            .all(|o| o.is_some_and(|o| o.counters.accepted > 0))
+        let picture = engine.latest();
+        (1..=2).all(|number| {
+            OutputNumber::try_from(number)
+                .ok()
+                .and_then(|output| picture.output(output))
+                .is_some_and(|output| output.counters.accepted > 0)
+        })
     });
 
     let (allocations, tick_frees) = (counting::allocations(), counting::tick_frees());
     let mut attaching = 0;
     let mut play: Option<PlayId> = None;
     let mut launched = false;
-    let frame = engine.latest().state.frame;
+    let frame = engine.latest().frame();
     for value in 0..=255 {
         let channel = ChannelNumbers {
             universe: 1,
@@ -407,20 +410,21 @@ fn main() {
             attaching += counting::allocations() - before;
         }
         // Pace the commands by the tick: a reader on every frame waits for the next picture.
-        let seen = engine.latest().state.frame;
-        mock::wait_until("no frame went by", || engine.latest().state.frame > seen);
-        launched |=
-            engine.latest().state.plays.iter().any(|play| {
-                play.rank == Rank::Autopilot && play.state == engine::PlayState::Playing
-            });
+        let seen = engine.latest().frame();
+        mock::wait_until("no frame went by", || engine.latest().frame() > seen);
+        launched |= engine
+            .latest()
+            .active_plays()
+            .any(|play| play.rank == Rank::Autopilot && play.state == engine::PlayState::Playing);
     }
-    let state = engine.latest().state;
-    let lit = engine.latest().lights()[..usize::from(LIGHTS) + 100]
-        .iter()
+    let state = engine.latest().performance();
+    let picture = engine.latest();
+    let lit = (1..=LIGHTS + 100)
+        .filter_map(|light| picture.light(light))
         .filter(|light| light.intensity == Some(u16::MAX))
         .count();
-    let green_lights = engine.latest().lights()[..usize::from(LIGHTS)]
-        .iter()
+    let green_lights = (1..=LIGHTS)
+        .filter_map(|light| picture.light(light))
         .skip(1)
         .step_by(2)
         .filter(|light| light.colour.is_some_and(|c| c.green == u16::MAX))
@@ -465,9 +469,7 @@ fn main() {
     mock::wait_until("the linked sequence finished and kept its sample", || {
         engine
             .latest()
-            .state
-            .plays
-            .iter()
+            .active_plays()
             .any(|p| p.look == 3 && p.state == engine::PlayState::Kept)
     });
     // Sample a moving Wave on the two ends of the strip while counting.
@@ -513,10 +515,13 @@ fn main() {
             .unwrap();
     });
     mock::wait_until("both strip pixels receive Wave", || {
-        let lights = engine.latest().lights();
-        [usize::from(LIGHTS), usize::from(LIGHTS) + 2]
-            .iter()
-            .all(|&index| lights[index].colour.is_some_and(|rgb| rgb.green == 4321))
+        let picture = engine.latest();
+        [LIGHTS + 1, LIGHTS + 3].iter().all(|&light| {
+            picture
+                .light(light)
+                .and_then(|light| light.colour)
+                .is_some_and(|rgb| rgb.green == 4321)
+        })
     });
     // a Manual play live as all is released
     let start = Command::StartLook {
@@ -535,9 +540,7 @@ fn main() {
     mock::wait_until("the Manual play never started", || {
         engine
             .latest()
-            .state
-            .plays
-            .iter()
+            .active_plays()
             .any(|play| play.rank == Rank::Manual)
     });
     // every Manual play, direct hold and raw channel let go: the plans go back
@@ -545,16 +548,12 @@ fn main() {
         send(&mut sender, Command::ReleaseAll, &library),
         "all is released"
     );
-    let seen = engine.latest().state.frame;
-    mock::wait_until("no frame went by", || {
-        engine.latest().state.frame > seen + 1
-    });
+    let seen = engine.latest().frame();
+    mock::wait_until("no frame went by", || engine.latest().frame() > seen + 1);
     assert!(
         engine
             .latest()
-            .state
-            .plays
-            .iter()
+            .active_plays()
             .all(|play| play.rank != Rank::Manual),
         "no Manual play is left"
     );
@@ -581,15 +580,21 @@ fn main() {
     );
     assert_eq!(
         state
-            .plays
-            .iter()
+            .active_plays()
             .filter(|p| p.rank == Rank::Manual)
             .map(|p| p.play)
             .collect::<Vec<_>>(),
         play.into_iter().collect::<Vec<_>>(),
         "the last Manual play started and not let go still plays"
     );
-    let accepted = state.outputs.map(|o| o.map(|o| o.counters.accepted));
+    let accepted = [
+        state
+            .attached_output(OutputNumber::try_from(1).unwrap())
+            .map(|output| output.counters.accepted),
+        state
+            .attached_output(OutputNumber::try_from(2).unwrap())
+            .map(|output| output.counters.accepted),
+    ];
     assert!(
         accepted[..2].iter().all(|n| n.is_some_and(|n| n > 5)),
         "both outputs were served: {accepted:?}"
@@ -663,11 +668,11 @@ fn output_health() {
                 wakes.wake().unwrap();
                 let snapshot = engine.latest();
                 snapshot.applied() == sender.sent()
-                    && snapshot.state.outputs[one.slot()].is_some_and(|o| {
+                    && snapshot.output(one).is_some_and(|o| {
                         if value == 1 {
                             o.counters.failed >= 2
                         } else {
-                            o.status == Status::Running
+                            o.connection() == Status::Running
                         }
                     })
             });
@@ -736,7 +741,14 @@ fn output_health() {
     // A refused restart keeps the old generation and its press history.
     // A successful restart serves the first press of a new generation.
     for (hand_back, result, generation, presses) in [
-        (false, Err(Refusal::CannotOpen { why: engine::OpenFailure::Device { with: None } }), 2, 2),
+        (
+            false,
+            Err(Refusal::CannotOpen {
+                why: engine::OpenFailure::Device { with: None },
+            }),
+            2,
+            2,
+        ),
         (true, Ok(()), 3, 1),
     ] {
         let Begun::Opening(restart) = begin(&mut sender, set_two(2, Rate::Sixty), &[]).unwrap()
@@ -861,7 +873,9 @@ fn output_cutover() {
     mock::wait_until("the old run counts its second frame", || {
         engine.latest();
         wakes.wake_at(at).unwrap();
-        engine.latest().state.outputs[output.slot()]
+        engine
+            .latest()
+            .output(output)
             .is_some_and(|out| out.universes.first() == 1 && out.counters.accepted == 2)
     });
     assert_eq!(byte.load(Ordering::Acquire), 12);
@@ -880,8 +894,10 @@ fn output_cutover() {
         engine.latest();
         wakes.wake().unwrap();
         assert_eq!(
-            engine.latest().state.outputs[output.slot()]
-                .unwrap()
+            engine
+                .latest()
+                .output(output)
+                .expect("output is attached")
                 .universes
                 .first(),
             1
@@ -900,8 +916,10 @@ fn output_cutover() {
     engine.latest();
     wakes.wake().unwrap();
     assert_eq!(
-        engine.latest().state.outputs[output.slot()]
-            .unwrap()
+        engine
+            .latest()
+            .output(output)
+            .expect("output is attached")
             .universes
             .first(),
         2
@@ -1046,11 +1064,11 @@ fn linked_ends() {
         let ids: [PlayId; PLAYS] = std::array::from_fn(|slot| start(&mut sender, slot, rank));
         engine.latest();
         wakes.wake_at(at).unwrap();
-        let playing = &engine.latest().state.plays;
-        assert_eq!(playing.iter().count(), PLAYS);
+        assert_eq!(engine.latest().active_plays().count(), PLAYS);
         assert!(
-            playing
-                .iter()
+            engine
+                .latest()
+                .active_plays()
                 .all(|p| p.state == PlayState::Playing && ids.contains(&p.play))
         );
         if rank == Rank::Show {
@@ -1087,11 +1105,12 @@ fn linked_ends() {
             engine.latest();
             wakes.wake_at(at).unwrap();
             let live = engine.latest();
-            assert_eq!(live.state.plays.iter().count(), PLAYS);
+            assert_eq!(live.active_plays().count(), PLAYS);
             assert!(
-                live.lights()[..93]
-                    .iter()
-                    .all(|light| light.intensity == Some(value + 3)),
+                (1..=93).all(|light| {
+                    live.light(light)
+                        .is_some_and(|light| light.intensity == Some(value + 3))
+                }),
                 "the replacement lights every pixel while the 32 plays are still running"
             );
         }
@@ -1126,29 +1145,23 @@ fn linked_ends() {
         let snapshot = engine.latest();
         assert_eq!(snapshot.applied(), full);
         if rank == Rank::Manual {
-            assert_eq!(snapshot.state.plays.iter().count(), PLAYS);
-            assert!(
+            assert_eq!(snapshot.active_plays().count(), PLAYS);
+            assert!(snapshot.active_plays().all(|p| p.state == PlayState::Kept));
+            assert!((1..=93).all(|light| {
                 snapshot
-                    .state
-                    .plays
-                    .iter()
-                    .all(|p| p.state == PlayState::Kept)
-            );
-            assert!(
-                snapshot.lights()[..93]
-                    .iter()
-                    .all(|l| l.intensity == Some(value))
-            );
+                    .light(light)
+                    .is_some_and(|light| light.intensity == Some(value))
+            }));
             for play in ids {
                 assert!(send(&mut sender, Command::ReleaseHold { play }, &[]));
             }
         } else {
-            assert_eq!(snapshot.state.plays.iter().count(), 0);
-            assert!(
-                snapshot.lights()[..93]
-                    .iter()
-                    .all(|l| l.intensity.is_none())
-            );
+            assert_eq!(snapshot.active_plays().count(), 0);
+            assert!((1..=93).all(|light| {
+                snapshot
+                    .light(light)
+                    .is_some_and(|light| light.intensity.is_none())
+            }));
         }
         if stall {
             engine.stall_reclamation(false);
@@ -1192,6 +1205,9 @@ fn linked_ends() {
             },
         );
     }
-    assert_eq!(sender.send(restart), Err(Unsent::Refused(Refusal::QueueFull)));
+    assert_eq!(
+        sender.send(restart),
+        Err(Unsent::Refused(Refusal::QueueFull))
+    );
     wakes.run();
 }

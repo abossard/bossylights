@@ -5,7 +5,7 @@
 //! `ReleaseAll`, the brightness setting, `Stay` and `Reveal`, both Manual end settings,
 //! stopped holds after a settings edit, and a direct grab over a playing Manual look.
 
-mod common;
+use crate::wire_common as common;
 
 use common::{Heard, Socket, answer, command, connect, open, send};
 use engine::{Engine, Universes};

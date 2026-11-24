@@ -7,8 +7,9 @@
 //! | 2 | a raw channel held on the DMX screen | the light that writes that channel, until released |
 //! | 3 | a held value of a light | its default |
 //!
-//! Rows 1 and 2 are decided channel by channel in one pass, [`channels`]: a raw hold, then
-//! Blackout as a modifier every channel follows. Row 3 is [`mix`], where two writers meet.
+//! Rows 1 and 2 are decided channel by channel in one pass by `Channels`: a raw hold,
+//! then Blackout as a modifier every channel follows. Row 3 is [`mix`], where two
+//! writers meet.
 //!
 //! Two lights never reach one channel (decision 48): the patch refuses two fixtures on
 //! one channel, and the Rig makes a channel two heads name the fixture's own, one writer.
@@ -34,54 +35,10 @@
 //! | kept, rules change to remove it | `UntilStop` for Manual, `Reveal` for the others | nothing |
 
 use crate::LightChange;
-use crate::channel::{
-    ADDRESSES, ChannelSet, Channels, Flags, Follows, Levels, MODIFIERS, SourceTag,
+use crate::{
+    Brightness, GrabId, Light, ManualEnd, MixRules, OtherEnd, Property,
 };
 use crate::playback::{Entry, PlayState, Plays, Rank};
-use crate::property::{Light, Property};
-use serde::{Deserialize, Serialize};
-
-/// The Mixer's three settings, saved with the show. An edit takes effect in the frame
-/// that applies it.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-pub struct MixRules {
-    pub brightness: Brightness,
-    pub manual_end: ManualEnd,
-    pub other_end: OtherEnd,
-}
-
-/// Between two brightness values of one rank: the latest start, or the highest.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-pub enum Brightness {
-    #[default]
-    Latest,
-    Highest,
-}
-
-/// What a stopped Manual play leaves.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-pub enum ManualEnd {
-    /// Its values, until released.
-    #[default]
-    UntilRelease,
-    /// Nothing: the stop ends it.
-    UntilStop,
-}
-
-/// What a stopped Show or Autopilot play leaves.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-pub enum OtherEnd {
-    /// Nothing: what is underneath shows.
-    #[default]
-    Reveal,
-    /// Its values, at its rank and start, until released or started again.
-    Stay,
-}
 
 /// What a stop leaves of a play.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -141,16 +98,6 @@ fn beats(
     }
     wins(claim.order, over.order)
 }
-/// One direct grab: the generation the front gave it. Its gestures reach only the light
-/// properties it still holds: a later grab takes them away, and an old finger cannot
-/// update or end its replacement.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-pub struct GrabId {
-    pub generation: u32,
-}
-
 /// Who holds a property of a light directly.
 ///
 /// ```text
@@ -191,6 +138,17 @@ impl Held {
     /// The values held.
     pub const fn values(&self) -> &Light {
         &self.values
+    }
+
+    /// Offers each held property to the Mixer for this frame.
+    fn offer(&self, out: &mut Light, claims: &mut Claims) {
+        *out = self.values;
+        for (claim, property) in claims.iter_mut().zip(Property::ALL) {
+            *claim = self.values.has(property).then(|| Claim {
+                rank: Rank::Manual,
+                order: self.since(property),
+            });
+        }
     }
 
     /// `change` made to this light; a grab takes the start order `order`.
@@ -293,13 +251,7 @@ pub fn show<'a>(
     claims: &mut [Claims],
 ) {
     for ((out, claims), held) in out.iter_mut().zip(claims.iter_mut()).zip(held) {
-        *out = held.values;
-        for (claim, property) in claims.iter_mut().zip(Property::ALL) {
-            *claim = held.values.has(property).then(|| Claim {
-                rank: Rank::Manual,
-                order: held.since(property),
-            });
-        }
+        held.offer(out, claims);
     }
     for play in plays.sounding() {
         let claim = Claim {
@@ -359,136 +311,14 @@ pub const fn mix(first: Want, then: Want) -> Want {
     }
 }
 
-/// Every channel back to its rest, nobody's: where a frame starts.
-pub(crate) fn rest(channels: &mut Channels) {
-    let Channels {
-        value,
-        rest,
-        source,
-        ..
-    } = channels;
-    for (row, rest) in value.iter_mut().zip(rest.chunks_exact(ADDRESSES)) {
-        row.0.copy_from_slice(rest);
-    }
-    source.fill(SourceTag::REST);
-}
-
-/// The one pass that decides each channel, once the resolver wrote the lights' bytes into
-/// `channels` (`lit`: where a light value won). Rows 1 and 2 of the table, per channel:
-/// a raw hold (`raw` at `holds`) replaces the byte, also with 0; then each follower moves
-/// toward its dark byte by the `levels` of the modifiers it follows ([`scale`]). Blackout
-/// is the modifier every channel follows.
-pub(crate) fn channels(
-    channels: &mut Channels,
-    lit: &[ChannelSet],
-    (raw, holds): (&[Levels], &[ChannelSet]),
-    levels: [u8; MODIFIERS],
-) {
-    let Channels {
-        value,
-        dark,
-        flags,
-        follows,
-        source,
-        ..
-    } = channels;
-    let rows = value.iter_mut().zip(source.chunks_exact_mut(ADDRESSES));
-    for (universe, (value, source)) in rows.enumerate() {
-        for address in lit
-            .get(universe)
-            .into_iter()
-            .flat_map(ChannelSet::addresses)
-        {
-            if let Some(source) = source.get_mut(address) {
-                *source = SourceTag::LIGHTS;
-            }
-        }
-        let (Some(raw), Some(holds)) = (raw.get(universe), holds.get(universe)) else {
-            continue;
-        };
-        for address in holds.addresses() {
-            if let (Some(value), Some(source), Some(raw)) = (
-                value.0.get_mut(address),
-                source.get_mut(address),
-                raw.0.get(address),
-            ) {
-                *value = *raw;
-                *source = SourceTag::RAW;
-            }
-        }
-    }
-    // every level full: no follower moves
-    if levels == [u8::MAX; MODIFIERS] {
-        return;
-    }
-    let by = scales(levels);
-    let bytes = value.iter_mut().flat_map(|row| row.0.iter_mut());
-    for (value, ((dark, flags), follows)) in
-        bytes.zip(dark.iter().zip(flags.iter()).zip(follows.iter()))
-    {
-        if let Some(by) = by.get(usize::from(follows.0)) {
-            *value = scale(*value, *dark, *flags, *by);
-        }
-    }
-}
-
 /// What the levels of a set of modifier slots multiply to.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Scale {
-    /// Every level full: the byte stays.
-    Full,
-    /// A level at 0: the byte goes to dark.
-    Dark,
-    /// `product / whole`, both above 0, `product` below `whole`.
-    Part { product: i128, whole: i128 },
-}
-
-/// The scale of every set of slots, by its bits: worked out once a frame, so a channel
-/// only looks its own up.
-fn scales(levels: [u8; MODIFIERS]) -> [Scale; 1 << MODIFIERS] {
-    let mut scales = [Scale::Full; 1 << MODIFIERS];
-    for (follows, scale) in (0..=u8::MAX).zip(scales.iter_mut()) {
-        *scale = scale_of(Follows(follows), levels);
-    }
-    scales
-}
-
-fn scale_of(follows: Follows, levels: [u8; MODIFIERS]) -> Scale {
-    let (mut product, mut whole) = (1_i128, 1_i128);
-    for (slot, level) in levels.iter().enumerate() {
-        if follows.0 & (1 << slot) != 0 {
-            product *= i128::from(*level);
-            whole *= 255;
-        }
-    }
-    match product {
-        0 => Scale::Dark,
-        _ if product == whole => Scale::Full,
-        _ => Scale::Part { product, whole },
-    }
-}
-
-/// A follower's byte: `value` moved toward `dark` by the levels of the modifiers it
-/// follows, `dark + (value - dark) x m1 x ... x mn / 255^n` with one rounding at the end,
-/// half away from `dark`. A channel that jumps goes all the way or not at all: `dark`
-/// when a level it follows is 0, else `value`.
-fn scale(value: u8, dark: u8, flags: Flags, scale: Scale) -> u8 {
-    match scale {
-        Scale::Full => value,
-        Scale::Dark => dark,
-        Scale::Part { .. } if !flags.fades() => value,
-        Scale::Part { product, whole } => {
-            let distance = (i128::from(value) - i128::from(dark)) * product;
-            let moved = (2 * distance.abs() + whole) / (2 * whole);
-            u8::try_from(i128::from(dark) + distance.signum() * moved).unwrap_or(dark)
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::channel::{BLACKOUT, ChannelNumbers, Universes};
+    use crate::channel::{
+        ADDRESSES, BLACKOUT, ChannelNumbers, ChannelSet, Channels, Flags, Follows, Levels,
+        MODIFIERS, Scale, SourceTag, Universes, scale_of,
+    };
     use Want::{Default, Light};
 
     #[test]
@@ -626,7 +456,7 @@ mod tests {
         for (row, wrote, hold, dark, out, source) in cases {
             let mut all = Box::new(Channels::NEW);
             all.value[0].0[8] = 3; // whatever the frame before left
-            rest(&mut all);
+            all.reset_frame();
             let mut lit = [ChannelSet::NONE];
             if let Some(want) = wrote {
                 all.value[0].0[6] = want.level();
@@ -637,7 +467,7 @@ mod tests {
                 raw[0].0[6] = level;
                 at.mark(&mut holds, true);
             }
-            channels(&mut all, &lit, (&raw, &holds), blackout(dark));
+            all.apply_winners(&lit, &raw, &holds, blackout(dark));
             assert_eq!(
                 (all.values()[0].0[6], all.source(at)),
                 (out, source),
@@ -667,9 +497,9 @@ mod tests {
         let cases = [(false, 255), (true, 0)];
         for (dark, out) in cases {
             let mut all = Box::new(Channels::NEW);
-            rest(&mut all);
+            all.reset_frame();
             let lit = [ChannelSet::NONE; crate::MAX_UNIVERSES as usize];
-            channels(&mut all, &lit, (&raw, &holds), blackout(dark));
+            all.apply_winners(&lit, &raw, &holds, blackout(dark));
             let missed = all
                 .values()
                 .iter()
@@ -698,16 +528,16 @@ mod tests {
             ("released", None, 40, SourceTag::REST),
         ];
         for (frame, hold, out, source) in frames {
-            rest(&mut all);
+            all.reset_frame();
             let (mut raw, mut holds) = ([Levels::ZERO], [ChannelSet::NONE]);
             if let Some(level) = hold {
                 raw[0].0[6] = level;
                 at.mark(&mut holds, true);
             }
-            channels(
-                &mut all,
+            all.apply_winners(
                 &[ChannelSet::NONE],
-                (&raw, &holds),
+                &raw,
+                &holds,
                 blackout(false),
             );
             assert_eq!(
@@ -883,7 +713,7 @@ mod tests {
             all.value[0].0[6] = value;
             (all.dark[6], all.flags[6], all.follows[6]) = (dark, flags, follows);
             let (raw, holds) = ([Levels::ZERO], [ChannelSet::NONE]);
-            channels(&mut all, &[ChannelSet::NONE], (&raw, &holds), levels);
+            all.apply_winners(&[ChannelSet::NONE], &raw, &holds, levels);
             assert_eq!(all.values()[0].0[6], out, "{case}");
         }
     }
@@ -927,8 +757,7 @@ mod properties {
     use super::*;
     use crate::clock::{Clock, When};
     use crate::playback::{Launches, PLAYS, PlayId, Plays};
-    use crate::property::{Gobo, Position, Rgb, Value, Wheel};
-    use crate::resolve::{LightNumber, LightRun, Lights};
+    use crate::{Gobo, LightNumber, LightRun, Lights, Position, Rgb, Value, Wheel};
     use core::time::Duration;
 
     const RED: Rgb = Rgb {

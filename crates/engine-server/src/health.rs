@@ -30,7 +30,12 @@ impl Reader {
         }
     }
 
-    pub(super) fn view(&self) -> &View {
+    pub(super) fn publish(&self) -> View {
+        self.view.clone()
+    }
+
+    #[cfg(test)]
+    fn view(&self) -> &View {
         &self.view
     }
 

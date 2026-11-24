@@ -1,7 +1,6 @@
 //! A same-adapter reroute preserves failures already reported by the old lane.
 
-#[path = "../../outputs/tests/common/stream.rs"]
-mod stream;
+use crate::output_stream as stream;
 
 use engine::{
     Begun, ChannelNumbers, Color, Command, Device, Engine, Event, Outcome, OutputNumber, Rate,
@@ -93,7 +92,11 @@ fn a_failure_returned_before_reroute_is_kept_on_the_same_adapter() {
     assert_eq!(first_slot(&socket), 11);
     let started = Instant::now();
     loop {
-        if engine.latest().state.outputs[0].is_some_and(|out| out.status == Status::Running) {
+        if engine
+            .latest()
+            .output(output)
+            .is_some_and(engine::Output::is_running)
+        {
             break;
         }
         assert!(started.elapsed() < GUARD, "adapter never reached Running"); // guard
@@ -118,7 +121,7 @@ fn a_failure_returned_before_reroute_is_kept_on_the_same_adapter() {
     sender.finish(opened).unwrap();
     engine.latest();
     wakes.wake().unwrap();
-    let rerouted = engine.latest().state.outputs[0].unwrap();
+    let rerouted = engine.latest().output(output).unwrap();
     assert_eq!(rerouted.universes.first(), 2);
     restore.send(()).unwrap();
     drop(restore);
@@ -131,7 +134,7 @@ fn a_failure_returned_before_reroute_is_kept_on_the_same_adapter() {
         )
     });
     assert_eq!(
-        (rerouted.status, counted),
+        (rerouted.connection(), counted),
         (Status::Reconnecting { failures: 2 }, true),
         "the completed failure for the last accepted route vanished at the switch"
     );

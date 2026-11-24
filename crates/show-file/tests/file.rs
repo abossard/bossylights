@@ -233,7 +233,7 @@ fn v6_rejects_channel_fields_outside_the_v6_schema() {
 
 /// V6 keeps the mode and all of its v11 writers; declarations first persist in v7.
 fn assert_v6_patch(read: &Patch, original: &Patch) {
-    assert_eq!(read.writers(), original.writers());
+    assert_eq!(read.prepare(), original.prepare());
     assert_eq!(read.groups(), original.groups());
     assert_eq!(read.fixtures(), original.fixtures());
     for fixture in original.fixtures() {

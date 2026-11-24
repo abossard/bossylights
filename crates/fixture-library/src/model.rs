@@ -1,4 +1,3 @@
-use crate::error::{Refused, Warning};
 use alloc::string::String;
 use alloc::vec::Vec;
 use serde::{Deserialize, Serialize};
@@ -70,6 +69,75 @@ pub struct Degrees {
 pub struct Layout {
     pub width: u16,
     pub height: u16,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub enum Problem {
+    NotText,
+    NotXml(String),
+    /// A DOCTYPE with declarations (`[ ... ]`): entities could grow the file when read.
+    Declarations,
+    TooLarge {
+        bytes: usize,
+        most: usize,
+    },
+    WrongRoot(String),
+    Missing(&'static str),
+    BadNumber {
+        what: &'static str,
+        text: String,
+    },
+    UnknownChannel(String),
+    DuplicateNumber(u16),
+    SkippedNumber(u16),
+    BackwardsRange {
+        min: u8,
+        max: u8,
+    },
+    /// A head names a channel the mode does not have. `head` counts the mode's heads from
+    /// 0, in the file's order; `channels` is how many the mode has.
+    HeadPastEnd {
+        head: usize,
+        channel: u16,
+        channels: usize,
+    },
+    /// An `ActsOn` names a channel the mode does not have.
+    ActsOnPastEnd {
+        channel: u16,
+        channels: usize,
+    },
+    /// The file has no `<Mode>`.
+    NoMode,
+    /// Every mode of the file is refused: each one, in the file's order. Never empty.
+    NoModeKept(Vec<Refused>),
+}
+
+/// A mode that cannot be used: which, where in the file, and why. The file's other
+/// modes are read without it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct Refused {
+    pub mode: String,
+    /// The line in the file, counted from 1.
+    pub line: u32,
+    pub problem: Problem,
+}
+
+/// Something a definition gets wrong that the rest can be read without. It is left out of
+/// the model, and said here: which mode, where in the file, what and why.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Warning {
+    pub mode: String,
+    /// The line in the file, counted from 1.
+    pub line: u32,
+    pub left_out: LeftOut,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LeftOut {
+    /// A layout without exactly one cell for each head the mode keeps.
+    Layout { layout: Layout, heads: usize },
 }
 
 /// One DMX channel. The v11 writers use its `function`. Its [`Self::role`] comes from

@@ -18,51 +18,66 @@ mod api;
 mod channel;
 mod clock;
 mod evaluate;
+#[path = "model/failure.rs"]
+mod model_failure;
+#[path = "model/kinds.rs"]
+mod model_kinds;
+#[path = "model/light.rs"]
+mod model_light;
+#[path = "model/lights.rs"]
+mod model_lights;
+#[path = "model/mix.rs"]
+mod model_mix;
+#[path = "model/output.rs"]
+mod model_output;
+#[path = "model/text.rs"]
+mod model_text;
 pub mod health;
 pub use clock::{BEATS_PER_BAR, BeatTime, Bpm, Clock, Reading, Source, When, beats};
 pub use evaluate::{Binding, Elapsed, Item, MAX_DEPTH, Node, Program};
-mod kinds;
-mod library;
 mod mix;
-pub use mix::{
-    Brightness, Claims, End, GrabId, Held, ManualEnd, MixRules, OtherEnd, show, stops, unkept, wins,
-};
+pub use mix::{Claims, End, Held, show, stops, unkept, wins};
 mod output;
 mod patch;
 mod playback;
 mod project;
-mod property;
 mod resolve;
 mod show;
 
 pub use api::{
-    AuthoredStep, Definition, OpenFailure, OutOfRange, Palette, Pattern, Percent, Period, Refusal,
-    Repeat, SavedLook, Sequence, SequenceItem, Speed, Swatches, Use, WaveTarget, Width,
+    AuthoredStep, Definition, OutOfRange, Palette, Pattern, Percent, Period, Repeat, SavedLook,
+    Saved, Sequence, SequenceItem, Speed, Step, Swatches, Use, WaveTarget, Width,
 };
 pub use channel::{
     ADDRESSES, CHANNELS, Channel, ChannelLevel, ChannelNumbers, ChannelSet, Channels, Levels,
     MAX_UNIVERSES, SourceTag, Universes, changes,
 };
 use channel::{BLACKOUT, MODIFIERS};
-pub use kinds::{Adapter, Color, OutputKind};
+pub use model_failure::{OpenFailure, Refusal};
+pub use model_kinds::{Adapter, Color, OutputKind};
+pub use model_light::{Gobo, Light, Position, Property, Rgb, Value, Wheel};
+pub use model_lights::{LightNumber, LightRun, Lights, MAX_LIGHTS};
+pub use model_mix::{Brightness, GrabId, ManualEnd, MixRules, OtherEnd};
+pub use model_output::{MAX_OUTPUTS, Outcome, OutputNumber, Rate, Status, Watch};
+pub use model_text::Text;
+#[cfg(test)]
+pub(crate) use model_kinds::{EXAMPLE, OTHER};
 #[cfg(feature = "test-support")]
-pub use kinds::{EXAMPLE as TEST_STREAM_KIND, OTHER as TEST_KIND};
-pub use library::Text;
+pub use model_kinds::{EXAMPLE as TEST_STREAM_KIND, OTHER as TEST_KIND};
 pub use output::{
-    Counters, MAX_OUTPUTS, OFF_BEAT, Outcome, Output, OutputNumber, ROUTE_MOST, Rate, RouteFault,
-    Run, RunNumbers, SPANS_MOST, Span, Status, Watch, bounds, gather, route_length,
+    Counters, OFF_BEAT, Output, ROUTE_MOST, RouteFault, Run, RunNumbers, SPANS_MOST, Span, bounds,
+    gather, route_length,
 };
 pub use patch::{
     Grouped, Layout, Member, MemberList, Members, PatchCommand, Patched, Pixels, Target,
 };
 pub use playback::{
-    Entry, LOOKS, Launches, LookCommand, PLAYS, Play, PlayId, PlayState, Plays, Rank, Saved, Step,
+    Entry, LOOKS, Launches, LookCommand, PLAYS, Play, PlayId, PlayState, Plays, Rank,
 };
 pub use project::{Project, ProjectEffect, ProjectEvent, ProjectOutput};
-pub use property::{Gobo, Light, Position, Property, Rgb, Value, Wheel};
 pub use resolve::{
-    HeldLight, Less, LightNumber, LightRun, Lights, MAX_LIGHTS, Part, Place, Scale, Sense, Take,
-    Travel, Writer, held_lights, light_changes, resolve,
+    HeldLight, Less, Part, Place, Scale, Sense, Take, Travel, Writer, held_lights, light_changes,
+    resolve,
 };
 pub use show::{ShowFile, Unopened};
 
@@ -82,7 +97,7 @@ pub struct State {
     pub blackout: bool,
     /// The outputs, by number. `None` where no output is set.
     #[cfg_attr(feature = "ts", ts(type = "Array<Output | null>"))]
-    pub outputs: [Option<Output>; MAX_OUTPUTS],
+    outputs: [Option<Output>; MAX_OUTPUTS],
     /// When the engine last woke, since it started.
     #[serde(skip)]
     #[cfg_attr(feature = "ts", ts(skip))]
@@ -93,7 +108,7 @@ pub struct State {
     pub beat: Duration,
     /// The looks playing or kept, by slot.
     #[cfg_attr(feature = "ts", ts(type = "Array<Play>"))]
-    pub plays: Plays,
+    plays: Plays,
     /// The Mixer's settings as this frame applies them.
     pub rules: MixRules,
     /// The start order the next hold or play takes: a later start wins.
@@ -106,7 +121,7 @@ pub struct State {
     pub launches: Launches,
     /// The beat clock, settled to the frame's time.
     #[cfg_attr(feature = "ts", ts(type = "Reading"))]
-    pub clock: Clock,
+    clock: Clock,
 }
 
 impl State {
@@ -134,21 +149,137 @@ impl State {
     /// A new run for the same adapter starts a fresh set of counters. Its
     /// current status, including consecutive failures, belongs to the adapter.
     pub fn reroute(self, output: OutputNumber, run: Run, rate: Rate) -> Self {
-        let Some(Some(previous)) = self.outputs.get(output.slot()) else {
+        let Some(schedule) = self.rerouted_output(output, run, rate) else {
             return self;
         };
-        self.with_output(output, run, rate, previous.status)
+        self.with_output_schedule(output, schedule)
     }
 
-    fn with_output(mut self, output: OutputNumber, run: Run, rate: Rate, status: Status) -> Self {
-        let due = first_due(&self.outputs, rate, self.now);
+    fn with_output(mut self, output: OutputNumber, run: Run, rate: Rate) -> Self {
+        let due = self.first_due(rate);
         if let Some(slot) = self.outputs.get_mut(output.slot()) {
-            *slot = Some(Output {
-                status,
-                ..Output::new(run, rate, due)
-            });
+            *slot = Some(Output::new(run, rate, due));
         }
         self
+    }
+
+    /// The attached output at `output`, as one immutable snapshot.
+    pub fn attached_output(&self, output: OutputNumber) -> Option<Output> {
+        self.outputs.get(output.slot()).copied().flatten()
+    }
+
+    /// A reroute schedule for `output`, with a fresh run and preserved adapter state.
+    pub fn rerouted_output(&self, output: OutputNumber, run: Run, rate: Rate) -> Option<Output> {
+        Some(
+            self.attached_output(output)?
+                .rerouted(run, rate, self.first_due(rate)),
+        )
+    }
+
+    /// Installs an output schedule without exposing the schedule array.
+    pub fn with_output_schedule(mut self, output: OutputNumber, schedule: Output) -> Self {
+        if let Some(slot) = self.outputs.get_mut(output.slot()) {
+            *slot = Some(schedule);
+        }
+        self
+    }
+
+    /// Clears every output from a schedule while retaining the performance state.
+    pub fn without_output_schedules(mut self) -> Self {
+        self.outputs.fill(None);
+        self
+    }
+
+    /// Commits a switched schedule, carrying the old adapter status on reuse.
+    pub fn commit_output_schedule(
+        self,
+        output: OutputNumber,
+        mut schedule: Output,
+        reuse: bool,
+    ) -> Self {
+        if reuse && let Some(old) = self.attached_output(output) {
+            schedule = schedule.resumed_from(old);
+        }
+        self.with_output_schedule(output, schedule)
+    }
+
+    /// Whether `output` has an attached schedule.
+    pub fn has_output(&self, output: OutputNumber) -> bool {
+        self.attached_output(output).is_some()
+    }
+
+    /// The next due output deadline, when any output is attached.
+    pub fn next_output_due(&self) -> Option<Duration> {
+        self.outputs
+            .iter()
+            .flatten()
+            .map(|output| output.deadline())
+            .min()
+    }
+
+    /// Whether the attached output is reconnecting.
+    pub fn output_reconnecting(&self, output: OutputNumber) -> bool {
+        self.attached_output(output)
+            .is_some_and(Output::is_reconnecting)
+    }
+
+    /// Copies the attached output's status and counters into a health sample.
+    pub fn record_output_health(
+        &self,
+        output: OutputNumber,
+        sample: &mut health::HealthSample,
+    ) -> bool {
+        let Some(attached) = self.attached_output(output) else {
+            return false;
+        };
+        attached.record_health(sample);
+        true
+    }
+
+    /// Every play the performance still owns, in slot order.
+    pub fn active_plays(&self) -> impl Iterator<Item = &Play> {
+        self.plays.iter()
+    }
+
+    /// Every playing or kept play the Mixer hears, in slot order.
+    pub fn sounding_plays(&self) -> impl Iterator<Item = &Play> {
+        self.plays.sounding()
+    }
+
+    /// The play currently occupying `slot`.
+    pub fn play_at(&self, slot: usize) -> Option<Play> {
+        self.plays.at(slot)
+    }
+
+    /// Whether a play currently occupies `slot`.
+    pub fn has_play(&self, slot: usize) -> bool {
+        self.plays.has(slot)
+    }
+
+    /// Whether a plan for `play` can still install.
+    pub fn takes_plan(&self, play: PlayId) -> bool {
+        self.plays.takes_plan(play)
+    }
+
+    /// Mixes this frame's holds and plays into `out`.
+    pub fn show_plays<'a>(
+        &self,
+        held: &[Held],
+        plan: impl Fn(usize) -> &'a [Entry],
+        out: &mut [Light],
+        claims: &mut [Claims],
+    ) {
+        show(held, &self.plays, plan, self.rules, out, claims);
+    }
+
+    /// The settled beat count now.
+    pub fn beat_now(&self) -> BeatTime {
+        self.clock.beat_at(self.clock.at())
+    }
+
+    /// Elapsed beat time from `start` to the settled instant now.
+    pub fn elapsed_since(&self, start: BeatTime) -> Elapsed {
+        Elapsed::between(self.beat_now(), start)
     }
 }
 
@@ -484,11 +615,23 @@ pub fn update(
     lights: &mut [Held],
     command: EngineCommand,
 ) -> State {
-    let held = State {
-        order: state.order.saturating_add(1),
-        ..state
-    };
-    match command {
+    state.apply(universes, holds, lights, command)
+}
+
+impl State {
+    fn apply(
+        self,
+        universes: &mut [Levels],
+        holds: &mut [ChannelSet],
+        lights: &mut [Held],
+        command: EngineCommand,
+    ) -> State {
+        let state = self;
+        let held = State {
+            order: state.order.saturating_add(1),
+            ..state
+        };
+        match command {
         EngineCommand::Tick { now } => State {
             frame: state.frame.wrapping_add(1),
             now,
@@ -523,7 +666,7 @@ pub fn update(
             output,
             universes: run,
             rate,
-        } => state.with_output(output, run, rate, Status::NotFound),
+        } => state.with_output(output, run, rate),
         EngineCommand::RemoveOutput { output } => {
             let mut outputs = state.outputs;
             if let Some(slot) = outputs.get_mut(output.slot()) {
@@ -632,44 +775,50 @@ pub fn update(
             } else {
                 (state.launches, state.order)
             };
-            launch(State {
+            State {
                 clock,
                 launches,
                 order,
                 ..state
-            })
+            }
+            .launch()
         }
-        EngineCommand::Tap => retempo(launch(State {
+        EngineCommand::Tap => State {
             clock: state.clock.tap(),
             ..state
-        })),
-        EngineCommand::ReleaseTempo => retempo(State {
+        }
+        .launch()
+        .retempo(),
+        EngineCommand::ReleaseTempo => State {
             clock: state.clock.release(),
             ..state
-        }),
-        EngineCommand::Feed { bpm } => retempo(State {
+        }
+        .retempo(),
+        EngineCommand::Feed { bpm } => State {
             clock: state.clock.set_feed(bpm),
             ..state
-        }),
+        }
+        .retempo(),
+        }
     }
-}
 
-/// The waiting plays whose beat the grid reached by now play.
-fn launch(state: State) -> State {
-    let (mut plays, mut launches) = (state.plays, state.launches);
-    plays.launch(&state.clock, &mut launches);
-    State {
-        plays,
-        launches,
-        ..state
+    /// The waiting plays whose beat the grid reached by now play.
+    fn launch(self) -> State {
+        let (mut plays, mut launches) = (self.plays, self.launches);
+        plays.launch(&self.clock, &mut launches);
+        State {
+            plays,
+            launches,
+            ..self
+        }
     }
-}
 
-/// After a change of tempo: the plays started at once begin at the frame as it is now.
-fn retempo(state: State) -> State {
-    let mut plays = state.plays;
-    plays.begin_at(&state.clock, state.now);
-    State { plays, ..state }
+    /// After a change of tempo: the plays started at once begin at the frame as it is now.
+    fn retempo(self) -> State {
+        let mut plays = self.plays;
+        plays.begin_at(&self.clock, self.now);
+        State { plays, ..self }
+    }
 }
 
 /// The bytes that go out now, written into `channels`, which the caller owns. Every
@@ -686,10 +835,9 @@ pub fn frame(
     writers: &[Writer],
     channels: &mut Channels,
 ) {
-    let mut lit = [ChannelSet::NONE; MAX_UNIVERSES as usize];
-    mix::rest(channels);
-    resolve::write(lights, writers, &mut channels.value, &mut lit);
-    mix::channels(channels, &lit, (universes, holds), modifiers(state));
+    channels.render(universes, holds, modifiers(state), |levels, lit| {
+        resolve::write(lights, writers, levels, lit);
+    });
 }
 
 /// The level of each modifier slot this frame: Master full until `SetMaster` comes,
@@ -721,36 +869,51 @@ pub fn next_frame(due: Duration, now: Duration, period: Duration) -> Duration {
 pub const BEAT: Duration = Duration::from_nanos(1_000_000_000 / 44);
 
 /// When the engine wakes next: when the first output is due, or on the beat if none is set.
-fn next_wake(state: &State) -> Duration {
-    state
-        .outputs
+impl State {
+    fn next_wake(&self) -> Duration {
+        self.outputs
         .iter()
         .flatten()
-        .map(|output| output.due)
+        .map(|output| output.deadline())
         .min()
-        .unwrap_or(state.beat)
-}
+        .unwrap_or(self.beat)
+    }
 
-/// When a new output of `rate` is first due: at the next frame of an output that runs at
-/// that rate already, so they go out in one wake. At `now` if none does.
-fn first_due(outputs: &[Option<Output>], rate: Rate, now: Duration) -> Duration {
-    outputs
-        .iter()
-        .flatten()
-        .filter(|output| output.rate == rate)
-        .map(|output| output.due)
-        .min()
-        .unwrap_or(now)
+    /// When a new output of `rate` is first due: at the next frame of an output that
+    /// runs at that rate already, so they go out in one wake. At `now` if none does.
+    fn first_due(&self, rate: Rate) -> Duration {
+        self.outputs
+            .iter()
+            .flatten()
+            .filter(|output| output.runs_at(rate))
+            .map(|output| output.deadline())
+            .min()
+            .unwrap_or(self.now)
+    }
+
+    fn due(&self, now: Duration) -> impl Iterator<Item = OutputNumber> + '_ {
+        let soon = now.saturating_add(SPIN);
+        (1..)
+            .zip(&self.outputs)
+            .filter(move |(_, output)| {
+                output.is_some_and(|output| output.deadline() <= soon)
+            })
+            .filter_map(|(number, _)| OutputNumber::try_from(number).ok())
+    }
+
+    fn wait(&self, now: Duration) -> (Duration, Option<Duration>) {
+        let wake = self.next_wake();
+        if self.outputs.iter().all(Option::is_none) {
+            return (wake.saturating_sub(now), None);
+        }
+        (sleep_before(wake, now), Some(wake))
+    }
 }
 
 /// The outputs to serve at `now`, by number: those due, and those due within [`SPIN`]
 /// after. A wake costs a spin, so outputs due that close together go out in one.
 pub fn due(state: &State, now: Duration) -> impl Iterator<Item = OutputNumber> + '_ {
-    let soon = now.saturating_add(SPIN);
-    (1..)
-        .zip(&state.outputs)
-        .filter(move |(_, output)| output.is_some_and(|output| output.due <= soon))
-        .filter_map(|(number, _)| OutputNumber::try_from(number).ok())
+    state.due(now)
 }
 
 /// The output thread sleeps until this long before a frame is due, then spins: a
@@ -766,11 +929,7 @@ pub fn sleep_before(due: Duration, now: Duration) -> Duration {
 /// until the time returned, if any. Only a wake that serves an output spins. On the beat
 /// with no output set nothing goes out, so it only sleeps.
 pub fn wait(state: &State, now: Duration) -> (Duration, Option<Duration>) {
-    let wake = next_wake(state);
-    if state.outputs.iter().all(Option::is_none) {
-        return (wake.saturating_sub(now), None);
-    }
-    (sleep_before(wake, now), Some(wake))
+    state.wait(now)
 }
 
 /// Times are counted in buckets this wide.
@@ -830,1379 +989,5 @@ fn bound<const N: usize>(bucket: usize, worst: Duration) -> Duration {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    const CALM: State = State {
-        frame: 7,
-        ..State::new(Priority::RealTime)
-    };
-    const DARK: State = State {
-        blackout: true,
-        ..CALM
-    };
-
-    /// Two universes, with these (universe, address, level) set; counted from 1.
-    fn held(levels: &[(u16, u16, u8)]) -> [Levels; 2] {
-        let mut universes = [Levels::ZERO; 2];
-        for (universe, address, level) in levels {
-            universes[usize::from(*universe - 1)].0[usize::from(*address - 1)] = *level;
-        }
-        universes
-    }
-
-    /// The raw channels of two universes, these (universe, address, level) held.
-    fn raw(levels: &[(u16, u16, u8)]) -> ([Levels; 2], [ChannelSet; 2]) {
-        let mut holds = [ChannelSet::NONE; 2];
-        for (universe, address, _) in levels {
-            channel(*universe, *address).mark(&mut holds, true);
-        }
-        (held(levels), holds)
-    }
-
-    fn channel(universe: u16, address: u16) -> Channel {
-        ChannelNumbers { universe, address }
-            .check(Universes::new(2).unwrap())
-            .unwrap()
-    }
-
-    fn tick(ms: u64) -> EngineCommand {
-        EngineCommand::Tick {
-            now: Duration::from_millis(ms),
-        }
-    }
-
-    /// One wake at `now`: the commands sent by then, each settled at the time it was
-    /// sent, then the frame's time, as the tick applies them.
-    fn wake(state: State, now: u64, sent: &[(u64, EngineCommand)]) -> State {
-        let apply = |state, command| update(state, &mut [], &mut [], &mut [], command);
-        let mut state = apply(state, tick(now));
-        for (at, command) in sent {
-            let at = Duration::from_millis(*at);
-            state = apply(state, EngineCommand::Settle { at });
-            state = apply(state, *command);
-        }
-        apply(
-            state,
-            EngineCommand::Settle {
-                at: Duration::from_millis(now),
-            },
-        )
-    }
-
-    /// An engine with the feed at 120 beats a minute: beat n at n * 500 ms.
-    fn at_120() -> State {
-        wake(
-            CALM,
-            0,
-            &[(
-                0,
-                EngineCommand::Feed {
-                    bpm: Bpm::new(120).unwrap(),
-                },
-            )],
-        )
-    }
-
-    /// A count of the clock is `beats`, to a millionth of a beat.
-    fn close(count: impl Into<BeatTime>, want: f64) -> bool {
-        (count.into().beats() - want).abs() < 1e-6
-    }
-
-    fn play(slot: usize) -> PlayId {
-        PlayId::new(slot, 1).unwrap()
-    }
-
-    #[test]
-    fn a_waiting_play_launches_on_its_beat_in_time_order() {
-        let start = |slot, when| EngineCommand::Start {
-            play: play(slot),
-            look: 7,
-            rank: Rank::Manual,
-            when,
-        };
-        let keep = EngineCommand::Keep { play: play(0) };
-        let release = EngineCommand::Release { play: play(0) };
-        let tap = EngineCommand::Tap;
-        let (beat, bar, now) = (When::Beat, When::Bar, When::Now);
-        let waits = |beat| PlayState::Waiting { beat };
-        let (playing, kept) = (PlayState::Playing, PlayState::Kept);
-        type Wakes<'a> = &'a [(u64, &'a [(u64, EngineCommand)])];
-        // (name, wakes, plays after the last, the latest start that sounds)
-        type Case<'a> = (&'a str, Wakes<'a>, &'a [(usize, PlayState)], Option<usize>);
-        let cases: [Case; 23] = [
-            (
-                "a tap supplies a crossing at the instant of a later request: it wins",
-                &[
-                    (1100, &[(1100, start(0, beat))]),
-                    (1300, &[(1300, start(1, now)), (1300, tap)]),
-                ],
-                &[(0, playing), (1, playing)],
-                Some(1),
-            ),
-            (
-                "a tap supplies a crossing asked at its instant, after a start at once",
-                &[(
-                    1300,
-                    &[(1300, start(1, now)), (1300, start(0, beat)), (1300, tap)],
-                )],
-                &[(0, playing), (1, playing)],
-                Some(0),
-            ),
-            (
-                "a launched play, then a later start: it wins",
-                &[
-                    (1100, &[(1100, start(0, beat))]),
-                    (1500, &[]),
-                    (1500, &[(1500, start(1, now))]),
-                ],
-                &[(0, playing), (1, playing)],
-                Some(1),
-            ),
-            (
-                "two launched at one instant by a tap, then a later start",
-                &[
-                    (1100, &[(1100, start(0, beat)), (1100, start(2, beat))]),
-                    (1300, &[(1300, tap), (1300, start(1, now))]),
-                ],
-                &[(0, playing), (1, playing), (2, playing)],
-                Some(1),
-            ),
-            (
-                "a beat, before it",
-                &[(1100, &[(1100, start(0, beat))]), (1499, &[])],
-                &[(0, waits(3))],
-                None,
-            ),
-            (
-                "a beat, on it",
-                &[(1100, &[(1100, start(0, beat))]), (1500, &[])],
-                &[(0, playing)],
-                Some(0),
-            ),
-            (
-                "a beat, asked on the grid",
-                &[(1500, &[(1500, start(0, beat))])],
-                &[(0, playing)],
-                Some(0),
-            ),
-            (
-                "a beat, asked on the grid, late",
-                &[(1600, &[(1500, start(0, beat))])],
-                &[(0, playing)],
-                Some(0),
-            ),
-            (
-                "a bar, through the beats",
-                &[
-                    (2600, &[(2600, start(0, bar))]),
-                    (3000, &[]),
-                    (3500, &[]),
-                    (3999, &[]),
-                ],
-                &[(0, waits(8))],
-                None,
-            ),
-            (
-                "a bar, on it",
-                &[(2600, &[(2600, start(0, bar))]), (3000, &[]), (4000, &[])],
-                &[(0, playing)],
-                Some(0),
-            ),
-            (
-                "kept while waiting: cancelled",
-                &[
-                    (1100, &[(1100, start(0, beat))]),
-                    (1200, &[(1200, keep)]),
-                    (2000, &[]),
-                ],
-                &[],
-                None,
-            ),
-            (
-                "released while waiting",
-                &[
-                    (1100, &[(1100, start(0, beat))]),
-                    (1200, &[(1200, release)]),
-                    (2000, &[]),
-                ],
-                &[],
-                None,
-            ),
-            (
-                "kept after its crossing, in a late wake",
-                &[(1100, &[(1100, start(0, beat))]), (1600, &[(1550, keep)])],
-                &[(0, kept)],
-                Some(0),
-            ),
-            (
-                "kept before its crossing, in a late wake",
-                &[(1100, &[(1100, start(0, beat))]), (1600, &[(1450, keep)])],
-                &[],
-                None,
-            ),
-            (
-                "kept on its crossing: it launched first",
-                &[(1100, &[(1100, start(0, beat))]), (1600, &[(1500, keep)])],
-                &[(0, kept)],
-                Some(0),
-            ),
-            (
-                "two boundaries in one late wake: the later beat starts later",
-                &[
-                    (1100, &[(1100, start(0, bar)), (1100, start(1, beat))]),
-                    (2100, &[]),
-                ],
-                &[(0, playing), (1, playing)],
-                Some(0),
-            ),
-            (
-                "two on one beat: the later request starts later",
-                &[
-                    (1100, &[(1100, start(0, beat)), (1100, start(1, beat))]),
-                    (1500, &[]),
-                ],
-                &[(0, playing), (1, playing)],
-                Some(1),
-            ),
-            (
-                "sent before the crossing, at once: the launch is later",
-                &[
-                    (1100, &[(1100, start(0, beat))]),
-                    (1600, &[(1200, start(1, now))]),
-                ],
-                &[(0, playing), (1, playing)],
-                Some(0),
-            ),
-            (
-                "sent after the crossing, at once: it is later",
-                &[
-                    (1100, &[(1100, start(0, beat))]),
-                    (1600, &[(1550, start(1, now))]),
-                ],
-                &[(0, playing), (1, playing)],
-                Some(1),
-            ),
-            (
-                "a tap supplies the crossing",
-                &[(1100, &[(1100, start(0, beat))]), (1300, &[(1300, tap)])],
-                &[(0, playing)],
-                Some(0),
-            ),
-            (
-                "an off-grid tap moves a bar's crossing: before it",
-                &[
-                    (2600, &[(2600, start(0, bar))]),
-                    (3150, &[(3150, tap)]),
-                    (3649, &[]),
-                ],
-                &[(0, waits(8))],
-                None,
-            ),
-            (
-                "an off-grid tap moves a bar's crossing: on it",
-                &[
-                    (2600, &[(2600, start(0, bar))]),
-                    (3150, &[(3150, tap)]),
-                    (3650, &[]),
-                ],
-                &[(0, playing)],
-                Some(0),
-            ),
-            (
-                "started again while waiting: waits afresh",
-                &[
-                    (1100, &[(1100, start(0, beat))]),
-                    (1200, &[(1200, start(0, bar))]),
-                    (1500, &[]),
-                ],
-                &[(0, waits(4))],
-                None,
-            ),
-        ];
-        for (name, wakes, plays, latest) in cases {
-            let mut state = at_120();
-            for (now, sent) in wakes {
-                state = wake(state, *now, sent);
-            }
-            let now: Vec<_> = state
-                .plays
-                .iter()
-                .map(|play| (play.play.slot(), play.state))
-                .collect();
-            assert_eq!(now, plays, "{name}");
-            let mut orders: Vec<_> = state.plays.sounding().map(|play| play.order).collect();
-            orders.sort_unstable();
-            orders.dedup();
-            assert_eq!(
-                orders.len(),
-                state.plays.sounding().count(),
-                "{name}: a tie"
-            );
-            let last = state.plays.sounding().max_by_key(|play| play.order);
-            assert_eq!(last.map(|play| play.play.slot()), latest, "{name}");
-        }
-    }
-
-    #[test]
-    fn a_cancelled_play_ends_and_frees_its_slot() {
-        let start = EngineCommand::Start {
-            play: play(0),
-            look: 7,
-            rank: Rank::Show,
-            when: When::Bar,
-        };
-        let state = wake(at_120(), 1100, &[(1100, start)]);
-        let state = wake(
-            state,
-            1200,
-            &[(1200, EngineCommand::Keep { play: play(0) })],
-        );
-        assert!(!state.plays.has(0));
-        // and it never sounds: past its bar, nothing launched
-        let later = wake(state, 2500, &[]);
-        assert!(later.plays.iter().next().is_none());
-    }
-
-    /// Every cell of "A play on the tick" (`docs/engine.md`): beat n at n * 500 ms, the
-    /// play in slot 0 set up at 1100 ms, each event in a later wake.
-    #[test]
-    fn a_play_on_the_tick_follows_its_table() {
-        let (first, second) = (play(0), PlayId::new(0, 2).unwrap());
-        let start = |play, rank, when| EngineCommand::Start {
-            play,
-            look: 7,
-            rank,
-            when,
-        };
-        let removing = MixRules {
-            manual_end: ManualEnd::UntilStop,
-            ..MixRules::default()
-        };
-        let staying = MixRules {
-            other_end: OtherEnd::Stay,
-            ..MixRules::default()
-        };
-        let set_up = |commands: &[EngineCommand]| {
-            let sent: Vec<_> = commands.iter().map(|command| (1100, *command)).collect();
-            wake(at_120(), 1100, &sent)
-        };
-        let keep = EngineCommand::Keep { play: first };
-        let manual = |when| start(first, Rank::Manual, when);
-        let (off, waiting) = (set_up(&[]), set_up(&[manual(When::Beat)]));
-        let (playing, kept) = (set_up(&[manual(When::Now)]), set_up(&[manual(When::Now), keep]));
-        // (event, wake at, its command): the table's columns, in order
-        let events = [
-            ("Start, Now", 1200, Some(start(second, Rank::Manual, When::Now))),
-            ("Start, Beat, not reached", 1200, Some(start(second, Rank::Manual, When::Beat))),
-            ("Start, boundary reached", 1500, Some(start(second, Rank::Manual, When::Beat))),
-            ("grid reaches the beat", 1600, None),
-            ("Keep", 1200, Some(keep)),
-            ("Release", 1200, Some(EngineCommand::Release { play: first })),
-            ("ReleaseAll", 1200, Some(EngineCommand::ReleaseAll)),
-            ("Rules, Manual ends on a stop", 1200, Some(EngineCommand::Rules { rules: removing })),
-            ("Rules, Manual kept", 1200, Some(EngineCommand::Rules { rules: staying })),
-        ];
-        let first_is = |state| Some((1, state));
-        let (fresh, fresh_waiting) = (
-            Some((2, PlayState::Playing)),
-            Some((2, PlayState::Waiting { beat: 3 })),
-        );
-        let (on_3, plays, held) = (
-            first_is(PlayState::Waiting { beat: 3 }),
-            first_is(PlayState::Playing),
-            first_is(PlayState::Kept),
-        );
-        // (state, slot 0 after each event as (generation, state), takes a plan for it)
-        let rows = [
-            ("off", off, [fresh, fresh_waiting, fresh, None, None, None, None, None, None], false),
-            ("Waiting", waiting, [fresh, fresh_waiting, fresh, plays, None, None, None, on_3, on_3], true),
-            ("Playing", playing, [fresh, fresh_waiting, fresh, plays, held, None, None, plays, plays], true),
-            ("Kept", kept, [fresh, fresh_waiting, fresh, held, held, None, None, None, held], false),
-        ];
-        for (name, state, after, takes_plan) in rows {
-            assert_eq!(state.plays.takes_plan(first), takes_plan, "{name}: Plan");
-            assert!(!state.plays.takes_plan(second), "{name}: Plan of another play");
-            for ((event, at, command), expected) in events.iter().zip(after) {
-                let sent: Vec<_> = command.iter().map(|command| (*at, *command)).collect();
-                let slot = wake(state, *at, &sent).plays.at(0);
-                let got = slot.map(|play| (play.play.generation, play.state));
-                assert_eq!(got, expected, "{name} + {event}");
-            }
-        }
-        // ReleaseAll lets only Manual go; the rules end a kept play of their rank only
-        let show_kept = set_up(&[start(first, Rank::Show, When::Now), keep]);
-        let show_cases = [
-            (EngineCommand::ReleaseAll, Some(PlayState::Kept)),
-            (EngineCommand::Rules { rules: staying }, Some(PlayState::Kept)),
-            (EngineCommand::Rules { rules: MixRules::default() }, None),
-        ];
-        for (command, expected) in show_cases {
-            let state = wake(show_kept, 1200, &[(1200, command)]);
-            let got = state.plays.at(0).map(|play| play.state);
-            assert_eq!(got, expected, "Show, Kept + {command:?}");
-        }
-    }
-
-    #[test]
-    fn a_play_starts_at_its_crossing_and_a_tap_moves_no_running_play() {
-        let start = |when| EngineCommand::Start {
-            play: play(0),
-            look: 7,
-            rank: Rank::Manual,
-            when,
-        };
-        // at once: beat zero in its applying frame, the wake at 1600
-        let state = wake(at_120(), 1600, &[(1100, start(When::Now))]);
-        assert!(close(state.plays.iter().next().unwrap().start, 3.2));
-        // a change of tempo after it, in the same wake: still beat zero in that frame
-        let tempo = |sent: &[(u64, EngineCommand)]| {
-            let mut sent = sent.to_vec();
-            sent.insert(0, (100, start(When::Now)));
-            let state = wake(at_120(), 500, &sent);
-            let play = *state.plays.iter().next().unwrap();
-            (play.start, state.clock.beat_at(state.clock.at()))
-        };
-        let slow = EngineCommand::Feed {
-            bpm: Bpm::new(60).unwrap(),
-        };
-        let keep = EngineCommand::Keep { play: play(0) };
-        let changes: [(&str, &[(u64, EngineCommand)]); 5] = [
-            ("the feed at 60", &[(200, slow)]),
-            ("a tap", &[(200, EngineCommand::Tap)]),
-            ("a tap at its frame", &[(500, EngineCommand::Tap)]),
-            ("released", &[(200, EngineCommand::ReleaseTempo)]),
-            ("kept, then the feed at 60", &[(150, keep), (200, slow)]),
-        ];
-        for (name, sent) in changes {
-            let (start, elapsed) = tempo(sent);
-            assert_eq!(start, elapsed, "{name}");
-        }
-        // on a beat in a late wake: from its crossing at 1500, 0.2 beats on by the frame
-        let state = wake(at_120(), 1100, &[(1100, start(When::Beat))]);
-        let state = wake(state, 1600, &[]);
-        assert!(close(state.plays.iter().next().unwrap().start, 3.0));
-        // a tap at 1700 moves the grid from 3.4 to 4; the elapsed count runs on
-        let untapped = wake(state, 1700, &[]);
-        let tapped = wake(state, 1700, &[(1700, EngineCommand::Tap)]);
-        assert_eq!(tapped.clock.elapsed_now(), untapped.clock.elapsed_now());
-        assert!(close(untapped.clock.grid(), 3.4) && close(tapped.clock.grid(), 4.0));
-        assert_eq!(tapped.plays, untapped.plays);
-    }
-
-    #[test]
-    fn a_press_sent_before_its_boundary_but_seen_after_plays_from_the_frame() {
-        let start = |when| EngineCommand::Start {
-            play: play(0),
-            look: 7,
-            rank: Rank::Manual,
-            when,
-        };
-        let playing = PlayState::Playing;
-        // 120 BPM: beat n at n * 500 ms, a bar every 2000 ms. The wake at `missed` counted
-        // its commands before the press came in; the wake at `seen` takes it.
-        // (name, when, sent, missed, seen, state, start in beats when playing)
-        type Case = (&'static str, When, u64, u64, u64, PlayState, Option<f64>);
-        let cases: [Case; 4] = [
-            ("a beat 1 ms before beat 3", When::Beat, 1499, 1501, 1520, playing, Some(3.04)),
-            ("a beat on beat 3", When::Beat, 1500, 1501, 1520, playing, Some(3.04)),
-            ("a bar 1 ms before bar 1", When::Bar, 1999, 2001, 2020, playing, Some(4.04)),
-            (
-                "a beat 1 ms after beat 3",
-                When::Beat,
-                1501,
-                1502,
-                1520,
-                PlayState::Waiting { beat: 4 },
-                None,
-            ),
-        ];
-        for (name, when, sent, missed, seen, expected, beats) in cases {
-            let state = wake(wake(at_120(), missed, &[]), seen, &[(sent, start(when))]);
-            let play = *state.plays.iter().next().unwrap();
-            assert_eq!(play.state, expected, "{name}");
-            if let Some(beats) = beats {
-                assert!(close(play.start, beats), "{name}: {:?}", play.start);
-            }
-        }
-    }
-
-    #[test]
-    fn taps_drained_in_one_wake_count_at_their_own_times() {
-        let cases = [
-            (
-                "750 ms apart",
-                1100,
-                1850,
-                Source::Tapped {
-                    at: Duration::from_millis(1850),
-                },
-                750,
-            ),
-            (
-                "sent at once: a bounce",
-                1100,
-                1100,
-                Source::OneTap {
-                    at: Duration::from_millis(1100),
-                },
-                500,
-            ),
-        ];
-        for (name, first, second, source, period) in cases {
-            let tap = EngineCommand::Tap;
-            let state = wake(at_120(), 2000, &[(first, tap), (second, tap)]);
-            assert_eq!(state.clock.source(), source, "{name}");
-            assert_eq!(
-                state.clock.period(),
-                Duration::from_millis(period),
-                "{name}"
-            );
-        }
-    }
-
-    #[test]
-    fn update_turns_a_command_into_a_new_state() {
-        let set = |universe, address, value| EngineCommand::SetChannel {
-            channel: channel(universe, address),
-            value,
-        };
-        let release = |universe, address| EngineCommand::ReleaseChannel {
-            channel: channel(universe, address),
-        };
-        let max = State {
-            frame: u64::MAX,
-            ..CALM
-        };
-        // (state, held before, command, state after, held after)
-        let cases = [
-            (
-                CALM,
-                raw(&[]),
-                tick(0),
-                State { frame: 8, ..CALM },
-                raw(&[]),
-            ), // the beat is not due yet: it stays
-            (
-                CALM,
-                raw(&[]),
-                EngineCommand::Tick { now: BEAT },
-                State {
-                    frame: 8,
-                    now: BEAT,
-                    beat: BEAT * 2,
-                    ..CALM
-                },
-                raw(&[]),
-            ), // the beat is due: it moves on
-            (max, raw(&[]), tick(0), State { frame: 0, ..CALM }, raw(&[])), // wraps
-            (CALM, raw(&[]), set(1, 1, 255), CALM, raw(&[(1, 1, 255)])),
-            (
-                CALM,
-                raw(&[(2, 512, 9)]),
-                set(2, 512, 10),
-                CALM,
-                raw(&[(2, 512, 10)]),
-            ),
-            (
-                CALM,
-                raw(&[(1, 3, 9), (1, 4, 5)]),
-                release(1, 3),
-                CALM,
-                raw(&[(1, 4, 5)]),
-            ),
-            (CALM, raw(&[]), release(1, 3), CALM, raw(&[])), // nothing held: no change
-            (
-                CALM,
-                raw(&[(1, 1, 1), (2, 2, 2)]),
-                EngineCommand::ReleaseAll,
-                CALM,
-                raw(&[]),
-            ),
-            (
-                CALM,
-                raw(&[(1, 1, 80)]),
-                EngineCommand::Blackout { on: true },
-                DARK,
-                raw(&[(1, 1, 80)]),
-            ),
-            (
-                DARK,
-                raw(&[(1, 1, 80)]),
-                EngineCommand::Blackout { on: false },
-                CALM,
-                raw(&[(1, 1, 80)]),
-            ),
-            (DARK, raw(&[]), set(1, 2, 50), DARK, raw(&[(1, 2, 50)])), // held in a blackout
-            (CALM, raw(&[]), set(1, 2, 0), CALM, raw(&[(1, 2, 0)])),   // held at 0 is held
-            (CALM, raw(&[(1, 2, 0)]), release(1, 2), CALM, raw(&[])),
-            (
-                CALM,
-                raw(&[(1, 2, 0)]),
-                release(1, 3),
-                CALM,
-                raw(&[(1, 2, 0)]),
-            ),
-        ];
-        for (state, (mut universes, mut holds), command, after, raw_after) in cases {
-            let result = update(state, &mut universes, &mut holds, &mut [], command);
-            assert_eq!(result, after, "{command:?}");
-            assert_eq!((universes, holds), raw_after, "{command:?}");
-        }
-    }
-
-    #[test]
-    fn a_light_command_changes_the_values_of_its_lights() {
-        let all = Lights::new(4).unwrap();
-        let run = |first, count| {
-            LightRun::new(LightNumber::new(first, all).unwrap(), count, all).unwrap()
-        };
-        let red = Light {
-            intensity: None,
-            colour: Some(Rgb {
-                red: 0xffff,
-                green: 0,
-                blue: 0,
-            }),
-            ..Light::DARK
-        };
-        let lit = Light {
-            intensity: Some(0x8000),
-            ..Light::DARK
-        };
-        let held_black = Light {
-            colour: Some(Rgb {
-                red: 0,
-                green: 0,
-                blue: 0,
-            }),
-            ..Light::DARK
-        };
-        let dark = Light::DARK;
-        let grab = GrabId { generation: 1 };
-        let set = |value| move |lights| LightChange::Grab { value, grab }.on(lights);
-        let set_red = set(Value::Colour(Rgb {
-            red: 0xffff,
-            green: 0,
-            blue: 0,
-        }));
-        let half = set(Value::Intensity(0x8000));
-        let full_red = Light {
-            intensity: Some(0x8000),
-            ..red
-        };
-        let release = |property| move |lights| LightChange::Release { property }.on(lights);
-        let let_go = release(Property::Intensity);
-        let black = release(Property::Colour);
-        // (lights before, command, lights after)
-        let cases = [
-            ([dark; 4], set_red(run(1, 2)), [dark, red, red, dark]),
-            ([dark; 4], half(run(3, 1)), [dark, dark, dark, lit]),
-            // black set is held black, not nothing held
-            (
-                [dark; 4],
-                set(Value::Colour(Rgb::BLACK))(run(0, 1)),
-                [held_black, dark, dark, dark],
-            ),
-            // intensity and colour are held on their own
-            ([red; 4], half(run(0, 1)), [full_red, red, red, red]),
-            ([lit; 4], set_red(run(0, 4)), [full_red; 4]),
-            (
-                [full_red; 4],
-                EngineCommand::Darken { lights: run(1, 3) },
-                [full_red, dark, dark, dark],
-            ),
-            ([red; 4], EngineCommand::Writers, [red; 4]),
-            // a release lets one property go back to its default, on its own
-            (
-                [full_red; 4],
-                let_go(run(1, 2)),
-                [full_red, red, red, full_red],
-            ),
-            (
-                [full_red; 4],
-                black(run(0, 1)),
-                [lit, full_red, full_red, full_red],
-            ),
-            ([full_red; 4], black(run(0, 4)), [lit; 4]),
-            // releasing what is not held does nothing
-            ([red; 4], let_go(run(0, 4)), [red; 4]),
-            ([lit; 4], black(run(0, 4)), [lit; 4]),
-            ([dark; 4], let_go(run(0, 4)), [dark; 4]),
-            ([dark; 4], black(run(0, 4)), [dark; 4]),
-        ];
-        for (before, command, after) in cases {
-            let mut lights = before.map(|values| {
-                let mut held = Held::NONE;
-                let each = [
-                    values.intensity.map(Value::Intensity),
-                    values.colour.map(Value::Colour),
-                ];
-                for value in each.into_iter().flatten() {
-                    held.change(LightChange::Grab { value, grab }, 1);
-                }
-                held
-            });
-            let (mut universes, mut holds) = raw(&[(1, 1, 5)]);
-            let state = update(CALM, &mut universes, &mut holds, &mut lights, command);
-            assert_eq!(
-                State {
-                    order: CALM.order,
-                    ..state
-                },
-                CALM,
-                "{command:?}"
-            );
-            assert_eq!(lights.map(|held| *held.values()), after, "{command:?}");
-            assert_eq!((universes, holds), raw(&[(1, 1, 5)]), "{command:?}");
-        }
-    }
-
-    #[test]
-    fn a_light_run_stays_in_the_lights_of_the_engine() {
-        let all = Lights::new(4).unwrap();
-        let number = |n| LightNumber::new(n, all).unwrap();
-        // (first, count, made)
-        let cases = [
-            (0, 4, true),
-            (3, 1, true),
-            (3, 2, false),
-            (0, 0, false),
-            (2, u16::MAX, false),
-        ];
-        for (first, count, made) in cases {
-            assert_eq!(
-                LightRun::new(number(first), count, all).is_some(),
-                made,
-                "{first} {count}"
-            );
-        }
-        // a shorter buffer of values: only the lights it has
-        let mut two = [Light::DARK; 2];
-        assert_eq!(
-            LightRun::new(number(1), 3, all).unwrap().of(&mut two).len(),
-            1
-        );
-    }
-
-    #[test]
-    fn a_channel_on_a_shorter_buffer_changes_nothing() {
-        let (mut one, mut holds) = ([Levels::ZERO], [ChannelSet::NONE]);
-        let command = EngineCommand::SetChannel {
-            channel: channel(2, 1),
-            value: 9,
-        };
-        assert_eq!(update(CALM, &mut one, &mut holds, &mut [], command), CALM);
-        assert_eq!((one, holds), ([Levels::ZERO], [ChannelSet::NONE]));
-    }
-
-    #[test]
-    fn frame_resolves_the_lights_and_mix_decides_each_channel() {
-        let all = Lights::new(1).unwrap();
-        let light = LightNumber::new(0, all).unwrap();
-        let takes = |of, address| Writer::Takes {
-            light,
-            take: Take {
-                of,
-                ..Take::INTENSITY
-            },
-            at: Place::Byte(channel(1, address)),
-            unheld: 0,
-        };
-        let shutter = Writer::Fixed {
-            at: channel(1, 4),
-            value: 200,
-        };
-        // a PAR at 1: red, green, blue, a shutter open at 200
-        let par = [
-            takes(Part::Red, 1),
-            takes(Part::Green, 2),
-            takes(Part::Blue, 3),
-            shutter,
-        ];
-        // two fixtures on channel 1: a light value and a default
-        let light_then_default = [
-            takes(Part::Red, 1),
-            Writer::Fixed {
-                at: channel(1, 1),
-                value: 100,
-            },
-        ];
-        let default_then_light = [
-            Writer::Fixed {
-                at: channel(1, 1),
-                value: 100,
-            },
-            takes(Part::Red, 1),
-        ];
-        let red = [Light {
-            colour: Some(Rgb {
-                red: 0xffff,
-                green: 0,
-                blue: 0,
-            }),
-            ..Light::DARK
-        }];
-        let lit = |more: &[(u16, u16, u8)]| {
-            let mut levels = vec![(1, 1, 255), (1, 4, 200)];
-            levels.extend_from_slice(more);
-            held(&levels)
-        };
-        // (row, state, raw held, writers, out)
-        type Case<'a> = (
-            &'a str,
-            State,
-            &'a [(u16, u16, u8)],
-            &'a [Writer],
-            [Levels; 2],
-        );
-        let cases: [Case; 13] = [
-            ("nothing", CALM, &[], &[], held(&[])),
-            (
-                "raw only",
-                CALM,
-                &[(1, 1, 255), (2, 512, 3)],
-                &[],
-                held(&[(1, 1, 255), (2, 512, 3)]),
-            ),
-            ("the light", CALM, &[], &par, lit(&[])),
-            (
-                "2 raw over the light",
-                CALM,
-                &[(1, 2, 9)],
-                &par,
-                lit(&[(1, 2, 9)]),
-            ),
-            (
-                "2 raw at 0 over the light",
-                CALM,
-                &[(1, 1, 0)],
-                &par,
-                held(&[(1, 4, 200)]),
-            ),
-            (
-                "2 raw over a default",
-                CALM,
-                &[(1, 4, 7)],
-                &par,
-                held(&[(1, 1, 255), (1, 4, 7)]),
-            ),
-            (
-                "2 raw beside the light",
-                CALM,
-                &[(2, 512, 3)],
-                &par,
-                lit(&[(2, 512, 3)]),
-            ),
-            ("1 blackout", DARK, &[], &par, held(&[])),
-            (
-                "1 blackout over raw",
-                DARK,
-                &[(1, 2, 9), (2, 512, 3)],
-                &par,
-                held(&[]),
-            ),
-            ("1 blackout, raw only", DARK, &[(1, 1, 255)], &[], held(&[])),
-            (
-                "3 a light over a default",
-                CALM,
-                &[],
-                &light_then_default,
-                held(&[(1, 1, 255)]),
-            ),
-            (
-                "3 a light over a default",
-                CALM,
-                &[],
-                &default_then_light,
-                held(&[(1, 1, 255)]),
-            ),
-            (
-                "2 raw over both",
-                CALM,
-                &[(1, 1, 9)],
-                &light_then_default,
-                held(&[(1, 1, 9)]),
-            ),
-        ];
-        for (row, state, raw_held, writers, expected) in cases {
-            let (universes, holds) = raw(raw_held);
-            let mut channels = Box::new(Channels::NEW);
-            channels.value[0].0[8] = 9; // whatever was there before
-            frame(&state, &universes, &holds, &red, writers, &mut channels);
-            assert_eq!(channels.values()[..2], expected, "{row}");
-            assert!(
-                channels.values()[2..].iter().all(|u| *u == Levels::ZERO),
-                "{row}"
-            );
-        }
-    }
-
-    #[test]
-    fn frame_says_who_set_each_channel_and_a_release_gives_it_back() {
-        let all = Lights::new(1).unwrap();
-        let light = LightNumber::new(0, all).unwrap();
-        // a dimmer at 1, a shutter open at 200 at 2
-        let writers = [
-            Writer::Takes {
-                light,
-                take: Take::INTENSITY,
-                at: Place::Byte(channel(1, 1)),
-                unheld: 0,
-            },
-            Writer::Fixed {
-                at: channel(1, 2),
-                value: 200,
-            },
-        ];
-        let lit = [Light {
-            intensity: Some(0xffff),
-            ..Light::DARK
-        }];
-        let set = |universe, address, value| EngineCommand::SetChannel {
-            channel: channel(universe, address),
-            value,
-        };
-        let release = |universe, address| EngineCommand::ReleaseChannel {
-            channel: channel(universe, address),
-        };
-        let blackout = |on| EngineCommand::Blackout { on };
-        use SourceTag as S;
-        // (row, commands, channels 1/1, 1/2 and 2/512: byte and source)
-        type Seen = [(u8, SourceTag); 3];
-        let cases: [(&str, Vec<EngineCommand>, Seen); 7] = [
-            (
-                "nothing held",
-                vec![],
-                [(255, S::LIGHTS), (200, S::REST), (0, S::REST)],
-            ),
-            (
-                "raw 91 over the light",
-                vec![set(1, 1, 91)],
-                [(91, S::RAW), (200, S::REST), (0, S::REST)],
-            ),
-            (
-                "raw 91 released",
-                vec![set(1, 1, 91), release(1, 1)],
-                [(255, S::LIGHTS), (200, S::REST), (0, S::REST)],
-            ),
-            (
-                "raw on the last channel",
-                vec![set(2, 512, 91)],
-                [(255, S::LIGHTS), (200, S::REST), (91, S::RAW)],
-            ),
-            (
-                "blackout over raw and light",
-                vec![set(2, 512, 91), blackout(true)],
-                [(0, S::LIGHTS), (0, S::REST), (0, S::RAW)],
-            ),
-            (
-                "blackout off, the hold comes back",
-                vec![set(2, 512, 91), blackout(true), blackout(false)],
-                [(255, S::LIGHTS), (200, S::REST), (91, S::RAW)],
-            ),
-            (
-                "every raw channel released",
-                vec![
-                    set(1, 1, 91),
-                    set(2, 512, 91),
-                    EngineCommand::ReleaseChannels,
-                ],
-                [(255, S::LIGHTS), (200, S::REST), (0, S::REST)],
-            ),
-        ];
-        for (row, commands, expected) in cases {
-            let (mut universes, mut holds) = raw(&[]);
-            let mut state = CALM;
-            for command in commands {
-                state = update(state, &mut universes, &mut holds, &mut [], command);
-            }
-            let mut channels = Box::new(Channels::NEW);
-            frame(&state, &universes, &holds, &lit, &writers, &mut channels);
-            let seen = [(1, 1), (1, 2), (2, 512)].map(|(universe, address)| {
-                let at = channel(universe, address);
-                let byte = channels.values()[usize::from(universe - 1)].0[usize::from(address - 1)];
-                (byte, channels.source(at))
-            });
-            assert_eq!(seen, expected, "{row}");
-        }
-    }
-
-    fn output(number: u8) -> OutputNumber {
-        OutputNumber::try_from(number).unwrap()
-    }
-
-    fn set_output(number: u8, rate: Rate) -> EngineCommand {
-        EngineCommand::Attach {
-            output: output(number),
-            universes: RunNumbers { first: 1, count: 1 }
-                .check(Universes::ONE)
-                .unwrap(),
-            rate,
-        }
-    }
-
-    /// Per wake: the time in ms and the outputs served.
-    type Wakes = Vec<(u64, Vec<u8>)>;
-
-    /// Runs the schedule like the output thread does, on time: wake, hand every due
-    /// output a frame. Returns, per wake, the time in ms and the outputs served.
-    fn run(
-        mut state: State,
-        until_ms: u64,
-        mut at: impl FnMut(u64) -> Vec<EngineCommand>,
-    ) -> Wakes {
-        let mut wakes = vec![];
-        let mut universes = [Levels::ZERO];
-        loop {
-            let now = next_wake(&state);
-            let ms = u64::try_from(now.as_millis()).unwrap();
-            if ms > until_ms {
-                return wakes;
-            }
-            state = update(
-                state,
-                &mut universes,
-                &mut [],
-                &mut [],
-                EngineCommand::Tick { now },
-            );
-            for command in at(ms) {
-                state = update(state, &mut universes, &mut [], &mut [], command);
-            }
-            let served: Vec<u8> = due(&state, now).map(|n| n.slot() as u8 + 1).collect();
-            for &number in &served {
-                let handed = EngineCommand::Handed {
-                    output: output(number),
-                    at: now,
-                };
-                state = update(state, &mut universes, &mut [], &mut [], handed);
-            }
-            wakes.push((ms, served));
-        }
-    }
-
-    #[test]
-    fn the_engine_wakes_when_the_next_output_is_due() {
-        let calm = State::new(Priority::RealTime);
-        let (thirty, forty_four, sixty) = (Rate::Thirty, Rate::FortyFour, Rate::Sixty);
-        // (outputs set on the first wake, until ms, wakes: ms and outputs served)
-        // 60 and 30 a second meet at 56.06 ms, 1 ns apart: one wake serves both.
-        let cases: [(Vec<EngineCommand>, u64, Wakes); 4] = [
-            (vec![], 70, vec![(22, vec![]), (45, vec![]), (68, vec![])]), // the beat
-            (
-                vec![set_output(1, sixty)],
-                40,
-                vec![(22, vec![1]), (39, vec![1])],
-            ),
-            (
-                vec![set_output(1, sixty), set_output(2, thirty)],
-                60,
-                vec![(22, vec![1, 2]), (39, vec![1]), (56, vec![1, 2])],
-            ),
-            (
-                vec![
-                    set_output(1, sixty),
-                    set_output(2, thirty),
-                    set_output(3, forty_four),
-                ],
-                60,
-                vec![
-                    (22, vec![1, 2, 3]),
-                    (39, vec![1]),
-                    (45, vec![3]),
-                    (56, vec![1, 2]),
-                ],
-            ),
-        ];
-        for (commands, until, expected) in cases {
-            let mut first = Some(commands.clone());
-            let wakes = run(calm, until, |_| first.take().unwrap_or_default());
-            assert_eq!(wakes, expected, "{commands:?}");
-        }
-    }
-
-    #[test]
-    fn outputs_added_or_removed_while_running_change_the_wakes() {
-        let calm = State::new(Priority::RealTime);
-        let remove = EngineCommand::RemoveOutput { output: output(1) };
-        let wakes = run(calm, 100, |ms| match ms {
-            22 => vec![set_output(1, Rate::Sixty)],
-            39 => vec![set_output(2, Rate::Thirty)],
-            56 => vec![remove],
-            _ => vec![],
-        });
-        let expected = vec![
-            (22, vec![1]),    // added on the beat: served at once
-            (39, vec![1, 2]), // the second one too
-            (56, vec![]),     // 1 removed before it was served
-            (72, vec![2]),    // only 2 is left, on its own rate; no beat while it is set
-        ];
-        assert_eq!(wakes, expected);
-    }
-
-    #[test]
-    fn a_new_output_joins_the_phase_of_its_rate() {
-        let calm = State::new(Priority::RealTime);
-        let (thirty, sixty) = (Rate::Thirty, Rate::Sixty);
-        // (output added on the wake at 39 ms, wakes: ms and outputs served)
-        let cases = [
-            // a rate that runs: its next frame, with the others of its rate
-            (
-                set_output(3, thirty),
-                vec![(22, vec![1, 2]), (39, vec![1]), (56, vec![1, 2, 3])],
-            ),
-            (
-                set_output(3, sixty),
-                vec![(22, vec![1, 2]), (39, vec![1, 3]), (56, vec![1, 2, 3])],
-            ),
-            // a rate of its own: at once
-            (
-                set_output(3, Rate::FortyFour),
-                vec![(22, vec![1, 2]), (39, vec![1, 3]), (56, vec![1, 2])],
-            ),
-        ];
-        for (added, expected) in cases {
-            let wakes = run(calm, 60, |ms| match ms {
-                22 => vec![set_output(1, sixty), set_output(2, thirty)],
-                39 => vec![added],
-                _ => vec![],
-            });
-            assert_eq!(wakes, expected, "{added:?}");
-        }
-    }
-
-    #[test]
-    fn after_the_last_output_is_removed_the_engine_wakes_within_one_beat() {
-        let calm = State::new(Priority::RealTime);
-        let one_beat = u64::try_from(BEAT.as_millis()).unwrap() + 1;
-        let (thirty, forty_four, sixty) = (Rate::Thirty, Rate::FortyFour, Rate::Sixty);
-        // (outputs set on the first wake, all removed on the first wake after ms)
-        let cases: [(&[(u8, Rate)], u64); 5] = [
-            (&[(1, sixty)], 50),
-            (&[(1, sixty)], 17_000), // about 1000 wakes
-            (&[(1, sixty), (2, forty_four)], 17_000),
-            (&[(1, thirty)], 17_000),
-            (&[(1, sixty), (2, thirty), (3, forty_four)], 17_000),
-        ];
-        for (outputs, after) in cases {
-            let (mut added, mut removed) = (false, None);
-            let wakes = run(calm, after + 100, |ms| {
-                if !added {
-                    added = true;
-                    return outputs
-                        .iter()
-                        .map(|&(n, rate)| set_output(n, rate))
-                        .collect();
-                }
-                if removed.is_some() || ms < after {
-                    return vec![];
-                }
-                removed = Some(ms);
-                let remove =
-                    |&(n, _): &(u8, Rate)| EngineCommand::RemoveOutput { output: output(n) };
-                outputs.iter().map(remove).collect()
-            });
-            let removed = removed.unwrap();
-            let next = wakes.iter().map(|&(ms, _)| ms).find(|&ms| ms > removed);
-            assert!(
-                next.is_some_and(|ms| ms - removed <= one_beat),
-                "{outputs:?}: removed at {removed} ms, next wake {next:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn after_a_long_stall_each_output_starts_over_from_now() {
-        let mut universes = [Levels::ZERO];
-        let mut state = State::new(Priority::RealTime);
-        state = update(
-            state,
-            &mut universes,
-            &mut [],
-            &mut [],
-            set_output(1, Rate::Sixty),
-        );
-        state = update(
-            state,
-            &mut universes,
-            &mut [],
-            &mut [],
-            set_output(2, Rate::Thirty),
-        );
-        // the machine slept for a second
-        let now = Duration::from_secs(1);
-        state = update(
-            state,
-            &mut universes,
-            &mut [],
-            &mut [],
-            EngineCommand::Tick { now },
-        );
-        let served: Vec<_> = due(&state, now).collect();
-        assert_eq!(served, vec![output(1), output(2)]);
-        for number in served {
-            let handed = EngineCommand::Handed {
-                output: number,
-                at: now,
-            };
-            state = update(state, &mut universes, &mut [], &mut [], handed);
-        }
-        assert_eq!(next_wake(&state), now + Rate::Sixty.period());
-        let thirty = state.outputs[1].unwrap();
-        assert_eq!(thirty.due, now + Rate::Thirty.period());
-    }
-
-    #[test]
-    fn next_frame_catches_up_when_late_and_resyncs_after_a_stall() {
-        let period = Duration::from_millis(10);
-        let due = Duration::from_secs(5);
-        // (frames late, when the next frame is due)
-        let cases = [
-            (0, due + period),              // on time
-            (3, due + period),              // oversleep: make it up at once
-            (MAX_BEHIND, due + period),     // still catching up
-            (MAX_BEHIND + 1, due + period), // the last frame it still makes up
-            (20, due + period * 21),        // machine slept: start over from now
-        ];
-        for (late, expected) in cases {
-            let now = due + period * late;
-            assert_eq!(next_frame(due, now, period), expected, "{late} frames late");
-        }
-        assert_eq!(
-            next_frame(Duration::MAX, Duration::MAX, period),
-            Duration::MAX
-        );
-    }
-
-    #[test]
-    fn a_wake_that_serves_an_output_spins_the_last_millisecond_a_beat_only_sleeps() {
-        let mut universes = [Levels::ZERO];
-        let calm = State::new(Priority::RealTime);
-        let due = BEAT; // the beat, and the output's first frame
-        let with_output = update(
-            calm,
-            &mut universes,
-            &mut [],
-            &mut [],
-            set_output(1, Rate::Sixty),
-        );
-        let with_output = State {
-            outputs: with_output.outputs.map(|o| o.map(|o| Output { due, ..o })),
-            ..with_output
-        };
-        let us = Duration::from_micros;
-        // (state, µs before due, µs to sleep, spin until due)
-        let cases = [
-            (with_output, 22_727, 21_727, true), // a whole frame ahead
-            (with_output, 1_001, 1, true),
-            (with_output, 1_000, 0, true), // spin all of it
-            (with_output, 400, 0, true),
-            (with_output, 0, 0, true),
-            (calm, 22_727, 22_727, false), // no output: sleep to the beat
-            (calm, 400, 400, false),
-            (calm, 0, 0, false),
-        ];
-        for (state, ahead, sleep, spins) in cases {
-            let now = due - us(ahead);
-            let spin = spins.then_some(due);
-            assert_eq!(
-                wait(&state, now),
-                (us(sleep), spin),
-                "{ahead} µs ahead, spins {spins}"
-            );
-        }
-        // past due: no sleep
-        assert_eq!(wait(&with_output, due * 2), (Duration::ZERO, Some(due)));
-        assert_eq!(wait(&calm, due * 2), (Duration::ZERO, None));
-    }
-
-    #[test]
-    fn bucket_counts_by_100_microseconds() {
-        // (time in µs, bucket of 251, bucket of 501)
-        let cases = [
-            (0, 0, 0),
-            (99, 0, 0),
-            (100, 1, 1),
-            (250, 2, 2),
-            (9_999, 99, 99),
-            (24_999, 249, 249),
-            (25_000, 250, 250),
-            (49_999, 250, 499),
-            (u64::MAX, 250, 500),
-        ];
-        for (micros, lateness, latency) in cases {
-            let time = Duration::from_micros(micros);
-            assert_eq!(bucket::<LATENESS_BUCKETS>(time), lateness, "{micros} µs");
-            assert_eq!(bucket::<LATENCY_BUCKETS>(time), latency, "{micros} µs");
-        }
-    }
-
-    fn counts(counts: &[(usize, u64)]) -> Histogram<LATENESS_BUCKETS> {
-        let mut histogram = [0; LATENESS_BUCKETS];
-        for (bucket, count) in counts {
-            histogram[*bucket] = *count;
-        }
-        histogram
-    }
-
-    #[test]
-    fn rank_is_the_nearest_rank() {
-        // (total, percent, rank): ceil(percent / 100 x total), the textbook nearest rank
-        let full = 501 * u128::from(u64::MAX); // every bucket of a window at its most
-        let cases = [
-            (0, 99, 0),
-            (1, 0, 0),
-            (1, 99, 1),
-            (99, 99, 99),   // 98.01
-            (100, 99, 99),  // 99
-            (101, 99, 100), // 99.99
-            (100, 95, 95),  // 95
-            (101, 95, 96),  // 95.95
-            (100, 100, 100),
-            (100, 0, 0),
-            (100, 150, 100), // above 100 is 100
-            (full, 99, 9_149_400_593_119_200_505_524),
-        ];
-        for (total, percent, expected) in cases {
-            assert_eq!(rank(total, percent), expected, "{total}, {percent}");
-        }
-    }
-
-    #[test]
-    fn percentile_is_the_upper_edge_of_its_bucket_and_never_past_the_worst() {
-        let last = LATENESS_BUCKETS - 1;
-        let late = 30_000; // past the last edge, 25 ms
-        // (bucket and count, the worst time counted in µs, percent, result in µs)
-        let cases = [
-            (counts(&[]), 0, 99, None),
-            (counts(&[(0, 1)]), 99, 99, Some(99)), // the worst is in the bucket
-            (counts(&[(0, 99), (5, 1)]), 550, 99, Some(100)),
-            (counts(&[(0, 98), (5, 2)]), 550, 99, Some(550)),
-            (counts(&[(0, 98), (5, 2)]), 599, 99, Some(599)),
-            (counts(&[(3, 1000), (100, 11)]), 10_050, 99, Some(10_050)),
-            (counts(&[(3, 1000), (100, 11)]), late, 99, Some(10_100)),
-            (counts(&[(0, 95), (5, 5)]), 550, 95, Some(100)),
-            (counts(&[(0, 94), (5, 6)]), 550, 95, Some(550)),
-            (counts(&[(0, 1), (9, 1)]), 950, 95, Some(950)),
-            (counts(&[(0, 1), (last, 1)]), 2_000_000, 95, Some(2_000_000)), // a stall of 2 s
-            (counts(&[(last, 3)]), late, 50, Some(late)),
-            (counts(&[(0, 99), (last, 1)]), late, 99, Some(100)),
-            // half of 2 x u64::MAX counts in each: p99 is in the second, capped at the worst
-            (counts(&[(0, u64::MAX), (1, u64::MAX)]), 150, 99, Some(150)),
-            // a total that is no multiple of 100: the rank is rounded up
-            (counts(&[(0, 75), (5, 75)]), 550, 50, Some(100)), // rank 75
-            (counts(&[(0, 74), (5, 76)]), 550, 50, Some(550)),
-            (counts(&[(0, 76), (5, 75)]), 550, 50, Some(100)), // rank 76 of 151
-            (counts(&[(0, 76), (5, 75)]), 550, 51, Some(550)), // rank 78
-        ];
-        for (histogram, worst, percent, expected) in cases {
-            let worst = Duration::from_micros(worst);
-            assert_eq!(
-                percentile(&histogram, percent, worst),
-                expected.map(Duration::from_micros),
-                "p{percent} worst {worst:?}"
-            );
-        }
-    }
-}
+#[path = "../tests/unit/engine.rs"]
+mod tests;

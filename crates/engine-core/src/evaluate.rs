@@ -87,14 +87,14 @@ pub struct Elapsed(Moment);
 
 impl From<u64> for Elapsed {
     fn from(whole: u64) -> Self {
-        BeatTime::from(whole).since(0.into())
+        Self::between(whole.into(), 0.into())
     }
 }
 
-impl BeatTime {
+impl Elapsed {
     /// Subtract the exact start position, even if a tap has changed the clock's span.
-    pub fn since(self, start: Self) -> Elapsed {
-        let (now_count, now_part, now_span) = self.parts();
+    pub fn between(now: BeatTime, start: BeatTime) -> Self {
+        let (now_count, now_part, now_span) = now.parts();
         let (start_count, start_part, start_span) = start.parts();
         // One Q32 count has this many subcounts. The larger span divides the scale
         // exactly; only the smaller span can leave a fractional subcount. Keep
@@ -130,7 +130,7 @@ impl BeatTime {
                 time.divisor = divisor;
             }
         }
-        Elapsed(time)
+        Self(time)
     }
 }
 
@@ -426,6 +426,26 @@ mod tests {
 
     const BEAT: u64 = 1 << 32;
     const UNIT: u64 = BEAT / 16;
+
+    #[test]
+    fn elapsed_between_whole_counts_handles_boundaries_exactly() {
+        for (name, now, start, expected) in [
+            ("zero", 0, 0, 0),
+            ("first subcount", 1, 0, 1),
+            ("maximum", u64::MAX, 0, u64::MAX),
+            ("maximum adjacent", u64::MAX, u64::MAX - 1, 1),
+            ("same maximum", u64::MAX, u64::MAX, 0),
+            ("before start", u64::MAX - 1, u64::MAX, 0),
+            ("zero before start", 0, u64::MAX, 0),
+        ] {
+            let elapsed = Elapsed::between(now.into(), start.into());
+            assert_eq!(
+                (elapsed.0.count / elapsed.0.scale, elapsed.0.part),
+                (u128::from(expected), 0),
+                "{name}"
+            );
+        }
+    }
 
     #[derive(Default)]
     struct Graph {

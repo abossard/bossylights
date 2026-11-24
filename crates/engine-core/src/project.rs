@@ -549,7 +549,7 @@ impl Project {
 mod tests {
     use super::*;
     use crate::{
-        Channel, ChannelNumbers, Member, MemberList, Members, RunNumbers, Target, Text, kinds,
+        Channel, ChannelNumbers, Member, MemberList, Members, RunNumbers, Target, Text,
     };
 
     fn output(number: u8) -> OutputNumber {
@@ -566,8 +566,8 @@ mod tests {
     fn update_checks_a_command_against_the_project_and_says_what_to_do() {
         use ProjectEvent::{Attached, Client, OpenFailed, Opened};
         let empty = Project::new(Universes::ONE);
-        let kind = kinds::EXAMPLE;
-        let other = kinds::OTHER;
+        let kind = crate::EXAMPLE;
+        let other = crate::OTHER;
         let one = RunNumbers { first: 1, count: 1 };
         let run = one.check(Universes::ONE).unwrap();
         let numbers = |universe, address| ChannelNumbers { universe, address };
@@ -819,7 +819,7 @@ mod tests {
     #[test]
     fn changing_the_run_restarts_with_the_same_device() {
         let output = output(4);
-        let kind = kinds::EXAMPLE;
+        let kind = crate::EXAMPLE;
         let four = Universes::new(4).unwrap();
         let before = RunNumbers { first: 1, count: 2 };
         let set = |universes| {
@@ -918,7 +918,7 @@ mod tests {
         let two = Universes::new(2).unwrap();
         let numbers = |count| RunNumbers { first: 1, count };
         let (one_run, two_run) = (numbers(1).check(two).unwrap(), numbers(2).check(two).unwrap());
-        let (kind, other) = (kinds::EXAMPLE, kinds::OTHER);
+        let (kind, other) = (crate::EXAMPLE, crate::OTHER);
         let set_output = |kind, count| {
             Client(Command::SetOutput {
                 output: output(1),
@@ -1038,7 +1038,7 @@ mod tests {
     fn each_output_sends_its_kind_and_run_and_while_it_opens_the_next_too() {
         use ProjectEvent::{Attached, Client, OpenFailed, Opened};
         let four = Universes::new(4).unwrap();
-        let (kind, other) = (kinds::EXAMPLE, kinds::OTHER);
+        let (kind, other) = (crate::EXAMPLE, crate::OTHER);
         let run = |first, count| RunNumbers { first, count }.check(four).unwrap();
         let set = |number, kind, first, count| {
             Client(Command::SetOutput {
@@ -1093,7 +1093,7 @@ mod tests {
     fn an_output_streams_universes_when_its_run_has_them_all() {
         use ProjectEvent::{Attached, Client, OpenFailed, Opened};
         let four = Universes::new(4).unwrap();
-        let (kind, other) = (kinds::EXAMPLE, kinds::OTHER);
+        let (kind, other) = (crate::EXAMPLE, crate::OTHER);
         let run = |first, count| RunNumbers { first, count }.check(four).unwrap();
         let set = |number, kind, first, count| {
             Client(Command::SetOutput {

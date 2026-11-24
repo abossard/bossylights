@@ -18,11 +18,7 @@
 //! freeze that sample. The Mixer owns rank, start priority and the end rules.
 
 use crate::clock::{BeatTime, Clock, When};
-use crate::library::Text;
-use crate::mix::{GrabId, MixRules};
-use crate::patch::Target;
-use crate::property::{Light, Value};
-use crate::resolve::LightRun;
+use crate::{GrabId, Light, LightRun, MixRules, Value};
 use core::time::Duration;
 use serde::{Deserialize, Serialize};
 
@@ -31,27 +27,6 @@ pub const PLAYS: usize = 32;
 
 /// The most saved looks.
 pub const LOOKS: usize = 1024;
-
-/// A step: sparse values for the lights a target names. An absent property lets
-/// another source through; zero and black claim it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-pub struct Step {
-    pub target: Target,
-    pub values: Light,
-}
-
-/// A saved step row, also read from earlier show files.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-pub struct Saved {
-    pub look: u16,
-    #[cfg_attr(feature = "ts", ts(type = "string"))]
-    pub name: Text,
-    pub step: Step,
-}
 
 /// What a client asks of looks and plays. The front checks it against the saved looks
 /// and the patch.

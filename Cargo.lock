@@ -860,7 +860,6 @@ dependencies = [
  "axum",
  "engine",
  "engine-core",
- "engine-server",
  "fixture-library",
  "futures-util",
  "outputs",

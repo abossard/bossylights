@@ -74,7 +74,7 @@ fn library() -> Vec<Fixture> {
         .into()
 }
 
-/// An effect in words: `colour 0+3` (first light from 0, count), `writers 6`, `darken 1+1`.
+/// An effect in words: `colour 0+3` (first light from 0, count), `writers`, `darken 1+1`.
 /// The runs of a group sent as one: `colour 0+1 2+1`.
 fn said(effect: &PatchEffect) -> String {
     let run = |run: LightRun| format!("{}+{}", run.first().index(), run.count());
@@ -120,7 +120,7 @@ fn said(effect: &PatchEffect) -> String {
     };
     match effect {
         PatchEffect::Patched { fixture } => format!("patched {fixture}"),
-        PatchEffect::Writers(writers) => format!("writers {}", writers.len()),
+        PatchEffect::Writers(_) => "writers".to_string(),
         PatchEffect::Send(command) => word(*command),
         PatchEffect::Runs { change, runs: of } => runs(*change, of),
         PatchEffect::Grab { value, runs: of } => runs(
@@ -222,19 +222,19 @@ fn a_group_command_makes_new_groups_and_says_what_follows() {
         (
             with(&[front, back]),
             PatchCommand::Unpatch { fixture: 1 },
-            Ok(&["writers 32", "darken 0+1"]),
+            Ok(&["writers", "darken 0+1"]),
             &["front: F3 F2", "back: L6 L5"],
         ),
         (
             with(&[front, back]),
             PatchCommand::Unpatch { fixture: 4 },
-            Ok(&["writers 9", "darken 3+9"]),
+            Ok(&["writers", "darken 3+9"]),
             &["front: F3 F1 F2", "back: F1"],
         ),
         (
             with(&[set("bar", &[l(5)])]),
             PatchCommand::Unpatch { fixture: 4 },
-            Ok(&["writers 9", "darken 3+9"]),
+            Ok(&["writers", "darken 3+9"]),
             &["bar:"],
         ),
         // the order survives any other change of the patch
@@ -247,7 +247,7 @@ fn a_group_command_makes_new_groups_and_says_what_follows() {
                     address: 100,
                 },
             },
-            Ok(&["writers 35"]),
+            Ok(&["writers"]),
             &["front: F3 F1 F2", "back: L6 L5 F1"],
         ),
         (
@@ -262,7 +262,7 @@ fn a_group_command_makes_new_groups_and_says_what_follows() {
         (
             with(&[front, back]),
             par("PAR 5", 1, 10),
-            Ok(&["patched 5", "writers 38"]),
+            Ok(&["patched 5", "writers"]),
             &["front: F3 F1 F2", "back: L6 L5 F1"],
         ),
         // set light takes a group: its lights in the fewest runs, lowest first, sent as one

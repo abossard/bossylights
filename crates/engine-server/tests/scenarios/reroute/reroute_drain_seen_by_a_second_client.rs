@@ -1,8 +1,7 @@
 //! A second client observes the run while the adapter drains its last old write.
 
-mod common;
-#[path = "../../outputs/tests/common/stream.rs"]
-mod stream;
+use crate::output_stream as stream;
+use crate::wire_common as common;
 
 use engine::{Color, Device, Engine, Outcome, Rate, Universes, Wakes};
 use futures_util::{FutureExt, StreamExt};

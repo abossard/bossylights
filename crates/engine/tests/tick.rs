@@ -9,9 +9,9 @@ use std::time::Duration;
 #[test]
 fn with_no_output_the_counter_advances() {
     let (mut engine, _sender) = Engine::start(Universes::ONE).expect("the tick thread starts");
-    let before = engine.fresh().unwrap().state.frame;
+    let before = engine.fresh().unwrap().frame();
     mock::wait_until("the counter does not advance", || {
-        engine.latest().state.frame >= before + 3
+        engine.latest().frame() >= before + 3
     });
 }
 
@@ -35,7 +35,11 @@ fn dropping_the_engine_stops_the_tick_thread_and_releases_the_device() {
 fn every_frame_counts_how_late_its_output_was_served() {
     let (mut engine, mut sender) = Engine::start(Universes::ONE).expect("the tick thread starts");
     let output = OutputNumber::try_from(1).unwrap();
-    assert_eq!(engine.fresh().unwrap().lateness(output), None, "no output yet");
+    assert_eq!(
+        engine.fresh().unwrap().lateness(output),
+        None,
+        "no output yet"
+    );
     let run = RunNumbers { first: 1, count: 1 };
     mock::attach(&mut sender, Universes::ONE, 1, run, Rate::FortyFour);
     mock::wait_until("no frame was counted", || {
@@ -122,9 +126,12 @@ fn an_output_says_what_its_device_did_and_a_stuck_one_holds_up_no_other() {
     ];
     for (now, status, grows) in table {
         let counted = |engine: &mut Engine| {
-            let output = engine.latest().state.outputs[0].expect("output 1 is set");
+            let output = engine.latest().output(one).expect("output 1 is set");
             let c = output.counters;
-            (output.status, [c.accepted, c.dropped, c.failed][grows])
+            (
+                output.connection(),
+                [c.accepted, c.dropped, c.failed][grows],
+            )
         };
         let (_, before) = counted(&mut engine);
         let heard = two.frames();

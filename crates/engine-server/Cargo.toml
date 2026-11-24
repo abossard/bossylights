@@ -24,6 +24,14 @@ test = true # its pixel arithmetic has a test
 name = "send_to_frame"
 test = true
 
+[[test]]
+name = "admit"
+required-features = ["test-support"]
+
+[[test]]
+name = "api"
+required-features = ["test-support"]
+
 [dependencies]
 engine = { path = "../engine" }
 engine-core = { path = "../engine-core" }
@@ -40,7 +48,6 @@ tokio = { version = "1.54.1", features = ["rt", "macros", "net", "time", "sync"]
 test-support = []
 
 [dev-dependencies]
-engine-server = { path = ".", features = ["test-support"] } # its tests reach the hooks
 engine = { path = "../engine", features = ["test-support"] } # first_due_frame steps the tick
 outputs = { path = "../outputs" } # the hands-on checks find the adapter of a port
 rtrb = "0.4.1"

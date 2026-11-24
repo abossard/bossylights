@@ -51,6 +51,19 @@ impl HopHistory {
             .zip(hops.get(hops.len() / 2))
             .map_or(0.0, |(lower, upper)| (lower + upper) / 2.0)
     }
+
+    fn assess(&self, energy: f64) -> HopAssessment {
+        let previous = self.newest_first[0];
+        HopAssessment {
+            onset: energy >= MIN_ENERGY && energy - previous >= MIN_ENERGY.max(2.0 * self.median()),
+            level: level(energy.max(previous)),
+        }
+    }
+}
+
+struct HopAssessment {
+    onset: bool,
+    level: u8,
 }
 
 /// History used to decide the next onset on its capture clock.
@@ -160,18 +173,12 @@ impl Tracker {
     fn finish_hop(&mut self, end: u64, out: &mut Vec<Event>) {
         let hop = core::mem::take(&mut self.hop);
         let energy = hop.energy_sum / f64::from(hop.frames);
-        let previous = self.history.newest_first[0];
-        let onset = hop
-            .first_loud_at
-            .filter(|_| {
-                energy >= MIN_ENERGY
-                    && energy - previous >= MIN_ENERGY.max(2.0 * self.history.median())
-            })
-            .filter(|&at| {
-                self.onsets
-                    .last
-                    .is_none_or(|last| at.saturating_sub(last) >= MIN_ONSET_GAP)
-            });
+        let assessed = self.history.assess(energy);
+        let onset = hop.first_loud_at.filter(|_| assessed.onset).filter(|&at| {
+            self.onsets
+                .last
+                .is_none_or(|last| at.saturating_sub(last) >= MIN_ONSET_GAP)
+        });
         if let Some(at) = onset {
             self.hear_onset(at, out);
             self.quiet_through = at;
@@ -180,11 +187,10 @@ impl Tracker {
             self.quiet_through = self.quiet_through.max(end);
         }
         if self.second_hop {
-            let level = level(energy.max(previous));
             self.age_onsets(self.quiet_through);
             out.push(Event::Reading {
                 at: end,
-                level,
+                level: assessed.level,
                 signal: self.onset_signal,
                 confidence: self.onsets.estimate.confidence,
                 tempo: self.onsets.estimate.tempo,

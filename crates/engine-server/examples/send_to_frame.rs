@@ -344,7 +344,7 @@ fn measure(
     workload::prepare(&mut sender, profile)?;
     let setup = sender.sent();
     let picture = engine.fresh().unwrap();
-    let mut last_frame = picture.state.frame;
+    let mut last_frame = picture.frame();
     if picture.applied() != setup {
         return Err("setup did not reach the tick".into());
     }
@@ -370,17 +370,17 @@ fn measure(
             Ok::<_, String>((performance, sender.sent()))
         });
         while started.elapsed() < duration || !player.is_finished() {
-            let state = &engine.latest().state;
-            if state.frame != last_frame {
+            let picture = engine.latest();
+            if picture.frame() != last_frame {
                 pictures += 1;
-                last_frame = state.frame;
+                last_frame = picture.frame();
             }
             // Dispatch into a gap before both rates are due together. The cutoff
             // trace above checks what actually fit, even if a client was preempted.
             if profile == Workload::Burst
-                && let Some(next) = state.outputs.iter().flatten().map(|o| o.due).min()
+                && let Some(next) = picture.next_output_due()
                 && next.saturating_sub(timings.now()) >= Rate::Sixty.period() / 2
-                && engine_core::due(state, next).count() == outputs
+                && picture.outputs_due_at(next) == outputs
             {
                 let _ = ready.try_send(());
             }
@@ -989,12 +989,10 @@ mod workload {
             prepare(&mut sender, Workload::Burst).unwrap();
             let looks = sender.looks();
             let picture = engine.fresh().unwrap();
-            assert_eq!(picture.state.plays.iter().count(), 32);
+            assert_eq!(picture.active_plays().count(), 32);
             assert_eq!(
                 picture
-                    .state
-                    .plays
-                    .iter()
+                    .active_plays()
                     .map(|p| 2 * looks.plan(p.look).unwrap().work())
                     .sum::<usize>(),
                 65_536
@@ -1088,14 +1086,21 @@ mod workload {
                         .sum::<u16>(),
                     pixels
                 );
-                assert_eq!(engine.fresh().unwrap().state.plays.iter().count(), roots);
+                assert_eq!(engine.fresh().unwrap().active_plays().count(), roots);
                 let target = Target::Light { light: 1 };
                 send(&mut sender, colour(target, RED)).unwrap();
-                assert_eq!(engine.fresh().unwrap().lights()[0].colour, Some(RED));
+                assert_eq!(
+                    engine
+                        .fresh()
+                        .unwrap()
+                        .light(1)
+                        .and_then(|light| light.colour),
+                    Some(RED)
+                );
                 send(&mut sender, Command::ReleaseColour { target }).unwrap();
                 // Exercise both clients' command paths at the admitted edge.
                 send(&mut sender, wave_group(true)).unwrap();
-                assert_eq!(engine.fresh().unwrap().state.plays.iter().count(), roots);
+                assert_eq!(engine.fresh().unwrap().active_plays().count(), roots);
             }
         }
     }

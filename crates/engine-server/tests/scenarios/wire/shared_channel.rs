@@ -3,7 +3,7 @@
 //! fixture full and head 1 red send 255 255 0 at 37 to 39 on the DDP socket. A PAR on
 //! the fixture's channels is refused, `Overlaps`.
 
-mod common;
+use crate::wire_common as common;
 
 use common::taken;
 use engine::{Engine, Universes};

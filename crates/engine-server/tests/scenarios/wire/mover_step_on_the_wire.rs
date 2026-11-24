@@ -6,7 +6,7 @@
 //! gobo cuts to its next slot in the first frame handed over after its start, and black,
 //! not on the Shehds wheel, is refused in a step and held directly.
 
-mod common;
+use crate::wire_common as common;
 
 use common::{Heard, Socket, command, connect, open};
 use engine::{Engine, Event, Outcome, Universes, Wakes};

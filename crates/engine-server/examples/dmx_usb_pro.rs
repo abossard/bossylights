@@ -15,14 +15,13 @@
 //! 2 ms is printed with the time it was seen (within 10 ms), so a failed run says when.
 
 use engine::{
-    ChannelNumbers, Command, Counters, Device, Engine, Outcome, OutputKind, OutputNumber, Rate,
-    RunNumbers, State, Status, Universes,
+    ChannelNumbers, Command, Counters, Device, Engine, Outcome, Output, OutputKind, OutputNumber,
+    Rate, RunNumbers, State, Status, Universes,
 };
 #[path = "../src/report_line.rs"]
 mod report_line;
 
 use outputs::dmx_usb_pro::{self, DmxUsbPro, LostWith};
-use std::mem::discriminant;
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -158,7 +157,7 @@ impl Watch<'_> {
                 value: self.level,
             });
         }
-        let state = self.engine.fresh().unwrap().state;
+        let state = self.engine.fresh().unwrap().performance();
         self.events(&state);
         state
     }
@@ -169,10 +168,9 @@ impl Watch<'_> {
         let now = outputs(state);
         for ((name, before), after) in NAMES.iter().zip(self.seen).zip(now) {
             let Some(after) = after else { continue };
-            let changed =
-                before.is_none_or(|b| discriminant(&b.status) != discriminant(&after.status));
+            let changed = before.is_none_or(|b| !b.same_status_as(after));
             if changed {
-                let why = match (after.status, self.lost_with.get()) {
+                let why = match (after.connection(), self.lost_with.get()) {
                     (Status::Reconnecting { .. } | Status::NotFound, Some(e))
                         if *name == NAMES[0] =>
                     {
@@ -180,7 +178,7 @@ impl Watch<'_> {
                     }
                     _ => String::new(),
                 };
-                println!("{at:>9.3} s  {name}: {:?}{why}", after.status);
+                println!("{at:>9.3} s  {name}: {:?}{why}", after.connection());
             }
             let off = after.counters.off_beat - before.map_or(0, |b| b.counters.off_beat);
             if off > 0 {
@@ -212,7 +210,10 @@ impl Watch<'_> {
 }
 
 fn outputs(state: &State) -> [Option<engine::Output>; 2] {
-    [state.outputs[0], state.outputs[1]]
+    [
+        OutputNumber::from_slot(0).and_then(|output| state.attached_output(output)),
+        OutputNumber::from_slot(1).and_then(|output| state.attached_output(output)),
+    ]
 }
 
 fn describe(output: Option<engine::Output>) -> String {
@@ -220,7 +221,11 @@ fn describe(output: Option<engine::Output>) -> String {
         let c = o.counters;
         format!(
             "{:?}, accepted {}, dropped {}, failed {}, off by > 2 ms {}",
-            o.status, c.accepted, c.dropped, c.failed, c.off_beat
+            o.connection(),
+            c.accepted,
+            c.dropped,
+            c.failed,
+            c.off_beat
         )
     })
 }
@@ -232,7 +237,7 @@ fn counters(output: Option<engine::Output>) -> Counters {
 fn ten_minutes(watch: &mut Watch, sender: &mut engine::Sender) -> bool {
     println!("10 minutes. Nothing to do; a line every 30 s.");
     let end = Duration::from_secs(600);
-    let mut state = watch.engine.fresh().unwrap().state;
+    let mut state = watch.engine.fresh().unwrap().performance();
     let mut shown = 0;
     while watch.started.elapsed() < end {
         state = watch.tick(sender);
@@ -242,18 +247,19 @@ fn ten_minutes(watch: &mut Watch, sender: &mut engine::Sender) -> bool {
             watch.line(&state);
         }
     }
-    let [pro, _] = outputs(&state).map(counters);
+    let [pro_counts, _] = outputs(&state).map(counters);
     let lateness = OutputNumber::try_from(1)
         .ok()
         .and_then(|n| watch.engine.fresh().unwrap().lateness(n));
     println!("{BELL}\nresult after 600 s:");
-    println!("  adapter: {}", describe(state.outputs[0]));
-    println!("  other:   {}", describe(state.outputs[1]));
+    let [pro_output, other_output] = outputs(&state);
+    println!("  adapter: {}", describe(pro_output));
+    println!("  other:   {}", describe(other_output));
     if let Some(l) = lateness {
         println!("  adapter {}", report_line::lateness(l));
     }
     // The criterion is the adapter's; the other output is shown for comparison.
-    let passed = pro.off_beat == 0 && pro.dropped == 0 && pro.failed == 0;
+    let passed = pro_counts.off_beat == 0 && pro_counts.dropped == 0 && pro_counts.failed == 0;
     println!("{}", if passed { "PASSED" } else { "FAILED" });
     passed
 }
@@ -274,11 +280,11 @@ fn hands_on(watch: &mut Watch, sender: &mut engine::Sender, step: Step) -> bool 
         CALM.as_secs()
     );
     let calm_until = watch.started.elapsed() + CALM;
-    let mut state = watch.engine.fresh().unwrap().state;
+    let mut state = watch.engine.fresh().unwrap().performance();
     let mut ran = false;
     while watch.started.elapsed() < calm_until {
         state = watch.tick(sender);
-        let running = state.outputs[0].is_some_and(|o| o.status == Status::Running);
+        let running = outputs(&state)[0].is_some_and(Output::is_running);
         if ran && !running {
             watch.line(&state);
             println!(
@@ -299,7 +305,7 @@ fn hands_on(watch: &mut Watch, sender: &mut engine::Sender, step: Step) -> bool 
         Step::Unplug => {
             println!("{BELL}\n>>> NOW: UNPLUG the DMX USB Pro. <<<\n");
             let lost = wait_until(watch, sender, Duration::from_secs(60), |s| {
-                s.outputs[0].is_some_and(|o| o.status != Status::Running)
+                outputs(s)[0].is_some_and(|o| !o.is_running())
             });
             let Some(lost) = lost else {
                 println!("FAILED: the adapter did not leave Running within 60 s.");
@@ -347,7 +353,7 @@ fn hands_on(watch: &mut Watch, sender: &mut engine::Sender, step: Step) -> bool 
     }
     let back = Instant::now();
     let running = wait_until(watch, sender, Duration::from_secs(120), |s| {
-        s.outputs[0].is_some_and(|o| o.status == Status::Running)
+        outputs(s)[0].is_some_and(Output::is_running)
     });
     let Some(running) = running else {
         println!("FAILED: the adapter did not run again within 120 s.");
@@ -368,9 +374,10 @@ fn hands_on(watch: &mut Watch, sender: &mut engine::Sender, step: Step) -> bool 
     }
     let [pro, other] = outputs(&state).map(counters);
     println!("{BELL}\nresult:");
-    println!("  adapter: {}", describe(state.outputs[0]));
-    println!("  other:   {}", describe(state.outputs[1]));
-    let pro_ok = state.outputs[0].is_some_and(|o| o.status == Status::Running)
+    let [pro_output, other_output] = outputs(&state);
+    println!("  adapter: {}", describe(pro_output));
+    println!("  other:   {}", describe(other_output));
+    let pro_ok = pro_output.is_some_and(Output::is_running)
         && pro.accepted > pro_before.accepted
         && pro.off_beat == pro_before.off_beat;
     // Unplugging touches nothing else: the other output keeps its beat all along. A sleep

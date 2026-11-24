@@ -8,8 +8,8 @@ mod stream;
 
 use engine::Unsent;
 use engine::{
-    Begun, ChannelNumbers, Color, Command, Engine, Levels, Looks, MAX_OUTPUTS, OutputNumber, QUEUE,
-    Rate, Refusal, RunNumbers, Sender, Snapshot, Status, Universes,
+    Begun, ChannelNumbers, Color, Command, Engine, Levels, Looks, MAX_OUTPUTS, Output,
+    OutputNumber, QUEUE, Rate, Refusal, RunNumbers, Sender, Snapshot, Status, Universes,
 };
 use mock::Heard;
 use std::sync::{Arc, mpsc};
@@ -96,7 +96,7 @@ fn a_command_that_cannot_be_right_is_refused_and_changes_nothing() {
         (set(1, 513, 9), Refusal::NoSuchAddress),
     ];
     let (mut engine, mut sender, _first) = start();
-    let before = engine.fresh().unwrap().state;
+    let before = engine.fresh().unwrap().performance();
     for (command, reason) in cases {
         assert_eq!(
             sender.send(command),
@@ -105,13 +105,16 @@ fn a_command_that_cannot_be_right_is_refused_and_changes_nothing() {
         );
     }
     let picture = engine.fresh().unwrap();
-    let state = picture.state;
     assert_eq!(picture.universes(), [Levels::ZERO; 2]);
-    assert!(!state.blackout);
-    assert_eq!(state.outputs[1], None, "no second output");
+    assert!(!picture.blackout());
+    assert_eq!(picture.output(output(2)), None, "no second output");
     assert_eq!(
-        state.outputs[0].map(|o| (o.universes, o.rate)),
-        before.outputs[0].map(|o| (o.universes, o.rate))
+        picture
+            .output(output(1))
+            .map(|o| (o.universes, o.runs_at(Rate::Sixty))),
+        before
+            .attached_output(output(1))
+            .map(|o| (o.universes, o.runs_at(Rate::Sixty)))
     );
 }
 
@@ -153,22 +156,29 @@ fn outputs_are_attached_changed_and_removed() {
             heard.took_everything_sent(&mut engine, &sender);
             // Running from its second frame taken; the first may carry the command.
             mock::wait_until("output 3 never ran", || {
-                engine.latest().state.outputs[2].is_some_and(|o| o.status == Status::Running)
+                engine
+                    .latest()
+                    .output(output(3))
+                    .is_some_and(Output::is_running)
             });
         }
         let picture = engine.fresh().unwrap();
-        let state = picture.state;
-        let third = state.outputs[2];
-        assert_eq!(third.map(|o| o.rate), rate, "{steps:?}");
+        let third = picture.output(output(3));
+        assert_eq!(
+            third.map(|o| rate.is_some_and(|rate| o.runs_at(rate))),
+            rate.map(|_| true),
+            "{steps:?}"
+        );
         if let (Some(third), Some(heard)) = (third, &heard) {
-            assert_eq!(third.status, Status::Running, "{steps:?}");
+            assert!(third.is_running(), "{steps:?}");
             assert!(third.counters.accepted > 0, "{steps:?}");
             assert!(heard.frames() > 0, "{steps:?}");
             assert_eq!(heard.level(1, 1), 77, "universe 2 of the frame");
             assert!(picture.lateness(output(3)).is_some(), "{steps:?}");
         }
-        let one = state.outputs[0].expect("output 1 stays");
-        assert_eq!((one.status, one.rate), (Status::Running, Rate::Sixty));
+        let one = picture.output(output(1)).expect("output 1 stays");
+        assert_eq!(one.connection(), Status::Running);
+        assert!(one.runs_at(Rate::Sixty));
         assert!(one.counters.accepted > 0);
         assert_eq!((one.counters.dropped, one.counters.failed), (0, 0));
     }
@@ -203,9 +213,10 @@ fn after_the_last_output_is_removed_a_command_still_lands_and_the_engine_stops()
             mock::attach(&mut sender, Universes::ONE, number, run(1, 1), rate);
         }
         mock::wait_until("the outputs never took their frames", || {
-            let state = engine.latest().state;
             outputs.iter().all(|&(number, _, frames)| {
-                state.outputs[usize::from(number) - 1]
+                engine
+                    .latest()
+                    .output(output(number))
                     .is_some_and(|o| o.counters.accepted >= frames)
             })
         });
@@ -222,7 +233,13 @@ fn after_the_last_output_is_removed_a_command_still_lands_and_the_engine_stops()
                 thread::sleep(Duration::from_millis(1)); // poll
             }
         };
-        let removed = |picture: &Snapshot| picture.state.outputs.iter().all(Option::is_none);
+        let removed = |picture: &Snapshot| {
+            (1..=MAX_OUTPUTS).all(|slot| {
+                OutputNumber::from_slot(slot - 1)
+                    .and_then(|n| picture.output(n))
+                    .is_none()
+            })
+        };
         wait_until("the outputs were never removed", &removed);
         assert_eq!(sender.send(set(1, 1, 42)), Ok(()), "{outputs:?}");
         let landed = |picture: &Snapshot| picture.universes()[0].0[0] == 42;
@@ -375,7 +392,12 @@ fn a_reopen_gives_a_closing_port_its_full_second_before_trying_again() {
         rate: None,
     };
     let before = Instant::now();
-    assert_eq!(sender.send(reopen), Err(Unsent::Refused(Refusal::CannotOpen { why: engine::OpenFailure::Device { with: None } })));
+    assert_eq!(
+        sender.send(reopen),
+        Err(Unsent::Refused(Refusal::CannotOpen {
+            why: engine::OpenFailure::Device { with: None }
+        }))
+    );
     let attempted = attempts.try_recv().unwrap();
     assert!(attempted.duration_since(before) >= Duration::from_secs(1));
 }

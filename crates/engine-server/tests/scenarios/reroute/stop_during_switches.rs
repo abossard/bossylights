@@ -1,6 +1,4 @@
-use engine::{
-    ChannelNumbers, Command, Engine, OutputNumber, Rate, RunNumbers, Universes, Unsent,
-};
+use engine::{ChannelNumbers, Command, Engine, OutputNumber, Rate, RunNumbers, Universes, Unsent};
 use outputs::{Device, Outcome};
 use std::sync::mpsc;
 use std::time::Duration;
@@ -243,7 +241,10 @@ fn abandoning_an_opened_restart_puts_the_output_back() {
     // The next edit takes the abandoned one back first.
     assert_eq!(sender.send(Command::ReleaseAll), Ok(()));
     assert_eq!(
-        (sender.cutover_pending(output), sender.project().output(output)),
+        (
+            sender.cutover_pending(output),
+            sender.project().output(output)
+        ),
         (false, prior)
     );
     // And the opener is there again: the same restart goes through.

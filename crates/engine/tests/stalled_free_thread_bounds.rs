@@ -118,7 +118,10 @@ fn retired_plan_bytes_refuse_the_next_live_edit_until_reclaimed() {
     let last = sender.looks();
     let sent = sender.sent();
     let refused = step(1, u16::MAX);
-    assert_eq!(sender.send(refused), Err(Unsent::Refused(Refusal::WorkLimit)));
+    assert_eq!(
+        sender.send(refused),
+        Err(Unsent::Refused(Refusal::WorkLimit))
+    );
     assert_eq!(sent, sender.sent());
     assert!(Arc::ptr_eq(&last, &sender.looks()));
 
@@ -153,8 +156,11 @@ fn retired_plan_bytes_refuse_the_next_live_edit_until_reclaimed() {
     );
     let picture = engine.latest();
     assert_eq!(picture.applied(), sent);
-    assert!(picture.state.plays.iter().any(|p| p.play == play));
-    assert_eq!(sender.send(refused), Err(Unsent::Refused(Refusal::WorkLimit)));
+    assert!(picture.active_plays().any(|p| p.play == play));
+    assert_eq!(
+        sender.send(refused),
+        Err(Unsent::Refused(Refusal::WorkLimit))
+    );
 
     engine.stall_reclamation(false);
     mock::wait_until("the oldest plan never returned", || {
@@ -221,7 +227,10 @@ fn each_live_plan_swap_reserves_a_return_and_release_keeps_its_place() {
     }
     engine.latest();
     wakes.wake_at(at).unwrap();
-    assert_eq!(engine.latest().lights()[0].intensity, Some(swaps));
+    assert_eq!(
+        engine.latest().light(1).and_then(|light| light.intensity),
+        Some(swaps)
+    );
     let sent = sender.sent();
     let project = sender.looks();
     let restart = Command::StartLook {
@@ -231,7 +240,10 @@ fn each_live_plan_swap_reserves_a_return_and_release_keeps_its_place() {
         usage: Default::default(),
     };
     for refused in [step(u16::MAX), restart] {
-        assert_eq!(sender.send(refused), Err(Unsent::Refused(Refusal::QueueFull)));
+        assert_eq!(
+            sender.send(refused),
+            Err(Unsent::Refused(Refusal::QueueFull))
+        );
         assert_eq!(sender.sent(), sent);
         assert!(Arc::ptr_eq(&project, &sender.looks()));
     }
@@ -240,10 +252,13 @@ fn each_live_plan_swap_reserves_a_return_and_release_keeps_its_place() {
     engine.latest();
     wakes.wake_at(at).unwrap();
     let idle = engine.latest();
-    assert_eq!(idle.state.plays.iter().count(), 0);
-    assert_eq!(idle.lights()[0].intensity, None);
+    assert_eq!(idle.active_plays().count(), 0);
+    assert_eq!(idle.light(1).and_then(|light| light.intensity), None);
     // The released plan still occupies its return entry until the free thread runs.
-    assert_eq!(sender.send(restart), Err(Unsent::Refused(Refusal::QueueFull)));
+    assert_eq!(
+        sender.send(restart),
+        Err(Unsent::Refused(Refusal::QueueFull))
+    );
     engine.stall_reclamation(false);
     mock::wait_until(
         "no return entry reclaimed for the next start",
@@ -255,5 +270,8 @@ fn each_live_plan_swap_reserves_a_return_and_release_keeps_its_place() {
     );
     engine.latest();
     wakes.wake_at(at).unwrap();
-    assert_eq!(engine.latest().lights()[0].intensity, Some(swaps));
+    assert_eq!(
+        engine.latest().light(1).and_then(|light| light.intensity),
+        Some(swaps)
+    );
 }

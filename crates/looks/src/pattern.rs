@@ -1,13 +1,7 @@
 //! Resolve a Wave's swatches and bind its spatial phase before a play reaches the tick.
 
-use crate::{Looks, sequence};
-use alloc::{boxed::Box, collections::BTreeSet, vec, vec::Vec};
-use core::mem::size_of_val;
-use engine_core::{
-    Definition, LightNumber, LightRun, Lights, Node, Palette, Part, Pattern, Property, Refusal,
-    Target, WaveTarget, Writer,
-};
-use rig::Patch;
+use engine_core::{Definition, Node, Palette, Pattern, Refusal};
+use rig::{Patch, WaveBinding};
 
 pub(crate) fn reference(pattern: &Pattern) -> Option<u16> {
     match pattern {
@@ -23,8 +17,8 @@ pub(crate) fn reference(pattern: &Pattern) -> Option<u16> {
 }
 
 pub(crate) fn compile(
-    looks: &Looks,
     pattern: &Pattern,
+    linked: Option<&Definition>,
     patch: &Patch,
 ) -> Result<(Node, WaveBinding), Refusal> {
     let Pattern::Wave {
@@ -34,7 +28,7 @@ pub(crate) fn compile(
     } = *pattern;
     let swatches = match palette {
         Palette::Inline(swatches) => swatches,
-        Palette::Step { look } => match &looks.get(look).ok_or(Refusal::NoSuchLook)?.definition {
+        Palette::Step { .. } => match linked.ok_or(Refusal::NoSuchLook)? {
             Definition::Step(step) => step.swatches,
             Definition::Pattern(_) | Definition::Sequence(_) => return Err(Refusal::WrongLookKind),
         },
@@ -47,105 +41,8 @@ pub(crate) fn compile(
             period: period.get(),
             swatches,
         },
-        WaveBinding::new(target, patch)?,
+        patch.bind_wave(target)?,
     ))
-}
-
-/// Retained samples need the same capable lights after a patch edit. The order of
-/// group members can change without changing which lights the frozen colours belong to.
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) struct WaveBinding {
-    target: WaveTarget,
-    runs: Box<[LightRun]>,
-    pub columns: Option<u16>,
-}
-
-impl WaveBinding {
-    fn new(target: WaveTarget, patch: &Patch) -> Result<Self, Refusal> {
-        let (runs, columns) = match target {
-            WaveTarget::Group { group } => (patch.runs(Target::Group { group })?, None),
-            WaveTarget::Matrix { fixture } => {
-                let mode = patch.mode(fixture).ok_or(Refusal::NotPatched)?;
-                let layout = mode.layout.ok_or(Refusal::NoMatrix)?;
-                let cells = layout
-                    .width
-                    .checked_mul(layout.height)
-                    .filter(|&n| n != 0 && usize::from(n) == mode.pixels.len())
-                    .ok_or(Refusal::NoMatrix)?;
-                // Rig places the heads last, in definition order. A fixture's own
-                // light (e.g. its shared dimmer) precedes them and has no cell.
-                let runs = patch.runs(Target::Fixture { fixture })?;
-                let run = runs.first().ok_or(Refusal::NotPatched)?;
-                let first = run.first().index()
-                    + run.count().checked_sub(cells).ok_or(Refusal::NoMatrix)?;
-                let heads = LightNumber::new(first, Lights::MOST)
-                    .and_then(|first| LightRun::new(first, cells, Lights::MOST))
-                    .ok_or(Refusal::NoMatrix)?;
-                (vec![heads], Some(layout.width))
-            }
-        };
-        if runs.is_empty() {
-            return Err(Refusal::EmptyGroup);
-        }
-        // Rig compiles additive and subtractive mixes to continuous component writers.
-        // A fixed wheel bypass has no effect on this test, a slot alone cannot blend.
-        let continuous: BTreeSet<_> = patch
-            .writers()
-            .iter()
-            .filter_map(|writer| match writer {
-                Writer::Takes { light, take, .. }
-                    if matches!(take.of, Part::Red | Part::Green | Part::Blue | Part::Shared) =>
-                {
-                    Some(light.index())
-                }
-                Writer::Takes { .. }
-                | Writer::Fixed { .. }
-                | Writer::Picks { .. }
-                | Writer::ColourSlot { .. }
-                | Writer::GoboSlot { .. } => None,
-            })
-            .collect();
-        if let Some(index) = runs
-            .iter()
-            .copied()
-            .flat_map(sequence::numbers)
-            .find(|light| !continuous.contains(light))
-        {
-            return Err(Refusal::Unsupported {
-                light: index + 1,
-                property: Property::Colour,
-            });
-        }
-        Ok(Self {
-            target,
-            runs: runs.into_boxed_slice(),
-            columns,
-        })
-    }
-
-    pub fn ordered(&self, patch: &Patch) -> Result<Vec<u16>, Refusal> {
-        match self.target {
-            WaveTarget::Group { group } => sequence::ordered_group(group, patch),
-            WaveTarget::Matrix { .. } => Ok(self
-                .runs
-                .iter()
-                .copied()
-                .flat_map(sequence::numbers)
-                .collect()),
-        }
-    }
-
-    pub fn matches(&self, patch: &Patch) -> bool {
-        Self::new(self.target, patch).is_ok_and(|now| now == *self)
-    }
-
-    pub fn storage(all: &[Self]) -> usize {
-        size_of_val(all)
-            + all
-                .iter()
-                .map(|wave| size_of_val(wave.runs.as_ref()))
-                .sum::<usize>()
-    }
 }
 
 #[cfg(test)]
@@ -156,14 +53,16 @@ impl WaveBinding {
 )]
 mod tests {
     use super::*;
-    use engine_core::{Percent, Period, Width};
+    use crate::Looks;
     use crate::tests::{item, leaf, patch, sequence};
     use crate::{WORK_LIMIT, play_work};
+    use alloc::vec::Vec;
     use core::num::NonZeroU16;
     use engine_core::{
-        ChannelNumbers, Color, Light, PatchCommand, Pixels, SavedLook, SequenceItem, Text,
-        Universes, Use,
+        ChannelNumbers, Color, Light, Lights, PatchCommand, Pixels, SavedLook, SequenceItem,
+        Target, Text, Universes, Use, WaveTarget,
     };
+    use engine_core::{Percent, Period, Width};
     use rig::Whole;
 
     fn wave(

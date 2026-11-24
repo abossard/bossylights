@@ -6,7 +6,7 @@ mod common;
 use common::{lights, whole};
 use engine_core::{
     ChannelNumbers, Color, Command, Levels, Light, OutputKind, OutputNumber, PatchCommand, Pixels,
-    Project, ProjectEvent, Refusal, Rgb, RunNumbers, Text, Universes, resolve,
+    Project, ProjectEvent, Refusal, Rgb, RunNumbers, Text, Universes,
 };
 use rig::Patch;
 use std::net::{Ipv4Addr, SocketAddrV4};
@@ -212,7 +212,9 @@ fn a_fixture_up_to_the_last_channel_its_output_sends_is_kept_one_over_is_refused
             ..Light::DARK
         };
         let mut out = [Levels::ZERO; 2];
-        resolve(&vec![white; usize::from(pixels)], patch.writers(), &mut out);
+        patch
+            .prepare()
+            .resolve(&vec![white; usize::from(pixels)], &mut out);
         let bytes: Vec<u8> = out.iter().flat_map(|u| u.0).collect();
         let lit = bytes.iter().rposition(|&b| b != 0).unwrap();
         assert!(lit < sent, "{name}: channel {} lit, {sent} sent", lit + 1);

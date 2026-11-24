@@ -104,6 +104,49 @@ impl Flags {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Scale {
+    Full,
+    Dark,
+    Part { product: i128, whole: i128 },
+}
+
+pub(crate) fn scales(levels: [u8; MODIFIERS]) -> [Scale; 1 << MODIFIERS] {
+    let mut scales = [Scale::Full; 1 << MODIFIERS];
+    for (follows, scale) in (0..=u8::MAX).zip(scales.iter_mut()) {
+        *scale = scale_of(Follows(follows), levels);
+    }
+    scales
+}
+
+pub(crate) fn scale_of(follows: Follows, levels: [u8; MODIFIERS]) -> Scale {
+    let (mut product, mut whole) = (1_i128, 1_i128);
+    for (slot, level) in levels.iter().enumerate() {
+        if follows.0 & (1 << slot) != 0 {
+            product *= i128::from(*level);
+            whole *= 255;
+        }
+    }
+    match product {
+        0 => Scale::Dark,
+        _ if product == whole => Scale::Full,
+        _ => Scale::Part { product, whole },
+    }
+}
+
+fn scale(value: u8, dark: u8, flags: Flags, scale: Scale) -> u8 {
+    match scale {
+        Scale::Full => value,
+        Scale::Dark => dark,
+        Scale::Part { .. } if !flags.fades() => value,
+        Scale::Part { product, whole } => {
+            let distance = (i128::from(value) - i128::from(dark)) * product;
+            let moved = (2 * distance.abs() + whole) / (2 * whole);
+            u8::try_from(i128::from(dark) + distance.signum() * moved).unwrap_or(dark)
+        }
+    }
+}
+
 /// Every channel of the space, 8 bytes each, as a struct of arrays: a pass touches only
 /// the arrays it needs. Made once, before the tick starts; the frame writes `value` and
 /// `source`, the patch the others (owner decision q1, `docs/design/channel-model.md`).
@@ -145,6 +188,77 @@ impl Channels {
             .get(at.index())
             .copied()
             .unwrap_or(SourceTag::REST)
+    }
+
+    pub(crate) fn render(
+        &mut self,
+        raw: &[Levels],
+        holds: &[ChannelSet],
+        levels: [u8; MODIFIERS],
+        write: impl FnOnce(&mut [Levels], &mut [ChannelSet]),
+    ) {
+        let mut lit = [ChannelSet::NONE; MAX_UNIVERSES as usize];
+        self.reset_frame();
+        write(&mut self.value, &mut lit);
+        self.apply_winners(&lit, raw, holds, levels);
+    }
+
+    pub(crate) fn reset_frame(&mut self) {
+        for (row, rest) in self.value.iter_mut().zip(self.rest.chunks_exact(ADDRESSES)) {
+            row.0.copy_from_slice(rest);
+        }
+        self.source.fill(SourceTag::REST);
+    }
+
+    pub(crate) fn apply_winners(
+        &mut self,
+        lit: &[ChannelSet],
+        raw: &[Levels],
+        holds: &[ChannelSet],
+        levels: [u8; MODIFIERS],
+    ) {
+        let rows = self.value.iter_mut().zip(self.source.chunks_exact_mut(ADDRESSES));
+        for (universe, (value, source)) in rows.enumerate() {
+            for address in lit
+                .get(universe)
+                .into_iter()
+                .flat_map(ChannelSet::addresses)
+            {
+                if let Some(source) = source.get_mut(address) {
+                    *source = SourceTag::LIGHTS;
+                }
+            }
+            let (Some(raw), Some(holds)) = (raw.get(universe), holds.get(universe)) else {
+                continue;
+            };
+            for address in holds.addresses() {
+                if let (Some(value), Some(source), Some(raw)) = (
+                    value.0.get_mut(address),
+                    source.get_mut(address),
+                    raw.0.get(address),
+                ) {
+                    *value = *raw;
+                    *source = SourceTag::RAW;
+                }
+            }
+        }
+        if levels == [u8::MAX; MODIFIERS] {
+            return;
+        }
+        let by = scales(levels);
+        let bytes = self.value.iter_mut().flat_map(|row| row.0.iter_mut());
+        for (value, ((dark, flags), follows)) in bytes
+            .zip(
+                self.dark
+                    .iter()
+                    .zip(self.flags.iter())
+                    .zip(self.follows.iter()),
+            )
+        {
+            if let Some(by) = by.get(usize::from(follows.0)) {
+                *value = scale(*value, *dark, *flags, *by);
+            }
+        }
     }
 }
 

@@ -146,7 +146,7 @@ fn run(setup: &Setup) -> Result<String, String> {
     // A reader on every frame: it asks again as soon as a picture is back.
     let (started, mut seen, mut pictures) = (Instant::now(), 0, 0_u64);
     while started.elapsed() < setup.run {
-        let frame = engine.latest().state.frame;
+        let frame = engine.latest().frame();
         if frame != seen {
             (seen, pictures) = (frame, pictures + 1);
         }
@@ -154,23 +154,18 @@ fn run(setup: &Setup) -> Result<String, String> {
     }
     eprintln!("snapshots read: {pictures}, frames: {seen}");
     let picture = engine.fresh().unwrap().clone();
-    let state = picture.state;
+    let state = picture.performance();
     stop.store(true, Ordering::Relaxed);
     let (mut p99, mut worst, mut off) = (Duration::ZERO, Duration::ZERO, 0);
     for number in numbers {
         let number = number?;
         let lateness = picture.lateness(number).ok_or("no frame")?;
-        let output = state
-            .outputs
-            .get(number.slot())
-            .copied()
-            .flatten()
-            .ok_or("no output")?;
+        let output = state.attached_output(number).ok_or("no output")?;
         let c = output.counters;
         eprintln!(
             "output {} at {}/s: {}",
             number.slot() + 1,
-            output.rate.per_second(),
+            output.frames_per_second(),
             report_line::counts(c, lateness),
         );
         p99 = p99.max(lateness.p99);

@@ -3,8 +3,7 @@
 //! while another output never fails. An adapter plugged in after its output was set is
 //! not found until then, and runs by itself once it is there.
 
-#[path = "../../outputs/tests/common/mod.rs"]
-mod common;
+use crate::output_common as common;
 
 use common::Fake;
 use engine::{
@@ -50,9 +49,10 @@ fn reader(mut fake: Fake, unplug: Arc<AtomicBool>, stop: Arc<AtomicBool>) {
 
 fn status_until(engine: &mut Engine, done: impl Fn(Status) -> bool) -> Status {
     let started = Instant::now();
+    let one = OutputNumber::try_from(1).unwrap();
     loop {
         // Output 1 is in the state from the wake after it was attached.
-        let status = engine.latest().state.outputs[0].map(|o| o.status);
+        let status = engine.latest().output(one).map(|o| o.connection());
         if let Some(status) = status.filter(|s| done(*s)) {
             return status;
         }
@@ -97,9 +97,9 @@ fn unplugged_it_reconnects_and_runs_again_by_itself() {
     );
     status_until(&mut engine, |s| s == Status::Running);
 
-    let state = engine.fresh().unwrap().state;
-    let pro = state.outputs[0].unwrap().counters;
-    let other = state.outputs[1].unwrap().counters;
+    let picture = engine.fresh().unwrap();
+    let pro = picture.output(one).unwrap().counters;
+    let other = picture.output(two).unwrap().counters;
     assert!(pro.failed > 0 && pro.accepted > 0, "{pro:?}");
     assert_eq!(other.failed, 0, "the other output never failed");
     stop.store(true, Ordering::Relaxed);
@@ -110,11 +110,13 @@ fn unplugged_it_reconnects_and_runs_again_by_itself() {
 fn statuses_until(engine: &mut Engine, done: impl Fn(&engine::Output) -> bool) -> Vec<Status> {
     let mut seen = Vec::new();
     let started = Instant::now();
+    let one = OutputNumber::try_from(1).unwrap();
     loop {
         // A paused reader misses a status that lasts one frame: Connecting.
-        if let Some(output) = engine.latest().state.outputs[0] {
-            if seen.last() != Some(&output.status) {
-                seen.push(output.status);
+        if let Some(output) = engine.latest().output(one) {
+            let status = output.connection();
+            if seen.last() != Some(&status) {
+                seen.push(status);
             }
             if done(&output) {
                 return seen;
@@ -165,7 +167,7 @@ fn an_adapter_plugged_in_after_its_output_was_set_is_not_found_then_runs() {
         plugged.store(is_plugged, Ordering::Relaxed);
         let settled = *may_see[0].last().unwrap();
         let seen = statuses_until(&mut engine, |output| {
-            output.status == settled && (is_plugged || output.counters.failed >= 3)
+            output.connection() == settled && (is_plugged || output.counters.failed >= 3)
         });
         assert!(
             may_see.contains(&seen),
@@ -292,11 +294,12 @@ fn a_dmx_usb_pro_output_is_set_again_replaced_and_moved_through_send() {
         // counted when its box comes back from the output's thread (#174).
         let started = Instant::now();
         let running = loop {
-            let state = engine.latest().state;
-            let running = state
-                .outputs
-                .iter()
-                .position(|o| o.is_some_and(|o| o.status == Status::Running));
+            let picture = engine.latest();
+            let running = (0..engine::MAX_OUTPUTS).find(|slot| {
+                OutputNumber::from_slot(*slot)
+                    .and_then(|output| picture.output(output))
+                    .is_some_and(engine::Output::is_running)
+            });
             if running.is_some() || started.elapsed() > Duration::from_secs(5) {
                 break running;
             }

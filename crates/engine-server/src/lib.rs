@@ -35,9 +35,9 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use engine::{
     Begun, ChannelLevel, Command, Engine, Grouped, Looks, Patch, Patched, Project, ProjectView,
-    Refusal, SavedLook, Sender, Snapshot, changes,
+    Refusal, SavedLook, Sender, Snapshot,
 };
-use engine_core::{HeldLight, ShowFile, Text, held_lights, light_changes};
+use engine_core::{HeldLight, ShowFile, Text};
 use library::Shelf;
 use std::collections::VecDeque;
 use std::io;
@@ -85,13 +85,14 @@ pub async fn serve(
     let snapshot = engine.fresh().map_err(io::Error::other)?;
     let mut health = health::Reader::new();
     health.observe(|output, sample| snapshot.health_sample(output, sample));
+    let published = health.publish();
     let picture = Picture::of(
         snapshot.clone(),
         requested_at,
         &first,
         &shelf,
         &shown,
-        health.view(),
+        published,
     );
     let through = Arc::clone(&first.through);
     let front = Front {
@@ -180,13 +181,13 @@ impl Picture {
         moment: &Moment,
         shelf: &watch::Receiver<Arc<Shelf>>,
         show: &watch::Receiver<ShowFile>,
-        health: &health::View,
+        health: health::View,
     ) -> Self {
         let project = moment.project.at(&snapshot);
         Self {
             snapshot,
             requested_at,
-            health: health.clone(),
+            health,
             library: shelf.borrow().library(),
             project,
             patch: Arc::clone(&moment.patch),
@@ -261,7 +262,7 @@ impl Front {
         &mut self,
         snapshot: &Snapshot,
         requested_at: Instant,
-        health: &health::View,
+        health: health::View,
     ) -> Option<Picture> {
         while let Ok(moment) = self.moments.try_recv() {
             self.kept.push_back(moment);
@@ -289,7 +290,7 @@ async fn read(
 ) -> Engine {
     let mut poll = tokio::time::interval(engine::BEAT / 2);
     poll.set_missed_tick_behavior(MissedTickBehavior::Skip);
-    let mut observed_frame = painted.borrow().snapshot.state.frame;
+    let mut observed_frame = painted.borrow().snapshot.frame();
     let mut requested_at = painted.borrow().requested_at;
     let mut next_request = Instant::now();
     loop {
@@ -298,7 +299,7 @@ async fn read(
             _ = poll.tick() => {
                 let poll_started = Instant::now();
                 let snapshot = engine.latest();
-                let frame = snapshot.state.frame;
+                let frame = snapshot.frame();
                 // The front may need another poll to find this frame's project.
                 if frame != observed_frame {
                     // latest takes the previous request's snapshot and asks for the next.
@@ -306,12 +307,13 @@ async fn read(
                     health.observe(|output, sample| snapshot.health_sample(output, sample));
                     observed_frame = frame;
                 }
+                let health = health.publish();
                 let changed = {
                     let last = painted.borrow();
-                    frame != last.snapshot.state.frame
-                        || health.view().revision() != last.health.revision()
+                    frame != last.snapshot.frame()
+                        || health.revision() != last.health.revision()
                 };
-                if changed && let Some(picture) = front.picture(snapshot, requested_at, health.view()) {
+                if changed && let Some(picture) = front.picture(snapshot, requested_at, health) {
                     painted.send_replace(Arc::new(picture));
                 }
             }
@@ -472,11 +474,7 @@ async fn deliver(
 /// The slot of one request of a connection. A press is admitted here, at once, even
 /// behind a pending edit of this connection; every edit goes to the worker, behind what
 /// is there. Replies keep the order of the requests. `Stop` stops the engine at once.
-async fn take(
-    api: &Arc<Api>,
-    text: &str,
-    jobs: &mpsc::UnboundedSender<Command>,
-) -> Slot {
+async fn take(api: &Arc<Api>, text: &str, jobs: &mpsc::UnboundedSender<Command>) -> Slot {
     let Ok(request) = serde_json::from_str::<Request>(text) else {
         return Slot::Ready(json(&Reply::Refused {
             reason: Refusal::NotACommand,
@@ -641,52 +639,65 @@ async fn send(api: &Arc<Api>, command: Command) -> Result<Reply<'static>, Refusa
             sender.begin(command, shelf.fixtures())
         })
         .await
-        .map_or(Edited::Stopped, Edited::Begun)
+        .map_or(Edited::Stopped, Edited::from_result)
     };
     match begun {
         Edited::Stopped => Ok(Reply::Stopping),
         Edited::Failed => Ok(failed(api, "an edit")),
-        Edited::Begun(Ok(Begun::Opening(opening))) => {
-            let opener = Arc::clone(api);
-            let mut stopped = api.stop.subscribe();
-            // Keep the opener through the handoff. A busy blocking pool cannot
-            // put another job between publication and delivery of the device.
-            let worker = tokio::task::spawn_blocking(move || {
-                let opened = opening.open();
-                let publish = opener.changing(&mut credit, |sender| sender.publish_output(opened));
-                let Some(result) = tokio::runtime::Handle::current().block_on(publish) else {
-                    return Ok(Reply::Stopping);
-                };
-                if let Some(handoff) = result?
-                    && !handoff.wait()
-                {
-                    return Ok(Reply::Stopping);
+        Edited::Begun(begun) => match *begun {
+            Begun::Opening(opening) => {
+                let opener = Arc::clone(api);
+                let mut stopped = api.stop.subscribe();
+                // Keep the opener through the handoff. A busy blocking pool cannot
+                // put another job between publication and delivery of the device.
+                let worker = tokio::task::spawn_blocking(move || {
+                    let opened = opening.open();
+                    let publish =
+                        opener.changing(&mut credit, |sender| sender.publish_output(opened));
+                    let Some(result) = tokio::runtime::Handle::current().block_on(publish) else {
+                        return Ok(Reply::Stopping);
+                    };
+                    if let Some(handoff) = result?
+                        && !handoff.wait()
+                    {
+                        return Ok(Reply::Stopping);
+                    }
+                    Ok(Reply::Accepted)
+                });
+                // T13 answers the writer while the opener still owns and drains
+                // the old device. The worker finishes cleanup when the driver returns.
+                tokio::select! {
+                    biased;
+                    _ = stopped.wait_for(|stop| *stop) => Ok(Reply::Stopping),
+                    answer = worker => answer.unwrap_or_else(|_| Ok(failed(api, "a device open"))),
                 }
-                Ok(Reply::Accepted)
-            });
-            // T13 answers the writer while the opener still owns and drains
-            // the old device. The worker finishes cleanup when the driver returns.
-            tokio::select! {
-                biased;
-                _ = stopped.wait_for(|stop| *stop) => Ok(Reply::Stopping),
-                answer = worker => answer.unwrap_or_else(|_| Ok(failed(api, "a device open"))),
             }
-        }
-        Edited::Begun(Ok(Begun::Queued)) => Ok(Reply::Accepted),
-        Edited::Begun(Ok(Begun::Patched { fixture })) => Ok(Reply::Patched { fixture }),
-        Edited::Begun(Ok(Begun::Started { play })) => Ok(Reply::Started { play }),
-        Edited::Begun(Ok(Begun::Grabbed { grab })) => Ok(Reply::Grabbed { grab }),
-        Edited::Begun(Err(reason)) => Err(reason),
+            Begun::Queued => Ok(Reply::Accepted),
+            Begun::Patched { fixture } => Ok(Reply::Patched { fixture }),
+            Begun::Started { play } => Ok(Reply::Started { play }),
+            Begun::Grabbed { grab } => Ok(Reply::Grabbed { grab }),
+        },
+        Edited::Refused(reason) => Err(reason),
     }
 }
 
 /// What sending a command came to, before its reply.
 enum Edited {
-    Begun(Result<Begun, Refusal>),
+    Begun(Box<Begun>),
+    Refused(Refusal),
     /// The engine stopped first: nothing changed.
     Stopped,
     /// The work panicked. The picture says what is live.
     Failed,
+}
+
+impl Edited {
+    fn from_result(result: Result<Begun, Refusal>) -> Self {
+        match result {
+            Ok(begun) => Self::Begun(Box::new(begun)),
+            Err(reason) => Self::Refused(reason),
+        }
+    }
 }
 
 /// `Failed`, told on the process's error output, or `Stopping` once the engine stops:
@@ -707,7 +718,7 @@ async fn edit(
     shelf: &Arc<Shelf>,
     opening_credit: &mut Option<OwnedSemaphorePermit>,
 ) -> Edited {
-    let mut begun = Edited::Begun(Err(Refusal::Stale));
+    let mut begun = Edited::Refused(Refusal::Stale);
     let waiting_since = Instant::now();
     for _ in 0..PREPARES {
         // T12. Read the base and the state of this output under the same lock.
@@ -726,14 +737,14 @@ async fn edit(
             }
             drop(front);
             if waiting_since.elapsed() >= CUTOVER_WAIT {
-                return Edited::Begun(Err(Refusal::Opening));
+                return Edited::Refused(Refusal::Opening);
             }
             tokio::time::sleep(engine::BEAT).await;
         };
         // Bound in-flight edits too. A full history refuses before compiling.
         let mut credit = match reserve(&api.history, REVISION_BYTES) {
             Ok(credit) => credit,
-            Err(reason) => return Edited::Begun(Err(reason)),
+            Err(reason) => return Edited::Refused(reason),
         };
         let shelf = Arc::clone(shelf);
         let history = Arc::clone(&api.history);
@@ -765,15 +776,15 @@ async fn edit(
                     // in history until the device is ready and finish publishes it.
                     *opening_credit = credit;
                 }
-                admitted.map_or(Edited::Stopped, Edited::Begun)
+                admitted.map_or(Edited::Stopped, Edited::from_result)
             }
             // refused before the engine stops, or answered `Stopping` as an admitted one is
-            Ok(Err(reason)) if !*api.stop.borrow() => Edited::Begun(Err(reason)),
+            Ok(Err(reason)) if !*api.stop.borrow() => Edited::Refused(reason),
             Ok(Err(_)) => Edited::Stopped,
             Err(_) if *api.stop.borrow() => Edited::Stopped, // cancelled: the engine stops
             Err(_) => Edited::Failed,
         };
-        if !matches!(begun, Edited::Begun(Err(Refusal::Stale))) {
+        if !matches!(begun, Edited::Refused(Refusal::Stale)) {
             break;
         }
     }
@@ -824,9 +835,9 @@ impl Api {
 }
 
 fn picture(now: &Picture) -> Option<String> {
-    let lights: Vec<HeldLight> = held_lights(now.snapshot.lights()).collect();
+    let lights: Vec<HeldLight> = now.snapshot.held_lights().collect();
     json(&Reply::Picture {
-        state: now.snapshot.state,
+        state: now.snapshot.performance(),
         health: now.health.health(),
         project: now.project,
         library: now.library,
@@ -940,7 +951,7 @@ impl Subscription {
         };
         let (pacing, send) = self.pacing.next(PacingEvent::Picture {
             requested_at: picture.requested_at,
-            now: picture.snapshot.state.now,
+            now: picture.snapshot.now(),
             changed,
         });
         self.pacing = pacing;
@@ -957,7 +968,7 @@ impl Subscription {
 
     fn changed(&mut self, now: Arc<Picture>) -> Option<String> {
         let last = std::mem::replace(&mut self.last, now);
-        if last.snapshot.state.frame == self.last.snapshot.state.frame {
+        if last.snapshot.frame() == self.last.snapshot.frame() {
             return None;
         }
         changed(&last, &self.last)
@@ -966,16 +977,14 @@ impl Subscription {
 
 /// The channels and lights that differ from this connection's last frame.
 fn changed(last: &Picture, now: &Picture) -> Option<String> {
-    let channels: Vec<ChannelLevel> =
-        changes(last.snapshot.universes(), now.snapshot.universes()).collect();
-    let lights: Vec<HeldLight> =
-        light_changes(last.snapshot.lights(), now.snapshot.lights()).collect();
+    let channels: Vec<ChannelLevel> = now.snapshot.channel_changes_since(&last.snapshot).collect();
+    let lights: Vec<HeldLight> = now.snapshot.light_changes_since(&last.snapshot).collect();
     let new = !Arc::ptr_eq(&last.patch, &now.patch);
     let fixtures: Option<Vec<Patched>> = new.then(|| now.patch.fixtures());
     let groups: Option<Vec<Grouped>> = new.then(|| now.patch.groups());
     let looks = (!Weak::ptr_eq(&last.source, &now.source)).then_some(now.looks.as_ref());
     json(&Reply::Changed {
-        state: now.snapshot.state,
+        state: now.snapshot.performance(),
         project: now.project,
         library: now.library,
         patch: fixtures.as_deref(),
@@ -1083,11 +1092,11 @@ mod tests {
         change(step(2, blue));
         let health = health::View::default();
         let a = front
-            .picture(&a, Instant::now(), &health)
+            .picture(&a, Instant::now(), health.clone())
             .expect("A's moment is kept");
         let b = engine.fresh().unwrap().clone();
         let b = front
-            .picture(&b, Instant::now(), &health)
+            .picture(&b, Instant::now(), health)
             .expect("B's moment is kept");
 
         // (picture, saved looks, the play's look, light 1's colour)
@@ -1100,13 +1109,11 @@ mod tests {
             assert_eq!(saved, looks);
             let plays: Vec<u16> = picture
                 .snapshot
-                .state
-                .plays
-                .iter()
+                .active_plays()
                 .map(|play| play.look)
                 .collect();
             assert_eq!(plays.first().copied(), playing);
-            let held = held_lights(picture.snapshot.lights()).find(|held| held.light == 1);
+            let held = picture.snapshot.held_lights().find(|held| held.light == 1);
             assert_eq!(held.and_then(|held| held.colour), colour);
         }
         // Query: each picture as it is
@@ -1147,7 +1154,7 @@ mod tests {
             &Moment::of(&sender),
             &library::start(None),
             &watch::channel(ShowFile::None).1,
-            &health::View::default(),
+            health::View::default(),
         );
         sender.send(Command::RemoveLook { look: 1 }).unwrap();
         assert!(
@@ -1221,7 +1228,7 @@ mod tests {
             wakes.finish().unwrap();
             let snapshot = engine.latest().clone();
             let picture = front
-                .picture(&snapshot, Instant::now(), &health::View::default())
+                .picture(&snapshot, Instant::now(), health::View::default())
                 .expect("its moment is kept");
             let shown = picture
                 .looks

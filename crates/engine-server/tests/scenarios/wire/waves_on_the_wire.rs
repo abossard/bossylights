@@ -1,6 +1,6 @@
 //! Wave commands through /api, with a stepped beat clock and complete DMX USB Pro frames.
 
-mod common;
+use crate::wire_common as common;
 
 use common::{Heard, Socket, command, connect, open, send, serve};
 use engine::{Engine, Universes, Wakes};

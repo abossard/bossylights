@@ -89,17 +89,13 @@ fn run(args: Vec<String>) -> Result<(), String> {
         step += 1;
         thread::sleep(Duration::from_millis(25));
     }
-    let state = engine.fresh().unwrap().state;
-    let sent = state
-        .outputs
-        .first()
-        .copied()
-        .flatten()
+    let sent = OutputNumber::from_slot(0)
+        .and_then(|output| engine.fresh().unwrap().output(output))
         .ok_or("no output")?;
     eprintln!(
         "{:?} at {}/s: {:?}",
-        sent.status,
-        sent.rate.per_second(),
+        sent.connection(),
+        sent.frames_per_second(),
         sent.counters
     );
     Ok(())

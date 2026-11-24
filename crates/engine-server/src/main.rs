@@ -12,7 +12,7 @@
 
 #![forbid(unsafe_code)]
 
-use engine::{Counters, Engine, Lateness, MAX_OUTPUTS, OutputNumber, State, TickFailed, Universes};
+use engine::{Counters, Engine, Lateness, MAX_OUTPUTS, OutputNumber, TickFailed, Universes};
 use std::fs::{File, TryLockError};
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -125,10 +125,10 @@ fn lock(port: u16) -> Result<File, String> {
 /// What the engine measured, one line each: the frames, then every output's lateness.
 fn report(engine: &mut Engine) -> Result<String, TickFailed> {
     let picture = engine.fresh()?;
-    let State { frame, outputs, .. } = picture.state;
+    let frame = picture.frame();
     let lines = (1..=MAX_OUTPUTS).filter_map(|n| {
         let number = OutputNumber::try_from(u8::try_from(n).ok()?).ok()?;
-        let output = outputs.get(number.slot()).copied().flatten()?;
+        let output = picture.output(number)?;
         let lateness = picture.lateness(number)?;
         Some(line(n, output.counters, lateness))
     });

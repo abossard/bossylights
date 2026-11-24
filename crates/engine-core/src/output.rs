@@ -11,7 +11,9 @@
 //! A kind that gets no answer from its device accepts what it sent: for it, Running means
 //! the frames were sent.
 
-use crate::{ADDRESSES, CHANNELS, Levels, Refusal, Universes};
+use crate::{
+    ADDRESSES, CHANNELS, Levels, Outcome, Rate, Refusal, Status, Universes, Watch,
+};
 use core::num::NonZeroU16;
 use core::time::Duration;
 use serde::{Deserialize, Serialize};
@@ -123,60 +125,8 @@ pub fn bounds(spans: &[Span]) -> Option<Run> {
     })
 }
 
-/// The most outputs an engine has at once.
-pub const MAX_OUTPUTS: usize = 16;
 /// An interval further than this from the output's period is off its beat.
 pub const OFF_BEAT: Duration = Duration::from_millis(2);
-
-/// Which output, 1 to [`MAX_OUTPUTS`] as a client counts. Anything else does not parse.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
-#[serde(try_from = "u8")]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(type = "number"))]
-pub struct OutputNumber(u8);
-
-impl OutputNumber {
-    /// Counted from 0, below [`MAX_OUTPUTS`].
-    pub const fn slot(self) -> usize {
-        self.0 as usize
-    }
-}
-
-impl TryFrom<u8> for OutputNumber {
-    type Error = &'static str;
-    fn try_from(number: u8) -> Result<Self, Self::Error> {
-        if number >= 1 && usize::from(number) <= MAX_OUTPUTS {
-            Ok(Self(number - 1))
-        } else {
-            Err("outputs are 1 to 16")
-        }
-    }
-}
-
-/// Frames a second.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-pub enum Rate {
-    #[serde(rename = "30")]
-    Thirty,
-    #[serde(rename = "44")]
-    FortyFour,
-    #[serde(rename = "60")]
-    Sixty,
-}
-
-impl Rate {
-    pub const fn per_second(self) -> u32 {
-        match self {
-            Self::Thirty => 30,
-            Self::FortyFour => 44,
-            Self::Sixty => 60,
-        }
-    }
-
-    pub const fn period(self) -> Duration {
-        Duration::from_nanos(1_000_000_000 / self.per_second() as u64)
-    }
-}
 
 /// A run of universes as a client sends it: `count` universes from `first`, counted from 1.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
@@ -240,60 +190,26 @@ impl Run {
 
 }
 
-/// Where an output is. One type, one transition function: [`Status::after`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-pub enum Status {
-    /// No frame accepted since the output was set. Served like any other status: it
-    /// stays so the user tells a device never seen from one lost (`Reconnecting`).
-    NotFound,
-    Connecting,
-    Running,
-    /// Sends failed; `failures` in a row so far, counted up to `u16::MAX`.
-    Reconnecting {
-        failures: u16,
-    },
-}
-
-/// What happened when a frame was handed to an output.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Outcome {
-    /// The device took all of it. For a kind with a thread of its own: that thread took it.
-    Accepted,
-    /// The device was busy: the frame was dropped, nothing waited.
-    Dropped,
-    /// The device refused or is gone.
-    Failed,
-}
-
-/// Whether the engine's recovery worker holds a request for an output's lane: a device it
-/// lost or could not reopen. A failed frame of a watched lane is a lost device, even
-/// before any frame was accepted.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Watch {
-    Unwatched,
-    Watched,
-}
-
-impl Status {
-    /// Every transition. A dropped frame changes nothing: the device is there, only busy.
-    pub const fn after(self, outcome: Outcome, watch: Watch) -> Self {
-        match (self, outcome) {
-            (Self::NotFound, Outcome::Accepted) => Self::Connecting,
-            (Self::Connecting | Self::Running | Self::Reconnecting { .. }, Outcome::Accepted) => {
-                Self::Running
+impl Output {
+    /// Every status transition. A dropped frame changes nothing.
+    const fn after_status(status: Status, outcome: Outcome, watch: Watch) -> Status {
+        match (status, outcome) {
+            (Status::NotFound, Outcome::Accepted) => Status::Connecting,
+            (
+                Status::Connecting | Status::Running | Status::Reconnecting { .. },
+                Outcome::Accepted,
+            ) => Status::Running,
+            (Status::Connecting | Status::Running, Outcome::Failed) => {
+                Status::Reconnecting { failures: 1 }
             }
-            (Self::Connecting | Self::Running, Outcome::Failed) => {
-                Self::Reconnecting { failures: 1 }
-            }
-            (Self::Reconnecting { failures }, Outcome::Failed) => Self::Reconnecting {
+            (Status::Reconnecting { failures }, Outcome::Failed) => Status::Reconnecting {
                 failures: failures.saturating_add(1),
             },
-            (Self::NotFound, Outcome::Failed) => match watch {
-                Watch::Unwatched => Self::NotFound,
-                Watch::Watched => Self::Reconnecting { failures: 1 },
+            (Status::NotFound, Outcome::Failed) => match watch {
+                Watch::Unwatched => Status::NotFound,
+                Watch::Watched => Status::Reconnecting { failures: 1 },
             },
-            (state, Outcome::Dropped) => state,
+            (status, Outcome::Dropped) => status,
         }
     }
 }
@@ -318,8 +234,8 @@ pub struct Counters {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Output {
     pub universes: Run,
-    pub rate: Rate,
-    pub status: Status,
+    rate: Rate,
+    status: Status,
     pub counters: Counters,
     /// When its next frame is due, since the engine started.
     #[serde(skip)]
@@ -349,6 +265,87 @@ impl Output {
         }
     }
 
+    /// A reroute keeps the adapter's state but starts fresh counts and a new schedule.
+    pub const fn rerouted(self, universes: Run, rate: Rate, now: Duration) -> Self {
+        Self {
+            status: self.status,
+            ..Self::new(universes, rate, now)
+        }
+    }
+
+    /// A new lane resumes the old lane's device state when the adapter is reused.
+    pub const fn resumed_from(mut self, old: Self) -> Self {
+        self.status = old.status;
+        self
+    }
+
+    /// A new lane sees a device as not found until that lane first hears from it.
+    pub const fn fresh_lane(mut self) -> Self {
+        self.status = Status::NotFound;
+        self
+    }
+
+    /// The interval between this output's frames.
+    pub const fn period(self) -> Duration {
+        self.rate.period()
+    }
+
+    /// Frames per second for this output's schedule.
+    pub const fn frames_per_second(self) -> u32 {
+        self.rate.per_second()
+    }
+
+    /// Whether this schedule runs at `rate`.
+    pub fn runs_at(self, rate: Rate) -> bool {
+        self.rate == rate
+    }
+
+    /// Whether this output is in `status`.
+    pub fn has_status(self, status: Status) -> bool {
+        self.status == status
+    }
+
+    pub const fn is_running(self) -> bool {
+        matches!(self.status, Status::Running)
+    }
+
+    pub const fn is_reconnecting(self) -> bool {
+        matches!(self.status, Status::Reconnecting { .. })
+    }
+
+    /// The output's current connection state.
+    pub const fn connection(self) -> Status {
+        self.status
+    }
+
+    /// The two outputs are at the same kind of connection state.
+    pub fn same_status_as(self, other: Self) -> bool {
+        core::mem::discriminant(&self.status) == core::mem::discriminant(&other.status)
+    }
+
+    /// The output's next frame deadline.
+    pub const fn deadline(self) -> Duration {
+        self.due
+    }
+
+    /// This schedule, with its next frame due at `due`.
+    pub const fn due_at(self, due: Duration) -> Self {
+        Self { due, ..self }
+    }
+
+    /// Whether `latency` met this output's press target.
+    pub fn press_met(self, latency: Duration) -> bool {
+        crate::health::press_is_under_target(latency, self.rate)
+    }
+
+    /// Copies the device state and counters into a health sample.
+    pub fn record_health(self, sample: &mut crate::health::HealthSample) {
+        sample.status = self.status;
+        sample.dropped = self.counters.dropped;
+        sample.failed = self.counters.failed;
+        sample.off_beat = self.counters.off_beat;
+    }
+
     /// A frame went to the output's own thread at `now`: when the next is due.
     pub fn handed(self, now: Duration) -> Self {
         Self {
@@ -366,7 +363,7 @@ impl Output {
             .is_some_and(|last| at.saturating_sub(last).abs_diff(period) > OFF_BEAT);
         let counters = self.counters;
         Self {
-            status: self.status.after(outcome, watch),
+            status: Self::after_status(self.status, outcome, watch),
             counters: Counters {
                 accepted: counters.accepted + u64::from(outcome == Outcome::Accepted),
                 dropped: counters.dropped + u64::from(outcome == Outcome::Dropped),
@@ -377,11 +374,27 @@ impl Output {
             ..self
         }
     }
+
+}
+
+impl core::fmt::Display for Output {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            formatter,
+            "{:?}, accepted {}, dropped {}, failed {}, off by > 2 ms {}",
+            self.status,
+            self.counters.accepted,
+            self.counters.dropped,
+            self.counters.failed,
+            self.counters.off_beat
+        )
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::OutputNumber;
 
     #[test]
     fn the_joined_route_fits_the_device_and_the_channel_space() {
@@ -502,8 +515,8 @@ mod tests {
         ];
         for (state, outcome, unwatched, watched) in table {
             let next = (
-                state.after(outcome, Watch::Unwatched),
-                state.after(outcome, Watch::Watched),
+                Output::after_status(state, outcome, Watch::Unwatched),
+                Output::after_status(state, outcome, Watch::Watched),
             );
             assert_eq!(next, (unwatched, watched), "{state:?} + {outcome:?}");
         }

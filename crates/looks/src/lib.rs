@@ -200,7 +200,22 @@ impl Looks {
             .map(|(_, plan)| plan.bytes())
             .sum::<usize>();
         for &look in roots {
-            let plan = Plan::build(self, look, patch, PLAN_BYTES - bytes).map_err(|reason| {
+            let room = Plan::content_room(PLAN_BYTES - bytes).map_err(|reason| {
+                if rebinding && reason != Refusal::WorkLimit {
+                    Refusal::LookInUse { look }
+                } else {
+                    reason
+                }
+            })?;
+            let saved = self.saved.get(&look).ok_or(Refusal::NoSuchLook)?;
+            let plan = match &saved.definition {
+                Definition::Step(step) => Plan::step(look, step.step(), patch, room),
+                Definition::Sequence(_) | Definition::Pattern(_) => {
+                    sequence::compile(&self.saved, look, patch, room)
+                        .map(|(timed, work)| Plan::timed(look, timed, work))
+                }
+            }
+            .map_err(|reason| {
                 if rebinding && reason != Refusal::WorkLimit {
                     Refusal::LookInUse { look }
                 } else {
@@ -224,12 +239,12 @@ impl Looks {
 )]
 mod tests {
     use super::*;
-    use engine_core::{Percent, Width};
     use core::num::NonZeroU16;
     use engine_core::{
         ChannelNumbers, Color, Definition, Light, Lights, PatchCommand, Pixels, SavedLook,
         Sequence, SequenceItem, Target, Text, Universes, Use,
     };
+    use engine_core::{Percent, Width};
     use engine_core::{Saved, Step};
     use rig::Whole;
 

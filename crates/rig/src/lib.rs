@@ -49,7 +49,7 @@ pub mod channels;
 mod patch;
 
 pub use capabilities::{shows_one_gobo, supports};
-pub use patch::{Limit, Patch, PatchEffect, Placed, Unplaced, Whole};
+pub use patch::{Limit, Patch, PatchEffect, Placed, Unplaced, WaveBinding, Whole, WriterPlan};
 
 use capabilities::Wheels;
 

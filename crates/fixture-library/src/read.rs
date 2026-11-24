@@ -1,9 +1,12 @@
 //! Bytes of a QLC+ `.qxf` file to a `Fixture`. All of the XML walking lives here.
 
 use crate::capability::{self, Said};
-use crate::error::{Error, LeftOut, Problem, Refused, Warning};
+use crate::error::Error;
 use crate::function::{colour_of, direction_of, function_of};
-use crate::model::{Byte, Channel, Declared, Degrees, Dimming, Fixture, Kind, Layout, Mode, Range};
+use crate::model::{
+    Byte, Channel, Declared, Degrees, Dimming, Fixture, Kind, Layout, LeftOut, Mode, Problem,
+    Range, Refused, Warning,
+};
 use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;

@@ -1,7 +1,6 @@
 //! A health reader that samples before the reroute and after the same USB port returns.
 
-#[path = "../../outputs/tests/common/mod.rs"]
-mod usb;
+use crate::output_common as usb;
 
 use engine::{
     Adapter, Begun, ChannelNumbers, Command, Device, Engine, Event, Outcome, OutputKind,

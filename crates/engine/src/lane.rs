@@ -606,7 +606,7 @@ pub(crate) struct Lane {
     back: rtrb::Consumer<Frame>,
     spare: [Option<Frame>; BOXES],
     held: Option<HeldFrame>,
-    pub(crate) control: Control,
+    control: Control,
 }
 
 /// Rendezvous on the thread preparing an output. Dropping the release end lets it run.
@@ -631,7 +631,7 @@ impl Lane {
         life: Arc<EngineLife>,
         previous: Option<&Control>,
         #[cfg(feature = "test-support")] pause: Option<StartPause>,
-    ) -> io::Result<Self> {
+    ) -> io::Result<(Self, Control)> {
         #[cfg(feature = "test-support")]
         if let Some(pause) = pause {
             let _ = pause.reached.send(());
@@ -719,14 +719,47 @@ impl Lane {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .thread = Some(thread);
-        Ok(Self {
-            spans: route.spans,
-            frames,
-            back,
-            spare,
-            held,
-            control,
-        })
+        let front = control.clone();
+        Ok((
+            Self {
+                spans: route.spans,
+                frames,
+                back,
+                spare,
+                held,
+                control,
+            },
+            front,
+        ))
+    }
+
+    pub(crate) fn wake_action(&self) -> Effect {
+        self.control.cutover().effect(Event::Wake)
+    }
+
+    pub(crate) fn publish_cutoff(&self) {
+        self.control.publish();
+    }
+
+    pub(crate) fn cutoff(&self) -> bool {
+        self.control.cutover().apply(Event::Cutoff) == Effect::SwitchLane
+    }
+
+    pub(crate) fn show_new(&self) {
+        self.control.cutover().apply(Event::Wake);
+    }
+
+    pub(crate) fn stop_cutover(&self) {
+        self.control.cutover().stop();
+    }
+
+    /// Counts frames of a lane the cutover still treats as visible.
+    pub(crate) fn returned(&mut self, mut each: impl FnMut(Sent, Watch)) {
+        if self.control.cutover().apply(Event::FrameBack) != Effect::CountOld {
+            return;
+        }
+        let watch = self.control.watch();
+        self.back(|sent| each(sent, watch));
     }
 
     /// Hands `frame`, due at `due`, to the output's thread; the output's next frame is
@@ -1052,6 +1085,7 @@ mod tests {
             None,
         )
         .unwrap()
+        .0
     }
 
     fn take(lane: &mut Lane) -> Outcome {
@@ -1388,7 +1422,8 @@ mod tests {
             #[cfg(feature = "test-support")]
             None,
         )
-        .unwrap();
+        .unwrap()
+        .0;
         // Every frame is due at once: the thread sends what it finds.
         let prefix = |n| Prefix {
             presses: 100 + n,

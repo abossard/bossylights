@@ -1,13 +1,12 @@
 //! Immutable plans cross to the tick by shared ownership. Only the sample buffer
 //! changes there. A standalone step goes straight to the Mixer as runs of lights.
 
-use crate::{Looks, pattern::WaveBinding, sequence};
-use alloc::boxed::Box;
+use alloc::{boxed::Box, vec::Vec};
 use core::mem::size_of_val;
 use engine_core::{
-    Binding, Definition, Elapsed, Entry, Item, Light, LightRun, Node, Program, Refusal, Step, Use,
+    Binding, Elapsed, Entry, Item, Light, LightRun, Node, Program, Refusal, Step, Use,
 };
-use rig::Patch;
+use rig::{Patch, WaveBinding};
 
 /// Maximum play visits booked for one wake. The engine shares unused visits
 /// with light commands and guarantees room for one direct light grab.
@@ -32,18 +31,17 @@ pub const PLAN_BYTES: usize = 64 * 1024 * 1024;
 /// A step's values on its checked target runs, shared by static playback and nested
 /// sequence compilation.
 pub fn compile(step: &Step, patch: &Patch) -> Result<Box<[Entry]>, Refusal> {
-    let runs = patch.runs(step.target)?;
-    if runs.is_empty() {
-        return Err(Refusal::EmptyGroup);
-    }
-    rig::supports(patch.writers(), &runs, &step.values)?;
-    Ok(runs
-        .into_iter()
-        .map(|lights| Entry {
-            lights,
-            values: step.values,
-        })
-        .collect())
+    patch.bind_step(step)
+}
+
+pub(crate) fn numbers(run: LightRun) -> core::ops::Range<u16> {
+    run.first().index()..run.first().index() + run.count()
+}
+
+/// A group's lights in saved member order. Each fixture contributes its light and heads
+/// in definition order. Only the first occurrence of a repeated light counts.
+pub(crate) fn ordered_group(group: engine_core::Text, patch: &Patch) -> Result<Vec<u16>, Refusal> {
+    patch.ordered_group(group)
 }
 
 /// The original leaf and its bound lights, for validating changes against held samples.
@@ -111,7 +109,7 @@ impl PlanKind {
                     + size_of_val(timed.nodes.as_ref())
                     + size_of_val(timed.items.as_ref())
                     + size_of_val(timed.targets.as_ref())
-                    + WaveBinding::storage(&timed.waves)
+                    + timed.waves.iter().map(WaveBinding::bytes).sum::<usize>()
                     + size_of_val(timed.leaves.as_ref())
                     + timed
                         .targets
@@ -138,40 +136,40 @@ pub struct Plan {
 }
 
 impl Plan {
-    pub(crate) fn build(
-        looks: &Looks,
-        look: u16,
-        patch: &Patch,
-        room: usize,
-    ) -> Result<Self, Refusal> {
-        let room = room
-            .checked_sub(size_of::<Self>())
-            .ok_or(Refusal::WorkLimit)?;
-        let (kind, work) = match &looks.get(look).ok_or(Refusal::NoSuchLook)?.definition {
-            Definition::Step(step) => {
-                let leaf = Leaf::new(step.step(), patch)?;
-                if size_of_val(leaf.entries.as_ref()) > room {
-                    return Err(Refusal::WorkLimit);
-                }
-                let lights = leaf
-                    .entries
-                    .iter()
-                    .map(|entry| usize::from(entry.lights.count()))
-                    .sum();
-                (PlanKind::Step(leaf), sample_work(lights, 1)?)
-            }
-            Definition::Sequence(_) | Definition::Pattern(_) => {
-                let (program, work) = sequence::compile(looks, look, patch, room)?;
-                (PlanKind::Timed(program), work)
-            }
-        };
-        let bytes = core::mem::size_of::<Self>() + kind.storage();
-        Ok(Self {
+    pub(crate) fn content_room(room: usize) -> Result<usize, Refusal> {
+        room.checked_sub(size_of::<Self>())
+            .ok_or(Refusal::WorkLimit)
+    }
+
+    pub(crate) fn step(look: u16, step: Step, patch: &Patch, room: usize) -> Result<Self, Refusal> {
+        let leaf = Leaf::new(step, patch)?;
+        if size_of_val(leaf.entries.as_ref()) > room {
+            return Err(Refusal::WorkLimit);
+        }
+        let lights = leaf
+            .entries
+            .iter()
+            .map(|entry| usize::from(entry.lights.count()))
+            .sum();
+        Ok(Self::new(
+            look,
+            PlanKind::Step(leaf),
+            sample_work(lights, 1)?,
+        ))
+    }
+
+    pub(crate) fn timed(look: u16, timed: Timed, work: usize) -> Self {
+        Self::new(look, PlanKind::Timed(timed), work)
+    }
+
+    fn new(look: u16, kind: PlanKind, work: usize) -> Self {
+        let bytes = size_of::<Self>() + kind.storage();
+        Self {
             look,
             kind,
             work,
             bytes,
-        })
+        }
     }
 
     /// A frozen play retains its original linked IDs even when the saved graph changes.

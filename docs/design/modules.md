@@ -106,6 +106,25 @@ The bar shows depth: interface size on the left, what it hides on the right.
 | **Music** | `playing` `analyse` | VirtualDJ protocols, analysis pipeline, beat grids, confidence | ▮▮ → ▮▮▮▮▮▮ |
 | **Autopilot** | `start` `stop` | choosing looks, not repeating, staying out of your hands' way | ▮▮ → ▮▮▮▮▮ |
 
+### Inside the Engine
+
+```mermaid
+flowchart LR
+  FRONT["Front<br/>admit commands<br/>install patches"] --> QUEUE["command queue"]
+  QUEUE --> TICK["Tick<br/>mutate performance<br/>schedule outputs"]
+  TICK --> LANE["Lane<br/>worker control<br/>returned frames"]
+  TICK --> PUB["Publication<br/>copy one completed wake"]
+  PUB --> SNAP["Snapshot<br/>immutable views<br/>and deltas"]
+```
+
+| Owner | Keeps |
+|---|---|
+| **Front** | project, patch, saved looks, command admission, prepared output openings |
+| **Tick** | mutable performance state, cutover stamps, scheduling, frame measurements |
+| **Lane** | worker control, queued frames, returned-frame accounting |
+| **Snapshot** | immutable performance, channel levels, light values, health and revision reads |
+| **`lib.rs`** | crate exports and composition only |
+
 ### Rig: a mode becomes channels (channel model, #239)
 
 `rig::channels::lower` is a calculation off the tick. `resolve` (writers per light) goes when the tick runs on channels (#250).

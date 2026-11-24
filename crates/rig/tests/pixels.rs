@@ -4,7 +4,8 @@ mod common;
 
 use common::{fixture, lights, say};
 use engine_core::{
-    ChannelNumbers, Color, Lights, PatchCommand, Pixels, Refusal, Text, Universes, Writer,
+    ChannelNumbers, Color, LightNumber, Lights, PatchCommand, Pixels, Refusal, Text, Universes,
+    Writer,
 };
 use engine_core::{Command, OutputKind, OutputNumber, Project, ProjectEvent, RunNumbers};
 use rig::{Patch, PatchEffect};
@@ -106,7 +107,15 @@ fn a_fixture_with_heads_is_one_light_per_head_in_the_order_of_the_definition() {
         assert_eq!(format!("{}, {}", row.model, row.mode), named);
         assert_eq!(row.lights, count, "{named}");
         assert_eq!(row.layout.map(|l| (l.width, l.height)), layout, "{named}");
-        assert_eq!(owners(patch.writers()), expected, "{named}");
+        let rigged = rig::compile(
+            patch.mode(1).unwrap(),
+            at(row.universe, row.address),
+            LightNumber::new(row.first - 1, lights()).unwrap(),
+            Universes::ONE,
+            lights(),
+        )
+        .unwrap();
+        assert_eq!(owners(&rigged.writers), expected, "{named}");
     }
 }
 
@@ -143,7 +152,17 @@ fn a_strip_is_written_like_a_par_without_a_dimmer() {
         let empty = Patch::new(Universes::ONE, lights(), common::whole());
         let (patch, effects) = empty.update(strip(2, color, 1, 37), &[]).unwrap();
         assert_eq!(effects[0], PatchEffect::Patched { fixture: 1 });
-        let said: Vec<String> = patch.unwrap().writers().iter().map(say).collect();
+        let patch = patch.unwrap();
+        let row = patch.fixtures()[0];
+        let rigged = rig::compile(
+            patch.mode(1).unwrap(),
+            at(row.universe, row.address),
+            LightNumber::new(row.first - 1, lights()).unwrap(),
+            Universes::ONE,
+            lights(),
+        )
+        .unwrap();
+        let said: Vec<String> = rigged.writers.iter().map(say).collect();
         assert_eq!(said, expected, "{color:?}");
     }
 }

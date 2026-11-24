@@ -1,19 +1,19 @@
 //! Compile only the reachable graph. Shared references reuse a node, but each use
 //! contributes its full expansion to admission and keeps its own timing and spread.
 
-use crate::compile::{Leaf, Target as SampleTarget, Timed, WORK_LIMIT, sample_work};
-use crate::{
-    Looks,
-    pattern::{self, WaveBinding},
+use crate::compile::{
+    Leaf, Target as SampleTarget, Timed, WORK_LIMIT, numbers, ordered_group, sample_work,
 };
+use crate::pattern;
 use alloc::collections::{BTreeMap, BTreeSet};
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::mem::size_of_val;
 use engine_core::{
-    Binding, Definition, Item, LightNumber, LightRun, Lights, MAX_DEPTH, Member, Node, Percent,
-    Refusal, Sequence, Target, Writer,
+    Binding, Definition, Item, LightNumber, LightRun, Lights, MAX_DEPTH, Node, Percent, Refusal,
+    SavedLook, Sequence, Target,
 };
-use rig::Patch;
+use rig::{Patch, WaveBinding};
 
 const SIXTEENTH: u64 = 1 << 28;
 
@@ -35,7 +35,7 @@ struct Built {
 }
 
 struct Builder<'a> {
-    looks: &'a Looks,
+    saved: &'a BTreeMap<u16, Arc<SavedLook>>,
     patch: &'a Patch,
     nodes: Vec<Built>,
     items: Vec<Item>,
@@ -63,7 +63,7 @@ impl Builder<'_> {
             return Err(Refusal::WorkLimit);
         }
         self.path.push(look);
-        let saved = self.looks.get(look).ok_or(Refusal::NoSuchLook)?;
+        let saved = self.saved.get(&look).ok_or(Refusal::NoSuchLook)?;
         let built = match &saved.definition {
             Definition::Step(step) => {
                 let leaf = Leaf::new(step.step(), self.patch)?;
@@ -92,9 +92,18 @@ impl Builder<'_> {
             }
             Definition::Sequence(sequence) => self.sequence(sequence)?,
             Definition::Pattern(pattern) => {
-                let (node, wave) = pattern::compile(self.looks, pattern, self.patch)?;
+                let palette = pattern::reference(pattern)
+                    .map(|look| {
+                        self.saved
+                            .get(&look)
+                            .map(|saved| &saved.definition)
+                            .ok_or(Refusal::NoSuchLook)
+                    })
+                    .transpose()?;
+                let (node, wave) = pattern::compile(pattern, palette, self.patch)?;
                 let ordered = wave.ordered(self.patch)?;
-                let columns = wave.columns;
+                let targets = u16::try_from(ordered.len()).map_err(|_| Refusal::WorkLimit)?;
+                let columns = Some(wave.stride(targets));
                 let expansion = ordered.len();
                 self.waves.push(wave);
                 let palette = pattern::reference(pattern);
@@ -175,7 +184,8 @@ impl Builder<'_> {
             let child = self.built(item.child)?;
             let before = self.built(previous.child)?;
             let outgoing = if item.transition > 0
-                || (item.settings.spread > Percent::LEAST && matches!(child.node, Node::Step { .. }))
+                || (item.settings.spread > Percent::LEAST
+                    && matches!(child.node, Node::Step { .. }))
             {
                 before.size.visits
             } else {
@@ -212,13 +222,13 @@ fn comparisons(len: usize) -> usize {
 }
 
 pub(crate) fn compile(
-    looks: &Looks,
+    saved: &BTreeMap<u16, Arc<SavedLook>>,
     root: u16,
     patch: &Patch,
     room: usize,
 ) -> Result<(Timed, usize), Refusal> {
     let mut builder = Builder {
-        looks,
+        saved,
         patch,
         nodes: Vec::new(),
         items: Vec::new(),
@@ -240,7 +250,11 @@ pub(crate) fn compile(
     // flattened plan size before allocating its per-light binding tables.
     let storage = builder.nodes.len() * size_of::<Node>()
         + (builder.indexed.len() + builder.palettes.len()) * size_of::<u16>()
-        + WaveBinding::storage(&builder.waves)
+        + builder
+            .waves
+            .iter()
+            .map(WaveBinding::bytes)
+            .sum::<usize>()
         + builder.items.len() * size_of::<Item>()
         + built.ordered.len() * size_of::<SampleTarget>()
         + builder.bindings * size_of::<Binding>()
@@ -253,7 +267,7 @@ pub(crate) fn compile(
     if storage > room {
         return Err(Refusal::WorkLimit);
     }
-    let wheels = discrete_colours(patch);
+    let wheels = patch.discrete_colours();
     let mut by_light: BTreeMap<u16, Vec<Binding>> = BTreeMap::new();
     let mut nodes = Vec::with_capacity(builder.nodes.len());
     for (node, built) in builder.nodes.into_iter().enumerate() {
@@ -294,48 +308,4 @@ pub(crate) fn compile(
         },
         work,
     ))
-}
-
-pub(crate) fn numbers(run: LightRun) -> core::ops::Range<u16> {
-    run.first().index()..run.first().index() + run.count()
-}
-
-/// A group's lights in saved member order. Each fixture contributes its light and heads
-/// in definition order. Only the first occurrence of a repeated light counts.
-pub(crate) fn ordered_group(group: engine_core::Text, patch: &Patch) -> Result<Vec<u16>, Refusal> {
-    let groups = patch.groups();
-    let group = groups
-        .iter()
-        .find(|row| row.name == group.as_str())
-        .ok_or(Refusal::NoSuchGroup)?;
-    let mut seen = BTreeSet::new();
-    let mut ordered = Vec::new();
-    for &member in group.members {
-        let target = match member {
-            Member::Fixture { fixture } => Target::Fixture { fixture },
-            Member::Light { light } => Target::Light { light },
-        };
-        ordered.extend(
-            patch
-                .runs(target)?
-                .into_iter()
-                .flat_map(numbers)
-                .filter(|light| seen.insert(*light)),
-        );
-    }
-    Ok(ordered)
-}
-
-fn discrete_colours(patch: &Patch) -> BTreeSet<u16> {
-    let mut wheel = None;
-    let mut colours = BTreeSet::new();
-    for writer in patch.writers() {
-        match writer {
-            Writer::Picks { light, .. } => wheel = Some(light.index()),
-            Writer::ColourSlot { .. } => colours.extend(wheel),
-            Writer::GoboSlot { .. } => {}
-            Writer::Takes { .. } | Writer::Fixed { .. } => wheel = None,
-        }
-    }
-    colours
 }

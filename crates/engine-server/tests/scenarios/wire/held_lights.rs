@@ -2,7 +2,7 @@
 //! RGB PAR at 1:37 is light 1. Each step's command is in the picture a `Query` answers
 //! and in the lights a subscriber's `Changed` carries: set, set, release, release.
 
-mod common;
+use crate::wire_common as common;
 
 use common::taken;
 use engine::{Engine, Universes};

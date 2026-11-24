@@ -1,7 +1,6 @@
 //! A pending reroute must preserve a due press on the old DDP run.
 
-#[path = "../../outputs/tests/common/stream.rs"]
-mod stream;
+use crate::output_stream as stream;
 
 use engine::{
     Begun, ChannelNumbers, Color, Command, Device, Engine, Event, Outcome, OutputNumber, Rate,

@@ -30,15 +30,20 @@
 //! (`crates/outputs`), so [`Whole`] brings it in.
 
 use crate::{ADDRESSES, Unfit, compile, flat, lights_of, strip, supports, unflat};
+use alloc::boxed::Box;
+use alloc::collections::BTreeSet;
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
+use core::fmt;
+use core::mem::size_of;
 use core::num::NonZeroU16;
 use engine_core::{
-    ChannelNumbers, EngineCommand, Grouped, LightChange, LightNumber, LightRun, Lights, Member,
-    OutputKind, PatchCommand, Patched, Project, Refusal, SavedLook, Target, Universes, Value,
-    Writer,
+    ChannelNumbers, ChannelSet, Channels, EngineCommand, Entry as BoundEntry, Grouped, Levels,
+    Light, LightChange, LightNumber, LightRun, Lights, Member, OutputKind, Part, PatchCommand,
+    Patched, Project, Property, Refusal, SavedLook, State, Step, Target, Universes, Value,
+    WaveTarget, Writer,
 };
 use fixture_library::{Fixture, Mode};
 
@@ -51,7 +56,7 @@ pub struct Patch {
     /// fixtures it changes.
     fixtures: Vec<Arc<Entry>>,
     /// The writers of every fixture, in the order of their numbers.
-    writers: Vec<Writer>,
+    plan: WriterPlan,
     /// In the order they were made. Every member is patched.
     groups: Vec<Group>,
     /// The show file it is kept in, `None` when it is kept in none.
@@ -119,6 +124,50 @@ struct Entry {
     writers: Vec<Writer>,
 }
 
+/// A prepared writer plan ready to cross to the tick thread. Its representation stays
+/// inside the Rig.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct WriterPlan {
+    writers: Vec<Writer>,
+}
+
+impl fmt::Debug for WriterPlan {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("WriterPlan")
+    }
+}
+
+impl WriterPlan {
+    const fn from(writers: Vec<Writer>) -> Self {
+        Self { writers }
+    }
+
+    /// Resolve the prepared writers into caller-owned universe levels.
+    pub fn resolve(&self, lights: &[Light], universes: &mut [Levels]) {
+        engine_core::resolve(lights, &self.writers, universes);
+    }
+
+    /// Resolve and mix one complete engine frame.
+    pub fn frame(
+        &self,
+        state: &State,
+        universes: &[Levels],
+        holds: &[ChannelSet],
+        lights: &[Light],
+        channels: &mut Channels,
+    ) {
+        engine_core::frame(state, universes, holds, lights, &self.writers, channels);
+    }
+}
+
+/// The checked lights and matrix shape of a Wave target.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WaveBinding {
+    target: WaveTarget,
+    runs: Box<[LightRun]>,
+    columns: Option<u16>,
+}
+
 /// A fixture as a show file keeps it: its number and its lights as they were.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Placed {
@@ -147,7 +196,7 @@ pub enum PatchEffect {
     /// The fixture was patched with this number: the reply says it.
     Patched { fixture: u16 },
     /// The writers of the whole patch, to swap in on the tick thread.
-    Writers(Vec<Writer>),
+    Writers(WriterPlan),
     /// Send this to the tick thread.
     Send(EngineCommand),
     /// Make `change` to each of these runs, all in one frame: a group of more than one run.
@@ -167,7 +216,7 @@ impl Patch {
             universes,
             lights,
             fixtures: Vec::new(),
-            writers: Vec::new(),
+            plan: WriterPlan::from(Vec::new()),
             groups: Vec::new(),
             limit: None,
             whole,
@@ -290,7 +339,7 @@ impl Patch {
                     entry.at = at;
                     entry.writers = rigged.writers;
                 });
-                let writers = PatchEffect::Writers(patch.writers.clone());
+                let writers = PatchEffect::Writers(patch.prepare());
                 Ok((Some(patch), vec![writers]))
             }
             PatchCommand::Unpatch { fixture } => {
@@ -310,7 +359,7 @@ impl Patch {
                 for group in &mut patch.groups {
                     group.members.retain(|member| !gone(member));
                 }
-                let mut effects = vec![PatchEffect::Writers(patch.writers.clone())];
+                let mut effects = vec![PatchEffect::Writers(patch.prepare())];
                 effects
                     .extend(run.map(|lights| PatchEffect::Send(EngineCommand::Darken { lights })));
                 Ok((Some(patch), effects))
@@ -431,7 +480,7 @@ impl Patch {
         let place = fixtures.partition_point(|e| e.number < number);
         fixtures.insert(place, Arc::new(entry));
         let patch = self.with(fixtures);
-        let writers = PatchEffect::Writers(patch.writers.clone());
+        let writers = PatchEffect::Writers(patch.prepare());
         Ok((
             Some(patch),
             vec![PatchEffect::Patched { fixture: number }, writers],
@@ -456,7 +505,125 @@ impl Patch {
 
     /// `Unsupported` when a light of `runs` cannot show `value`.
     pub fn supports(&self, runs: &[LightRun], value: Value) -> Result<(), Refusal> {
-        supports(&self.writers, runs, &value.light())
+        supports(&self.plan.writers, runs, &value.light())
+    }
+
+    /// Check a step's target and values and bind them to the patch's lights.
+    pub fn bind_step(&self, step: &Step) -> Result<Box<[BoundEntry]>, Refusal> {
+        let runs = self.runs(step.target)?;
+        if runs.is_empty() {
+            return Err(Refusal::EmptyGroup);
+        }
+        supports(&self.plan.writers, &runs, &step.values)?;
+        Ok(runs
+            .into_iter()
+            .map(|lights| BoundEntry {
+                lights,
+                values: step.values,
+            })
+            .collect())
+    }
+
+    /// Check a Wave target and bind its topology and colour capability.
+    pub fn bind_wave(&self, target: WaveTarget) -> Result<WaveBinding, Refusal> {
+        let (runs, columns) = match target {
+            WaveTarget::Group { group } => (self.runs(Target::Group { group })?, None),
+            WaveTarget::Matrix { fixture } => {
+                let mode = self.mode(fixture).ok_or(Refusal::NotPatched)?;
+                let layout = mode.layout.ok_or(Refusal::NoMatrix)?;
+                let cells = layout
+                    .width
+                    .checked_mul(layout.height)
+                    .filter(|&n| n != 0 && usize::from(n) == mode.pixels.len())
+                    .ok_or(Refusal::NoMatrix)?;
+                let run = self
+                    .runs(Target::Fixture { fixture })?
+                    .into_iter()
+                    .next()
+                    .ok_or(Refusal::NotPatched)?;
+                let first = run.first().index()
+                    + run.count().checked_sub(cells).ok_or(Refusal::NoMatrix)?;
+                let heads = LightNumber::new(first, Lights::MOST)
+                    .and_then(|first| LightRun::new(first, cells, Lights::MOST))
+                    .ok_or(Refusal::NoMatrix)?;
+                (vec![heads], Some(layout.width))
+            }
+        };
+        if runs.is_empty() {
+            return Err(Refusal::EmptyGroup);
+        }
+        let continuous: BTreeSet<_> = self
+            .plan
+            .writers
+            .iter()
+            .filter_map(|writer| match writer {
+                Writer::Takes { light, take, .. }
+                    if matches!(take.of, Part::Red | Part::Green | Part::Blue | Part::Shared) =>
+                {
+                    Some(light.index())
+                }
+                Writer::Takes { .. }
+                | Writer::Fixed { .. }
+                | Writer::Picks { .. }
+                | Writer::ColourSlot { .. }
+                | Writer::GoboSlot { .. } => None,
+            })
+            .collect();
+        if let Some(light) = runs
+            .iter()
+            .copied()
+            .flat_map(|run| run.first().index()..run.first().index() + run.count())
+            .find(|light| !continuous.contains(light))
+        {
+            return Err(Refusal::Unsupported {
+                light: light + 1,
+                property: Property::Colour,
+            });
+        }
+        Ok(WaveBinding {
+            target,
+            runs: runs.into_boxed_slice(),
+            columns,
+        })
+    }
+
+    /// A group's lights in saved member order, with repeated lights once.
+    pub fn ordered_group(&self, name: engine_core::Text) -> Result<Vec<u16>, Refusal> {
+        let group = self
+            .groups
+            .iter()
+            .find(|row| row.name == name.as_str())
+            .ok_or(Refusal::NoSuchGroup)?;
+        let mut seen = BTreeSet::new();
+        let mut ordered = Vec::new();
+        for &member in &group.members {
+            let target = match member {
+                Member::Fixture { fixture } => Target::Fixture { fixture },
+                Member::Light { light } => Target::Light { light },
+            };
+            ordered.extend(
+                self.runs(target)?
+                    .into_iter()
+                    .flat_map(|run| run.first().index()..run.first().index() + run.count())
+                    .filter(|light| seen.insert(*light)),
+            );
+        }
+        Ok(ordered)
+    }
+
+    /// Every light whose colour is selected by a discrete wheel.
+    pub fn discrete_colours(&self) -> BTreeSet<u16> {
+        let mut wheel = None;
+        let mut colours = BTreeSet::new();
+        for writer in &self.plan.writers {
+            match writer {
+                Writer::Picks { light, .. } => wheel = Some(light.index()),
+                Writer::ColourSlot { .. } => colours.extend(wheel),
+                Writer::GoboSlot { .. } => {}
+                Writer::Takes { .. } | Writer::Fixed { .. } => wheel = None,
+            }
+        }
+        colours
     }
 
     /// The lights `target` names: one run for a light or a fixture, the fewest runs for a
@@ -578,9 +745,9 @@ impl Patch {
             .collect()
     }
 
-    /// The writers of every fixture, in the order of their numbers.
-    pub fn writers(&self) -> &[Writer] {
-        &self.writers
+    /// Prepare the whole patch for the engine's tick thread.
+    pub fn prepare(&self) -> WriterPlan {
+        self.plan.clone()
     }
 
     /// This patch with these fixtures: their writers made anew.
@@ -588,10 +755,12 @@ impl Patch {
         Self {
             universes: self.universes,
             lights: self.lights,
-            writers: fixtures
-                .iter()
-                .flat_map(|e| e.writers.iter().copied())
-                .collect(),
+            plan: WriterPlan::from(
+                fixtures
+                    .iter()
+                    .flat_map(|e| e.writers.iter().copied())
+                    .collect(),
+            ),
             fixtures,
             groups: self.groups.clone(),
             limit: self.limit,
@@ -698,6 +867,36 @@ impl Entry {
         let (from, to) = (self.first.index(), self.first.index() + self.lights);
         let (other_from, other_to) = (other.first.index(), other.first.index() + other.lights);
         from < other_to && other_from < to
+    }
+}
+
+impl WaveBinding {
+    /// Lights in authored target order, without repeated group members.
+    pub fn ordered(&self, patch: &Patch) -> Result<Vec<u16>, Refusal> {
+        match self.target {
+            WaveTarget::Group { group } => patch.ordered_group(group),
+            WaveTarget::Matrix { .. } => Ok(self
+                .runs
+                .iter()
+                .copied()
+                .flat_map(|run| run.first().index()..run.first().index() + run.count())
+                .collect()),
+        }
+    }
+
+    /// The number of columns used to index one target of `count` lights.
+    pub fn stride(&self, count: u16) -> u16 {
+        self.columns.unwrap_or(count)
+    }
+
+    /// Whether `patch` still has the same checked target topology and capability.
+    pub fn matches(&self, patch: &Patch) -> bool {
+        patch.bind_wave(self.target).is_ok_and(|now| now == *self)
+    }
+
+    /// Bytes occupied by the stored binding, including its boxed runs.
+    pub fn bytes(&self) -> usize {
+        size_of::<Self>() + size_of::<LightRun>() * self.runs.len()
     }
 }
 

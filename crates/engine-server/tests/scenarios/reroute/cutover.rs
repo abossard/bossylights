@@ -1,9 +1,8 @@
 //! Remaining wire paths in docs/design/output-cutover.md. The preparing path (T1,
 //! T2, T3, T4) and a publication during a wake (T5) use the gated opens in routes.rs.
 //! The reroute_* targets cover T8 to T11, including a return before the cutoff.
-mod common;
-#[path = "../../outputs/tests/common/stream.rs"]
-mod stream;
+use crate::output_stream as stream;
+use crate::wire_common as common;
 
 use engine::{Color, Device, Engine, Outcome, OutputKind, Universes, Unsent};
 use serde_json::{Value, json};
@@ -291,7 +290,9 @@ fn an_old_retry_in_flight_at_cutover_recovers_the_reused_adapter() {
     engine.stall_reclamation(true);
     assert_eq!(
         sender.send(set(2)),
-        Err(Unsent::Refused(Refusal::CannotOpen { why: engine::OpenFailure::Device { with: None } }))
+        Err(Unsent::Refused(Refusal::CannotOpen {
+            why: engine::OpenFailure::Device { with: None }
+        }))
     );
     let at = wakes.wake().unwrap();
     assert_eq!(attempts.recv_timeout(GUARD).unwrap(), 3);
@@ -372,10 +373,7 @@ fn a_removal_after_acceptance_cannot_bring_back_the_accepted_lane() {
     engine.latest();
     wakes.wake().unwrap();
     if removed == Err(Unsent::Refused(Refusal::Opening)) {
-        assert_eq!(
-            engine.latest().state.outputs[0].unwrap().universes.first(),
-            2
-        );
+        assert_eq!(engine.latest().output(output).unwrap().universes.first(), 2);
         assert_eq!(read(&wire, 510), 93);
         sender.send(remove).unwrap();
         engine.latest();
@@ -383,7 +381,7 @@ fn a_removal_after_acceptance_cannot_bring_back_the_accepted_lane() {
     } else {
         assert_eq!(removed, Ok(()));
     }
-    assert_eq!(engine.latest().state.outputs[0], None);
+    assert_eq!(engine.latest().output(output), None);
     wakes.events();
     wakes.wake().unwrap();
     assert!(!wakes.events().iter().any(|event| matches!(event,

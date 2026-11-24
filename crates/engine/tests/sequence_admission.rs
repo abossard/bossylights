@@ -143,7 +143,10 @@ fn a_saved_rgb_wave_leaves_room_to_light_its_first_pixel() {
                 target: Target::Light { light: 2 },
                 intensity: u16::MAX,
             };
-            assert_eq!(sender.send(another), Err(Unsent::Refused(engine::Refusal::WorkLimit)));
+            assert_eq!(
+                sender.send(another),
+                Err(Unsent::Refused(engine::Refusal::WorkLimit))
+            );
         }
         wakes.wake_at(second_at).unwrap();
         mock::wait_until("the second command's frame did not arrive", || {
@@ -200,7 +203,7 @@ fn playing_strip() -> (Engine, engine::Sender, engine::Wakes) {
         .unwrap();
     engine.latest();
     wakes.wake().unwrap();
-    assert_eq!(engine.latest().state.plays.iter().count(), 1);
+    assert_eq!(engine.latest().active_plays().count(), 1);
     (engine, sender, wakes)
 }
 
@@ -221,7 +224,10 @@ fn direct_grabs_reserve_their_end_and_release_before_they_are_accepted() {
         grabs.push(grab);
     }
     let tail = sender.sent();
-    assert_eq!(sender.send(press(13)), Err(Unsent::Refused(engine::Refusal::WorkLimit)));
+    assert_eq!(
+        sender.send(press(13)),
+        Err(Unsent::Refused(engine::Refusal::WorkLimit))
+    );
     assert_eq!(sender.sent(), tail);
 
     // EndGrab keeps the even-indexed grabs. Releasing the whole fixture
@@ -240,8 +246,11 @@ fn direct_grabs_reserve_their_end_and_release_before_they_are_accepted() {
     engine.latest();
     wakes.wake().unwrap();
     let picture = engine.latest();
-    for (index, light) in picture.lights().iter().take(14).enumerate() {
-        assert_eq!(light.intensity, (index == 12).then_some(11));
+    for light in 1..=14 {
+        assert_eq!(
+            picture.light(light).and_then(|light| light.intensity),
+            (light == 13).then_some(11)
+        );
     }
     wakes.run();
 }
@@ -280,12 +289,9 @@ fn a_fragmented_fixture_release_fits_in_one_wake() {
         wakes.wake().unwrap();
     }
     let intensities = |engine: &mut Engine| {
-        engine
-            .latest()
-            .lights()
-            .iter()
-            .take(usize::from(pixels))
-            .map(|light| light.intensity)
+        let picture = engine.latest();
+        (1..=pixels)
+            .map(|light| picture.light(light).and_then(|light| light.intensity))
             .collect::<Vec<_>>()
     };
     let alternating: Vec<_> = (1..=pixels)

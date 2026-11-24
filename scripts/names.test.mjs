@@ -51,7 +51,7 @@ for (const [line, named] of newKind) {
 
 test("the list of kinds may name them; the hit says where", () => {
   const source = "a\nOutputKind::Ddp";
-  assert.deepEqual(protocolNames("crates/engine-core/src/kinds.rs", source, KINDS), []);
+  assert.deepEqual(protocolNames("crates/engine-core/src/model/kinds.rs", source, KINDS), []);
   assert.deepEqual(protocolNames(FILE, source, KINDS), [`${FILE}:2: OutputKind::Ddp`]);
 });
 
