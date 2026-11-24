@@ -1,6 +1,6 @@
 [package]
 name = "outputs"
-description = "Every output kind and its bytes: open a device off the output thread, then take frames on it without waiting. DDP, DMX USB Pro."
+description = "Every output kind and its bytes: open a device off the output thread, then take frames on it without waiting. DDP, Art-Net, DMX USB Pro."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -14,6 +14,9 @@ engine-core = { path = "../engine-core" }
 rtrb = "0.4.1"
 serialport = { version = "4.10.1", default-features = false }
 nix = { version = "0.26.4", default-features = false, features = ["fs"] }
+
+[dev-dependencies]
+artnet_protocol = "0.4.4" # MIT: an outside decoder for the Art-Net tests
 
 [[test]]
 name = "no_alloc"

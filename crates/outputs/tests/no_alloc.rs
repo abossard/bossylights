@@ -76,11 +76,14 @@ fn main() {
         color: Color::Rgbw,
     })
     .unwrap();
+    let art_net =
+        outputs::artnet::open(address, outputs::artnet::PortAddress::new(1).unwrap()).unwrap();
     // (kind, the device, an outcome it must give)
     // All stay open until every one was measured: a dropped DDP output's socket thread
     // frees as it ends.
-    let mut devices: [(&str, Box<dyn Device>, Outcome); 3] = [
+    let mut devices: [(&str, Box<dyn Device>, Outcome); 4] = [
         ("DDP", ddp, Outcome::Accepted),
+        ("Art-Net", art_net, Outcome::Accepted),
         ("DDP nobody listens to", refused, Outcome::Failed),
         ("DMX USB Pro", Box::new(pro), Outcome::Accepted),
     ];

@@ -1,6 +1,6 @@
 # Art-Net 4: the wire, from Artistic Licence's spec
 
-Status: not built. This page is our summary of the official spec, in our words. Page numbers are the ones printed in the spec's footer.
+Status: ArtDmx built in `crates/outputs/src/artnet.rs` (#289), not reachable in the app before #211. ArtPoll and the reply: not built (P4). This page is our summary of the official spec, in our words. Page numbers are the ones printed in the spec's footer.
 
 ```mermaid
 flowchart LR
@@ -101,3 +101,13 @@ A port's Port-Address: `Net << 8 | Sub-Net << 4 | SwOut[i]`. A node is keyed by 
 | Where | v1 first step: the address the user typed. Then: every node subscribed to the Port-Address | typed address alone is unicast, but not to "subscribers" |
 | ArtPoll, our ArtPollReply | second step (discovery) | required for a compliant controller |
 | OEM code | from the owner's registration | required in ArtPoll and ArtPollReply, not in ArtDmx |
+
+## Sequence: one counter per universe
+
+A fixed array of 128 counters, one per universe of a route, made at open. A counter steps when its universe's packet is written, also if that send then fails: a gap forward is fine for a receiver, a repeat is not. A device that sends another route carries its counters on.
+
+| counter \ event | its universe is sent | another universe is sent | a frame without it |
+|---|---|---|---|
+| 0 (never sent) | 1 | 0 | 0 |
+| n, 1 to 254 | n + 1 | n | n |
+| 255 | 1 | 255 | 255 |

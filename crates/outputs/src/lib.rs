@@ -19,6 +19,7 @@
     clippy::indexing_slicing
 )]
 
+pub mod artnet;
 mod ddp;
 pub mod dmx_usb_pro;
 mod udp;
