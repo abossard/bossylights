@@ -97,7 +97,24 @@ fn a_lights_value_becomes_words_on_its_fields() {
     let both = |brightness: &str, rest: &str| format!("{brightness} {rest}");
     // (mode, light, the value without brightness,
     //  [brightness 0, a half, full alone], [with the value], [the value alone])
-    let cases: [(_, _, Light, [&str; 3], [String; 3], String); 8] = [
+    let cases: [(_, _, Light, [&str; 3], [String; 3], String); 10] = [
+        // fog and haze never take a brightness (#295)
+        (
+            ("Stairville-Hz-200-DMX.qxf", "Default"),
+            0,
+            red,
+            [none; 3],
+            [none.into(), none.into(), none.into()],
+            none.into(),
+        ),
+        (
+            ("Generic-Generic-Smoke.qxf", "Normal"),
+            0,
+            red,
+            [none; 3],
+            [none.into(), none.into(), none.into()],
+            none.into(),
+        ),
         // a dimmer carries the colour
         (
             ("Generic-Generic-RGB.qxf", "Dimmer RGB"),
@@ -467,7 +484,7 @@ fn offers_show_what_todays_writers_show_wherever_cx_4_does_not_apply() {
         undimmed.len()
     );
     if library.is_none() {
-        assert_eq!((modes, undimmed.len()), (174, 40));
+        assert_eq!((modes, undimmed.len()), (175, 40));
     }
 }
 

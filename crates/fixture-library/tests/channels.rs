@@ -515,9 +515,10 @@ fn a_fog_fixture_only_dims_its_emitters_with_a_plain_level() {
                 </FixtureDefinition>"#
             );
             for mode in parse("fog.qxf", xml.as_bytes()).unwrap().modes {
+                // a level that does not dim the emitters runs fog
                 assert_eq!(
-                    &mode.channels[0].role(),
-                    expected,
+                    (&mode.channels[0].role(), mode.channels[0].runs_fog()),
+                    (expected, *expected != Dimmer),
                     "{kind} {}, {ranges}",
                     mode.name
                 );

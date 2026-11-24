@@ -4,7 +4,7 @@
 mod common;
 
 use common::mode;
-use engine_core::{Color, Levels, Light, PatchCommand, Pixels, Text, Universes, resolve};
+use engine_core::{Color, Levels, Light, PatchCommand, Pixels, Rgb, Text, Universes, resolve};
 use fixture_library::{Byte, Direction, Does, Function, Mode, Range};
 use rig::channels::{
     Change, Compound, Config, Field, Follows, PastTheEnd, Sense, Shape, Ties, Travel, Width,
@@ -1710,19 +1710,20 @@ fn tagged_emitters_pair_and_mix_beside_a_fog_channel() {
     }
 }
 
+/// A brightness never moves fog or haze (#295): those channels keep what the frame has.
 #[test]
-fn v11_intensity_still_reaches_the_fog_channels() {
+fn a_brightness_never_reaches_a_fog_channel() {
     let cases = [
         (
             intensity_mode("Hazer", "Haze", "", false),
             91 * 257,
-            vec![91],
+            vec![0],
         ),
-        (mode(SMOKE, "Amount"), 91 * 257, vec![91]),
+        (mode(SMOKE, "Amount"), 91 * 257, vec![0]),
         (
             intensity_mode("Smoke", "Amount of Fog", "", true),
             u16::MAX,
-            vec![255, 255],
+            vec![0, 0],
         ),
     ];
     let actual = cases.each_ref().map(|(mode, intensity, _)| {
@@ -1743,6 +1744,43 @@ fn v11_intensity_still_reaches_the_fog_channels() {
         frame[0].0[..mode.channels.len()].to_vec()
     });
     assert_eq!(actual, cases.map(|(_, _, expected)| expected));
+}
+
+/// A fog channel is not the light's dimmer (#295): a smoke machine's LED with no other
+/// dimmer carries the brightness in its colour, as any light without a dimmer.
+#[test]
+fn a_fog_channel_is_not_the_lights_dimmer() {
+    let xml = r#"<FixtureDefinition><Manufacturer>Test</Manufacturer><Model>Test</Model><Type>Smoke</Type>
+        <Channel Name="Fog"><Group Byte="0">Intensity</Group>
+            <Capability Min="0" Max="9">Off</Capability><Capability Min="10" Max="255">Output</Capability></Channel>
+        <Channel Name="Red" Preset="IntensityRed"/>
+        <Mode Name="Fog and red"><Channel Number="0">Fog</Channel><Channel Number="1">Red</Channel></Mode>
+        </FixtureDefinition>"#;
+    let mode = fixture_library::parse("fog.qxf", xml.as_bytes())
+        .unwrap()
+        .modes
+        .remove(0);
+    let compiled = rig::compile(
+        &mode,
+        common::at(1),
+        common::light(0),
+        Universes::ONE,
+        common::lights(),
+    )
+    .unwrap();
+    let light = Light {
+        intensity: Some(0x8000),
+        colour: Some(Rgb {
+            red: u16::MAX,
+            green: 0,
+            blue: 0,
+        }),
+        ..Light::DARK
+    };
+    let mut frame = [Levels::ZERO];
+    resolve(&[light], &compiled.writers, &mut frame);
+    // fog at its rest, red at half: the brightness is in the colour
+    assert_eq!(frame[0].0[..2], [0, 128]);
 }
 
 #[test]

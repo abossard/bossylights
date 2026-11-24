@@ -20,7 +20,7 @@
 //!
 //! | Channel | Writer |
 //! |---|---|
-//! | dimmer | intensity |
+//! | dimmer | intensity; none on a Smoke or Hazer channel that runs fog ([`runs_fog`](fixture_library::Channel::runs_fog)) |
 //! | red, green, blue | its part of the colour, less the shared part when the light has white, times intensity when it has no dimmer |
 //! | white | the part red, green and blue share, times intensity when no dimmer |
 //! | cyan, magenta, yellow | full less red, green, blue (times intensity when no dimmer) |
@@ -393,7 +393,7 @@ impl Has {
             white: false,
         };
         for channel in channels.filter(|c| c.byte == Byte::Coarse) {
-            has.dimmer |= channel.function == Function::Dimmer;
+            has.dimmer |= channel.function == Function::Dimmer && !channel.runs_fog();
             has.white |= channel.function == Function::White;
         }
         has
@@ -467,6 +467,8 @@ fn take(channel: &fixture_library::Channel, has: Has) -> Option<Take> {
         travel,
     };
     let take = match &channel.function {
+        // fog and haze never take a brightness (#295)
+        Function::Dimmer if channel.runs_fog() => return None,
         Function::Dimmer => Take::INTENSITY,
         Function::Pan => travels(Part::Pan),
         Function::Tilt => travels(Part::Tilt),

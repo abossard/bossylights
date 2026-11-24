@@ -39,6 +39,13 @@ impl Channel {
         }
     }
 
+    /// On a Smoke or Hazer fixture, a channel with steps or without an emitter beside it
+    /// (in its mode when headless): it runs fog or haze, never light.
+    #[must_use]
+    pub fn runs_fog(&self) -> bool {
+        self.declared.dimming == Dimming::Fog
+    }
+
     /// A dimmer preset that runs fog, not light: on Smoke and Hazer, see `role`.
     #[must_use]
     pub fn is_fog_dimmer(&self) -> bool {

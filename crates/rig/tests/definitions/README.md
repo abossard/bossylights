@@ -53,3 +53,4 @@ the Apache License 2.0 (`COPYING` in the repository root, copied here as
 | `Clay-Paky-Arolla-Profile-HP.qxf` | Clay_Paky | a gobo rotation fine whose one range runs over the whole byte |
 | `Ayrton-Rivale-Profile.qxf` | Ayrton | gobo and prism rotation fines whose coarse shares their `ActsOn` but sits in group Speed |
 | `Elation-E-Spot-III.qxf` | Elation | a gobo index coarse declared fine: its fine stays apart (definition error) |
+| `Stairville-Hz-200-DMX.qxf` | Stairville | a hazer whose Haze channel is in group Intensity without a preset |
