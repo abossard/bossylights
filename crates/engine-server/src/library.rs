@@ -9,10 +9,6 @@
 //! cannot be read is a failure on the shelf; the engine runs on.
 
 use engine_core::{Refusal, Text};
-use wire::{
-    Asked, ChannelFunction, Failure, FixtureKind, Library, MATCHES, Match, ModeChannels,
-    ModeSize, NamedChannel, Reply, Why,
-};
 use fixture_library::{Fixture, Function, Kind, MOST_BYTES, Problem, Refused, parse, search};
 use std::collections::HashMap;
 use std::fs::{self, File};
@@ -21,6 +17,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread;
 use tokio::sync::watch;
+use wire::{
+    Asked, ChannelFunction, Failure, FixtureKind, Library, MATCHES, Match, ModeChannels, ModeSize,
+    NamedChannel, Reply, Why,
+};
 
 /// Where reading the folder is, and what it read.
 #[derive(Debug)]
@@ -232,9 +232,12 @@ fn shelve(
 /// and model. Its maker or model is longer than a client may send, or a fixture of the
 /// same maker and model is on the shelf already.
 fn unaskable(fixture: &Fixture, shelved: &HashMap<(String, String), String>) -> Option<Cause> {
-    let long = [(Asked::Maker, &fixture.maker), (Asked::Model, &fixture.model)]
-        .into_iter()
-        .find(|(_, text)| Text::new(text).is_none());
+    let long = [
+        (Asked::Maker, &fixture.maker),
+        (Asked::Model, &fixture.model),
+    ]
+    .into_iter()
+    .find(|(_, text)| Text::new(text).is_none());
     if let Some((what, _)) = long {
         return Some(Cause::TooLong(what));
     }
@@ -433,8 +436,11 @@ mod tests {
             line,
             why,
         };
-        let not_xml =
-            || Cause::Definition(Problem::NotXml("the root node was opened but never closed".into()));
+        let not_xml = || {
+            Cause::Definition(Problem::NotXml(
+                "the root node was opened but never closed".into(),
+            ))
+        };
         let named = |maker: &str, model: &str| {
             let text = String::from_utf8(rgb.to_vec()).unwrap();
             let text = text.replace(
@@ -476,7 +482,11 @@ mod tests {
                 vec![],
                 vec!["Locked"],
                 0,
-                vec![failed("Locked", None, Cause::CannotRead(Some(NO_SUCH_FILE)))],
+                vec![failed(
+                    "Locked",
+                    None,
+                    Cause::CannotRead(Some(NO_SUCH_FILE)),
+                )],
             ),
             (
                 vec![

@@ -64,9 +64,9 @@ fn transition(state: State, event: Event) -> (State, Effect) {
         // T6 after T8: the old lane returned before the cutoff carried the switch, so the
         // switch is applied now and T9 shows it (T9, step 1)
         (Returned, Event::Cutoff) => (Returned, Effect::SwitchLane),
-        (Switched, Event::Wake) => (Switched, Effect::SendNew),        // T7
+        (Switched, Event::Wake) => (Switched, Effect::SendNew), // T7
         (Published | Switched, Event::DeviceReturned) => (Returned, Effect::ReleaseAndAccept), // T8
-        (Returned, Event::Wake) => (Serving, Effect::ShowNew),         // T9
+        (Returned, Event::Wake) => (Serving, Effect::ShowNew),  // T9
         (Serving | Preparing | Published | Switched | Returned, Event::SendFailed) => {
             (state, Effect::RecordFailure) // T10
         }

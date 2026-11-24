@@ -141,7 +141,12 @@ async fn patch_each(case: usize, files: &[String], modes: &[&str]) -> (Vec<Value
 }
 
 /// The files' modes, the modes patched, each reply, the Failures rows (file, line, why).
-type MixedCase<'a> = (Vec<String>, Vec<&'a str>, Vec<Value>, Vec<(&'a str, Option<u32>, Value)>);
+type MixedCase<'a> = (
+    Vec<String>,
+    Vec<&'a str>,
+    Vec<Value>,
+    Vec<(&'a str, Option<u32>, Value)>,
+);
 
 // the files' modes, the modes patched, each reply, the Failures rows
 #[tokio::test]
@@ -155,9 +160,7 @@ async fn a_refused_mode_is_listed_and_the_files_other_modes_patch() {
     let patched = json!({"Patched": {"fixture": 1}});
     let refused = |reason: &str| json!({"Refused": {"reason": reason}});
     // A head of one channel that names channel 1 (counted from 0): past the mode's end.
-    let past_end = |mode: &str| {
-        json!({"ModeRefused": {"mode": mode, "problem": {"HeadPastEnd": {"head": 0, "channel": 1, "channels": 1}}}})
-    };
+    let past_end = |mode: &str| json!({"ModeRefused": {"mode": mode, "problem": {"HeadPastEnd": {"head": 0, "channel": 1, "channels": 1}}}});
     let past = past_end("Broken");
     let cases: [MixedCase; 5] = [
         (
@@ -189,7 +192,11 @@ async fn a_refused_mode_is_listed_and_the_files_other_modes_patch() {
             vec![String::new()],
             vec!["Good"],
             vec![refused("NoSuchFixture")],
-            vec![("mixed.qxf", Some(1), json!({"Definition": {"problem": "NoMode"}}))],
+            vec![(
+                "mixed.qxf",
+                Some(1),
+                json!({"Definition": {"problem": "NoMode"}}),
+            )],
         ),
         // a second file of the same maker and model stays off the shelf, its refused mode listed
         (
@@ -197,7 +204,11 @@ async fn a_refused_mode_is_listed_and_the_files_other_modes_patch() {
             vec!["Good", "Broken"],
             vec![patched, refused("NoSuchMode")],
             vec![
-                ("twin.qxf", None, json!({"SameModelAs": {"file": "mixed.qxf"}})),
+                (
+                    "twin.qxf",
+                    None,
+                    json!({"SameModelAs": {"file": "mixed.qxf"}}),
+                ),
                 ("twin.qxf", Some(5), past),
             ],
         ),

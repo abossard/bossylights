@@ -1,10 +1,10 @@
 // Each child remains a separately named scenario in one integration test target.
-#[path = "common/mod.rs"]
-mod wire_common;
 #[path = "../../outputs/tests/common/mod.rs"]
 mod output_common;
 #[path = "../../outputs/tests/common/stream.rs"]
 mod output_stream;
+#[path = "common/mod.rs"]
+mod wire_common;
 
 #[path = "scenarios/reroute/cutover.rs"]
 mod cutover;

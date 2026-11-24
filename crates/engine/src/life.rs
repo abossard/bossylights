@@ -166,7 +166,11 @@ mod tests {
                 }
             }
             assert_eq!(cell.get(), life);
-            assert_eq!(cell.apply(event), expected, "{life:?} + {event:?} in the cell");
+            assert_eq!(
+                cell.apply(event),
+                expected,
+                "{life:?} + {event:?} in the cell"
+            );
         }
     }
 

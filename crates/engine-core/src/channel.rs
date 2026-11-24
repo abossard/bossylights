@@ -217,7 +217,10 @@ impl Channels {
         holds: &[ChannelSet],
         levels: [u8; MODIFIERS],
     ) {
-        let rows = self.value.iter_mut().zip(self.source.chunks_exact_mut(ADDRESSES));
+        let rows = self
+            .value
+            .iter_mut()
+            .zip(self.source.chunks_exact_mut(ADDRESSES));
         for (universe, (value, source)) in rows.enumerate() {
             for address in lit
                 .get(universe)
@@ -247,14 +250,12 @@ impl Channels {
         }
         let by = scales(levels);
         let bytes = self.value.iter_mut().flat_map(|row| row.0.iter_mut());
-        for (value, ((dark, flags), follows)) in bytes
-            .zip(
-                self.dark
-                    .iter()
-                    .zip(self.flags.iter())
-                    .zip(self.follows.iter()),
-            )
-        {
+        for (value, ((dark, flags), follows)) in bytes.zip(
+            self.dark
+                .iter()
+                .zip(self.flags.iter())
+                .zip(self.follows.iter()),
+        ) {
             if let Some(by) = by.get(usize::from(follows.0)) {
                 *value = scale(*value, *dark, *flags, *by);
             }

@@ -32,7 +32,9 @@ pub enum Refusal {
     /// More commands are waiting than the engine takes in one frame. Send again.
     QueueFull,
     /// The output's device or socket could not be opened, and why.
-    CannotOpen { why: OpenFailure },
+    CannotOpen {
+        why: OpenFailure,
+    },
     /// The library has no fixture of that maker and model.
     NoSuchFixture,
     /// The output's device is being opened. Send again once it is open.

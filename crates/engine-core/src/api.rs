@@ -2,8 +2,8 @@
 //! why a command is refused. The messages around it (`Request`, `Reply`, the health and
 //! library views, `API_VERSION`) are in `crates/wire`.
 
-use crate::{Light, OutputNumber, Rgb, Text};
 use crate::patch::Target;
+use crate::{Light, OutputNumber, Rgb, Text};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// A step: sparse values for the lights a target names. An absent property lets

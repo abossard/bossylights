@@ -35,10 +35,8 @@
 //! | kept, rules change to remove it | `UntilStop` for Manual, `Reveal` for the others | nothing |
 
 use crate::LightChange;
-use crate::{
-    Brightness, GrabId, Light, ManualEnd, MixRules, OtherEnd, Property,
-};
 use crate::playback::{Entry, PlayState, Plays, Rank};
+use crate::{Brightness, GrabId, Light, ManualEnd, MixRules, OtherEnd, Property};
 
 /// What a stop leaves of a play.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -534,12 +532,7 @@ mod tests {
                 raw[0].0[6] = level;
                 at.mark(&mut holds, true);
             }
-            all.apply_winners(
-                &[ChannelSet::NONE],
-                &raw,
-                &holds,
-                blackout(false),
-            );
+            all.apply_winners(&[ChannelSet::NONE], &raw, &holds, blackout(false));
             assert_eq!(
                 (all.values()[0].0[6], all.source(at)),
                 (out, source),
@@ -618,13 +611,45 @@ mod tests {
                 100,
             ),
             // 255 x 128 / 255 = 128
-            ("full at master 128", 255, 0, fade, master, with(&[(0, 128)]), 128),
+            (
+                "full at master 128",
+                255,
+                0,
+                fade,
+                master,
+                with(&[(0, 128)]),
+                128,
+            ),
             // 200 x 64 / 255 = 50.20
-            ("master at a quarter", 200, 0, fade, master, with(&[(0, 64)]), 50),
+            (
+                "master at a quarter",
+                200,
+                0,
+                fade,
+                master,
+                with(&[(0, 64)]),
+                50,
+            ),
             // a level at 0: dark, wherever dark is
-            ("jump at master 0", 200, 10, jump, master, with(&[(0, 0)]), 10),
+            (
+                "jump at master 0",
+                200,
+                10,
+                jump,
+                master,
+                with(&[(0, 0)]),
+                10,
+            ),
             // a slot it does not follow moves nothing
-            ("blackout on, follows master", 200, 0, fade, master, blackout(true), 200),
+            (
+                "blackout on, follows master",
+                200,
+                0,
+                fade,
+                master,
+                blackout(true),
+                200,
+            ),
             (
                 "half rounds away from dark",
                 1,

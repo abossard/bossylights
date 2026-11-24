@@ -259,7 +259,10 @@ async fn check_health_spacing(request: &str, reader: &tokio::runtime::Runtime) {
     publish(&mut desk, now);
     assert_eq!(packet(&second_udp).await[10], 91);
     let due = now + Duration::from_millis(500);
-    for at in [now, first + Duration::from_millis(500) - Duration::from_nanos(1)] {
+    for at in [
+        now,
+        first + Duration::from_millis(500) - Duration::from_nanos(1),
+    ] {
         // At `now` this is a fresh snapshot requested after the first Health.
         publish(&mut desk, at);
         // One Query can race the new frame. The next drains any Health the
@@ -865,7 +868,11 @@ async fn a_press_behind_a_pending_open_on_its_connection_reaches_the_output_at_o
     send(&mut other, &json!("Stop")).await;
     assert_eq!(answer(&mut other).await, "Stopping");
     let _ = served.await.unwrap().unwrap();
-    assert_eq!(seen, [123, 42], "DDP bytes while output 2 is paused opening");
+    assert_eq!(
+        seen,
+        [123, 42],
+        "DDP bytes while output 2 is paused opening"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -958,7 +965,10 @@ async fn a_pending_open_holds_no_picture_of_its_connection_and_replies_keep_thei
     let expected = json!({"universe": 1, "address": 7, "value": 77});
     loop {
         let reply = next(&mut desk).await;
-        assert!(reply.get("Changed").is_some(), "only pictures before the open ends: {reply}");
+        assert!(
+            reply.get("Changed").is_some(),
+            "only pictures before the open ends: {reply}"
+        );
         if reply["Changed"]["channels"]
             .as_array()
             .is_some_and(|channels| channels.contains(&expected))
@@ -1038,7 +1048,10 @@ async fn a_request_past_the_32_waiting_is_not_read_until_a_reply_goes_out() {
     release.send(()).unwrap();
     assert_eq!(answer(&mut desk).await, "Accepted", "the attach");
     for query in 1..32 {
-        assert!(answer(&mut desk).await.get("Picture").is_some(), "query {query}");
+        assert!(
+            answer(&mut desk).await.get("Picture").is_some(),
+            "query {query}"
+        );
     }
     assert_eq!(answer(&mut desk).await, "Stopping");
     served.await.unwrap().unwrap();
@@ -1085,9 +1098,15 @@ async fn a_subscribe_behind_a_pending_edit_sends_no_change_before_its_picture() 
     }
     release.send(()).unwrap();
     let first = next(&mut desk).await;
-    assert_eq!(first, "Accepted", "the attach before anything else: {first}");
+    assert_eq!(
+        first, "Accepted",
+        "the attach before anything else: {first}"
+    );
     let second = next(&mut desk).await;
-    assert!(second.get("Picture").is_some(), "the picture first: {second}");
+    assert!(
+        second.get("Picture").is_some(),
+        "the picture first: {second}"
+    );
     send(&mut other, &json!("Stop")).await;
     assert_eq!(answer(&mut other).await, "Stopping");
     served.await.unwrap().unwrap();

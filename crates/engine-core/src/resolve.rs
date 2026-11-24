@@ -335,8 +335,8 @@ fn put(at: Channel, want: Want, out: &mut [Levels], lit: &mut [ChannelSet]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Lights, Value, Wheel};
     use crate::{ChannelNumbers, Universes};
+    use crate::{Lights, Value, Wheel};
 
     const FULL: u16 = u16::MAX;
     const HALF: u16 = 0x8000;

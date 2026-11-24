@@ -177,12 +177,20 @@ mod tests {
     /// command at all.
     #[test]
     fn a_timing_number_out_of_range_is_no_command() {
-        let start = |spread: u32| format!(r#"{{"Send":{{"command":{{"StartLook":{{"look":1,"use":{{"spread":{spread}}}}}}}}}}}"#);
+        let start = |spread: u32| {
+            format!(
+                r#"{{"Send":{{"command":{{"StartLook":{{"look":1,"use":{{"spread":{spread}}}}}}}}}}}"#
+            )
+        };
         let item = |field: &str, value: u32| {
-            format!(r#"{{"Send":{{"command":{{"PutSequence":{{"look":3,"name":"s","sequence":{{"items":[{{"look":1,"{field}":{value}}}]}}}}}}}}}}"#)
+            format!(
+                r#"{{"Send":{{"command":{{"PutSequence":{{"look":3,"name":"s","sequence":{{"items":[{{"look":1,"{field}":{value}}}]}}}}}}}}}}"#
+            )
         };
         let wave = |period: u32| {
-            format!(r#"{{"Send":{{"command":{{"PutPattern":{{"look":7,"name":"w","pattern":{{"Wave":{{"target":{{"Matrix":{{"fixture":1}}}},"period":{period},"palette":{{"Step":{{"look":3}}}}}}}}}}}}}}}}"#)
+            format!(
+                r#"{{"Send":{{"command":{{"PutPattern":{{"look":7,"name":"w","pattern":{{"Wave":{{"target":{{"Matrix":{{"fixture":1}}}},"period":{period},"palette":{{"Step":{{"look":3}}}}}}}}}}}}}}}}"#
+            )
         };
         let cases = [
             (start(0), true),
@@ -199,7 +207,11 @@ mod tests {
             (wave(33), false),
         ];
         for (text, command) in cases {
-            assert_eq!(serde_json::from_str::<Request>(&text).is_ok(), command, "{text}");
+            assert_eq!(
+                serde_json::from_str::<Request>(&text).is_ok(),
+                command,
+                "{text}"
+            );
         }
     }
 

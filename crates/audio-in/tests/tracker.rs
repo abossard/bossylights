@@ -10,14 +10,24 @@ const CLICK: i16 = 24_576;
 /// The 8 kHz mono WAV made by `scripts/make-tempo-clicks.mjs`.
 fn wav() -> Vec<i16> {
     let bytes = include_bytes!("data/click-93_75.wav");
-    assert_eq!(bytes.len(), 160_044, "44 header bytes and 10 s of 16 bit samples");
+    assert_eq!(
+        bytes.len(),
+        160_044,
+        "44 header bytes and 10 s of 16 bit samples"
+    );
     assert_eq!(&bytes[0..4], b"RIFF");
     assert_eq!(&bytes[8..16], b"WAVEfmt ");
     assert_eq!(u16::from_le_bytes([bytes[22], bytes[23]]), 1, "mono");
-    assert_eq!(u32::from_le_bytes([bytes[24], bytes[25], bytes[26], bytes[27]]), 8_000);
+    assert_eq!(
+        u32::from_le_bytes([bytes[24], bytes[25], bytes[26], bytes[27]]),
+        8_000
+    );
     assert_eq!(u16::from_le_bytes([bytes[34], bytes[35]]), 16, "16 bit");
     assert_eq!(&bytes[36..40], b"data");
-    bytes[44..].chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])).collect()
+    bytes[44..]
+        .chunks_exact(2)
+        .map(|b| i16::from_le_bytes([b[0], b[1]]))
+        .collect()
 }
 
 /// Silence with a click of 5 ms (alternating +24576, -24576) starting at each time.
@@ -56,7 +66,9 @@ fn feed(rate: u32, channels: u16, samples: &[i16], sizes: &[usize]) -> Vec<Event
         }
         let end = (at + size).min(frames);
         let block = &samples[at * usize::from(channels)..end * usize::from(channels)];
-        tracker.push(frame_time(rate, at), Samples::I16(block), &mut events).unwrap();
+        tracker
+            .push(frame_time(rate, at), Samples::I16(block), &mut events)
+            .unwrap();
         at = end;
     }
     events
@@ -91,7 +103,13 @@ fn readings(events: &[Event]) -> Vec<(u64, u8, Signal, u8, Option<Tempo>)> {
     events
         .iter()
         .filter_map(|e| match *e {
-            Event::Reading { at, level, signal, confidence, tempo } => Some((at, level, signal, confidence, tempo)),
+            Event::Reading {
+                at,
+                level,
+                signal,
+                confidence,
+                tempo,
+            } => Some((at, level, signal, confidence, tempo)),
             Event::Onset { .. } | Event::Beat { .. } => None,
         })
         .collect()
@@ -109,7 +127,11 @@ fn signal_changes(events: &[Event]) -> Vec<(u64, Signal)> {
 }
 
 fn level_at(events: &[Event], ms: u64) -> u8 {
-    readings(events).into_iter().find(|r| r.0 == ms * MS).map(|r| r.1).unwrap()
+    readings(events)
+        .into_iter()
+        .find(|r| r.0 == ms * MS)
+        .map(|r| r.1)
+        .unwrap()
 }
 
 fn in_ns<T: Copy>(table: &[(u64, T)]) -> Vec<(u64, T)> {
@@ -118,36 +140,95 @@ fn in_ns<T: Copy>(table: &[(u64, T)]) -> Vec<(u64, T)> {
 
 /// (time, span, beats) in milliseconds.
 fn tempos(table: &[(u64, u64, u64)]) -> Vec<(u64, Tempo)> {
-    table.iter().map(|&(at, span, beats)| (at * MS, Tempo { span: span * MS, beats })).collect()
+    table
+        .iter()
+        .map(|&(at, span, beats)| {
+            (
+                at * MS,
+                Tempo {
+                    span: span * MS,
+                    beats,
+                },
+            )
+        })
+        .collect()
 }
 
 const WAV_ONSETS: &[(u64, u8)] = &[
-    (200, 0), (840, 25), (1480, 50), (2120, 75), (2760, 100), (3400, 100), (4040, 100), (4680, 100),
-    (5320, 100), (5960, 100), (6600, 100), (7240, 100), (7880, 100), (8520, 100), (9160, 100), (9800, 100),
+    (200, 0),
+    (840, 25),
+    (1480, 50),
+    (2120, 75),
+    (2760, 100),
+    (3400, 100),
+    (4040, 100),
+    (4680, 100),
+    (5320, 100),
+    (5960, 100),
+    (6600, 100),
+    (7240, 100),
+    (7880, 100),
+    (8520, 100),
+    (9160, 100),
+    (9800, 100),
 ];
 const WAV_BEATS: &[(u64, u64, u64)] = &[
-    (2760, 2560, 4), (3400, 3200, 5), (4040, 3840, 6), (4680, 4480, 7), (5320, 5120, 8), (5960, 5120, 8),
-    (6600, 5120, 8), (7240, 5120, 8), (7880, 5120, 8), (8520, 5120, 8), (9160, 5120, 8), (9800, 5120, 8),
+    (2760, 2560, 4),
+    (3400, 3200, 5),
+    (4040, 3840, 6),
+    (4680, 4480, 7),
+    (5320, 5120, 8),
+    (5960, 5120, 8),
+    (6600, 5120, 8),
+    (7240, 5120, 8),
+    (7880, 5120, 8),
+    (8520, 5120, 8),
+    (9160, 5120, 8),
+    (9800, 5120, 8),
 ];
 
 #[test]
 fn the_wav_gives_its_known_answers() {
     let samples = wav();
-    assert_eq!(samples, clicks(8_000, &steady(), 10_000), "the WAV is the click track");
+    assert_eq!(
+        samples,
+        clicks(8_000, &steady(), 10_000),
+        "the WAV is the click track"
+    );
     let events = mono(&samples);
 
     assert_eq!(onsets(&events), in_ns(WAV_ONSETS));
     assert_eq!(beats(&events), tempos(WAV_BEATS));
     assert_eq!(
         signal_changes(&events),
-        in_ns(&[(20, Signal::None), (220, Signal::Weak), (2780, Signal::Locked)]),
+        in_ns(&[
+            (20, Signal::None),
+            (220, Signal::Weak),
+            (2780, Signal::Locked)
+        ]),
     );
     assert_eq!(readings(&events).len(), 500, "a reading every 20 ms");
-    assert_eq!((level_at(&events, 200), level_at(&events, 220), level_at(&events, 240)), (0, 53, 0));
-    let locked = readings(&events).into_iter().find(|r| r.0 == 2780 * MS).unwrap();
+    assert_eq!(
+        (
+            level_at(&events, 200),
+            level_at(&events, 220),
+            level_at(&events, 240)
+        ),
+        (0, 53, 0)
+    );
+    let locked = readings(&events)
+        .into_iter()
+        .find(|r| r.0 == 2780 * MS)
+        .unwrap();
     assert_eq!(
         (locked.3, locked.4),
-        (100, Some(Tempo { span: 2560 * MS, beats: 4 })),
+        (
+            100,
+            Some(Tempo {
+                span: 2560 * MS,
+                beats: 4
+            })
+        ),
         "93.75 BPM, kept exact",
     );
 }
@@ -174,12 +255,19 @@ fn every_sample_format_gives_the_same_events() {
     let inverted: Vec<i16> = samples.iter().flat_map(|&s| [s, -s]).collect();
     let as_f32: Vec<f32> = samples.iter().map(|&s| f32::from(s) / 32_768.0).collect();
     let as_f32_inverted: Vec<f32> = inverted.iter().map(|&s| f32::from(s) / 32_768.0).collect();
-    let as_u16: Vec<u16> = samples.iter().map(|&s| (i32::from(s) + 32_768).try_into().unwrap()).collect();
+    let as_u16: Vec<u16> = samples
+        .iter()
+        .map(|&s| (i32::from(s) + 32_768).try_into().unwrap())
+        .collect();
     let cases: &[(&str, u16, Samples<'_>)] = &[
         ("i16 mono", 1, Samples::I16(&samples)),
         ("i16 stereo, right inverted", 2, Samples::I16(&inverted)),
         ("f32 mono", 1, Samples::F32(&as_f32)),
-        ("f32 stereo, right inverted", 2, Samples::F32(&as_f32_inverted)),
+        (
+            "f32 stereo, right inverted",
+            2,
+            Samples::F32(&as_f32_inverted),
+        ),
         ("u16 mono", 1, Samples::U16(&as_u16)),
     ];
     for &(name, channels, block) in cases {
@@ -244,26 +332,74 @@ fn the_tempo_follows_what_it_hears() {
             starts: steady().into_iter().filter(|&t| t != 5320).collect(),
             length_ms: 10_000,
             onsets: &[
-                (200, 0), (840, 25), (1480, 50), (2120, 75), (2760, 100), (3400, 100), (4040, 100), (4680, 100),
-                (5960, 87), (6600, 87), (7240, 87), (7880, 87), (8520, 87), (9160, 87), (9800, 87),
+                (200, 0),
+                (840, 25),
+                (1480, 50),
+                (2120, 75),
+                (2760, 100),
+                (3400, 100),
+                (4040, 100),
+                (4680, 100),
+                (5960, 87),
+                (6600, 87),
+                (7240, 87),
+                (7880, 87),
+                (8520, 87),
+                (9160, 87),
+                (9800, 87),
             ],
             beats: &[
-                (2760, 2560, 4), (3400, 3200, 5), (4040, 3840, 6), (4680, 4480, 7),
-                (6600, 4480, 7), (7240, 4480, 7), (7880, 4480, 7), (8520, 4480, 7), (9160, 4480, 7), (9800, 4480, 7),
+                (2760, 2560, 4),
+                (3400, 3200, 5),
+                (4040, 3840, 6),
+                (4680, 4480, 7),
+                (6600, 4480, 7),
+                (7240, 4480, 7),
+                (7880, 4480, 7),
+                (8520, 4480, 7),
+                (9160, 4480, 7),
+                (9800, 4480, 7),
             ],
             signals: &[(20, None), (220, Weak), (2780, Locked)],
         },
         Pattern {
             name: "one click 30 ms early (the eighth)",
-            starts: steady().into_iter().map(|t| if t == 4680 { 4650 } else { t }).collect(),
+            starts: steady()
+                .into_iter()
+                .map(|t| if t == 4680 { 4650 } else { t })
+                .collect(),
             length_ms: 10_000,
             onsets: &[
-                (200, 0), (840, 25), (1480, 50), (2120, 75), (2760, 100), (3400, 100), (4040, 100), (4650, 100),
-                (5320, 100), (5960, 100), (6600, 100), (7240, 100), (7880, 100), (8520, 100), (9160, 100), (9800, 100),
+                (200, 0),
+                (840, 25),
+                (1480, 50),
+                (2120, 75),
+                (2760, 100),
+                (3400, 100),
+                (4040, 100),
+                (4650, 100),
+                (5320, 100),
+                (5960, 100),
+                (6600, 100),
+                (7240, 100),
+                (7880, 100),
+                (8520, 100),
+                (9160, 100),
+                (9800, 100),
             ],
             beats: &[
-                (2760, 2560, 4), (3400, 3200, 5), (4040, 3840, 6), (4650, 4450, 7), (5320, 5120, 8), (5960, 5120, 8),
-                (6600, 5120, 8), (7240, 5120, 8), (7880, 5120, 8), (8520, 5120, 8), (9160, 5120, 8), (9800, 5150, 8),
+                (2760, 2560, 4),
+                (3400, 3200, 5),
+                (4040, 3840, 6),
+                (4650, 4450, 7),
+                (5320, 5120, 8),
+                (5960, 5120, 8),
+                (6600, 5120, 8),
+                (7240, 5120, 8),
+                (7880, 5120, 8),
+                (8520, 5120, 8),
+                (9160, 5120, 8),
+                (9800, 5150, 8),
             ],
             signals: &[(20, None), (220, Weak), (2780, Locked)],
         },
@@ -272,49 +408,162 @@ fn the_tempo_follows_what_it_hears() {
             starts: switch(640, 1280, 20_000),
             length_ms: 20_000,
             onsets: &[
-                (200, 0), (840, 25), (1480, 50), (2120, 75), (2760, 100), (3400, 100), (4040, 100), (4680, 100),
-                (5960, 87), (7240, 75), (8520, 62), (9800, 50), (11_080, 59), (12_360, 75), (13_640, 87),
-                (14_920, 100), (16_200, 100), (17_480, 100), (18_760, 100),
+                (200, 0),
+                (840, 25),
+                (1480, 50),
+                (2120, 75),
+                (2760, 100),
+                (3400, 100),
+                (4040, 100),
+                (4680, 100),
+                (5960, 87),
+                (7240, 75),
+                (8520, 62),
+                (9800, 50),
+                (11_080, 59),
+                (12_360, 75),
+                (13_640, 87),
+                (14_920, 100),
+                (16_200, 100),
+                (17_480, 100),
+                (18_760, 100),
             ],
             beats: &[
-                (2760, 2560, 4), (3400, 3200, 5), (4040, 3840, 6), (4680, 4480, 7),
-                (13_640, 8960, 7), (14_920, 10_240, 8), (16_200, 10_240, 8), (17_480, 10_240, 8), (18_760, 10_240, 8),
+                (2760, 2560, 4),
+                (3400, 3200, 5),
+                (4040, 3840, 6),
+                (4680, 4480, 7),
+                (13_640, 8960, 7),
+                (14_920, 10_240, 8),
+                (16_200, 10_240, 8),
+                (17_480, 10_240, 8),
+                (18_760, 10_240, 8),
             ],
-            signals: &[(20, None), (220, Weak), (2780, Locked), (9820, Weak), (13_660, Locked)],
+            signals: &[
+                (20, None),
+                (220, Weak),
+                (2780, Locked),
+                (9820, Weak),
+                (13_660, Locked),
+            ],
         },
         Pattern {
             name: "double time: the spacing halves to 320 ms",
             starts: switch(640, 320, 10_000),
             length_ms: 10_000,
             onsets: &[
-                (200, 0), (840, 25), (1480, 50), (2120, 75), (2760, 100), (3400, 100), (4040, 100), (4680, 100),
-                (5000, 87), (5320, 75), (5640, 62), (5960, 50), (6280, 59), (6600, 75), (6920, 87), (7240, 100),
-                (7560, 100), (7880, 100), (8200, 100), (8520, 100), (8840, 100), (9160, 100), (9480, 100), (9800, 100),
+                (200, 0),
+                (840, 25),
+                (1480, 50),
+                (2120, 75),
+                (2760, 100),
+                (3400, 100),
+                (4040, 100),
+                (4680, 100),
+                (5000, 87),
+                (5320, 75),
+                (5640, 62),
+                (5960, 50),
+                (6280, 59),
+                (6600, 75),
+                (6920, 87),
+                (7240, 100),
+                (7560, 100),
+                (7880, 100),
+                (8200, 100),
+                (8520, 100),
+                (8840, 100),
+                (9160, 100),
+                (9480, 100),
+                (9800, 100),
             ],
             beats: &[
-                (2760, 2560, 4), (3400, 3200, 5), (4040, 3840, 6), (4680, 4480, 7), (6920, 2240, 7), (7240, 2560, 8),
-                (7560, 2560, 8), (7880, 2560, 8), (8200, 2560, 8), (8520, 2560, 8), (8840, 2560, 8), (9160, 2560, 8),
-                (9480, 2560, 8), (9800, 2560, 8),
+                (2760, 2560, 4),
+                (3400, 3200, 5),
+                (4040, 3840, 6),
+                (4680, 4480, 7),
+                (6920, 2240, 7),
+                (7240, 2560, 8),
+                (7560, 2560, 8),
+                (7880, 2560, 8),
+                (8200, 2560, 8),
+                (8520, 2560, 8),
+                (8840, 2560, 8),
+                (9160, 2560, 8),
+                (9480, 2560, 8),
+                (9800, 2560, 8),
             ],
-            signals: &[(20, None), (220, Weak), (2780, Locked), (5980, Weak), (6940, Locked)],
+            signals: &[
+                (20, None),
+                (220, Weak),
+                (2780, Locked),
+                (5980, Weak),
+                (6940, Locked),
+            ],
         },
         Pattern {
             name: "slow drift: each gap 4 ms longer than the last",
-            starts: (0..29_u64).scan(200, |t, k| Some(std::mem::replace(t, *t + 640 + 4 * k))).collect(),
+            starts: (0..29_u64)
+                .scan(200, |t, k| Some(std::mem::replace(t, *t + 640 + 4 * k)))
+                .collect(),
             length_ms: 20_000,
             onsets: &[
-                (200, 0), (840, 25), (1484, 50), (2132, 75), (2784, 100), (3440, 100), (4100, 100), (4764, 100),
-                (5432, 100), (6104, 100), (6780, 100), (7460, 100), (8144, 100), (8832, 100), (9524, 100),
-                (10_220, 100), (10_920, 100), (11_624, 100), (12_332, 100), (13_044, 100), (13_760, 100),
-                (14_480, 100), (15_204, 100), (15_932, 100), (16_664, 100), (17_400, 100), (18_140, 100),
-                (18_884, 100), (19_632, 100),
+                (200, 0),
+                (840, 25),
+                (1484, 50),
+                (2132, 75),
+                (2784, 100),
+                (3440, 100),
+                (4100, 100),
+                (4764, 100),
+                (5432, 100),
+                (6104, 100),
+                (6780, 100),
+                (7460, 100),
+                (8144, 100),
+                (8832, 100),
+                (9524, 100),
+                (10_220, 100),
+                (10_920, 100),
+                (11_624, 100),
+                (12_332, 100),
+                (13_044, 100),
+                (13_760, 100),
+                (14_480, 100),
+                (15_204, 100),
+                (15_932, 100),
+                (16_664, 100),
+                (17_400, 100),
+                (18_140, 100),
+                (18_884, 100),
+                (19_632, 100),
             ],
             beats: &[
-                (2784, 2584, 4), (3440, 3240, 5), (4100, 3900, 6), (4764, 4564, 7), (5432, 5232, 8), (6104, 5264, 8),
-                (6780, 5296, 8), (7460, 5328, 8), (8144, 5360, 8), (8832, 5392, 8), (9524, 5424, 8),
-                (10_220, 5456, 8), (10_920, 5488, 8), (11_624, 5520, 8), (12_332, 5552, 8), (13_044, 5584, 8),
-                (13_760, 5616, 8), (14_480, 5648, 8), (15_204, 5680, 8), (15_932, 5712, 8), (16_664, 5744, 8),
-                (17_400, 5776, 8), (18_140, 5808, 8), (18_884, 5840, 8), (19_632, 5872, 8),
+                (2784, 2584, 4),
+                (3440, 3240, 5),
+                (4100, 3900, 6),
+                (4764, 4564, 7),
+                (5432, 5232, 8),
+                (6104, 5264, 8),
+                (6780, 5296, 8),
+                (7460, 5328, 8),
+                (8144, 5360, 8),
+                (8832, 5392, 8),
+                (9524, 5424, 8),
+                (10_220, 5456, 8),
+                (10_920, 5488, 8),
+                (11_624, 5520, 8),
+                (12_332, 5552, 8),
+                (13_044, 5584, 8),
+                (13_760, 5616, 8),
+                (14_480, 5648, 8),
+                (15_204, 5680, 8),
+                (15_932, 5712, 8),
+                (16_664, 5744, 8),
+                (17_400, 5776, 8),
+                (18_140, 5808, 8),
+                (18_884, 5840, 8),
+                (19_632, 5872, 8),
             ],
             signals: &[(20, None), (220, Weak), (2800, Locked)],
         },
@@ -323,12 +572,22 @@ fn the_tempo_follows_what_it_hears() {
         let events = mono(&clicks(8_000, &case.starts, case.length_ms));
         assert_eq!(onsets(&events), in_ns(case.onsets), "{}: onsets", case.name);
         assert_eq!(beats(&events), tempos(case.beats), "{}: beats", case.name);
-        assert_eq!(signal_changes(&events), in_ns(case.signals), "{}: signal", case.name);
+        assert_eq!(
+            signal_changes(&events),
+            in_ns(case.signals),
+            "{}: signal",
+            case.name
+        );
     }
 }
 
 /// name, samples, onsets (ns, confidence), signal changes (ms)
-type Quiet<'a> = (&'static str, Samples<'a>, &'static [(u64, u8)], &'static [(u64, Signal)]);
+type Quiet<'a> = (
+    &'static str,
+    Samples<'a>,
+    &'static [(u64, u8)],
+    &'static [(u64, Signal)],
+);
 
 #[test]
 fn no_rhythm_no_beat() {
@@ -350,8 +609,18 @@ fn no_rhythm_no_beat() {
     let silence = vec![0_i16; 80_000];
     let cases: &[Quiet<'_>] = &[
         ("silence", Samples::I16(&silence), &[], &[(20, None)]),
-        ("a steady tone from the start", Samples::F32(&tone), &[(125_000, 0)], &[(20, Weak), (3020, Lost)]),
-        ("steady noise from the start", Samples::I16(&noise), &[(0, 0)], &[(20, Weak), (3000, Lost)]),
+        (
+            "a steady tone from the start",
+            Samples::F32(&tone),
+            &[(125_000, 0)],
+            &[(20, Weak), (3020, Lost)],
+        ),
+        (
+            "steady noise from the start",
+            Samples::I16(&noise),
+            &[(0, 0)],
+            &[(20, Weak), (3000, Lost)],
+        ),
     ];
     for &(name, block, expected_onsets, signals) in cases {
         let mut tracker = Tracker::new(Format::new(8_000, 1).unwrap());
@@ -361,10 +630,16 @@ fn no_rhythm_no_beat() {
         assert!(beats(&events).is_empty(), "{name}");
         assert_eq!(signal_changes(&events), in_ns(signals), "{name}");
         let mut lost = readings(&events).into_iter().filter(|r| r.2 == Lost);
-        assert!(lost.all(|r| r.3 == 0 && r.4.is_none()), "{name}: Lost has no estimate");
+        assert!(
+            lost.all(|r| r.3 == 0 && r.4.is_none()),
+            "{name}: Lost has no estimate"
+        );
     }
     let silent = mono(&silence);
-    assert!(readings(&silent).iter().all(|r| r.1 == 0), "silence reads 0");
+    assert!(
+        readings(&silent).iter().all(|r| r.1 == 0),
+        "silence reads 0"
+    );
 }
 
 #[test]
@@ -376,7 +651,10 @@ fn three_quiet_seconds_lose_the_beat() {
         in_ns(&[(20, None), (220, Weak), (2780, Locked), (12_800, Lost)]),
         "the last click at 9800 ms, Lost at the first hop 3 s after it",
     );
-    let lost = readings(&events).into_iter().find(|r| r.0 == 12_800 * MS).unwrap();
+    let lost = readings(&events)
+        .into_iter()
+        .find(|r| r.0 == 12_800 * MS)
+        .unwrap();
     assert_eq!((lost.3, lost.4), (0, Option::None), "no estimate once Lost");
 }
 
@@ -397,10 +675,15 @@ fn with_arrival(arrival: Arrival) -> (Vec<Event>, usize) {
     let split = 40_000;
     let mut tracker = Tracker::new(Format::new(8_000, 1).unwrap());
     let mut events = Vec::new();
-    tracker.push(0, Samples::I16(&samples[..split]), &mut events).unwrap();
+    tracker
+        .push(0, Samples::I16(&samples[..split]), &mut events)
+        .unwrap();
     let before = events.len();
     let (time, rest) = match arrival {
-        Arrival::Stamped(shift) => (5000 * MS).checked_add_signed(shift).map(|t| (t, &samples[split..])).unwrap(),
+        Arrival::Stamped(shift) => (5000 * MS)
+            .checked_add_signed(shift)
+            .map(|t| (t, &samples[split..]))
+            .unwrap(),
         Arrival::AfterGap => {
             tracker.gap();
             (5000 * MS, &samples[split..])
@@ -428,35 +711,87 @@ fn a_gap_restarts_the_tracker() {
     for (arrival, gap) in cases {
         let (events, before) = with_arrival(arrival);
         if let (false, Arrival::Stamped(shift)) = (gap, arrival) {
-            assert_eq!(signal_changes(&events), signal_changes(&reference), "{arrival:?}: not a gap");
+            assert_eq!(
+                signal_changes(&events),
+                signal_changes(&reference),
+                "{arrival:?}: not a gap"
+            );
             let follows: Vec<(u64, u8)> = onsets(&reference)
                 .into_iter()
-                .map(|(at, confidence)| if at < 5000 * MS { (at, confidence) } else { (at.checked_add_signed(shift).unwrap(), confidence) })
+                .map(|(at, confidence)| {
+                    if at < 5000 * MS {
+                        (at, confidence)
+                    } else {
+                        (at.checked_add_signed(shift).unwrap(), confidence)
+                    }
+                })
                 .collect();
-            assert_eq!(onsets(&events), follows, "{arrival:?}: times follow the block's own stamp");
+            assert_eq!(
+                onsets(&events),
+                follows,
+                "{arrival:?}: times follow the block's own stamp"
+            );
             continue;
         }
         let after = &events[before..];
         let first = readings(after)[0];
-        assert_eq!((first.2, first.3, first.4), (Signal::Lost, 0, Option::None), "{arrival:?}: Lost, no estimate");
+        assert_eq!(
+            (first.2, first.3, first.4),
+            (Signal::Lost, 0, Option::None),
+            "{arrival:?}: Lost, no estimate"
+        );
         let confidences: Vec<u8> = onsets(after).iter().map(|o| o.1).take(5).collect();
-        assert_eq!(confidences, [0, 25, 50, 75, 100], "{arrival:?}: it listens again from nothing");
+        assert_eq!(
+            confidences,
+            [0, 25, 50, 75, 100],
+            "{arrival:?}: it listens again from nothing"
+        );
         let fifth = onsets(after)[4].0;
-        assert_eq!(beats(after)[0].0, fifth, "{arrival:?}: the fifth click locks again");
+        assert_eq!(
+            beats(after)[0].0,
+            fifth,
+            "{arrival:?}: the fifth click locks again"
+        );
     }
     use Signal::{Locked, Lost, None, Weak};
     let (after_gap, _) = with_arrival(Arrival::AfterGap);
     assert_eq!(
         signal_changes(&after_gap),
-        in_ns(&[(20, None), (220, Weak), (2780, Locked), (5020, Lost), (5340, Weak), (7900, Locked)]),
+        in_ns(&[
+            (20, None),
+            (220, Weak),
+            (2780, Locked),
+            (5020, Lost),
+            (5340, Weak),
+            (7900, Locked)
+        ]),
         "hops count again from the first sample after the gap",
     );
     let (dropped, _) = with_arrival(Arrival::Dropped100Ms);
     assert_eq!(
         signal_changes(&dropped),
-        in_ns(&[(20, None), (220, Weak), (2780, Locked), (5120, Lost), (5340, Weak), (7900, Locked)]),
+        in_ns(&[
+            (20, None),
+            (220, Weak),
+            (2780, Locked),
+            (5120, Lost),
+            (5340, Weak),
+            (7900, Locked)
+        ]),
     );
-    assert_eq!(onsets(&dropped)[8..], in_ns(&[(5320, 0), (5960, 25), (6600, 50), (7240, 75), (7880, 100), (8520, 100), (9160, 100), (9800, 100)]));
+    assert_eq!(
+        onsets(&dropped)[8..],
+        in_ns(&[
+            (5320, 0),
+            (5960, 25),
+            (6600, 50),
+            (7240, 75),
+            (7880, 100),
+            (8520, 100),
+            (9160, 100),
+            (9800, 100)
+        ])
+    );
 }
 
 #[test]
@@ -469,17 +804,39 @@ fn the_signal_machine_has_every_cell() {
         Step::Onset { confidence: 79 },
         Step::Onset { confidence: 80 },
         Step::Onset { confidence: 100 },
-        Step::Quiet { since_onset: 3 * SECOND - 1 },
-        Step::Quiet { since_onset: 3 * SECOND },
-        Step::Quiet { since_onset: 3 * SECOND + 1 },
+        Step::Quiet {
+            since_onset: 3 * SECOND - 1,
+        },
+        Step::Quiet {
+            since_onset: 3 * SECOND,
+        },
+        Step::Quiet {
+            since_onset: 3 * SECOND + 1,
+        },
         Step::Gap,
     ];
     // spec 4b: one row per state, one column per step above
     let table = [
-        (None, [Weak, Weak, Weak, Weak, Weak, Weak, None, None, None, None]),
-        (Weak, [Weak, Weak, Weak, Weak, Locked, Locked, Weak, Lost, Lost, Lost]),
-        (Locked, [Weak, Weak, Locked, Locked, Locked, Locked, Locked, Lost, Lost, Lost]),
-        (Lost, [Weak, Weak, Weak, Weak, Weak, Weak, Lost, Lost, Lost, Lost]),
+        (
+            None,
+            [Weak, Weak, Weak, Weak, Weak, Weak, None, None, None, None],
+        ),
+        (
+            Weak,
+            [
+                Weak, Weak, Weak, Weak, Locked, Locked, Weak, Lost, Lost, Lost,
+            ],
+        ),
+        (
+            Locked,
+            [
+                Weak, Weak, Locked, Locked, Locked, Locked, Locked, Lost, Lost, Lost,
+            ],
+        ),
+        (
+            Lost,
+            [Weak, Weak, Weak, Weak, Weak, Weak, Lost, Lost, Lost, Lost],
+        ),
     ];
     for (from, row) in table {
         for (step, to) in steps.iter().zip(row) {
@@ -500,7 +857,11 @@ fn a_format_outside_the_range_cannot_be_built() {
         (48_000, 33, false),
     ];
     for (rate, channels, built) in cases {
-        assert_eq!(Format::new(rate, channels).is_some(), built, "{rate} Hz, {channels} channels");
+        assert_eq!(
+            Format::new(rate, channels).is_some(),
+            built,
+            "{rate} Hz, {channels} channels"
+        );
     }
 }
 
@@ -510,7 +871,10 @@ fn a_partial_frame_is_refused_and_changes_nothing() {
     let stereo: Vec<i16> = samples.iter().flat_map(|&s| [s, s]).collect();
     let mut tracker = Tracker::new(Format::new(8_000, 2).unwrap());
     let mut events = Vec::new();
-    assert_eq!(tracker.push(0, Samples::I16(&stereo[..3]), &mut events), Err(PartialFrame));
+    assert_eq!(
+        tracker.push(0, Samples::I16(&stereo[..3]), &mut events),
+        Err(PartialFrame)
+    );
     assert!(events.is_empty());
     tracker.push(0, Samples::I16(&stereo), &mut events).unwrap();
     assert_eq!(events, mono(&samples));

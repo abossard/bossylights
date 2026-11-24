@@ -11,9 +11,7 @@
 //! A kind that gets no answer from its device accepts what it sent: for it, Running means
 //! the frames were sent.
 
-use crate::{
-    ADDRESSES, CHANNELS, Levels, Outcome, Rate, Refusal, Status, Universes, Watch,
-};
+use crate::{ADDRESSES, CHANNELS, Levels, Outcome, Rate, Refusal, Status, Universes, Watch};
 use core::num::NonZeroU16;
 use core::time::Duration;
 use serde::{Deserialize, Serialize};
@@ -187,7 +185,6 @@ impl Run {
     pub const fn covers(self, first: u16, last: u16) -> bool {
         self.first <= first && last < self.first.saturating_add(self.count)
     }
-
 }
 
 impl Output {
@@ -374,7 +371,6 @@ impl Output {
             ..self
         }
     }
-
 }
 
 impl core::fmt::Display for Output {

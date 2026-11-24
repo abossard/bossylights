@@ -154,7 +154,10 @@ fn a_saved_sequence_must_fit_its_first_start() {
             heard.took_everything_sent(&mut engine, &sender);
             assert_eq!(bytes(&heard, 1, 1), [255, 0, 0]);
         } else {
-            assert_eq!(sender.send(start), Err(Unsent::Refused(Refusal::NoSuchLook)));
+            assert_eq!(
+                sender.send(start),
+                Err(Unsent::Refused(Refusal::NoSuchLook))
+            );
         }
     }
 }
@@ -259,7 +262,10 @@ fn a_patch_the_front_refuses_changes_nothing() {
     }
     let before = sender.patch();
     // no library on `send`: a patch finds no fixture
-    assert_eq!(sender.send(par("X", 1, 1)), Err(Unsent::Refused(Refusal::NoSuchFixture)));
+    assert_eq!(
+        sender.send(par("X", 1, 1)),
+        Err(Unsent::Refused(Refusal::NoSuchFixture))
+    );
     assert_eq!(
         send(&mut sender, par("X", 2, 511)),
         Err(Refusal::PastTheEnd { channels: 3 })

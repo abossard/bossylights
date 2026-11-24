@@ -47,7 +47,10 @@ struct Slot {
 enum Setup {
     Settled(Settled),
     /// The wire still shows `was`; `to` is what `Opened` makes it.
-    Switching { was: Settled, to: Opening },
+    Switching {
+        was: Settled,
+        to: Opening,
+    },
 }
 
 impl Default for Setup {
@@ -155,7 +158,9 @@ pub enum ProjectEvent {
     },
     /// Back to the settled state the output's last switch replaced, for a view of the
     /// project before that switch is visible. Refused (`Stale`) when there is none.
-    Restore { output: OutputNumber },
+    Restore {
+        output: OutputNumber,
+    },
 }
 
 /// What the front must do after an update, as data. `rate: None` is the kind's default,
@@ -548,9 +553,7 @@ impl Project {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        Channel, ChannelNumbers, Member, MemberList, Members, RunNumbers, Target, Text,
-    };
+    use crate::{Channel, ChannelNumbers, Member, MemberList, Members, RunNumbers, Target, Text};
 
     fn output(number: u8) -> OutputNumber {
         OutputNumber::try_from(number).unwrap()
@@ -917,7 +920,10 @@ mod tests {
         use ProjectEvent::{Attached, Client, OpenFailed, Opened, Restore, Routed};
         let two = Universes::new(2).unwrap();
         let numbers = |count| RunNumbers { first: 1, count };
-        let (one_run, two_run) = (numbers(1).check(two).unwrap(), numbers(2).check(two).unwrap());
+        let (one_run, two_run) = (
+            numbers(1).check(two).unwrap(),
+            numbers(2).check(two).unwrap(),
+        );
         let (kind, other) = (crate::EXAMPLE, crate::OTHER);
         let set_output = |kind, count| {
             Client(Command::SetOutput {
@@ -935,11 +941,26 @@ mod tests {
             ("SetOutput, same kind and run", set_output(kind, 1)),
             ("SetOutput, same kind, new run", set_output(kind, 2)),
             ("SetOutput, other kind", set_output(other, 1)),
-            ("RemoveOutput", Client(Command::RemoveOutput { output: output(1) })),
+            (
+                "RemoveOutput",
+                Client(Command::RemoveOutput { output: output(1) }),
+            ),
             ("Opened", opened),
             ("OpenFailed", OpenFailed { output: output(1) }),
-            ("Attached", Attached { output: output(1), universes: two_run }),
-            ("Routed", Routed { output: output(1), bounds: two_run }),
+            (
+                "Attached",
+                Attached {
+                    output: output(1),
+                    universes: two_run,
+                },
+            ),
+            (
+                "Routed",
+                Routed {
+                    output: output(1),
+                    bounds: two_run,
+                },
+            ),
             ("Restore", Restore { output: output(1) }),
         ];
         // what an event did: its effect by name, or why it was refused
@@ -954,37 +975,114 @@ mod tests {
             Err(Refusal::Stale) => "refused Stale",
             Err(_) => "refused",
         };
-        let k = |run| Some(ProjectOutput::Kind { kind, universes: run });
+        let k = |run| {
+            Some(ProjectOutput::Kind {
+                kind,
+                universes: run,
+            })
+        };
         let a = |run| Some(ProjectOutput::Attached { universes: run });
         let (k1, k2, a1, a2) = (k(one_run), k(two_run), a(one_run), a(two_run));
         let refused = "refused Opening";
         // (state, events that make it, then per event: what it did, output 1 on the wire)
         type Cell = (&'static str, Option<ProjectOutput>);
         let rows: [(&str, Vec<ProjectEvent>, [Cell; 9]); 6] = [
-            ("Empty", vec![], [
-                ("Open", None), ("Open", None), ("Open", None), ("Remove", None), ("-", None),
-                ("-", None), ("-", a2), ("-", a2), ("refused Stale", None),
-            ]),
-            ("Kind", vec![set_output(kind, 1), opened], [
-                ("Keep", k1), ("Restart", k1), ("Open", k1), ("Remove", None), ("-", k1),
-                ("-", k1), ("-", a2), ("-", a2), ("-", None),
-            ]),
-            ("Attached", vec![Attached { output: output(1), universes: one_run }], [
-                ("Open", a1), ("Open", a1), ("Open", a1), ("Remove", None), ("-", a1),
-                ("-", a1), ("-", a2), ("-", a2), ("-", None),
-            ]),
-            ("Routed", vec![Routed { output: output(1), bounds: one_run }], [
-                ("Open", a1), ("Open", a1), ("Open", a1), ("Remove", None), ("-", a1),
-                ("-", a1), ("-", a2), ("-", a2), ("-", None),
-            ]),
-            ("Opening", vec![set_output(kind, 1)], [
-                (refused, None), (refused, None), (refused, None), (refused, None), ("-", k1),
-                ("-", None), (refused, None), (refused, None), ("-", None),
-            ]),
-            ("Restarting", vec![set_output(kind, 1), opened, set_output(kind, 2)], [
-                (refused, k1), (refused, k1), (refused, k1), (refused, k1), ("-", k2),
-                ("-", k1), (refused, k1), (refused, k1), ("-", k1),
-            ]),
+            (
+                "Empty",
+                vec![],
+                [
+                    ("Open", None),
+                    ("Open", None),
+                    ("Open", None),
+                    ("Remove", None),
+                    ("-", None),
+                    ("-", None),
+                    ("-", a2),
+                    ("-", a2),
+                    ("refused Stale", None),
+                ],
+            ),
+            (
+                "Kind",
+                vec![set_output(kind, 1), opened],
+                [
+                    ("Keep", k1),
+                    ("Restart", k1),
+                    ("Open", k1),
+                    ("Remove", None),
+                    ("-", k1),
+                    ("-", k1),
+                    ("-", a2),
+                    ("-", a2),
+                    ("-", None),
+                ],
+            ),
+            (
+                "Attached",
+                vec![Attached {
+                    output: output(1),
+                    universes: one_run,
+                }],
+                [
+                    ("Open", a1),
+                    ("Open", a1),
+                    ("Open", a1),
+                    ("Remove", None),
+                    ("-", a1),
+                    ("-", a1),
+                    ("-", a2),
+                    ("-", a2),
+                    ("-", None),
+                ],
+            ),
+            (
+                "Routed",
+                vec![Routed {
+                    output: output(1),
+                    bounds: one_run,
+                }],
+                [
+                    ("Open", a1),
+                    ("Open", a1),
+                    ("Open", a1),
+                    ("Remove", None),
+                    ("-", a1),
+                    ("-", a1),
+                    ("-", a2),
+                    ("-", a2),
+                    ("-", None),
+                ],
+            ),
+            (
+                "Opening",
+                vec![set_output(kind, 1)],
+                [
+                    (refused, None),
+                    (refused, None),
+                    (refused, None),
+                    (refused, None),
+                    ("-", k1),
+                    ("-", None),
+                    (refused, None),
+                    (refused, None),
+                    ("-", None),
+                ],
+            ),
+            (
+                "Restarting",
+                vec![set_output(kind, 1), opened, set_output(kind, 2)],
+                [
+                    (refused, k1),
+                    (refused, k1),
+                    (refused, k1),
+                    (refused, k1),
+                    ("-", k2),
+                    ("-", k1),
+                    (refused, k1),
+                    (refused, k1),
+                    ("-", k1),
+                ],
+            ),
         ];
         for (state, making, cells) in rows {
             let project = making
@@ -993,14 +1091,21 @@ mod tests {
             for ((event, happens), (expected, wire)) in events.iter().zip(cells) {
                 let done = project.update(*happens);
                 let after = done.map_or(project, |(after, _)| after);
-                assert_eq!((did(&done), after.output(output(1))), (expected, wire), "{state} + {event}");
+                assert_eq!(
+                    (did(&done), after.output(output(1))),
+                    (expected, wire),
+                    "{state} + {event}"
+                );
             }
         }
         // a restore goes back once: what the switch replaced is used up
         let restored = [set_output(kind, 1), opened, Restore { output: output(1) }]
             .into_iter()
             .fold(Project::new(two), |p, e| p.update(e).unwrap().0);
-        assert_eq!(restored.update(Restore { output: output(1) }), Err(Refusal::Stale));
+        assert_eq!(
+            restored.update(Restore { output: output(1) }),
+            Err(Refusal::Stale)
+        );
     }
 
     #[test]

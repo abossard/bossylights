@@ -18,6 +18,7 @@ mod api;
 mod channel;
 mod clock;
 mod evaluate;
+pub mod health;
 #[path = "model/failure.rs"]
 mod model_failure;
 #[path = "model/kinds.rs"]
@@ -32,7 +33,6 @@ mod model_mix;
 mod model_output;
 #[path = "model/text.rs"]
 mod model_text;
-pub mod health;
 pub use clock::{BEATS_PER_BAR, BeatTime, Bpm, Clock, Reading, Source, When, beats};
 pub use evaluate::{Binding, Elapsed, Item, MAX_DEPTH, Node, Program};
 mod mix;
@@ -45,8 +45,8 @@ mod resolve;
 mod show;
 
 pub use api::{
-    AuthoredStep, Definition, OutOfRange, Palette, Pattern, Percent, Period, Repeat, SavedLook,
-    Saved, Sequence, SequenceItem, Speed, Step, Swatches, Use, WaveTarget, Width,
+    AuthoredStep, Definition, OutOfRange, Palette, Pattern, Percent, Period, Repeat, Saved,
+    SavedLook, Sequence, SequenceItem, Speed, Step, Swatches, Use, WaveTarget, Width,
 };
 pub use channel::{
     ADDRESSES, CHANNELS, Channel, ChannelLevel, ChannelNumbers, ChannelSet, Channels, Levels,
@@ -55,15 +55,15 @@ pub use channel::{
 use channel::{BLACKOUT, MODIFIERS};
 pub use model_failure::{OpenFailure, Refusal};
 pub use model_kinds::{Adapter, Color, OutputKind};
+#[cfg(test)]
+pub(crate) use model_kinds::{EXAMPLE, OTHER};
+#[cfg(feature = "test-support")]
+pub use model_kinds::{EXAMPLE as TEST_STREAM_KIND, OTHER as TEST_KIND};
 pub use model_light::{Gobo, Light, Position, Property, Rgb, Value, Wheel};
 pub use model_lights::{LightNumber, LightRun, Lights, MAX_LIGHTS};
 pub use model_mix::{Brightness, GrabId, ManualEnd, MixRules, OtherEnd};
 pub use model_output::{MAX_OUTPUTS, Outcome, OutputNumber, Rate, Status, Watch};
 pub use model_text::Text;
-#[cfg(test)]
-pub(crate) use model_kinds::{EXAMPLE, OTHER};
-#[cfg(feature = "test-support")]
-pub use model_kinds::{EXAMPLE as TEST_STREAM_KIND, OTHER as TEST_KIND};
 pub use output::{
     Counters, OFF_BEAT, Output, ROUTE_MOST, RouteFault, Run, RunNumbers, SPANS_MOST, Span, bounds,
     gather, route_length,
@@ -632,173 +632,175 @@ impl State {
             ..state
         };
         match command {
-        EngineCommand::Tick { now } => State {
-            frame: state.frame.wrapping_add(1),
-            now,
-            // Only a due beat moves on: a wake for an output must not push it ahead.
-            beat: if now < state.beat {
-                state.beat
-            } else {
-                next_frame(state.beat, now, BEAT)
-            },
-            ..state
-        },
-        EngineCommand::Handed { output, at } => {
-            let mut outputs = state.outputs;
-            if let Some(Some(handed)) = outputs.get_mut(output.slot()) {
-                *handed = handed.handed(at);
-            }
-            State { outputs, ..state }
-        }
-        EngineCommand::Sent {
-            output,
-            outcome,
-            watch,
-            at,
-        } => {
-            let mut outputs = state.outputs;
-            if let Some(Some(sent)) = outputs.get_mut(output.slot()) {
-                *sent = sent.sent(outcome, watch, at);
-            }
-            State { outputs, ..state }
-        }
-        EngineCommand::Attach {
-            output,
-            universes: run,
-            rate,
-        } => state.with_output(output, run, rate),
-        EngineCommand::RemoveOutput { output } => {
-            let mut outputs = state.outputs;
-            if let Some(slot) = outputs.get_mut(output.slot()) {
-                *slot = None;
-            }
-            State { outputs, ..state }
-        }
-        EngineCommand::SetChannel { channel, value } => {
-            if let Some(level) = channel.level(universes) {
-                *level = value;
-                channel.mark(holds, true);
-            }
-            state
-        }
-        EngineCommand::ReleaseChannel { channel } => {
-            if let Some(level) = channel.level(universes) {
-                *level = 0;
-            }
-            channel.mark(holds, false);
-            state
-        }
-        EngineCommand::ReleaseChannels => {
-            universes.fill(Levels::ZERO);
-            holds.fill(ChannelSet::NONE);
-            state
-        }
-        EngineCommand::ReleaseAll => {
-            universes.fill(Levels::ZERO);
-            holds.fill(ChannelSet::NONE);
-            lights.fill(Held::NONE);
-            let mut plays = state.plays;
-            plays.release_where(|play| play.rank == Rank::Manual);
-            State { plays, ..state }
-        }
-        EngineCommand::Blackout { on } => State {
-            blackout: on,
-            ..state
-        },
-        // `Plan`: the plays stay; whether its plan installs is `Plays::takes_plan`.
-        EngineCommand::Writers | EngineCommand::Runs { .. } | EngineCommand::Plan { .. } => state,
-        EngineCommand::Lights {
-            lights: run,
-            change,
-        } => {
-            for light in run.of(lights) {
-                light.change(change, state.order);
-            }
-            match change {
-                LightChange::Grab { .. } => held,
-                LightChange::Update { .. }
-                | LightChange::End { .. }
-                | LightChange::Release { .. } => state,
-            }
-        }
-        EngineCommand::Darken { lights: run } => {
-            run.of(lights).fill(Held::NONE);
-            state
-        }
-        EngineCommand::Start {
-            play,
-            look,
-            rank,
-            when,
-        } => {
-            let (mut plays, mut launches) = (state.plays, state.launches);
-            plays.start(
-                (play, look, rank),
-                when,
-                &state.clock,
-                state.now,
-                (state.order, &mut launches),
-            );
-            State {
-                plays,
-                launches,
-                ..held
-            }
-        }
-        EngineCommand::Keep { play } => {
-            let mut plays = state.plays;
-            plays.keep(play);
-            State { plays, ..state }
-        }
-        EngineCommand::Rules { rules } => {
-            let mut plays = state.plays;
-            plays.release_where(|play| unkept(play.rank, play.state, rules));
-            for light in lights.iter_mut() {
-                light.unkeep(rules);
-            }
-            State {
-                plays,
-                rules,
+            EngineCommand::Tick { now } => State {
+                frame: state.frame.wrapping_add(1),
+                now,
+                // Only a due beat moves on: a wake for an output must not push it ahead.
+                beat: if now < state.beat {
+                    state.beat
+                } else {
+                    next_frame(state.beat, now, BEAT)
+                },
                 ..state
+            },
+            EngineCommand::Handed { output, at } => {
+                let mut outputs = state.outputs;
+                if let Some(Some(handed)) = outputs.get_mut(output.slot()) {
+                    *handed = handed.handed(at);
+                }
+                State { outputs, ..state }
             }
-        }
-        EngineCommand::Release { play } => {
-            let mut plays = state.plays;
-            plays.release(play);
-            State { plays, ..state }
-        }
-        EngineCommand::Settle { at } => {
-            let clock = state.clock.settle(at);
-            // a new instant keeps the orders of its launches before its commands
-            let (launches, order) = if clock.at() > state.clock.at() {
-                Launches::from(state.order)
-            } else {
-                (state.launches, state.order)
-            };
-            State {
-                clock,
-                launches,
-                order,
+            EngineCommand::Sent {
+                output,
+                outcome,
+                watch,
+                at,
+            } => {
+                let mut outputs = state.outputs;
+                if let Some(Some(sent)) = outputs.get_mut(output.slot()) {
+                    *sent = sent.sent(outcome, watch, at);
+                }
+                State { outputs, ..state }
+            }
+            EngineCommand::Attach {
+                output,
+                universes: run,
+                rate,
+            } => state.with_output(output, run, rate),
+            EngineCommand::RemoveOutput { output } => {
+                let mut outputs = state.outputs;
+                if let Some(slot) = outputs.get_mut(output.slot()) {
+                    *slot = None;
+                }
+                State { outputs, ..state }
+            }
+            EngineCommand::SetChannel { channel, value } => {
+                if let Some(level) = channel.level(universes) {
+                    *level = value;
+                    channel.mark(holds, true);
+                }
+                state
+            }
+            EngineCommand::ReleaseChannel { channel } => {
+                if let Some(level) = channel.level(universes) {
+                    *level = 0;
+                }
+                channel.mark(holds, false);
+                state
+            }
+            EngineCommand::ReleaseChannels => {
+                universes.fill(Levels::ZERO);
+                holds.fill(ChannelSet::NONE);
+                state
+            }
+            EngineCommand::ReleaseAll => {
+                universes.fill(Levels::ZERO);
+                holds.fill(ChannelSet::NONE);
+                lights.fill(Held::NONE);
+                let mut plays = state.plays;
+                plays.release_where(|play| play.rank == Rank::Manual);
+                State { plays, ..state }
+            }
+            EngineCommand::Blackout { on } => State {
+                blackout: on,
+                ..state
+            },
+            // `Plan`: the plays stay; whether its plan installs is `Plays::takes_plan`.
+            EngineCommand::Writers | EngineCommand::Runs { .. } | EngineCommand::Plan { .. } => {
+                state
+            }
+            EngineCommand::Lights {
+                lights: run,
+                change,
+            } => {
+                for light in run.of(lights) {
+                    light.change(change, state.order);
+                }
+                match change {
+                    LightChange::Grab { .. } => held,
+                    LightChange::Update { .. }
+                    | LightChange::End { .. }
+                    | LightChange::Release { .. } => state,
+                }
+            }
+            EngineCommand::Darken { lights: run } => {
+                run.of(lights).fill(Held::NONE);
+                state
+            }
+            EngineCommand::Start {
+                play,
+                look,
+                rank,
+                when,
+            } => {
+                let (mut plays, mut launches) = (state.plays, state.launches);
+                plays.start(
+                    (play, look, rank),
+                    when,
+                    &state.clock,
+                    state.now,
+                    (state.order, &mut launches),
+                );
+                State {
+                    plays,
+                    launches,
+                    ..held
+                }
+            }
+            EngineCommand::Keep { play } => {
+                let mut plays = state.plays;
+                plays.keep(play);
+                State { plays, ..state }
+            }
+            EngineCommand::Rules { rules } => {
+                let mut plays = state.plays;
+                plays.release_where(|play| unkept(play.rank, play.state, rules));
+                for light in lights.iter_mut() {
+                    light.unkeep(rules);
+                }
+                State {
+                    plays,
+                    rules,
+                    ..state
+                }
+            }
+            EngineCommand::Release { play } => {
+                let mut plays = state.plays;
+                plays.release(play);
+                State { plays, ..state }
+            }
+            EngineCommand::Settle { at } => {
+                let clock = state.clock.settle(at);
+                // a new instant keeps the orders of its launches before its commands
+                let (launches, order) = if clock.at() > state.clock.at() {
+                    Launches::from(state.order)
+                } else {
+                    (state.launches, state.order)
+                };
+                State {
+                    clock,
+                    launches,
+                    order,
+                    ..state
+                }
+                .launch()
+            }
+            EngineCommand::Tap => State {
+                clock: state.clock.tap(),
                 ..state
             }
             .launch()
-        }
-        EngineCommand::Tap => State {
-            clock: state.clock.tap(),
-            ..state
-        }
-        .launch()
-        .retempo(),
-        EngineCommand::ReleaseTempo => State {
-            clock: state.clock.release(),
-            ..state
-        }
-        .retempo(),
-        EngineCommand::Feed { bpm } => State {
-            clock: state.clock.set_feed(bpm),
-            ..state
-        }
-        .retempo(),
+            .retempo(),
+            EngineCommand::ReleaseTempo => State {
+                clock: state.clock.release(),
+                ..state
+            }
+            .retempo(),
+            EngineCommand::Feed { bpm } => State {
+                clock: state.clock.set_feed(bpm),
+                ..state
+            }
+            .retempo(),
         }
     }
 
@@ -872,11 +874,11 @@ pub const BEAT: Duration = Duration::from_nanos(1_000_000_000 / 44);
 impl State {
     fn next_wake(&self) -> Duration {
         self.outputs
-        .iter()
-        .flatten()
-        .map(|output| output.deadline())
-        .min()
-        .unwrap_or(self.beat)
+            .iter()
+            .flatten()
+            .map(|output| output.deadline())
+            .min()
+            .unwrap_or(self.beat)
     }
 
     /// When a new output of `rate` is first due: at the next frame of an output that
@@ -895,9 +897,7 @@ impl State {
         let soon = now.saturating_add(SPIN);
         (1..)
             .zip(&self.outputs)
-            .filter(move |(_, output)| {
-                output.is_some_and(|output| output.deadline() <= soon)
-            })
+            .filter(move |(_, output)| output.is_some_and(|output| output.deadline() <= soon))
             .filter_map(|(number, _)| OutputNumber::try_from(number).ok())
     }
 

@@ -18,8 +18,8 @@
 //! A command published before the cutoff is in this frame, one published after it in the
 //! next. Without the feature the stepped parts are not compiled: the tick pays nothing.
 
-use engine_core::{Outcome, OutputNumber};
 use crate::life::EngineLife;
+use engine_core::{Outcome, OutputNumber};
 use std::time::{Duration, Instant};
 use std::{hint, thread};
 

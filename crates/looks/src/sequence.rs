@@ -250,11 +250,7 @@ pub(crate) fn compile(
     // flattened plan size before allocating its per-light binding tables.
     let storage = builder.nodes.len() * size_of::<Node>()
         + (builder.indexed.len() + builder.palettes.len()) * size_of::<u16>()
-        + builder
-            .waves
-            .iter()
-            .map(WaveBinding::bytes)
-            .sum::<usize>()
+        + builder.waves.iter().map(WaveBinding::bytes).sum::<usize>()
         + builder.items.len() * size_of::<Item>()
         + built.ordered.len() * size_of::<SampleTarget>()
         + builder.bindings * size_of::<Binding>()

@@ -492,10 +492,10 @@ fn broken(error: serde_json::Error) -> Unopened {
 )]
 mod sequence_tests {
     use super::*;
-    use engine_core::{Percent, Period, Width};
     use engine_core::{
         Color, Light, Lights, Pixels, Position, Rgb, Saved, Step, Target, Universes, Wheel,
     };
+    use engine_core::{Percent, Period, Width};
     use rig::Whole;
 
     #[test]
