@@ -2,6 +2,8 @@
 
 An adapter takes bytes and never waits ([theory, idea 10](theory.md)). What waits lives on the adapter's own thread, as the machines below. Each table is every pair of state and event; the tests walk each row (`crates/outputs`). "n/a" rows cannot happen and say why.
 
+The wire of each kind, from its official spec: [DMX USB Pro](outputs-dmx-usb-pro.md), [DDP](outputs-ddp.md), [Art-Net](outputs-artnet.md), [sACN](outputs-sacn.md), [IDN for lasers](outputs-idn.md).
+
 ## DMX USB Pro
 
 ```mermaid
