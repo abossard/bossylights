@@ -20,4 +20,10 @@ jobs:
         with:
           tool: cargo-mutants
       - name: Mutation testing (score in the run summary)
-        run: npm run mutants
+        # A mutant can make a test allocate without end. The cap kills that test, not the runner (#272).
+        run: >-
+          sudo env "PATH=$PATH" "GITHUB_STEP_SUMMARY=$GITHUB_STEP_SUMMARY" "HOME=$HOME" "CARGO_INCREMENTAL=$CARGO_INCREMENTAL"
+          "GITHUB_ACTION=$GITHUB_ACTION"
+          systemd-run --scope --quiet --uid="$(id -u)" --gid="$(id -g)"
+          -p MemoryMax=12G -p MemorySwapMax=0 -p OOMPolicy=continue
+          npm run mutants
