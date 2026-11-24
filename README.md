@@ -138,18 +138,9 @@ flowchart LR
 
 All rules live in one table: [docs/design/who-wins.md](docs/design/who-wins.md).
 
-## Milestones
+## Where it stands
 
-```mermaid
-flowchart LR
-  M1["M1 done<br/>Command to light"] --> M2["M2 in progress<br/>Lights, not channels"] --> M3["M3<br/>Looks and who wins"] --> M4["M4<br/>First real screens"] --> M5["M5<br/>One great night"]
-  classDef done stroke:#3fb950,stroke-width:3px
-  classDef now stroke:#d29922,stroke-width:3px,stroke-dasharray:6 3
-  class M1 done
-  class M2 now
-```
-
-A gate review sits between each two. How the work is run: [docs/agents/orchestration.md](docs/agents/orchestration.md).
+The road to version 1 and what is in work: the owner's [cockpit](https://claude.ai/artifact/RFGnHgq9gcwYVJdaRWJcBt). How the work is run: [docs/agents/orchestration.md](docs/agents/orchestration.md).
 
 ## Build, run, test
 
@@ -174,7 +165,7 @@ Needs Rust, Node 24 and npm. On Linux also the [Tauri system libraries](https://
 |---|---|
 | [docs/engine.md](docs/engine.md) | the engine in detail: API, commands, output states, DMX port thread, hand checks, what `npm test` proves |
 | [docs/coding.md](docs/coding.md) | how we write code |
-| [The map issue](https://github.com/abossard/bossylights/issues?q=is%3Aissue+label%3Amap), [interactive map](docs/plan/map/index.html) | every area, feature, requirement and task |
+| [The map issue](https://github.com/abossard/bossylights/issues?q=is%3Aissue+label%3Amap) | every area, feature, requirement and task |
 | [docs/plan/requirements.md](docs/plan/requirements.md) | requirements |
 | [docs/plan/capability-map.md](docs/plan/capability-map.md) | what QLC+, BlinderKitten, Chataigne, Mizer and xLights can do |
 

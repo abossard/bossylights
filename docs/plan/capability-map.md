@@ -32,7 +32,7 @@ Parts, not bases:
 
 ## Capability matrix
 
-● yes, ◐ partial, ○ no, · unknown. The full, weighted version is the Tool fit tab of the plan map.
+● yes, ◐ partial, ○ no, · unknown.
 
 | Capability | QLC+ fork | BlinderKitten | Chataigne | Mizer | xLights | SwiftVJ |
 |---|---|---|---|---|---|---|

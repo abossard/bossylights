@@ -1,7 +1,7 @@
 # AGENTS.md
 
 Bossylights is an open-source lighting desk: easy first, deep on request.
-Rust engine, web UI in a Tauri shell, Apache-2.0. Status: skeleton (engine counter in a window).
+Rust engine, web UI in a Tauri shell, Apache-2.0. Where the project stands: the owner's [cockpit](https://claude.ai/artifact/RFGnHgq9gcwYVJdaRWJcBt), the one status page.
 
 ## Commands
 
@@ -31,7 +31,7 @@ Rust engine, web UI in a Tauri shell, Apache-2.0. Status: skeleton (engine count
 
 ## Plan
 
-- Map of all work: the GitHub issue labelled `map`, and `docs/plan/map/index.html`.
+- Map of all work: the GitHub issue labelled `map`. State of the project: the cockpit (top of this file).
 - Requirements: `docs/plan/requirements.md`. Research: `docs/plan/capability-map.md`.
 - A map item is not a ticket. It becomes buildable in two steps: a spec on the item, then tickets labelled `ready-for-agent` that name it as their parent.
 - Gate for the real UI: no product UI ticket starts before its controls are approved in the storyboard catalog (issue #102): every element, in every situation.
@@ -78,14 +78,14 @@ The owner has ADHD and is a visual learner. This applies to every output: docs, 
 | Plan before code | a ticket that changes behaviour or a module edge starts with an Opus explain-back of the plan against the theory (`docs/design/theory.md`). Test, CI and doc fixes skip it |
 | State machines first | written in the design doc before code. The tests walk every row |
 | Expected answers from outside the code | charts, QLC+, hand-worked tables, saved real output |
-| End of a slice | a hand-over comment on the issue, `SendMessage` to the orchestrator (a chat answer reaches nobody), `clear_session "self"` |
+| End of a slice | a hand-over comment on the issue, tuios mail to the lead (a chat answer reaches nobody), stop |
 | No invalid project state | a command that would make one is refused, and so is a later command that would break it. Never allow and flag |
 
 ## Agent skills
 
 ### How the work is run
 
-Roles, models, the queue loop, milestones and gates. See `docs/agents/orchestration.md`.
+The crew in tuios: planner, lead, workers and checker, the lead's loop, a worker's steps, mail, step gates. See `docs/agents/orchestration.md`.
 Peer agents (Codex CLI, Copilot CLI) for builds, reviews and research: `npm run peer`, see `docs/agents/peers.md`.
 
 ### Issue tracker

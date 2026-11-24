@@ -1,4 +1,4 @@
-// Calculations for `npm run verify` (docs/agents/orchestration.md, step 4): no files, no processes.
+// Calculations for `npm run verify` (docs/agents/orchestration.md, worker step 5): no files, no processes.
 
 /** The suites `npm test` chains, in order: ["test:checks", ...]. */
 export function suitesOf(testScript) {

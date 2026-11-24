@@ -1,7 +1,7 @@
 # Required features
 
 Target: parity with QLC+ v5 and with what the abossard/qlcplus fork added, reshaped for people who want a result fast.
-IDs match the boxes in the plan map (`docs/plan/map/index.html`) and the "Map id" of each GitHub issue. Priorities live on the issues.
+IDs match the "Map id" of each GitHub issue. Priorities live on the issues.
 
 Origin: **Q** = QLC+ v5 parity, **F** = built in the fork, **N** = new.
 

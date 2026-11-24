@@ -1,4 +1,4 @@
-// Calculations for `npm run land` (docs/agents/orchestration.md, step 5): no files, no processes.
+// Calculations for `npm run land` (docs/agents/orchestration.md, worker step 7): no files, no processes.
 
 export const CI_RED = "CI red on main:";
 

@@ -1,85 +1,149 @@
 # How the work is run
 
-Three roles, three price levels. The expensive model works only where a wrong answer is expensive.
+A crew of Claude sessions in tuios: lead and workers in session `bossy-crew`, the planner in `session-3`. The lead runs the queue, each worker builds and lands one ticket, the planner gates each road step.
 
 ```mermaid
 flowchart LR
-  Q["Queue<br/>ready-for-agent"] --> W["Worker<br/>builds one ticket"] --> O["Orchestrator<br/>verifies, closes,<br/>hands over the next"] --> Q
-  O -- "milestone reached" --> G["Gate<br/>deep review,<br/>next slice designed"] --> Q
+  Q["Queue<br/>in issue 147"] --> W["Worker<br/>one ticket,<br/>own worktree"] --> C["Check<br/>mutants + Opus checker"] --> L["Worker lands,<br/>closes, mails lead"] --> A["Lead audits,<br/>updates cockpit"] --> Q
+  A -- "road step done" --> G["Planner<br/>deep review,<br/>owner tries it"] --> Q
 ```
 
-## Who does what
-
-| Role | Model, effort | Does | Never does |
-|---|---|---|---|
-| **Worker** | Sonnet 5.5, medium. Opus 5.5, high for tickets that touch the real-time core or cross crates. Hands over at 30% of its context (about 300k tokens, owner 2026-11-20) | designs and writes the change of one ticket from red tests, verifies it, commits, reports with evidence. Claude writes the code again (owner, 2026-11-21) | closes issues, changes checks, decides product design |
-| **Orchestrator** | Opus 5.5, medium (owner, 2026-11-20). Hands over to a fresh Opus 5.5 medium session at 50% of its context (about 500k tokens, owner 2026-11-20) | picks the next ticket, briefs the worker, verifies, closes, keeps `main` green, has every result checked by Opus (owner, 2026-11-21: all verification and checks come from Opus) | writes product code, makes product decisions, plans a change to the peer harness with a model below Opus |
-| **Peers** (`npm run peer`) | Not used for code or checks since 2026-11-21 (owner). Harness kept: Codex `gpt-6.2-astra`/`sol`, Copilot `gpt-6.2-sol` | build, review or research in a scratch copy, leave a patch, repro tests and evidence | commits, pushes, closes issues, trusted on its report: Opus verifies every result |
-| **Checker** (`.claude/agents/checker.md`, subagent type `checker`) | Opus 5.5, with only Read, Grep, Glob, Bash and Write: no browser, MCP or skill tools, so each call re-reads less | checks one result in its own clean copy, plants breaks, reports a verdict | edits the shared checkout, commits, posts |
-| **Gate reviewer** | Fable 5.2, high | deep review at a milestone, designs the next slice | routine verification, ticket by ticket |
-
-| Price per million tokens, in and out | |
+| Where | What |
 |---|---|
-| Sonnet 5.5 | 2 and 10 |
-| Opus 5.5 | 4 and 20 |
-| Fable 5.2 | 8 and 40 |
+| [Cockpit](https://claude.ai/artifact/RFGnHgq9gcwYVJdaRWJcBt) (private to the owner) | the one status page: the road, what is in work, the decision register |
+| [Decisions page](https://claude.ai/artifact/KBkqWhcVWnyKaDYtejFBoC) | questions to the owner, with options and a recommendation |
+| Issue #147 | the queue |
+| `.claude/decisions/crew/` in the main checkout (not in git) | `rules.md`, briefs (`t-<ticket>.md`), plans, check reports. Shared by all panes |
 
-Why cheaper models are safe for the routine: the rules are held by the compiler, the lints and the tests (`docs/coding.md`, last column). A worker cannot talk its way past them.
+## Who
 
-## The loop (orchestrator)
+| Role | Pane | Model, effort | Does | Never |
+|---|---|---|---|---|
+| Planner, step gate | `planner` | Fable 5.2, xhigh | the road, slicing, plan review of real-time core tickets, deep review at the end of a road step | the routine loop |
+| Lead | `lead` | Opus 5.5, high | queue, briefs, starts and closes workers, audits landings, cockpit, decisions page, nudges the owner | product code, product decisions |
+| Worker | `w-<ticket>` | Opus 5.5, high. xhigh for the real-time core (`engine-core`, `engine`, `rt-thread`, `rig`) | one ticket: plan, red tests, build, check, land, close, report | a second ticket, a product decision, a rule change |
+| Checker | subagent `checker` of the worker (`.claude/agents/checker.md`) | Opus 5.5 | plants breaks in its own clean copy, gives a verdict | edits, commits |
 
-```mermaid
-flowchart LR
-  P["Pick<br/>+ pre-check"] --> B["Brief<br/>modules it owns"] --> W["Worker<br/>wip/ branch,<br/>own worktree"] --> H["Hand-over comment,<br/>SendMessage,<br/>clear self"]
-  W -- "push branch" --> V["Verify<br/>clean copy"] --> D["Second look<br/>Opus"] --> L["Land<br/>one commit<br/>on main"] --> C["Close"] --> P
-  H --> V
+| Rule | |
+|---|---|
+| Always pass the model | new sessions default to Fable: `--model claude-opus-5-5 --effort high` (or `xhigh`) |
+| Keep the pane name | `lead`, `w-<ticket>`: mail finds a pane by it. Never rename a pane or the session |
+| Rules change only by the owner or the planner | a third repeat of one problem becomes one rule, not a new habit |
+
+## The lead's loop
+
+| # | Step | How |
+|---|---|---|
+| 1 | Pick | the next open `ready-for-agent` issue of the queue with no open blocker |
+| 2 | Pre-check | can every box pass with this ticket's own commands? Does a box need a rule of who wins, or allow a state that cannot come out right? Settle it, or ask the owner on the decisions page, before the worker starts |
+| 3 | Brief | `crew/t-<ticket>.md`: the criteria, out of scope, the modules the worker owns (see "Work isolation"), the docs to read |
+| 4 | Start | a worker pane `w-<ticket>` with the right model, in its own worktree on `wip/<ticket>` |
+| 5 | Audit | on the worker's mail: the commit on `main`, the evidence on the issue, the check report. Never trust a report alone |
+| 6 | Cockpit | update the road and the work rows. Close the worker's pane |
+| 7 | Gate | when a road step is done: hand it to the planner |
+
+## A worker's ticket, step by step
+
+| # | Step | How |
+|---|---|---|
+| 1 | Read | the issue, the brief, `AGENTS.md`, `docs/coding.md`, the docs the brief names. Nothing else |
+| 2 | Set up | own worktree on `wip/<ticket>`, `npm install`. Never write in the main checkout |
+| 3 | Plan | a ticket that changes behaviour or a module edge: `crew/plans/<ticket>.md` (files, order, state machine rows, expected answers from outside the code, how `npm test` stays green). Real-time core: mail the planner, wait for its answer. Others: one Opus explain-back against `docs/design/theory.md`. Test, CI and doc fixes skip this |
+| 4 | Build | red tests first. Every feature has an end-to-end test that checks DMX output |
+| 5 | Check | `npm test` green, commit, push the branch. `npm run verify -- <sha> --mutants`: every missed mutant is killed or explained. Then one `checker` pass with planted breaks, report to `crew/reports/<ticket>-check.md` |
+| 6 | Fix | at most two fix rounds. A third finding of the same kind: stop, mail the lead. It becomes one rule or a question to the owner |
+| 7 | Land | from the main checkout, because land refuses inside the branch's own worktree: `npm run land -- wip/<ticket> <message-file>`. One commit on `main`, the worktree goes with it |
+| 8 | Issue | tick the boxes, post the evidence (table: what ran, numbers, checker verdict, what was not checked), close it |
+| 9 | Report | mail the lead, `tuios set-agent-state done -m '<ticket>: landed <sha>'`, stop |
+
+| Stop early when | Do |
+|---|---|
+| the context reaches 30% (about 300k) | hand-over comment on the issue (done, next, pitfalls), push the branch, mail the lead, stop |
+| a product or design question comes up | mail the lead with the question, options and a recommendation. Go on with boxes that do not depend on it |
+| a rule seems wrong | mail the lead. Do not work around it |
+
+| What `npm run verify` and `npm run land` do | |
+|---|---|
+| `verify -- <sha> [--mutants]` | a clean copy of the commit, every suite of `npm test` with the default target folder, mutants on the commit's diff (missed lines listed) |
+| `land -- wip/<ticket> <message-file>` | squashes the branch onto `origin/main`, verifies that commit again in a clean copy, pushes, removes the branch and its worktree. Refuses while CI on `main` is running, missing or cancelled. A red run is passed only when the message names the open `CI red on main:` issue |
+
+## Mail
+
+Short, the detail in a file the mail names. A chat answer reaches nobody.
+
+```sh
+tuios send-agent-message -s bossy-crew -w lead --from "$TUIOS_PANE_ID" 'w-250: landed abc1234, issue closed. Report: crew/reports/250-check.md'
+tuios send-agent-message -s session-3 -w planner --from "$TUIOS_PANE_ID" 'w-250: plan ready for review: crew/plans/250.md'
 ```
-
-| Step | How |
-|---|---|
-| 1. Pick | the lowest open `ready-for-agent` issue with no open blocker |
-| 2. Pre-check | can every box pass with this ticket's own commands? Does a box need a rule of who wins, or allow a state that cannot come out right? Settle it (or ask the owner) before the worker builds. A ticket that changes behaviour or a module edge: an Opus explain-back of the plan against the theory first (test, CI, doc fixes skip it). Its state machines are written in the design doc, its expected answers come from outside the code |
-| 3. Brief | the criteria from the issue, out of scope, the modules the worker owns (see "Work isolation"), the end of the slice (below). One ticket per worker. Send it only when `list_events` shows the worker empty |
-| 4. Verify | never trust a report. `npm run verify -- <commit> --mutants`: a clean copy of the branch tip, every suite of `npm test` with the default target folder, mutants on the commit's diff (missed lines are listed). Then `npm run scorecard`. Drive the feature by hand. Break each new rule on purpose and see its check fail. Compare numbers with raw result files |
-| 4b. Second look | after your own verify, before closing: an Opus check in its own clean copy (the `checker` agent): each box red before and green after, breaks planted on purpose, a rule broken (`docs/coding.md`, `AGENTS.md`), argue against the verdict. All checks come from Opus (owner, 2026-11-21). A confirmed finding keeps the ticket open or becomes an issue. Name the result in the closing comment |
-| 4c. Peer ledger | after each peer run: paste the row `npm run peer` prints into `docs/agents/peer-runs.md`, fill in whether verify passed first time and what the breaks or the second look found |
-| 5. Land | `npm run land -- wip/<ticket> <message-file>`: the branch squashed onto `origin/main`, verified again in a clean copy, pushed, branch and worktree removed. It refuses while CI on `main` is running, missing or cancelled. A red run is passed only when the message names the open `CI red on main:` issue |
-| 6. Close | tick the boxes, close with a table of evidence, note what was not verified |
-| 7. Next | hand over the next ticket. Stop only for a decision of the owner |
-
-| A worker's slice ends with, in this order | Why |
-|---|---|
-| 1. a hand-over comment on the issue: done, evidence, next, pitfalls | the next session starts from the issue, not from a chat |
-| 2. `SendMessage` to the orchestrator: the branch tip and three lines | a chat answer reaches nobody: workers sat idle for hours |
-| 3. `clear_session "self"` | the worker is empty for its next brief, no round trip |
-
-| The orchestrator wakes on | |
-|---|---|
-| a worker's message | the normal path |
-| a new commit on a `wip/` branch | a watch polls `origin` every minute: a push with no message still gets verified |
-| a busy worker gone idle without a message | checked on every wake: a worker that stopped before pushing is nudged |
 
 ## Work isolation: a branch and a worktree per ticket
-
-Each ticket has its own `wip/` branch and worktree. Modules still keep slices apart, so the branches land without conflicts.
 
 | Rule | How |
 |---|---|
 | A worker owns modules | the brief names the crates, files or folders it may write. Two workers never own the same file |
 | New file over a shared edit | a new command family, test table or fake goes into a file of its own, wired in by one line |
 | Hotspots get one owner at a time | `engine-core` `Command` and `api`, `scripts/layers.mjs`, `engine-server/src/lib.rs`. When two slices need one, they run one after the other, or the first splits it so each owns a part |
-| Plan slices along seams | before running two slices in parallel, list the files each will touch. An overlap means sequence them or cut the seam first |
-| One ticket, one branch (owner, 2026-11-21) | `git worktree add -b wip/<ticket> ../wip-<ticket> origin/main`, the folder named like the branch. Commit and push only the branch. Nobody commits to `main` by hand or writes in the shared checkout |
-| Lands as one commit, same day | after verify and the second look, `npm run land` (step 5). The branch and its worktree go with it |
+| Plan slices along seams | before running two slices side by side, list the files each will touch. An overlap means sequence them or cut the seam first |
+| One ticket, one branch | `git worktree add -b wip/<ticket> ../wip-<ticket> origin/main`, the folder named like the branch. Push only the branch. Nobody commits to `main` by hand |
+
+## Standing rules
+
+| Rule | |
+|---|---|
+| Nothing mocked or half-working is reachable in the app | it grows by complete pieces on the real engine |
+| No invalid state | refuse the command. Never allow and flag |
+| No backward compatibility | no old shows, no migration |
+| Simplest behaviour | pressed is pressed |
+| Machine load is normal | never hold or delay work because of it. Run checks side by side |
+| Size | 1,024 universes and 16 outputs |
+| No AI attribution | no `Co-Authored-By`, no "Generated with" |
+| Never | push `main` by hand, force-push, delete someone's work, create issues in another repository |
+| JSON | `jq`, never grep or sed |
+| Tool output | to a file, show only the tail or the failures |
 
 | Stays with the owner | |
 |---|---|
-| Product and design decisions | asked once, in a table, with a recommendation |
+| Product and design decisions | asked once on the decisions page, with a recommendation |
 | `ready-for-human` issues | never run unattended |
 | Anything destructive or outward | force-push, deleting, security alerts, visibility |
 | Hardware and hands | adapters, unplug and sleep checks |
 
-| Learned the hard way | Rule |
+## Writing for the owner
+
+The owner has ADHD and is a visual learner. Every issue, comment and report: a picture or a table first, one or two short lines per idea, no em dashes, no walls of bullets.
+
+| An issue reads like this | |
+|---|---|
+| Title | plain words, what the owner gets. No codes |
+| First line | status: waiting, in work, done |
+| Table | "You do" and "You see" |
+| Check by hand | steps the owner can do on the rig |
+| Below a fold (`<details>`) | everything for agents: files, criteria, blockers |
+
+## What a step gate does
+
+At the end of a road step the planner reviews the repository fresh, without the workers' reports. Then the owner tries the step.
+
+| Part | Question | Output |
+|---|---|---|
+| 1. Rules | does the code follow `docs/coding.md`, beyond what the checks can see | findings |
+| 2. Design | is each module deep. Is any seam in the wrong place. What can be deleted or merged | findings, with the simpler shape drawn |
+| 3. Generality | did the second real case fit without bending the core | yes or no, with the diff that shows it |
+| 4. Truth | do the docs, the theory and the issues still say what the code does | corrections |
+| 5. Numbers | the scorecard against the last gate: calculation share, public items, escape hatches, lateness, mutation score | a table, with what moved and why |
+| 6. Tests | would the tests catch a wrong change. Any test that asserts timing on a runner, or tests nothing | findings |
+| 7. Next step | the spec and tickets of the next road step | a spec in `docs/design/`, tickets with blockers |
+
+| Rule for findings | |
+|---|---|
+| Each has a failing scenario or a measured number | "this could be cleaner" is not a finding |
+| Each becomes an issue, most severe first | labelled `gate-finding` |
+| The verdict is one of two | pass, or fix first with the list |
+| Fixes go back to the queue | workers fix, the lead audits. The planner does not fix its own findings |
+
+## Learned the hard way
+
+| What happened | Rule |
 |---|---|
 | A worker waited on a run that had already ended | check the process and its expected end, not only a notification |
 | A frame-rate assertion failed on a CI runner | CI judges what is sent, a real machine judges timing. No test asserts a time under one second (`scripts/check-timing.mjs`) |
@@ -87,52 +151,9 @@ Each ticket has its own `wip/` branch and worktree. Modules still keep slices ap
 | Local checks passed while CI was red | one command: CI runs `npm test`, the Rust version is pinned in `rust-toolchain.toml` |
 | A serial link looked on time and was minutes behind | count what the device accepted |
 | A capture of a hidden window was blank | a hidden web view does not draw. Say what was not seen |
-| Workers ended with a chat answer, the orchestrator never heard | the slice ends with `SendMessage`, and the orchestrator watches the `wip/` branches |
-| A brief arrived before a worker's clear, the clear was lost | the worker clears itself at the end of a slice; brief only an empty worker |
+| Workers ended with a chat answer, nobody heard | the ticket ends with tuios mail to the lead |
 | A worker's question was answered while it kept building, the answer came too late | the pre-check settles rules before the brief; a worker that asks waits for the answer on that box |
 | Sessions shared one checkout, a push carried another worker's commit | a branch and worktree per ticket; `npm run land` puts exactly one squashed commit on `main` |
 | e2e ports clash between sessions | gone: every run takes free ports (`e2e/ports.ts`) |
-| The orchestrator's own check used another target folder, e2e found no binary | verify with the default target folder |
+| A check used another target folder, e2e found no binary | verify with the default target folder |
 | "Allow it and flag it" was overruled | a command that would make an invalid project is refused, and so is a later command that would break it |
-
-## Milestones and gates
-
-A milestone is a slice that ends in something a person can see. A gate is a review that the next milestone waits for.
-
-```mermaid
-flowchart LR
-  M1["M1<br/>Command to light"] --> G1{{"Gate 1"}} --> M2["M2<br/>Lights, not channels"] --> G2{{"Gate 2"}} --> M3["M3<br/>Looks and who wins"] --> G3{{"Gate 3"}} --> M4["M4<br/>First real screens"] --> G4{{"Gate 4"}} --> M5["M5<br/>One great night"]
-```
-
-| Milestone | Ends in | Needs first |
-|---|---|---|
-| M1 Command to light | a command over the API lights a WLED device and a DMX adapter, each at its own rate | the first engine slice (`docs/history/engine-slice-1.md`) |
-| M2 Lights, not channels | "PAR 3: red" becomes the right bytes. Patch, groups, fixture order | the fixture library |
-| M3 Looks and who wins | steps, sequences and patterns play on the beat. Manual beats show beats autopilot | M2 |
-| M4 First real screens | Console and DMX on the real engine | the storyboard catalog (#102) approved |
-| M5 One great night | songs, recording, autopilot, controllers | M3, M4 |
-
-Only M1 has tickets. Each gate designs the next milestone's tickets.
-
-## What a gate does
-
-The reviewer is a fresh session. It has not seen the workers' reports, only the repository. That keeps it unbiased.
-
-| Part | Question | Output |
-|---|---|---|
-| 1. Rules | does the code follow the eight rules of `docs/coding.md`, beyond what the checks can see | findings |
-| 2. Design | is each module deep. Is any seam in the wrong place. What can be deleted or merged | findings, with the simpler shape drawn |
-| 3. Generality | did the second real case fit without bending the core | yes or no, with the diff that shows it |
-| 4. Truth | do the docs, the theory and the issues still say what the code does | corrections |
-| 5. Numbers | the scorecard against the last gate: calculation share, public items, escape hatches, lateness, mutation score | a table, with what moved and why |
-| 6. Tests | would the tests catch a wrong change. Any test that asserts timing on a runner, or tests nothing | findings |
-| 7. Next slice | the spec and tickets of the next milestone | a spec in `docs/design/`, tickets with blockers |
-
-| Rule for findings | |
-|---|---|
-| Each has a failing scenario or a measured number | "this could be cleaner" is not a finding |
-| Each becomes an issue, most severe first | labelled `gate-finding` |
-| The verdict is one of two | pass, or fix first with the list |
-| Fixes go back to the queue | workers fix, the orchestrator verifies. The reviewer does not fix its own findings |
-
-Tools the reviewer may use: the review skills of this repo's agent setup (standards, spec and adversarial review, deep-module review, simplicity review), `npm run scorecard`, `npm run mutants`.
