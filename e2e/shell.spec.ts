@@ -108,17 +108,21 @@ test("kill the shell: the engine keeps sending, a new shell adopts it and the fr
  * waits for `close`, and a dropped ask is asked again: a hidden window's timers are slowed, so the page uses none. */
 async function closingPage() {
   let closing = false;
+  let heard = false;
   const asked: ServerResponse[] = [];
   const server = createServer((ask, answer) => {
     answer.setHeader("access-control-allow-origin", "*");
-    if (ask.url !== "/close") answer.end("<!doctype html><title>Bossylights</title><p>closing page</p>");
-    else if (closing) answer.end("yes");
+    if (ask.url !== "/close") return answer.end("<!doctype html><title>Bossylights</title><p>closing page</p>");
+    heard = true;
+    if (closing) answer.end("yes");
     else asked.push(answer);
   });
   await new Promise<void>((listening) => server.listen(0, "127.0.0.1", listening));
   const page = `http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
   return {
     page,
+    /** The page has asked: it loaded and its script runs. */
+    heard: () => heard,
     script: `const ask = () => fetch("${page}close").then((r) => r.text()).then((said) => {
       if (said === "yes") window.__TAURI_INTERNALS__.invoke("plugin:window|close", { label: "main" });
       else ask();
@@ -159,9 +163,11 @@ for (const [whose, before] of engines) {
       expect(await send(ADDRESS, output)).toBe("Accepted");
       expect(await send(ADDRESS, { SetChannel: { channel: { universe: 1, address: 1 }, value: 77 } })).toBe("Accepted");
 
-      const exited = new Promise((done) => shell.process.once("exit", done));
       window.close();
-      await exited; // the last window closed: the app is gone
+      await expect.poll(window.heard, { ...WAIT, message: "the window's page asks whether to close" }).toBe(true);
+      await expect
+        .poll(() => shell.process.exitCode, { ...WAIT, message: "the app ends after its last window closed" })
+        .toBe(0);
       packets.length = 0;
       // DDP (3waylabs): a 10 byte header, then channel 1 of universe 1.
       await expect.poll(() => packets.length, WAIT).toBeGreaterThan(30);
@@ -334,3 +340,34 @@ for (const [who, hook, page, mac] of starts) {
     }
   });
 }
+
+// #324: WebKit suspends a hidden window's page soon after it loads. A test window's page must run on, or a page that
+// has not loaded by then never loads, and a test that waits for it waits for nothing.
+test("a window the tests start: its hidden page keeps running", async () => {
+  test.setTimeout(120_000);
+  let first = 0;
+  let latest = 0;
+  // Each ask is answered a second later, by this process: the hidden page itself uses no timers.
+  const server = createServer((ask, answer) => {
+    latest = Date.now();
+    first ||= latest;
+    answer.setHeader("access-control-allow-origin", "*");
+    if (ask.url !== "/ask") return answer.end("<!doctype html><title>Bossylights</title><p>asking page</p>");
+    setTimeout(() => answer.end("again"), 1_000);
+  });
+  await new Promise<void>((listening) => server.listen(0, "127.0.0.1", listening));
+  const page = `http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
+  const script = `const ask = () => fetch("${page}ask").then(ask, ask); ask();`;
+  // No engine: the page is all this test reads.
+  const shell = startShell(NOWHERE, { BOSSYLIGHTS_UI: page, BOSSYLIGHTS_WINDOW_SCRIPT: script });
+  try {
+    await expect.poll(() => first, { ...WAIT, message: "the window loads its page" }).toBeGreaterThan(0);
+    await expect
+      .poll(() => latest - first, { ...WAIT, message: "the hidden page still asks 20 s after it loaded" })
+      .toBeGreaterThan(20_000);
+  } finally {
+    await kill(shell.process);
+    server.closeAllConnections();
+    await new Promise((closed) => server.close(closed));
+  }
+});

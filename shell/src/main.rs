@@ -84,13 +84,19 @@ fn main() {
                         .permission("core:window:allow-close"),
                 )?;
             }
-            tauri::WebviewWindowBuilder::new(app, "main", page)
+            let window = tauri::WebviewWindowBuilder::new(app, "main", page)
                 .title("Bossylights")
                 .inner_size(640.0, 420.0)
                 .visible(showing.visible)
                 .focused(showing.activates)
-                .initialization_script(script)
-                .build()?;
+                .initialization_script(script);
+            let window = match showing.hidden_page {
+                HiddenPage::Sleeps => window,
+                HiddenPage::Runs => window.background_throttling(
+                    tauri::utils::config::BackgroundThrottlingPolicy::Disabled,
+                ),
+            };
+            window.build()?;
             Ok(())
         })
         .build(tauri::generate_context!())
@@ -126,6 +132,18 @@ struct Showing {
     activates: bool,
     /// The app has a Dock icon (macOS).
     in_dock: bool,
+    /// What the page does while its window is hidden.
+    hidden_page: HiddenPage,
+}
+
+/// What the page does while its window is hidden.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HiddenPage {
+    /// It sleeps (WebKit's default, `Suspend`).
+    Sleeps,
+    /// It runs. A hidden window whose page sleeps before it has loaded never loads it:
+    /// under load, a test window then never closes (#324).
+    Runs,
 }
 
 /// How the window of a start shows. A calculation.
@@ -135,6 +153,11 @@ fn showing(start: Start) -> Showing {
         visible: person,
         activates: person,
         in_dock: person,
+        hidden_page: if person {
+            HiddenPage::Sleeps
+        } else {
+            HiddenPage::Runs
+        },
     }
 }
 
@@ -397,7 +420,7 @@ mod tests {
 
     #[test]
     fn a_window_the_tests_start_stays_out_of_the_way() {
-        // (who started the window, how it shows). #316
+        // (who started the window, how it shows). #316, #324
         let cases = [
             (
                 Start::Person,
@@ -405,6 +428,7 @@ mod tests {
                     visible: true,
                     activates: true,
                     in_dock: true,
+                    hidden_page: HiddenPage::Sleeps,
                 },
             ),
             (
@@ -413,6 +437,7 @@ mod tests {
                     visible: false,
                     activates: false,
                     in_dock: false,
+                    hidden_page: HiddenPage::Runs,
                 },
             ),
         ];
