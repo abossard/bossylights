@@ -57,10 +57,12 @@ fn listen(mut end: TTYPort, heard: Option<Heard>, stop: Arc<AtomicBool>) {
 }
 
 /// A fake serial port for the adapter: `listen` reads its other end into `heard`, or
-/// nobody reads.
+/// nobody reads. Its first pseudo terminal is made now: the system makes them one at a
+/// time, and under load that takes seconds, which no API answer may wait for.
 pub fn find(heard: Option<Heard>, stop: Arc<AtomicBool>) -> Find {
+    let mut first = Some(TTYPort::pair());
     Box::new(move || {
-        let (mut end, port) = TTYPort::pair()?;
+        let (mut end, port) = first.take().unwrap_or_else(TTYPort::pair)?;
         never_wait(&port)?;
         end.set_timeout(Duration::from_millis(20))?;
         let (heard, stop) = (heard.clone(), Arc::clone(&stop));
@@ -70,13 +72,17 @@ pub fn find(heard: Option<Heard>, stop: Arc<AtomicBool>) -> Find {
 }
 
 /// The engine's `open`: DDP as the engine opens it, adapter 1 a fake serial port whose
-/// other end `listen` reads into `heard`, or nobody reads.
+/// other end `listen` reads into `heard`, or nobody reads. The port of its first open
+/// is made now ([`find`]).
 pub fn open(heard: Option<Heard>, stop: Arc<AtomicBool>) -> Open {
+    let mut first = Some(find(heard.clone(), Arc::clone(&stop)));
     Box::new(move |kind| match kind {
         OutputKind::DmxUsbPro {
             adapter: Adapter::FIRST,
         } => {
-            let find = find(heard.clone(), Arc::clone(&stop));
+            let find = first
+                .take()
+                .unwrap_or_else(|| find(heard.clone(), Arc::clone(&stop)));
             Ok(Box::new(DmxUsbPro::open(find)?) as Box<dyn Device>)
         }
         OutputKind::Ddp { .. } | OutputKind::DmxUsbPro { .. } => outputs::open(kind),
