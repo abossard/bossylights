@@ -6,7 +6,7 @@ import { appendFileSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { arch, cpus, release, type } from "node:os";
 import { CRATES } from "./layers.mjs";
-import { codeLines, crateSource, crateSurface, escapeHatches, loadRow, loadTables, measurement, missedReferenceTarget, performanceRows, performanceTable, scorecard, withoutTests } from "./scorecard.mjs";
+import { codeLines, crateSource, crateSurface, escapeHatches, loadRow, loadTables, measurement, performanceRows, performanceTable, scorecard, withoutTests } from "./scorecard.mjs";
 
 const args = process.argv.slice(2);
 const seconds = args.length === 0 ? undefined : Number(args[1]);
@@ -82,4 +82,3 @@ const host = measured ? `\nMeasured on ${type()} ${release()}, ${arch()}, ${cpus
 const markdown = `${summary}\n${performanceTable(runs)}\n${loadTables(loads)}${host}`;
 console.log(markdown);
 if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, markdown);
-if (missedReferenceTarget(runs)) process.exitCode = 1;

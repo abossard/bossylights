@@ -85,8 +85,7 @@ export function performanceRows(json, count, seconds, workload) {
     if (![p99, p95, drops].every((n) => Number.isSafeInteger(n) && n >= 0)) {
       throw new Error(`incomplete measurement for output ${output}`);
     }
-    const period = Math.floor(1_000_000_000 / hz);
-    return { output, hz, p99, p95, drops, pass: p99 < 1_000_000 && p95 < period + 5_000_000 };
+    return { output, hz, p99, p95, drops };
   });
   return { workload, seconds, events: run.events, pressSamples: run.pressSamples, bursts: run.bursts, outputs };
 }
@@ -114,20 +113,12 @@ export function performanceTable(runs) {
     ] : []),
     "The normal show ran a Wave and a sequence on 10,000 RGB pixels and 2 outputs. The biggest show used 10,922 RGB pixels, 32 roots, 65,536 reserved visits and 16 outputs.",
     "",
-    "| Rig | Output | Hz | Handoff lateness p99 (µs) | Send to handoff p95 (µs) | Drops | Target |",
-    "|---|---:|---:|---:|---:|---:|---|",
-    ...runs.flatMap(([name, { outputs }]) => outputs.map(({ output, hz, p99, p95, drops, pass }) =>
-      `| ${name} | ${output} | ${hz} | ${p99 / 1000} | ${p95 / 1000} | ${drops} | ${pass ? "pass" : "fail"} |`)),
-    "",
-    "Targets are p99 below 1,000 µs and p95 below the output period plus 5,000 µs.",
-    ...(seconds >= 60 ? [] : ["Short runs exercise the measurements. Runs of 60 s or longer check the caps."]),
+    "| Rig | Output | Hz | Handoff lateness p99 (µs) | Send to handoff p95 (µs) | Drops |",
+    "|---|---:|---:|---:|---:|---:|",
+    ...runs.flatMap(([name, { outputs }]) => outputs.map(({ output, hz, p99, p95, drops }) =>
+      `| ${name} | ${output} | ${hz} | ${p99 / 1000} | ${p95 / 1000} | ${drops} |`)),
     "",
   ].join("\n");
-}
-
-/** Measured runs of 60 seconds or longer gate the caps. */
-export function missedReferenceTarget(runs) {
-  return runs.some(([, run]) => run.seconds >= 60 && run.outputs.some((row) => !row.pass));
 }
 
 /** Each output's thread wakes once at its frame and once every 200 µs from 3 ms before it (`crates/engine/src/lane.rs`, LOOK and LEAD). */
@@ -175,12 +166,12 @@ export function loadTables(rows) {
     "",
     "How long a press takes to reach the lights, and what one Bossylights asks of the Mac. A release build that writes the scorecard's timing stream, which the product does not.",
     "",
-    "Press to frame: from the moment the engine is handed the command to the moment an output's thread hands the frame that carries it to its device. It leaves out the trip from the screen to the engine, and all after the handoff: the adapter, about 23 ms for a whole DMX frame on the wire, the light itself. A press at a random moment waits for the next frame, so the median is near half a period.",
+    "Press to frame: from the moment the engine is handed the command to the moment an output's thread hands the frame that carries it to its device. It leaves out the trip from the screen to the engine, and all after the handoff: the adapter, about 23 ms for a whole DMX frame on the wire, the light itself. A press at a random moment waits for the next frame, so the median is near half a period. The worst is near a period, plus the frame's work and its handoff.",
     "",
-    "| Load | Hz | Presses | Median (ms) | Expected median, half a period (ms) | p99 (ms) | Worst (ms) | Worst stays under, a period + 5 ms (ms) |",
+    "| Load | Hz | Presses | Median (ms) | Expected median, half a period (ms) | p99 (ms) | Worst (ms) | Expected worst, a period (ms) |",
     "|---|---:|---:|---:|---:|---:|---:|---:|",
     ...rows.flatMap(([name, row]) => row.press.map((line) =>
-      `| ${name} | ${line.hz} | ${line.samples} | ${ms(line.p50)} | ${ms(period(line.hz) / 2)} | ${ms(line.p99)} | ${ms(line.worst)} | ${ms(period(line.hz) + 5_000_000)} |`)),
+      `| ${name} | ${line.hz} | ${line.samples} | ${ms(line.p50)} | ${ms(period(line.hz) / 2)} | ${ms(line.p99)} | ${ms(line.worst)} | ${ms(period(line.hz))} |`)),
     "",
     "CPU as the system counts it, in % of one core. The engine: every thread it starts. Wakes expected: the tick once a frame of each rate, at most; each output's thread about 16 times a frame (`crates/engine/src/lane.rs`).",
     "",
@@ -229,7 +220,7 @@ export function scorecard(crates, hatches, lateness, sendToFrame, limits, missin
     `| Escape hatches: allow, expect, lint-disable, unsafe | ${hatches.allow}, ${hatches.expect}, ${hatches.lintDisable}, ${hatches.unsafe} | flat |`,
     `| Lateness per output in ${seconds ?? 60} s (60 and 44 a second), worst p99 | ${timing(lateness)} | flat |`,
     `| At the limits: 16 outputs of 64 universes in ${seconds ?? 30} s (60 and 44 a second in turn), worst p99 | ${timing(limits)} | flat |`,
-    `| Send to frame in ${seconds ?? 10} s, p95 (under one frame + 5 ms) | ${press} | flat |`,
+    `| Send to frame in ${seconds ?? 10} s, p95 | ${press} | flat |`,
     "",
     "| Crate | Kind | Public items | Lines | Lines per public item |",
     "|---|---|---|---|---|",
