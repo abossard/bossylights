@@ -30,9 +30,25 @@ pub use stepped::{Event, Wakes};
 #[derive(Clone)]
 pub(crate) struct Clock {
     start: Instant,
+    /// One pointer, so the clock is as big as without the feature.
     #[cfg(feature = "test-support")]
-    stepped: Option<std::sync::Arc<stepped::Steps>>,
+    test: std::sync::Arc<TestParts>,
 }
+
+/// What a clock carries for tests and the scorecard.
+#[cfg(feature = "test-support")]
+#[derive(Default)]
+struct TestParts {
+    stepped: Option<std::sync::Arc<stepped::Steps>>,
+    output_wakes: OutputWakes,
+}
+
+/// How often the output threads woke (#318). On a cache line of its own: the output
+/// threads write it, and every [`Clock::now`] reads `stepped` beside it.
+#[cfg(feature = "test-support")]
+#[derive(Default)]
+#[repr(align(128))]
+struct OutputWakes(std::sync::atomic::AtomicU64);
 
 impl Clock {
     /// The wall, from now.
@@ -40,14 +56,33 @@ impl Clock {
         Self {
             start: Instant::now(),
             #[cfg(feature = "test-support")]
-            stepped: None,
+            test: std::sync::Arc::default(),
         }
+    }
+
+    /// An output's thread woke from a wait. Counted only with the feature
+    /// `test-support`: a relaxed add, nothing else.
+    pub(crate) fn output_woke(&self) {
+        #[cfg(feature = "test-support")]
+        self.test
+            .output_wakes
+            .0
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// How often the output threads woke so far.
+    #[cfg(feature = "test-support")]
+    pub(crate) fn output_wakes(&self) -> u64 {
+        self.test
+            .output_wakes
+            .0
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Since the engine started.
     pub(crate) fn now(&self) -> Duration {
         #[cfg(feature = "test-support")]
-        if let Some(steps) = &self.stepped {
+        if let Some(steps) = &self.test.stepped {
             return steps.now();
         }
         self.start.elapsed()
@@ -61,7 +96,7 @@ impl Clock {
     )]
     pub(crate) fn wait(&self, sleep: Duration, spin: Option<Duration>, stop: &EngineLife) {
         #[cfg(feature = "test-support")]
-        if let Some(steps) = &self.stepped {
+        if let Some(steps) = &self.test.stepped {
             steps.wait(
                 spin.unwrap_or_else(|| steps.now().saturating_add(sleep)),
                 stop,
@@ -83,7 +118,7 @@ impl Clock {
     )]
     pub(crate) fn cutoff(&self, stop: &EngineLife) -> Duration {
         #[cfg(feature = "test-support")]
-        if let Some(steps) = &self.stepped {
+        if let Some(steps) = &self.test.stepped {
             steps.cutoff(stop);
         }
         self.now()
@@ -311,7 +346,10 @@ mod stepped {
         let (events, read) = rtrb::RingBuffer::new(EVENTS);
         let clock = Clock {
             start: Instant::now(),
-            stepped: Some(Arc::clone(&steps)),
+            test: Arc::new(super::TestParts {
+                stepped: Some(Arc::clone(&steps)),
+                output_wakes: super::OutputWakes::default(),
+            }),
         };
         let trace = Trace {
             events: Some(events),

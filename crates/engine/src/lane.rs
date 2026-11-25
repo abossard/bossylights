@@ -852,6 +852,16 @@ impl Drop for Lane {
     }
 }
 
+/// Parks until the tick wakes the thread, or at most `limit`. Each return is one wake on
+/// the engine's clock, which the scorecard counts.
+fn wait(clock: &Clock, limit: Option<Duration>) {
+    match limit {
+        Some(limit) => thread::park_timeout(limit),
+        None => thread::park(),
+    }
+    clock.output_woke();
+}
+
 /// The output's thread, an action: does what [`step`] says until it is stopped, then
 /// gives the device back. Never allocates or frees; the only call outward is `take`.
 fn run(
@@ -902,9 +912,9 @@ fn run(
                 devices.receive(&shared.recovery);
                 return (devices.current, held_reader);
             }
-            Step::Hold { .. } => thread::park(),
-            Step::Sleep(time) => thread::park_timeout(time),
-            Step::Look => thread::park_timeout(LOOK),
+            Step::Hold { .. } => wait(clock, None),
+            Step::Sleep(time) => wait(clock, Some(time)),
+            Step::Look => wait(clock, Some(LOOK)),
             Step::Send { .. } => {
                 if let Ok(frame) = waiting.pop() {
                     next = frame.next;
@@ -1156,6 +1166,32 @@ mod tests {
             assert!(!next.control.closed());
             assert!(!next.control.waits_to_serve());
         }
+    }
+
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn an_output_thread_counts_its_wakes_on_the_engines_clock() {
+        let clock = Clock::wall();
+        let route = Route::new(Limits::RAW, &[Span { start: 0, len: 1 }]).unwrap();
+        let (lane, _control) = Lane::start(
+            Some(Box::new(Constant(Outcome::Accepted))),
+            route,
+            clock.clone(),
+            Arc::new(EngineLife::new()),
+            None,
+            None,
+        )
+        .unwrap();
+        // No frame yet, its first one due now: it looks every LOOK, and each look is a wake.
+        let started = Instant::now();
+        while clock.output_wakes() < 2 {
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "no wake counted"
+            );
+            thread::sleep(Duration::from_millis(1)); // poll
+        }
+        drop(lane);
     }
 
     #[test]

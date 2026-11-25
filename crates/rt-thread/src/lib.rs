@@ -8,6 +8,8 @@
 //! | others | nothing | always: [`BestEffort::NotSupported`] |
 //!
 //! A refusal is a state, never an error: the thread runs best effort and says why.
+//! With the feature `test-support` it also reads the CPU each thread used, for the
+//! scorecard ([`cpu_by_thread`]).
 //! The code runs on the output thread, so the same lock and I/O bans apply as in
 //! `crates/engine` (`clippy.toml` is a link to that crate's).
 
@@ -20,6 +22,11 @@
 )]
 
 pub use engine_core::{BestEffort, Priority};
+
+#[cfg(feature = "test-support")]
+mod cpu;
+#[cfg(feature = "test-support")]
+pub use cpu::cpu_by_thread;
 
 use std::io;
 use std::sync::Arc;

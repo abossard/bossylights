@@ -22,7 +22,7 @@ engine-slot = { path = "../engine-slot", optional = true } # test-support: an en
 [features]
 # A clock a test steps one wake at a time, and a trace of each due hand-over (src/wake.rs).
 # Only tests turn it on: without it the tick reads the wall and writes no trace.
-test-support = ["engine-core/test-support", "dep:engine-slot"]
+test-support = ["engine-core/test-support", "dep:engine-slot", "rt-thread/test-support"]
 
 [dev-dependencies]
 engine-slot = { path = "../engine-slot" } # the unit tests take the slot without test-support too

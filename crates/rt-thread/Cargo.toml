@@ -13,5 +13,9 @@ workspace = true
 engine-core = { path = "../engine-core" }
 libc = "0.2.191"
 
+[features]
+# The scorecard reads the CPU each thread used (src/cpu.rs). The product never does.
+test-support = []
+
 [dev-dependencies]
 engine-slot = { path = "../engine-slot" } # its test runs a real-time thread: one engine at a time on the machine

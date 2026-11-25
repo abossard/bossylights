@@ -16,6 +16,30 @@ fn with_no_output_the_counter_advances() {
 }
 
 #[test]
+fn a_measured_engine_counts_its_output_wakes_and_reads_its_threads_cpu_by_name() {
+    let (_engine, mut sender, timings) =
+        Engine::start_measured(Universes::ONE).expect("the tick thread starts");
+    let run = RunNumbers { first: 1, count: 1 };
+    let heard = mock::attach(&mut sender, Universes::ONE, 1, run, Rate::Sixty);
+    heard.two_more_frames();
+    // Two, so a count stuck at one is caught too.
+    mock::wait_until("no output wakes counted", || timings.output_wakes() >= 2);
+    // The names the scorecard reads: read where the system is measured, else None.
+    let named = |name| {
+        timings
+            .cpu()
+            .map(|threads| threads.iter().any(|(named, _)| named == name))
+    };
+    for name in ["tick", "output"] {
+        assert_eq!(
+            named(name),
+            cfg!(target_os = "macos").then_some(true),
+            "{name}"
+        );
+    }
+}
+
+#[test]
 fn dropping_the_engine_stops_the_tick_thread_and_releases_the_device() {
     let (engine, mut sender) = Engine::start(Universes::ONE).expect("the tick thread starts");
     let run = RunNumbers { first: 1, count: 1 };

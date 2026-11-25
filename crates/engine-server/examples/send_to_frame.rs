@@ -1,6 +1,12 @@
 //! The reference scorecard. `baseline [seconds]` prints the original one-output
-//! send-to-frame p95 in microseconds. `show|biggest|burst [seconds]` prints JSON with
-//! lateness p99 and command-to-device-handoff p95 in nanoseconds for each output.
+//! send-to-frame p95 in microseconds. `show|biggest|burst|idle [seconds]` prints JSON,
+//! all times in nanoseconds:
+//!
+//! | Key | What |
+//! |---|---|
+//! | `outputs` | each output's lateness p99 and press to frame p95: from the send stamp to its device's handoff of the frame that carries it |
+//! | `press` | the press to frame for each rate, its outputs together: samples, p50, p99, worst |
+//! | `load` | over `wall`: the CPU the system counted for the tick, all output threads, and the engine (the engine names each thread it starts; this example's own are `main` and threads with no name), `null` where not measured; the wakes of the tick and of all output threads |
 
 use engine::{
     ChannelNumbers, Color, Command, Device, Engine, Outcome, OutputKind, OutputNumber, Rate,
@@ -26,7 +32,7 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     };
     if args.next().is_some() || seconds == Some(0) {
-        eprintln!("send_to_frame [baseline|show|biggest|burst] [seconds]");
+        eprintln!("send_to_frame [baseline|show|biggest|burst|idle] [seconds]");
         return ExitCode::FAILURE;
     }
     let profile = match mode.as_str() {
@@ -34,6 +40,7 @@ fn main() -> ExitCode {
         "show" => Workload::Show,
         "biggest" => Workload::Biggest,
         "burst" => Workload::Burst,
+        "idle" => Workload::Idle,
         other => {
             eprintln!("unknown run {other:?}");
             return ExitCode::FAILURE;
@@ -242,6 +249,7 @@ impl Samples {
             Ok(values[(values.len() * percent).div_ceil(100) - 1].as_nanos())
         }
         let mut outputs = Vec::new();
+        let mut by_rate = BTreeMap::<u32, Vec<Duration>>::new();
         for (slot, row) in self.outputs.iter_mut().enumerate() {
             let mut manual = Vec::with_capacity(performance.manual.len());
             for &number in &performance.manual {
@@ -261,6 +269,21 @@ impl Samples {
                 "p95": percentile(&mut manual, 95)?,
                 "drops": row.drops,
             }));
+            by_rate
+                .entry(rate(slot).per_second())
+                .or_default()
+                .extend(manual);
+        }
+        // The delay is made of the frame period: one line per rate, its outputs together.
+        let mut press = Vec::new();
+        for (hz, mut samples) in by_rate {
+            press.push(json!({
+                "hz": hz,
+                "samples": samples.len(),
+                "p50": percentile(&mut samples, 50)?,
+                "p99": percentile(&mut samples, 99)?,
+                "worst": percentile(&mut samples, 100)?,
+            }));
         }
         let mut report = json!({
             "workload": self.workload.name(),
@@ -268,6 +291,7 @@ impl Samples {
             "events": performance.events,
             "pressSamples": performance.manual.len(),
             "outputs": outputs,
+            "press": press,
         });
         if self.workload == Workload::Burst {
             report["bursts"] = json!(self.commands.len() / engine::QUEUE);
@@ -359,13 +383,14 @@ fn measure(
         .ok_or("run duration exceeds clock range")?;
     let mut samples = Samples::new(profile, outputs, setup, since, end);
     let mut pictures = 0_u64;
+    let before = Reading::now(&mut engine, &timings);
     let (performance, tail) = thread::scope(|scope| -> Result<_, Box<dyn Error>> {
         let (ready, common_deadline) = mpsc::sync_channel(0);
         let player = scope.spawn(move || {
             let performance = if profile == Workload::Burst {
                 perform_bursts(&mut sender, started, duration, common_deadline)?
             } else {
-                workload::perform(&mut sender, started, duration)?
+                workload::perform(&mut sender, profile, started, duration)?
             };
             Ok::<_, String>((performance, sender.sent()))
         });
@@ -389,6 +414,7 @@ fn measure(
         }
         Ok(player.join().map_err(|_| "workload thread panicked")??)
     })?;
+    let after = Reading::now(&mut engine, &timings);
     // A late result can arrive after the last deadline of the run. Wait for
     // every in-window outcome and every measured command on every output.
     let draining = Instant::now();
@@ -408,7 +434,95 @@ fn measure(
         return Err("snapshot reader received no new frames".into());
     }
     eprintln!("snapshots read: {pictures}");
-    samples.report(&performance)
+    if let Some(threads) = &after.cpu {
+        eprintln!("engine threads: {}", engine_threads(threads));
+    }
+    let mut report = samples.report(&performance)?;
+    report["load"] = load(&before, &after);
+    Ok(report)
+}
+
+/// What the system and the engine counted at one moment.
+struct Reading {
+    at: Instant,
+    /// Each thread's name and CPU so far, `None` where the system is not measured.
+    cpu: Option<Vec<(String, Duration)>>,
+    tick_wakes: u64,
+    output_wakes: u64,
+}
+
+impl Reading {
+    fn now(engine: &mut Engine, timings: &Timings) -> Self {
+        Self {
+            at: Instant::now(),
+            cpu: timings.cpu(),
+            tick_wakes: engine.latest().frame(),
+            output_wakes: timings.output_wakes(),
+        }
+    }
+}
+
+/// Whether a thread is the engine's: the engine names each thread it starts. This
+/// example's own are its `main` and threads with no name.
+fn engine_thread(name: &str) -> bool {
+    !name.is_empty() && name != "main"
+}
+
+/// The CPU of the tick, of all output threads, and of the engine.
+fn cpu_groups(threads: &[(String, Duration)]) -> [Duration; 3] {
+    let sum = |keep: fn(&str) -> bool| -> Duration {
+        threads
+            .iter()
+            .filter(|(name, _)| keep(name))
+            .map(|(_, cpu)| *cpu)
+            .sum()
+    };
+    [
+        sum(|name| name == "tick"),
+        sum(|name| name == "output"),
+        sum(engine_thread),
+    ]
+}
+
+/// The engine's threads by name, with how many share each.
+fn engine_threads(threads: &[(String, Duration)]) -> String {
+    let mut names = BTreeMap::<&str, usize>::new();
+    for (name, _) in threads.iter().filter(|(name, _)| engine_thread(name)) {
+        *names.entry(name).or_default() += 1;
+    }
+    let named: Vec<_> = names
+        .into_iter()
+        .map(|(name, n)| {
+            if n == 1 {
+                name.to_string()
+            } else {
+                format!("{name} x{n}")
+            }
+        })
+        .collect();
+    named.join(", ")
+}
+
+/// The load between two readings: the wall time, the CPU of each group (`null` where not
+/// measured), the wakes. Nanoseconds.
+fn load(before: &Reading, after: &Reading) -> serde_json::Value {
+    let cpu = before
+        .cpu
+        .as_deref()
+        .zip(after.cpu.as_deref())
+        .map(|(from, to)| {
+            let (from, to) = (cpu_groups(from), cpu_groups(to));
+            let used = |group: usize| to[group].saturating_sub(from[group]).as_nanos();
+            json!({ "tick": used(0), "outputs": used(1), "engine": used(2) })
+        });
+    json!({
+        "wall": after.at.saturating_duration_since(before.at).as_nanos(),
+        "cpu": cpu,
+        "wakes": {
+            "tick": after.tick_wakes.saturating_sub(before.tick_wakes),
+            "outputs": after.output_wakes.saturating_sub(before.output_wakes),
+        },
+    })
 }
 
 fn perform_bursts(
@@ -450,6 +564,8 @@ mod workload {
         Show,
         Biggest,
         Burst,
+        /// The show's rig patched and its outputs sending, nothing playing.
+        Idle,
     }
 
     impl Workload {
@@ -458,14 +574,20 @@ mod workload {
                 Self::Show => "show",
                 Self::Biggest => "biggest",
                 Self::Burst => "burst",
+                Self::Idle => "idle",
             }
+        }
+
+        /// Whether its looks play. The idle rig plays nothing and gets no group edits.
+        fn plays(self) -> bool {
+            !matches!(self, Self::Idle)
         }
 
         /// The normal show runs on 10,000 pixels. In the biggest show all 10,922 whole
         /// RGB pixels fit, and the three target sizes jointly fill the visit budget.
         fn strips(self) -> (u16, u16, u16) {
             match self {
-                Self::Show => (1024, 256, 10_000 - 1024 - 256),
+                Self::Show | Self::Idle => (1024, 256, 10_000 - 1024 - 256),
                 Self::Biggest | Self::Burst => (77, 198, 10_922 - 77 - 198),
             }
         }
@@ -474,6 +596,7 @@ mod workload {
             match self {
                 Self::Show => 1,
                 Self::Biggest | Self::Burst => engine_core::PLAYS - 2,
+                Self::Idle => 0,
             }
         }
     }
@@ -651,10 +774,11 @@ mod workload {
         // Measure what the compiler actually reserved, including an event sample.
         // Start the background before the other Autopilot roots, so their colour wins.
         let mut visits = 0;
-        for (look, rank, spread) in [(1, Rank::Autopilot, 0), (4, Rank::Show, 0)]
+        let roots = [(1, Rank::Autopilot, 0), (4, Rank::Show, 0)]
             .into_iter()
             .chain((5..5 + waves).map(|look| (look, Rank::Autopilot, 100)))
-        {
+            .filter(|_| workload.plays());
+        for (look, rank, spread) in roots {
             visits += 2 * sender
                 .looks()
                 .plan(look)
@@ -682,7 +806,7 @@ mod workload {
         eprintln!(
             "{} RGB pixels, {} roots ({waves} Waves on {wave} pixels, sequence on {sequence}, background), {visits} reserved visits",
             channels / 3,
-            waves + 2
+            if workload.plays() { waves + 2 } else { 0 }
         );
         Ok(())
     }
@@ -856,14 +980,24 @@ mod workload {
         }
     }
 
+    /// What the clients of `workload` send in `duration`: the seeded schedule, without
+    /// the group edits when nothing plays.
+    fn sent(workload: Workload, duration: Duration) -> Vec<Event> {
+        schedule(duration)
+            .into_iter()
+            .filter(|event| workload.plays() || !matches!(event.action, Action::Edit { .. }))
+            .collect()
+    }
+
     /// One edit client and one performance client, mirroring the server's short
     /// sender lock. Heavy prepares may span a press. Both clients use the same epoch.
     pub(crate) fn perform(
         sender: &mut Sender,
+        workload: Workload,
         started: Instant,
         duration: Duration,
     ) -> Result<Performed, String> {
-        let events = schedule(duration);
+        let events = sent(workload, duration);
         let mut manual = Vec::new();
         let sender = Mutex::new(sender);
         thread::scope(|scope| -> Result<(), String> {
@@ -1071,11 +1205,41 @@ mod workload {
         }
 
         #[test]
+        fn the_idle_rig_gets_the_same_presses_and_releases_and_no_edits() {
+            let at = |workload| {
+                sent(workload, Duration::from_secs(5))
+                    .iter()
+                    .map(|event| (event.at, event.action))
+                    .collect::<Vec<_>>()
+            };
+            let without_edits: Vec<_> = at(Workload::Show)
+                .into_iter()
+                .filter(|(_, action)| !matches!(action, Action::Edit { .. }))
+                .collect();
+            // (workload, events, edits)
+            for (workload, events, edits) in [
+                (Workload::Show, 45, 15),
+                (Workload::Biggest, 45, 15),
+                (Workload::Idle, 30, 0),
+            ] {
+                let sent = at(workload);
+                assert_eq!(sent.len(), events, "{workload:?}");
+                let edited = sent
+                    .iter()
+                    .filter(|(_, action)| matches!(action, Action::Edit { .. }))
+                    .count();
+                assert_eq!(edited, edits, "{workload:?}");
+            }
+            assert_eq!(at(Workload::Idle), without_edits);
+        }
+
+        #[test]
         fn measured_rigs_patch_all_the_pixels_and_run_the_expected_roots() {
             let universes = Universes::new(64).unwrap();
             for (mode, pixels, roots) in [
                 (Workload::Show, 10_000, 3),
                 (Workload::Biggest, 10_922, engine_core::PLAYS),
+                (Workload::Idle, 10_000, 0),
             ] {
                 let (mut engine, mut sender) = Engine::start(universes).unwrap();
                 stream(&mut sender, universes);
@@ -1212,6 +1376,112 @@ mod handoff_tests {
             .unwrap();
         assert_eq!(report["outputs"][0]["p99"], 99);
         assert_eq!(report["workload"], "show");
+    }
+
+    #[test]
+    fn press_to_frame_is_the_median_p99_and_worst_of_each_rates_presses_together() {
+        let ms = Duration::from_millis;
+        let outputs = 3; // at 44, 60 and 44 a second
+        let mut run = Samples::new(Workload::Idle, outputs, 0, ms(0), ms(11_000));
+        // Press n reaches the outputs at 44 a second n ms after it was sent, the one at
+        // 60 a second 2n ms after, each in its own frame.
+        for number in 1..=100 {
+            let sent = ms(100 * number);
+            run.record(Applied { number, at: sent }).unwrap();
+            for slot in 0..outputs {
+                let output = OutputNumber::try_from(slot as u8 + 1).unwrap();
+                let due = sent + ms(number * (1 + slot as u64 % 2));
+                run.record(Due {
+                    output,
+                    due,
+                    applied: number,
+                })
+                .unwrap();
+                run.record(Finished {
+                    output,
+                    due,
+                    at: due,
+                    outcome: Outcome::Accepted,
+                })
+                .unwrap();
+            }
+        }
+        let report = run
+            .report(&Performed {
+                events: 100,
+                manual: (1..=100).collect(),
+            })
+            .unwrap();
+        // (hz, samples, p50, p99, worst in ms)
+        let expected = [(44, 200, 50, 99, 100), (60, 100, 100, 198, 200)];
+        for (line, (hz, samples, p50, p99, worst)) in expected.into_iter().enumerate() {
+            let press = &report["press"][line];
+            assert_eq!(press["hz"], hz);
+            assert_eq!(press["samples"], samples, "{hz}");
+            for (key, ms) in [("p50", p50), ("p99", p99), ("worst", worst)] {
+                assert_eq!(press[key], ms * 1_000_000, "{hz} {key}");
+            }
+        }
+        assert_eq!(report["press"].as_array().unwrap().len(), 2);
+        assert_eq!(report["outputs"][1]["p95"], 190_000_000);
+        assert_eq!(report["workload"], "idle");
+    }
+
+    #[test]
+    fn the_load_counts_the_tick_the_output_threads_and_every_thread_the_engine_named() {
+        let ms = Duration::from_millis;
+        let threads = |cpu: [u64; 6]| {
+            Some(
+                ["tick", "output", "output", "udp-socket", "", "main"]
+                    .into_iter()
+                    .zip(cpu)
+                    .map(|(name, cpu)| (name.to_string(), ms(cpu)))
+                    .collect(),
+            )
+        };
+        let at = Instant::now();
+        let reading = |cpu, tick_wakes, output_wakes, after: u64| Reading {
+            at: at + ms(after),
+            cpu,
+            tick_wakes,
+            output_wakes,
+        };
+        // (before, after, cpu as tick, outputs, engine in ms or none, wakes)
+        let cases = [
+            (
+                reading(threads([1, 2, 3, 4, 50, 60]), 10, 100, 0),
+                reading(threads([11, 7, 13, 5, 90, 80]), 1050, 16_100, 10_000),
+                Some((10, 15, 26)),
+            ),
+            (
+                reading(None, 10, 100, 0),
+                reading(None, 1050, 16_100, 10_000),
+                None,
+            ),
+            (
+                reading(threads([1, 2, 3, 4, 50, 60]), 10, 100, 0),
+                reading(None, 1050, 16_100, 10_000),
+                None,
+            ),
+        ];
+        for (before, after, cpu) in cases {
+            let load = load(&before, &after);
+            assert_eq!(load["wall"], 10_000_000_000_u64);
+            assert_eq!(load["wakes"]["tick"], 1040);
+            assert_eq!(load["wakes"]["outputs"], 16_000);
+            match cpu {
+                Some((tick, outputs, engine)) => {
+                    for (key, ms) in [("tick", tick), ("outputs", outputs), ("engine", engine)] {
+                        assert_eq!(load["cpu"][key], ms * 1_000_000, "{key}");
+                    }
+                }
+                None => assert!(load["cpu"].is_null()),
+            }
+        }
+        assert_eq!(
+            engine_threads(&threads([0; 6]).unwrap()),
+            "output x2, tick, udp-socket"
+        );
     }
 
     #[test]

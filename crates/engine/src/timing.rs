@@ -36,6 +36,18 @@ impl Timings {
         self.clock.now()
     }
 
+    /// How often the output threads woke from a wait so far, all together.
+    pub fn output_wakes(&self) -> u64 {
+        self.clock.output_wakes()
+    }
+
+    /// Each thread of this process, its name and the CPU the system counted for it so
+    /// far, read from outside the threads. The tick is named `tick`, each output's
+    /// thread `output`. `None` where the system is not measured.
+    pub fn cpu(&self) -> Option<Vec<(String, Duration)>> {
+        rt_thread::cpu_by_thread()
+    }
+
     pub fn discard(&mut self) {
         while self.events.pop().is_ok() {}
         self.lost.store(false, Ordering::Release);

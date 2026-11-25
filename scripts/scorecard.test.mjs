@@ -183,6 +183,59 @@ test("the performance scorecard keeps each output, rejects missing samples and u
   ]) assert.equal(missedReferenceTarget(runs), fails);
 });
 
+// A run of send_to_frame as the load tables read it: its outputs, its press lines, its load.
+const loadRun = ({ workload = "idle", outputs = [44, 60], press, cpu = { tick: 1_600_000_000, outputs: 300_000_000, engine: 2_000_000_000 }, wakes = { tick: 1500, outputs: 25_000 }, load } = {}) => JSON.stringify({
+  workload, seconds: 15, events: 60, pressSamples: 60,
+  outputs: outputs.map((hz, i) => ({ output: i + 1, hz, p99: 100_000 * (i + 1), p95: 1, drops: 0 })),
+  press: press ?? [{ hz: 44, samples: 92, p50: 11_503_709, p99: 22_575_458, worst: 22_575_458 }, { hz: 60, samples: 92, p50: 7_988_708, p99: 16_545_625, worst: 16_545_625 }],
+  load: load ?? { wall: 15_000_000_000, cpu, wakes },
+});
+
+// [what the run says, a line the tables print]
+const loadCases = [
+  [{}, "| idle | 44 | 92 | 11.5 | 11.4 | 22.6 | 22.6 | 27.7 |"],
+  [{}, "| idle | 60 | 92 | 8.0 | 8.3 | 16.5 | 16.5 | 21.7 |"],
+  [{}, "| idle | 2 | 200 | 10.7 | 2.0 | 13.3 | 100 | 104 | 1,667 | 1,664 |"],
+  [{ cpu: null }, "| idle | 2 | 200 | not measured | not measured | not measured | 100 | 104 | 1,667 | 1,664 |"],
+  [{ workload: "biggest", outputs: Array.from({ length: 16 }, (_, i) => (i % 2 ? 60 : 44)) }, "| full load | 16 | 1,600 | 10.7 | 2.0 | 13.3 | 100 | 104 | 1,667 | 13,312 |"],
+  [{ outputs: [44, 44], press: [{ hz: 44, samples: 184, p50: 1, p99: 1, worst: 1 }] }, "| idle | 2 | 200 | 10.7 | 2.0 | 13.3 | 100 | 44 | 1,667 | 1,408 |"],
+];
+for (const [run, line] of loadCases) {
+  test(`the load tables print ${line}`, async () => {
+    const { loadRow, loadTables } = await import("./scorecard.mjs");
+    const workload = run.workload ?? "idle";
+    const name = workload === "idle" ? "idle" : "full load";
+    const tables = loadTables([[name, loadRow(loadRun(run), workload)]]);
+    assert.ok(tables.split("\n").includes(line), tables);
+  });
+}
+
+test("the load tables say what the press to frame leaves out, and are not measured on CI", async () => {
+  const { loadRow, loadTables } = await import("./scorecard.mjs");
+  const tables = loadTables([["idle", loadRow(loadRun(), "idle")]]);
+  for (const words of [/screen to the engine/, /after the handoff/, /23 ms/, /the product does not/]) assert.match(tables, words);
+  assert.match(loadTables([]), /## Press to frame and load\n\nNot measured on CI/);
+});
+
+// [what is wrong with the run, the error]
+const brokenLoads = [
+  [{ workload: "show" }, /expected workload idle/],
+  [{ press: [] }, /a press line for each rate/],
+  [{ press: [{ hz: 44, samples: 0, p50: 1, p99: 1, worst: 1 }, { hz: 60, samples: 1, p50: 1, p99: 1, worst: 1 }] }, /press line at 44/],
+  [{ press: [{ hz: 44, samples: 1, p50: 1, p99: 1, worst: 1 }, { hz: 60, samples: 1, p50: -1, p99: 1, worst: 1 }] }, /press line at 60/],
+  [{ cpu: { tick: 1, outputs: 1 } }, /CPU of the tick, the output threads and the engine/],
+  [{ wakes: { tick: 1 } }, /wakes of the tick and the output threads/],
+  [{ load: { wall: 15_000_000_000, wakes: { tick: 1, outputs: 1 } } }, /CPU of the tick, the output threads and the engine, or null/],
+  [{ press: [30, 60].map((hz) => ({ hz, samples: 1, p50: 1, p99: 1, worst: 1 })) }, /a press line for each rate/],
+  [{ load: { wall: 0, cpu: null, wakes: { tick: 1, outputs: 1 } } }, /wall time/],
+];
+for (const [run, error] of brokenLoads) {
+  test(`a load run is refused: ${error.source}`, async () => {
+    const { loadRow } = await import("./scorecard.mjs");
+    assert.throws(() => loadRow(loadRun(run), "idle"), error);
+  });
+}
+
 test("a rig refuses a measurement from a different or unnamed workload", async () => {
   const { performanceRows } = await import("./scorecard.mjs");
   const outputs = [44, 60].map((hz, i) => ({ hz, output: i + 1, p99: 1, p95: 1, drops: 0 }));
@@ -207,7 +260,7 @@ test("a burst row requires complete batches of raw channel sends and plan swaps"
   }
 });
 
-test("the scorecard command prints the normal show, the biggest show and the burst, and gates runs of at least 60 seconds", (t) => {
+test("the scorecard command prints the normal show, the biggest show, the burst and the load at full load, the example rig and idle, and gates runs of at least 60 seconds", (t) => {
   const dir = mkdtempSync(join(tmpdir(), "scorecard-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   // Feed the command recorded numbers in place of starting a real-time measurement on CI.
@@ -234,8 +287,12 @@ esac
       if (burst && missed) outputs[1].p99 = 1_000_000;
       const events = burst ? 454 : 2;
       const pressSamples = burst ? 452 : 1;
-      writeFileSync(join(dir, workload + ".json"), JSON.stringify({ workload, seconds, events, pressSamples, outputs, bursts: burst ? 2 : undefined }));
+      const press = [44, 60].map((hz) => ({ hz, samples: 1, p50: ns, p99: ns, worst: ns }));
+      const load = { wall: 1e9, cpu: { tick: ns, outputs: ns, engine: ns }, wakes: { tick: 100, outputs: 1600 } };
+      writeFileSync(join(dir, workload + ".json"), JSON.stringify({ workload, seconds, events, pressSamples, outputs, press, load, bursts: burst ? 2 : undefined }));
     }
+    const idle = { workload: "idle", seconds: Math.min(seconds, 15), events: 1, pressSamples: 1, outputs: [44, 60].map((hz, i) => ({ output: i + 1, hz, p99: 1000, p95: 1, drops: 0 })) };
+    writeFileSync(join(dir, "idle.json"), JSON.stringify({ ...idle, press: [44, 60].map((hz) => ({ hz, samples: 1, p50: 1000, p99: 1000, worst: 1000 })), load: { wall: 1e9, cpu: null, wakes: { tick: 100, outputs: 1600 } } }));
     const { stdout, stderr, status } = spawnSync(process.execPath, ["scripts/print-scorecard.mjs", "--seconds", String(seconds)], {
       encoding: "utf8", env,
     });
@@ -254,5 +311,8 @@ esac
     assert.match(stdout, /452 raw channel sends per output/);
     assert.match(stdout, /first accepted handoff/);
     assert.equal(stdout.includes("Short runs"), seconds < 60);
+    for (const row of ["| full load | 44 |", "| example rig | 60 |", "| idle | 44 |", "| full load | 16 | 3 |", "| example rig | 2 | 2 |", "| idle | 2 | 1 | not measured |"]) {
+      assert.ok(stdout.includes(row), row);
+    }
   }
 });

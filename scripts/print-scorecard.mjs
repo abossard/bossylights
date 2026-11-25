@@ -6,7 +6,7 @@ import { appendFileSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { arch, cpus, release, type } from "node:os";
 import { CRATES } from "./layers.mjs";
-import { codeLines, crateSource, crateSurface, escapeHatches, measurement, missedReferenceTarget, performanceRows, performanceTable, scorecard, withoutTests } from "./scorecard.mjs";
+import { codeLines, crateSource, crateSurface, escapeHatches, loadRow, loadTables, measurement, missedReferenceTarget, performanceRows, performanceTable, scorecard, withoutTests } from "./scorecard.mjs";
 
 const args = process.argv.slice(2);
 const seconds = args.length === 0 ? undefined : Number(args[1]);
@@ -67,11 +67,19 @@ const summary = scorecard(
 );
 const duration = seconds ?? 60;
 const rigs = { show: ["normal show", 2], biggest: ["biggest show", 16], burst: ["biggest show plus burst", 16] };
+const reports = measured ? Object.fromEntries(Object.keys(rigs).map((workload) => [workload, example("send_to_frame", workload, String(duration))])) : {};
 const runs = measured ? Object.entries(rigs).map(([workload, [name, outputs]]) => [
-  name, performanceRows(example("send_to_frame", workload, String(duration)), outputs, duration, workload),
+  name, performanceRows(reports[workload], outputs, duration, workload),
 ]) : [];
+// CPU and wakes settle in 10 s. A 10 s run ends 3 ms after its last press: 15 s leaves room.
+const idle = measured ? example("send_to_frame", "idle", String(Math.min(duration, 15))) : undefined;
+const loads = measured ? [
+  ["full load", loadRow(reports.biggest, "biggest")],
+  ["example rig", loadRow(reports.show, "show")],
+  ["idle", loadRow(idle, "idle")],
+] : [];
 const host = measured ? `\nMeasured on ${type()} ${release()}, ${arch()}, ${cpus()[0]?.model ?? "unknown CPU"}.\n` : "";
-const markdown = `${summary}\n${performanceTable(runs)}${host}`;
+const markdown = `${summary}\n${performanceTable(runs)}\n${loadTables(loads)}${host}`;
 console.log(markdown);
 if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, markdown);
 if (missedReferenceTarget(runs)) process.exitCode = 1;

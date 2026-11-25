@@ -130,6 +130,71 @@ export function missedReferenceTarget(runs) {
   return runs.some(([, run]) => run.seconds >= 60 && run.outputs.some((row) => !row.pass));
 }
 
+/** Each output's thread wakes once at its frame and once every 200 µs from 3 ms before it (`crates/engine/src/lane.rs`, LOOK and LEAD). */
+const OUTPUT_WAKES_PER_FRAME = 1 + 3000 / 200;
+const isCount = (n) => Number.isSafeInteger(n) && n >= 0;
+
+/**
+ * One run of send_to_frame as the load tables read it: the rates of its outputs, the worst
+ * lateness p99 of them, a press line per rate, and the load over `wall`. Throws when a part is missing.
+ */
+export function loadRow(json, workload) {
+  const run = JSON.parse(json);
+  if (run.workload !== workload) throw new Error(`expected workload ${workload}, got ${run.workload}`);
+  const rates = (run.outputs ?? []).map((output) => output.hz);
+  const distinct = [...new Set(rates)].sort((a, b) => a - b);
+  const press = run.press ?? [];
+  if (press.length !== distinct.length || press.some((line, i) => line.hz !== distinct[i])) {
+    throw new Error("expected a press line for each rate of the outputs");
+  }
+  for (const line of press) {
+    if (!(line.samples >= 1 && [line.samples, line.p50, line.p99, line.worst].every(isCount))) {
+      throw new Error(`incomplete press line at ${line.hz}`);
+    }
+  }
+  const { wall, cpu, wakes } = run.load ?? {};
+  if (!(isCount(wall) && wall > 0)) throw new Error("expected the wall time of the load");
+  if (cpu !== null && ![cpu?.tick, cpu?.outputs, cpu?.engine].every(isCount)) {
+    throw new Error("expected the CPU of the tick, the output threads and the engine, or null");
+  }
+  if (![wakes?.tick, wakes?.outputs].every(isCount)) throw new Error("expected the wakes of the tick and the output threads");
+  const lateness = Math.max(...run.outputs.map((output) => output.p99));
+  return { workload, rates, lateness, press, wall, cpu, wakes };
+}
+
+/** The press to frame by rate, then the load on the Mac, for rows of [name, loadRow]. */
+export function loadTables(rows) {
+  if (rows.length === 0) return "## Press to frame and load\n\nNot measured on CI.\n";
+  const ms = (ns) => (ns / 1e6).toFixed(1);
+  const count = (n) => Math.round(n).toLocaleString("en-US");
+  const period = (hz) => Math.floor(1e9 / hz);
+  const share = (row, ns) => (row.cpu === null ? "not measured" : ((100 * ns) / row.wall).toFixed(1));
+  const perSecond = (row, n) => count((n * 1e9) / row.wall);
+  return [
+    "## Press to frame and load",
+    "",
+    "How long a press takes to reach the lights, and what one Bossylights asks of the Mac. A release build that writes the scorecard's timing stream, which the product does not.",
+    "",
+    "Press to frame: from the moment the engine is handed the command to the moment an output's thread hands the frame that carries it to its device. It leaves out the trip from the screen to the engine, and all after the handoff: the adapter, about 23 ms for a whole DMX frame on the wire, the light itself. A press at a random moment waits for the next frame, so the median is near half a period.",
+    "",
+    "| Load | Hz | Presses | Median (ms) | Expected median, half a period (ms) | p99 (ms) | Worst (ms) | Worst stays under, a period + 5 ms (ms) |",
+    "|---|---:|---:|---:|---:|---:|---:|---:|",
+    ...rows.flatMap(([name, row]) => row.press.map((line) =>
+      `| ${name} | ${line.hz} | ${line.samples} | ${ms(line.p50)} | ${ms(period(line.hz) / 2)} | ${ms(line.p99)} | ${ms(line.worst)} | ${ms(period(line.hz) + 5_000_000)} |`)),
+    "",
+    "CPU as the system counts it, in % of one core. The engine: every thread it starts. Wakes expected: the tick once a frame of each rate, at most; each output's thread about 16 times a frame (`crates/engine/src/lane.rs`).",
+    "",
+    "| Load | Outputs | Lateness p99 (µs) | CPU tick | CPU output threads | CPU engine | Tick wakes a second | Expected, at most | Output thread wakes a second | Expected, about |",
+    "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+    ...rows.map(([name, row]) => {
+      const rates = [...new Set(row.rates)].reduce((sum, hz) => sum + hz, 0);
+      const frames = row.rates.reduce((sum, hz) => sum + hz, 0);
+      return `| ${name} | ${row.rates.length} | ${count(row.lateness / 1000)} | ${share(row, row.cpu?.tick)} | ${share(row, row.cpu?.outputs)} | ${share(row, row.cpu?.engine)} | ${perSecond(row, row.wakes.tick)} | ${count(rates)} | ${perSecond(row, row.wakes.outputs)} | ${count(frames * OUTPUT_WAKES_PER_FRAME)} |`;
+    }),
+    "",
+  ].join("\n");
+}
+
 /** Places that switch a check off. */
 export function escapeHatches(source) {
   const count = (pattern) => [...source.matchAll(pattern)].length;
