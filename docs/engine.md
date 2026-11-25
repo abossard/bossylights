@@ -149,6 +149,21 @@ One connection (`talk` in `crates/engine-server/src/lib.rs`). An edit is a comma
 | the client closes | end | end; the running edit finishes alone, its reply dropped; edits not started are dropped |
 | 32 requests wait (`WAITING`) | | the connection is read no further until a reply goes out |
 
+Revision history (`Api::history` and `Api::spare` in `crates/engine-server/src/lib.rs`, 64 MiB). Each change keeps its moment (the patch, looks and held lights a picture shows) until the reader takes a snapshot past it. Each moment is paid before its change: an edit with its plans, a hold press with one revision, 256 KiB, which fits a held list of all 16,384 lights. A stalled reader holds at most 64 MiB. The last revision is a spare only a release may take: what you touch stays yours until Release (theory 5).
+
+| Press | Commands |
+|---|---|
+| sets a hold | `SetIntensity`, `SetColour`, `SetProperty`, `UpdateGrab` |
+| releases a hold | `EndGrab`, `ReleaseIntensity`, `ReleaseColour`, `ReleaseProperty`, `ReleaseAll` |
+| changes no hold | every other press |
+
+| History \ press | sets a hold | releases a hold | changes no hold |
+|---|---|---|---|
+| in step: the reader passed every moment | taken; its moment holds 256 KiB until a snapshot passes it, then all is free again | as a hold | taken; no moment, no bytes |
+| behind, room left | taken; paid as in step | as a hold | taken; no moment, no bytes |
+| behind, full: only the spare left | `WorkLimit`: holds, grabs and history unchanged | taken; paid from the spare | taken; in the next frame |
+| behind, full, spare used | `WorkLimit` | `WorkLimit`, even one that holds nothing: nothing changes | taken; in the next frame |
+
 | Command | Does |
 |---|---|
 | `SetChannel` (universe, address, value) | holds that channel at the value. It wins over every play and grab, also at 0 |

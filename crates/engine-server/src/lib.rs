@@ -3,7 +3,7 @@
 //!
 //! | Policy | Where |
 //! |---|---|
-//! | revision history: each edit keeps its moment until a snapshot passes it, paid in bytes. A press that changes the held lights keeps one that no bytes pay for (#312) | `Moment`, `REVISION_BYTES`, `Api::history` |
+//! | revision history: each change keeps its moment until a snapshot passes it, paid in bytes before it: an edit with its plans, a hold press with one revision. One revision stays kept for a release | `Moment`, `REVISION_BYTES`, `Api::history`, `Api::spare`, `Press` |
 //! | an edit prepared on a base another change replaced is prepared again | `PREPARES` |
 //! | an output edit waits for the old route to finish | `CUTOVER_WAIT` |
 //! | health goes to a subscriber at most once per 500 ms of engine time | `HealthPacing` |
@@ -104,6 +104,7 @@ pub async fn serve(
     };
     let (painted, pictures) = watch::channel(Arc::new(picture));
     let reader = tokio::spawn(read(engine, front, health, painted, stop.subscribe()));
+    let (history, spare) = history();
     let api = Arc::new(Api {
         moments,
         patch,
@@ -112,7 +113,8 @@ pub async fn serve(
             through,
             grabs,
         }),
-        history: Arc::new(Semaphore::new(engine::PLAN_BYTES)),
+        history,
+        spare,
         stop,
         pictures,
         shelf,
@@ -150,6 +152,9 @@ struct Api {
     sender: Mutex<Publisher>,
     /// Capacity for revisions awaiting a snapshot, including compiled plans they pin.
     history: Arc<Semaphore>,
+    /// One revision more, only for a release once `history` is full: what you touch
+    /// stays yours until Release, even while the reader is stalled.
+    spare: Arc<Semaphore>,
     /// The front after each change, in the order of the changes: the reader pairs each
     /// snapshot with the one it was taken under.
     moments: mpsc::UnboundedSender<Moment>,
@@ -631,6 +636,88 @@ pub fn handed_to_the_pool(name: &str) -> bool {
 /// Even an edit which shares all its plans needs a place in snapshot history.
 const REVISION_BYTES: usize = engine::PLAN_BYTES.div_ceil(engine::QUEUE);
 
+// One revision pays for a moment holding all lights: 16,384 x 14 bytes and the moment.
+const _: () = assert!(
+    size_of::<Moment>()
+        + 2 * size_of::<usize>()
+        + engine_core::MAX_LIGHTS as usize * size_of::<HeldLight>()
+        <= REVISION_BYTES
+);
+
+/// History and its release spare, both free: `PLAN_BYTES` together, one revision of it
+/// the spare.
+fn history() -> (Arc<Semaphore>, Arc<Semaphore>) {
+    (
+        Arc::new(Semaphore::new(engine::PLAN_BYTES - REVISION_BYTES)),
+        Arc::new(Semaphore::new(REVISION_BYTES)),
+    )
+}
+
+/// What a press pays before it is admitted: a press that can change the held lights
+/// keeps a moment with all of them (#312).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Press {
+    /// Changes no hold: never a moment of its own.
+    Free,
+    /// Sets or changes a hold: one revision of `history`.
+    Holds,
+    /// Lets a hold go: one revision of `history`, else of `spare`.
+    Releases,
+}
+
+impl Press {
+    const fn of(command: &Command) -> Self {
+        match command {
+            Command::SetIntensity { .. }
+            | Command::SetColour { .. }
+            | Command::SetProperty { .. }
+            | Command::UpdateGrab { .. } => Self::Holds,
+            Command::EndGrab { .. }
+            | Command::ReleaseIntensity { .. }
+            | Command::ReleaseColour { .. }
+            | Command::ReleaseProperty { .. }
+            | Command::ReleaseAll => Self::Releases,
+            // An edit or an output change pays in `edit`.
+            Command::Patch { .. }
+            | Command::PatchStrip { .. }
+            | Command::Move { .. }
+            | Command::Unpatch { .. }
+            | Command::Rename { .. }
+            | Command::SetGroup { .. }
+            | Command::RemoveGroup { .. }
+            | Command::PutStep { .. }
+            | Command::PutPattern { .. }
+            | Command::PutSequence { .. }
+            | Command::RemoveLook { .. }
+            | Command::SetMixRules { .. }
+            | Command::SetOutput { .. }
+            | Command::RemoveOutput { .. }
+            | Command::SetChannel { .. }
+            | Command::ReleaseChannel { .. }
+            | Command::ReleaseChannels
+            | Command::Blackout { .. }
+            | Command::StartLook { .. }
+            | Command::StopLook { .. }
+            | Command::EndFlash { .. }
+            | Command::ReleaseHold { .. }
+            | Command::SetInternalTempo { .. }
+            | Command::TapTempo
+            | Command::ReleaseTempo => Self::Free,
+        }
+    }
+
+    /// Its credit, taken before the press: `WorkLimit` when history has no room.
+    fn credit(self, api: &Api) -> Result<Option<OwnedSemaphorePermit>, Refusal> {
+        match self {
+            Self::Free => Ok(None),
+            Self::Holds => reserve(&api.history, REVISION_BYTES).map(Some),
+            Self::Releases => reserve(&api.history, REVISION_BYTES)
+                .or_else(|_| reserve(&api.spare, REVISION_BYTES))
+                .map(Some),
+        }
+    }
+}
+
 fn reserve(history: &Arc<Semaphore>, bytes: usize) -> Result<OwnedSemaphorePermit, Refusal> {
     Arc::clone(history)
         .try_acquire_many_owned(u32::try_from(bytes).map_err(|_| Refusal::WorkLimit)?)
@@ -649,6 +736,7 @@ async fn send(api: &Arc<Api>, command: Command) -> Result<Reply<'static>, Refusa
     let begun = if is_edit(&command) {
         edit(api, command, &shelf, &mut credit).await
     } else {
+        credit = Press::of(&command).credit(api)?;
         api.changing(&mut credit, |sender| {
             sender.begin(command, shelf.fixtures())
         })
@@ -807,10 +895,9 @@ async fn edit(
 
 impl Api {
     /// Changes the front with `change`, and tells the reader the front as `change` left
-    /// it, before another change: each moment is one the engine was in. A press that
-    /// changes what the grabs hold is a moment of its own, without credit: it keeps its
-    /// held lights (up to one per light), paid by no bytes, until a snapshot passes it.
-    /// Bounded while the reader keeps up, not while it stalls (#312). The show file
+    /// it, before another change: each moment is one the engine was in, paid by
+    /// `credit` until a snapshot passes it. A press that changes what the grabs hold is a
+    /// moment of its own ([`Press`]): its held lights are up to one per light. The show file
     /// hears only of a change of the patch or the looks: a refusal or a press saves
     /// nothing. `None` once the engine stops ([`Api::stopping`]): nothing changes then,
     /// so no change comes after the last save.
@@ -834,7 +921,7 @@ impl Api {
             sender.revise();
             let mut moment = Moment::of(sender);
             moment.credit = credit.take();
-            debug_assert!(moment.credit.is_some() || !(edited || outputs));
+            debug_assert!(moment.credit.is_some(), "every moment is paid");
             publisher.through = Arc::clone(&moment.through);
             publisher.grabs = sender.grabs_revision();
             // The reader is gone only once the server stops.
@@ -1421,5 +1508,432 @@ mod tests {
         for (pacing, event, expected) in cases {
             assert_eq!(pacing.next(event), expected, "{pacing:?} {event:?}");
         }
+    }
+
+    /// An `Api` over `sender` whose reader is stalled: the test holds its moments in
+    /// the returned front and passes a snapshot only when it says so ([`pass`]).
+    fn stalled(engine: &mut Engine, sender: Sender) -> (Arc<Api>, Front) {
+        let shelf = library::start(None);
+        let show = watch::channel(ShowFile::None).1;
+        let first = Moment::of(&sender);
+        let saved = show::Kept::of(&sender);
+        let picture = Picture::of(
+            engine.latest().clone(),
+            Instant::now(),
+            &first,
+            &shelf,
+            &show,
+            health::View::default(),
+        );
+        let (moments, taken) = mpsc::unbounded_channel();
+        let (history, spare) = history();
+        let api = Api {
+            origins: Vec::new(),
+            sender: Mutex::new(Publisher {
+                through: Arc::clone(&first.through),
+                grabs: sender.grabs_revision(),
+                sender,
+            }),
+            history,
+            spare,
+            moments,
+            patch: watch::channel(saved).0,
+            stop: watch::channel(false).0,
+            pictures: watch::channel(Arc::new(picture)).1,
+            shelf: shelf.clone(),
+        };
+        let front = Front {
+            shelf,
+            moments: taken,
+            kept: VecDeque::from([first]),
+            show,
+        };
+        (Arc::new(api), front)
+    }
+
+    /// The bytes history has free, the release's spare included.
+    fn free(api: &Api) -> usize {
+        api.history.available_permits() + api.spare.available_permits()
+    }
+
+    /// The reader takes a snapshot of everything sent so far and pairs it with its
+    /// moment: every moment before it goes, and its bytes with it.
+    fn pass(engine: &mut Engine, wakes: &engine::Wakes, front: &mut Front, case: &str) {
+        let _ = engine.latest(); // asks for the next wake's picture
+        wakes.wake().unwrap();
+        let snapshot = engine.latest().clone();
+        assert!(
+            front
+                .picture(&snapshot, Instant::now(), health::View::default())
+                .is_some(),
+            "{case}: the reader passes every moment"
+        );
+    }
+
+    /// The moments the stalled reader has not taken yet.
+    fn waiting(front: &mut Front) -> Vec<Moment> {
+        std::iter::from_fn(|| front.moments.try_recv().ok()).collect()
+    }
+
+    /// The byte of channel 1/`address` in the next frame.
+    fn next_frame(engine: &mut Engine, wakes: &engine::Wakes, address: u16) -> u8 {
+        let _ = engine.latest();
+        wakes.wake().unwrap();
+        engine.latest().sent(1, address)
+    }
+
+    /// A stepped engine of `universes`, its tick held, with `patch` sent, under a
+    /// stalled reader.
+    fn desk(
+        universes: u16,
+        library: &[fixture_library::Fixture],
+        patch: impl IntoIterator<Item = Command>,
+    ) -> (Engine, engine::Wakes, Arc<Api>, Front) {
+        let none: engine::Open = Box::new(|_| Err(io::Error::other("no devices")));
+        let (mut engine, mut sender, wakes) =
+            Engine::start_stepped(Universes::new(universes).unwrap(), none).unwrap();
+        wakes.hold().unwrap();
+        for command in patch {
+            sender.begin(command, library).unwrap();
+            wakes.wake().unwrap();
+        }
+        let (api, front) = stalled(&mut engine, sender);
+        (engine, wakes, api, front)
+    }
+
+    /// An RGB strip of 2 pixels from 1/1: fixture 1, channels 1 to 6.
+    fn two_pixels() -> Command {
+        Command::PatchStrip {
+            name: Text::new("pixel").unwrap(),
+            pixels: engine_core::Pixels::try_from(2).unwrap(),
+            color: engine::Color::Rgb,
+            at: ChannelNumbers {
+                universe: 1,
+                address: 1,
+            },
+        }
+    }
+
+    /// A press that sets a hold: every light of `target` at `intensity`.
+    fn hold(target: Target, intensity: u16) -> Command {
+        Command::SetIntensity { target, intensity }
+    }
+
+    /// A press that releases the intensity of `target`.
+    fn release(target: Target) -> Command {
+        Command::ReleaseIntensity { target }
+    }
+
+    /// A press that changes no hold: channel 1/`address` at `value`.
+    fn raw(address: u16, value: u8) -> Command {
+        Command::SetChannel {
+            channel: ChannelNumbers {
+                universe: 1,
+                address,
+            },
+            value,
+        }
+    }
+
+    /// History without the spare, in revisions: (64 MiB - 256 KiB) / 256 KiB, by hand.
+    const PAID_MOMENTS: usize = 255;
+    /// One revision, by hand: 64 MiB / 256.
+    const REVISION: usize = 262_144;
+    /// 64 MiB, by hand.
+    const ALL: usize = 67_108_864;
+
+    #[tokio::test]
+    async fn a_press_pays_for_its_moment_as_the_history_table_says() {
+        let fixture = Target::Fixture { fixture: 1 };
+        // (history, press, reply, bytes free after it, a moment kept)
+        let cases = [
+            ("in step", "sets a hold", Ok(()), ALL - REVISION, true),
+            ("in step", "releases a hold", Ok(()), ALL - REVISION, true),
+            ("in step", "changes no hold", Ok(()), ALL, false),
+            (
+                "behind, room left",
+                "sets a hold",
+                Ok(()),
+                ALL - 2 * REVISION,
+                true,
+            ),
+            (
+                "behind, room left",
+                "releases a hold",
+                Ok(()),
+                ALL - 2 * REVISION,
+                true,
+            ),
+            (
+                "behind, room left",
+                "changes no hold",
+                Ok(()),
+                ALL - REVISION,
+                false,
+            ),
+            (
+                "behind, full",
+                "sets a hold",
+                Err(Refusal::WorkLimit),
+                REVISION,
+                false,
+            ),
+            ("behind, full", "releases a hold", Ok(()), 0, true),
+            ("behind, full", "changes no hold", Ok(()), REVISION, false),
+            (
+                "behind, full, spare used",
+                "sets a hold",
+                Err(Refusal::WorkLimit),
+                0,
+                false,
+            ),
+            (
+                "behind, full, spare used",
+                "releases a hold",
+                Err(Refusal::WorkLimit),
+                0,
+                false,
+            ),
+            (
+                "behind, full, spare used",
+                "changes no hold",
+                Ok(()),
+                0,
+                false,
+            ),
+        ];
+        for (history, press, reply, left, kept) in cases {
+            let case = format!("{history}, {press}");
+            let (mut engine, wakes, api, mut front) = desk(1, &[], [two_pixels()]);
+            let behind = match history {
+                "in step" | "behind, room left" => 1,
+                _ => PAID_MOMENTS,
+            };
+            for at in 0..behind {
+                let at = u16::try_from(at).unwrap();
+                assert!(send(&api, hold(fixture, at)).await.is_ok(), "{case}");
+                wakes.wake().unwrap();
+            }
+            if history == "behind, full, spare used" {
+                let first = Target::Light { light: 1 };
+                assert_eq!(
+                    send(&api, release(first)).await,
+                    Ok(Reply::Accepted),
+                    "{case}"
+                );
+                wakes.wake().unwrap();
+            }
+            if history == "in step" {
+                let waited = waiting(&mut front);
+                front.kept.extend(waited);
+                pass(&mut engine, &wakes, &mut front, &case);
+            }
+            let before = free(&api);
+            let waited = waiting(&mut front);
+            front.kept.extend(waited);
+            let (grabs, held) = {
+                let front = api.sender.lock().await;
+                (front.sender.grabs_revision(), front.sender.held_lights())
+            };
+            let command = match press {
+                "sets a hold" => hold(fixture, u16::MAX),
+                "releases a hold" => release(fixture),
+                _ => raw(3, 7),
+            };
+            let answer = send(&api, command).await.map(|_| ());
+            assert_eq!(answer, reply, "{case}");
+            assert_eq!(free(&api), left, "{case}: history, {before} free before");
+            let made = waiting(&mut front);
+            assert_eq!(made.len(), usize::from(kept), "{case}: moment");
+            front.kept.extend(made);
+            if reply.is_err() {
+                let front = api.sender.lock().await;
+                assert_eq!(front.sender.grabs_revision(), grabs, "{case}: grabs");
+                assert_eq!(front.sender.held_lights(), held, "{case}: holds");
+            }
+            if press == "changes no hold" {
+                assert_eq!(
+                    next_frame(&mut engine, &wakes, 3),
+                    7,
+                    "{case}: in the next frame"
+                );
+            }
+            if history == "in step" {
+                pass(&mut engine, &wakes, &mut front, &case);
+                assert_eq!(free(&api), ALL, "{case}: all free again");
+            }
+            wakes.run();
+        }
+    }
+
+    #[test]
+    fn each_press_pays_as_the_press_table_says() {
+        let fixture = serde_json::json!({"Fixture": {"fixture": 1}});
+        let channel = serde_json::json!({"universe": 1, "address": 1});
+        let grab = serde_json::json!({"generation": 1});
+        let play = serde_json::json!({"slot": 0, "generation": 1});
+        let intensity = serde_json::json!({"Intensity": 0});
+        // (the command on the wire, what it pays: docs/engine.md, the press table)
+        let cases = [
+            (
+                serde_json::json!({"SetIntensity": {"target": fixture, "intensity": 0}}),
+                Press::Holds,
+            ),
+            (
+                serde_json::json!({"SetColour": {"target": fixture, "red": 0, "green": 0, "blue": 0}}),
+                Press::Holds,
+            ),
+            (
+                serde_json::json!({"SetProperty": {"target": fixture, "value": intensity}}),
+                Press::Holds,
+            ),
+            (
+                serde_json::json!({"UpdateGrab": {"grab": grab, "value": intensity}}),
+                Press::Holds,
+            ),
+            (
+                serde_json::json!({"EndGrab": {"grab": grab}}),
+                Press::Releases,
+            ),
+            (
+                serde_json::json!({"ReleaseIntensity": {"target": fixture}}),
+                Press::Releases,
+            ),
+            (
+                serde_json::json!({"ReleaseColour": {"target": fixture}}),
+                Press::Releases,
+            ),
+            (
+                serde_json::json!({"ReleaseProperty": {"target": fixture, "property": "Colour"}}),
+                Press::Releases,
+            ),
+            (serde_json::json!("ReleaseAll"), Press::Releases),
+            (
+                serde_json::json!({"SetChannel": {"channel": channel, "value": 1}}),
+                Press::Free,
+            ),
+            (
+                serde_json::json!({"ReleaseChannel": {"channel": channel}}),
+                Press::Free,
+            ),
+            (serde_json::json!("ReleaseChannels"), Press::Free),
+            (serde_json::json!({"Blackout": {"on": true}}), Press::Free),
+            (serde_json::json!({"StartLook": {"look": 1}}), Press::Free),
+            (serde_json::json!({"StopLook": {"play": play}}), Press::Free),
+            (serde_json::json!({"EndFlash": {"play": play}}), Press::Free),
+            (
+                serde_json::json!({"ReleaseHold": {"play": play}}),
+                Press::Free,
+            ),
+            (
+                serde_json::json!({"SetInternalTempo": {"bpm": 120}}),
+                Press::Free,
+            ),
+            (serde_json::json!("TapTempo"), Press::Free),
+            (serde_json::json!("ReleaseTempo"), Press::Free),
+        ];
+        for (wire, pays) in cases {
+            let command: Command = serde_json::from_value(wire.clone()).unwrap();
+            assert_eq!(Press::of(&command), pays, "{wire}");
+        }
+    }
+
+    #[test]
+    fn history_and_its_spare_are_64_mib_one_revision_of_it_the_spare() {
+        let (history, spare) = history();
+        assert_eq!(
+            (history.available_permits(), spare.available_permits()),
+            (ALL - REVISION, REVISION)
+        );
+    }
+
+    /// A test fixture of 32 lights, one dimmer channel each.
+    fn heads_32() -> fixture_library::Fixture {
+        let channels: String = (1..=32)
+            .map(|at| format!(r#"<Channel Name="Dimmer {at}" Preset="IntensityDimmer"/>"#))
+            .collect();
+        let mode: String = (0..32)
+            .map(|at| format!(r#"<Channel Number="{at}">Dimmer {}</Channel>"#, at + 1))
+            .collect();
+        let heads: String = (0..32)
+            .map(|at| format!("<Head><Channel>{at}</Channel></Head>"))
+            .collect();
+        let qxf = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<FixtureDefinition xmlns="http://www.qlcplus.org/FixtureDefinition">
+<Manufacturer>Test</Manufacturer><Model>Heads 32</Model><Type>LED Bar (Pixels)</Type>
+{channels}<Mode Name="32">{mode}{heads}</Mode></FixtureDefinition>"#
+        );
+        fixture_library::parse("Test-Heads-32.qxf", qxf.as_bytes()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_stalled_reader_holds_at_most_the_history_of_hold_presses_on_all_16384_lights() {
+        // 512 fixtures of 32 lights, 16 a universe over 32 universes: 16,384 lights
+        let patch = (0..512u16).map(|at| Command::Patch {
+            name: Text::new("bar").unwrap(),
+            maker: Text::new("Test").unwrap(),
+            model: Text::new("Heads 32").unwrap(),
+            mode: Text::new("32").unwrap(),
+            at: ChannelNumbers {
+                universe: at / 16 + 1,
+                address: at % 16 * 32 + 1,
+            },
+        });
+        let members: Vec<engine_core::Member> = (1..=512)
+            .map(|fixture| engine_core::Member::Fixture { fixture })
+            .collect();
+        let group = Command::SetGroup {
+            name: Text::new("all").unwrap(),
+            members: engine_core::MemberList::Fits(engine_core::Members::new(&members).unwrap()),
+        };
+        let all = Target::Group {
+            group: Text::new("all").unwrap(),
+        };
+        let (mut engine, wakes, api, mut front) = desk(64, &[heads_32()], patch.chain([group]));
+        let mut kept = Vec::new();
+        for at in 0..PAID_MOMENTS {
+            let at = u16::try_from(at).unwrap();
+            assert!(send(&api, hold(all, at)).await.is_ok(), "press {at}");
+            wakes.wake().unwrap();
+            kept.extend(waiting(&mut front));
+        }
+        assert_eq!(kept.len(), PAID_MOMENTS);
+        assert!(kept.iter().all(|moment| moment.held.len() == 16_384));
+        let held: usize = kept
+            .iter()
+            .map(|moment| moment.held.len() * size_of::<HeldLight>())
+            .sum();
+        assert!(held <= ALL, "{held} bytes of held lights");
+        assert_eq!(free(&api), REVISION, "only the release's spare is left");
+        assert_eq!(
+            send(&api, hold(all, u16::MAX)).await,
+            Err(Refusal::WorkLimit)
+        );
+        assert!(
+            waiting(&mut front).is_empty(),
+            "a refused press keeps no moment"
+        );
+        // a release still goes, paid from the spare, and keeps all lights but one
+        let first = Target::Light { light: 1 };
+        assert_eq!(send(&api, release(first)).await, Ok(Reply::Accepted));
+        let released = waiting(&mut front);
+        assert_eq!(
+            released
+                .iter()
+                .map(|moment| moment.held.len())
+                .collect::<Vec<_>>(),
+            [16_383]
+        );
+        assert_eq!(free(&api), 0);
+        // a press that changes no hold is still in the next frame
+        assert_eq!(send(&api, raw(1, 7)).await, Ok(Reply::Accepted));
+        assert_eq!(next_frame(&mut engine, &wakes, 1), 7);
+        // the reader passes: every byte comes back, a hold press is taken again
+        front.kept.extend(kept.into_iter().chain(released));
+        pass(&mut engine, &wakes, &mut front, "stalled");
+        assert_eq!(free(&api), ALL);
+        assert!(send(&api, hold(all, u16::MAX)).await.is_ok());
+        wakes.run();
     }
 }
