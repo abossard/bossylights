@@ -19,3 +19,4 @@ harness = false
 
 [dev-dependencies]
 rt-thread = { path = "../rt-thread" }
+engine-slot = { path = "../engine-slot" } # frame_lateness runs a real-time thread: one engine at a time on the machine

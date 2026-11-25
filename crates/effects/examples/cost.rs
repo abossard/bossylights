@@ -21,6 +21,8 @@ const PERIOD: Duration = Duration::from_nanos(1_000_000_000 / 60);
 const BEATS_PER_WAKE: u64 = (1 << 32) / 30;
 
 fn main() {
+    // a real-time thread: one at a time on the machine, as an engine (#319)
+    let _slot = engine_slot::take().unwrap();
     let (thread, priority) = rt_thread::spawn("effects_cost", |_| measure()).unwrap();
     eprintln!("priority: {priority:?}");
     thread.join().unwrap();

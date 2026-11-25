@@ -51,6 +51,8 @@ fn run((seconds, pars): (u64, u64)) -> Result<String, String> {
     // made here: the space does not fit on the stack of the thread that runs the frames
     let mut channels = Box::new(Channels::NEW);
     channels.configure(&[], rig.0.configured());
+    // a real-time thread: one at a time on the machine, as an engine (#319)
+    let _slot = engine_slot::take().map_err(|e| e.to_string())?;
     let (thread, priority) = rt_thread::spawn("frame_lateness", move |_| {
         frames_of(&rig, &mut channels, frames)
     })

@@ -26,6 +26,7 @@ Rust engine, web UI in a Tauri shell, Apache-2.0. Where the project stands: the 
 | `crates/fixture-library` | fixture definitions as a model: QLC+ `.qxf` bytes in, maker, model, modes, channels out. Reads no files. `cargo run -p fixture-library --example read_folder -- <folder>` reads a folder and prints how many were read, why any failed, and the tally of the model (functions, "other", fine bytes, defaults, what ranges do, shutters, pixels) |
 | `crates/rig` | the Rig: a mode at an address becomes writers (which light, what to take, how, where) and channels as its file says (rest, dark, fade, pair). Off the tick thread. The tick reads its field table every frame: a light index to the channels its words go to. `cargo run -q --release -p rig --example frame_lateness -- 10 10000` measures a frame of 10 000 lights |
 | `crates/engine-server` | `bossylights-engine`, the headless process serving the API |
+| `crates/engine-slot` | tests only: the machine's one engine slot, a file lock on `/tmp/bossylights-engine.slot`. `cargo run -q -p engine-slot -- <command>` runs a command under it |
 | `ui/` | the product web UI (SolidJS). `mockups/` is design reference only |
 | `shell/` | Tauri window: starts the engine, hosts `ui/` |
 | `e2e/` | Playwright tests |
@@ -47,6 +48,7 @@ Rust engine, web UI in a Tauri shell, Apache-2.0. Where the project stands: the 
 - A press is in the very next frame. Each output has its own rate (`docs/design/theory.md`, idea 1).
 - First engine slice: `docs/history/engine-slice-1.md`.
 - Every feature has an end-to-end test that checks DMX output.
+- A test starts a fresh engine, one at a time on the machine: in a test build every engine start waits for the machine's one engine slot. A suite that starts the real app runs through `engine-slot`. A test never holds two engines at once.
 - Apache-2.0 only: no GPL or AGPL code or dependencies. Ideas from BlinderKitten, Chataigne and Mizer are fine, their code is not.
 - Plain words in the default view: looks, pads. Desk words: Playback, Patch, Show file, Looks, Tempo. A song has one show.
 - All who-wins rules live in one place (one table in the Mixer, one panel in the app). No other code decides between two values for the same light. See `docs/design/who-wins.md`.

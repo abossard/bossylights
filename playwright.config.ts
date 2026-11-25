@@ -6,6 +6,9 @@ export { ENGINE };
 
 export default defineConfig({
   testDir: "e2e",
+  // One engine on the machine at a time (#319): the shell tests start their own engine, so
+  // they run after these, with their own config (`playwright.shell.config.ts`).
+  testIgnore: "shell.spec.ts",
   use: { baseURL: UI, browserName: "chromium" },
   webServer: [
     {

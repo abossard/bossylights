@@ -14,7 +14,7 @@
     "test:rust": "cargo fmt --all --check && cargo check -p engine-core -p fixture-library -p wire && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace",
     "test:release-shell": "node scripts/check-release-shell.mjs",
     "test:ui": "tsc -p ui && tsc -p e2e && oxlint --type-aware --deny-warnings -c ui/.oxlintrc.json ui/src && node --test ui/src/*.test.mjs",
-    "test:e2e": "playwright install chromium && playwright test",
+    "test:e2e": "playwright install chromium && cargo run -q -p engine-slot -- sh -c 'playwright test && playwright test -c playwright.shell.config.ts'",
     "test:catalog": "playwright install chromium && playwright test -c ui/src/catalog",
     "test:scorecard": "CI=true node scripts/print-scorecard.mjs",
     "scorecard": "node scripts/print-scorecard.mjs",

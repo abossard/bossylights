@@ -153,6 +153,7 @@ Each of the five has a test or a documented check. A claim without one does not 
 
 - The test comes first when the behaviour is known.
 - A bug gets a failing test before it gets a fix.
+- A test starts a fresh engine, one at a time on the machine: in a test build `Engine::start` first waits for the machine's one engine slot (`crates/engine-slot`), with no time limit, before the engine's clock runs. A test that held two engines at once would wait forever: it never does. It starts no clock of its own before its engine. A suite that starts the real app runs through `cargo run -q -p engine-slot -- <command>`.
 - No test asserts a rate, a latency or a duration under one second: CI judges what is sent, never how fast. Timing is measured by hand (`npm run scorecard`). `scripts/check-timing.mjs` enforces it.
 
 ## Before a push

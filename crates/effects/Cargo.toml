@@ -11,3 +11,4 @@ workspace = true
 
 [dev-dependencies]
 rt-thread = { path = "../rt-thread" } # the cost example measures on a thread with the engine's real-time policy
+engine-slot = { path = "../engine-slot" } # and holds the machine's engine slot while it does
