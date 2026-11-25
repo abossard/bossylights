@@ -100,7 +100,8 @@ async fn desk(folder: &str, fixtures: &[(&str, &str, &str, u16)]) -> (Socket, He
 /// 25 (coarse) and 26 (fine). Two Show looks share the coarse byte and differ in the
 /// fine: 0x80FF and 0x8001, so the coarse alone cannot decide. Under Highest the greater
 /// word wins whichever started last, under Latest the later start wins; either way both
-/// bytes come from one look.
+/// bytes come from one look. A patch edit after the rule (one more spot, at 1:100, then at
+/// 1:200) keeps it.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_sixteen_bit_dimmer_is_won_as_one_word_in_both_orders() {
     let (mut socket, heard) = desk(
@@ -113,15 +114,29 @@ async fn a_sixteen_bit_dimmer_is_won_as_one_word_in_both_orders() {
     accepted(s, step(1, 1, &json!({"intensity": high}))).await;
     accepted(s, step(2, 1, &json!({"intensity": low}))).await;
     let word = |w: u16| [(25, w.to_be_bytes()[0]), (26, w.to_be_bytes()[1])];
-    // (brightness rule, first started, then, the word that shows)
+    // (brightness rule, a patch edit after it, first started, then, the word that shows)
     let cases = [
-        ("Highest", 1, 2, high),
-        ("Highest", 2, 1, high),
-        ("Latest", 1, 2, low),
-        ("Latest", 2, 1, high),
+        ("Highest", false, 1, 2, high),
+        ("Highest", false, 2, 1, high),
+        ("Latest", false, 1, 2, low),
+        ("Latest", false, 2, 1, high),
+        ("Highest", true, 1, 2, high),
+        ("Latest", true, 1, 2, low),
     ];
-    for (brightness, first, then, shows) in cases {
+    let mut spots = 1;
+    for (brightness, edit, first, then, shows) in cases {
         accepted(s, rules(brightness)).await;
+        if edit {
+            spots += 1;
+            let patch = json!({"Patch": {
+                "name": format!("Spot {spots}"), "maker": "Robe", "model": "ColorSpot 575 AT",
+                "mode": "1 - 27-Channel", "at": {"universe": 1, "address": 100 * (spots - 1)},
+            }});
+            assert_eq!(
+                command(s, patch).await,
+                json!({"Patched": {"fixture": spots}})
+            );
+        }
         let plays = [start(s, first, "Show").await, start(s, then, "Show").await];
         until_dmx(&heard, &word(shows)).await;
         for play in plays {

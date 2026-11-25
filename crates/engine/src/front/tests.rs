@@ -1541,24 +1541,27 @@ fn a_grab_box_outlives_the_command_that_lets_it_go_until_the_tick_applied_it() {
     };
     let release = Command::ReleaseColour { target: light };
     let next = Command::Blackout { on: false };
-    // (step, a wake before the command, boxes waiting for the tick after it)
+    // (step, a wake before the command, boxes waiting for the tick after it, the grabs'
+    // revision: one more for the grab and for the release, none for Blackout)
     let steps = [
-        ("the grab sent: its change list", grab, false, 1),
+        ("the grab sent: its change list", grab, false, 1, 1),
         (
             "the grab applied, the release sent: the box and its change list",
             release,
             true,
             2,
+            2,
         ),
-        ("the release not applied yet", next, false, 2),
-        ("applied", next, true, 0),
+        ("the release not applied yet", next, false, 2, 2),
+        ("applied", next, true, 0, 2),
     ];
-    for (step, command, wake, waiting) in steps {
+    for (step, command, wake, waiting, revision) in steps {
         if wake {
             wakes.wake().unwrap();
         }
         sender.send(command).unwrap();
         assert_eq!(sender.grabs.retiring(), waiting, "{step}");
+        assert_eq!(sender.grabs_revision(), revision, "{step}: revision");
     }
     wakes.run();
 }
