@@ -1,6 +1,6 @@
 //! A broken file gives an error that names the file and the place. Never a panic.
 
-use fixture_library::parse;
+use fixture_library::{MOST_BYTES, parse};
 
 const HEAD: &str = r#"<?xml version="1.0"?>
 <FixtureDefinition xmlns="http://www.qlcplus.org/FixtureDefinition">
@@ -168,6 +168,22 @@ fn a_file_that_could_grow_when_read_is_an_error_before_it_is_read() {
             "declarations",
         ),
         (
+            "declarations after a quoted id",
+            format!(
+                "<?xml version=\"1.0\"?>\n<!DOCTYPE FixtureDefinition SYSTEM \"x.dtd\" [\n<!ENTITY m \"Evil\">\n]>\n{BODY}"
+            ),
+            Some(2),
+            "declarations",
+        ),
+        (
+            "declarations after a single-quoted id with a > in it",
+            format!(
+                "<?xml version=\"1.0\"?>\n<!DOCTYPE FixtureDefinition SYSTEM 'a>b.dtd' [\n<!ENTITY m \"Evil\">\n]>\n{BODY}"
+            ),
+            Some(2),
+            "declarations",
+        ),
+        (
             "bigger than any real definition",
             format!("{BARE}{BODY}<!-- {} -->", "x".repeat(1024 * 1024)),
             None,
@@ -193,6 +209,11 @@ fn a_doctype_without_declarations_is_read() {
             format!("<!DOCTYPE FixtureDefinition PUBLIC \"-//x[y]\" \"x.dtd\">\n{BODY}"),
         ),
         ("no doctype", BODY.to_string()),
+        ("exactly the largest size", {
+            let start = format!("{BARE}{BODY}<!-- ");
+            let pad = MOST_BYTES - start.len() - " -->".len();
+            format!("{start}{} -->", "x".repeat(pad))
+        }),
     ];
     for (name, source) in cases {
         parse("ok.qxf", source.as_bytes()).unwrap_or_else(|e| panic!("{name}: {e}"));

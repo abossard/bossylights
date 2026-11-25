@@ -1,0 +1,11 @@
+# Mutants that cannot change any answer (equivalent), each with why. Read by cargo mutants.
+exclude_re = [
+  # Without the arm, `(Some(_), c)` falls to `_ => {}`: the arms after it all need no quote.
+  'fixture-library/src/read\.rs:\d+:\d+: delete match arm \(Some\(_\), _\) in declarations_at',
+  # Without the arm, the stem falls to `preset_colour`, which is None for every non-Intensity stem.
+  'fixture-library/src/function\.rs:\d+:\d+: delete match arm "PositionXAxis" \| "PositionYAxis" in from_preset',
+  'fixture-library/src/function\.rs:\d+:\d+: delete match arm "ColorRGBMixer" in from_preset',
+  # `left = i` instead of `i + 1`: the first cell's `left + 1` is then `i + 1`, never below
+  # its diagonal `i` plus a change cost of 0 or 1, so the minimum stays.
+  'fixture-library/src/search\.rs:36:26: replace \+ with \* in distance',
+]

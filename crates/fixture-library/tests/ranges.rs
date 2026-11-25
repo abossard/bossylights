@@ -79,6 +79,8 @@ fn a_range_does_what_its_preset_says() {
         (r#"Preset="StrobeFrequency" Res1="fast""#, strobe(Unsaid)),
         (r#"Preset="StrobeFreqRange" Res1="1""#, strobe(Unsaid)),
         (r#"Preset="StrobeFrequency" Res1="-3""#, strobe(Unsaid)),
+        (r#"Preset="StrobeFrequency" Res1="+5""#, strobe(Unsaid)),
+        (r#"Preset="StrobeFrequency" Res1="2.5Hz""#, strobe(Unsaid)),
         (r#"Preset="PulseSlowToFast""#, strobe(Goes(Up))),
         (r#"Preset="PulseFastToSlow""#, strobe(Goes(Down))),
         (
@@ -392,6 +394,9 @@ fn a_label_says_dark_or_names_black_by_its_words() {
         ("All LEDs off", true, true),
         ("LEDs off (blackout)", true, true),
         ("Black", false, true),
+        ("Black mask", false, true),
+        ("Prism out", false, false),
+        ("Open to Close", false, false),
         ("Strobe off", false, false),
         ("Shutter open", false, false),
         ("Open", false, false),

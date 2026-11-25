@@ -214,6 +214,23 @@ fn a_pixel_bar_has_its_pixels_and_layout() {
             height: 1
         })
     );
+    // In the file: "26 Channel" has 8 heads in a grid 4 wide, 2 high.
+    let grid = read("Eurolite-LED-IP-PIX-Strobe-Frost.qxf");
+    let grid = grid
+        .modes
+        .iter()
+        .find(|m| m.name == "26 Channel")
+        .expect("the mode is there");
+    assert_eq!(
+        (grid.pixels.len(), grid.layout),
+        (
+            8,
+            Some(Layout {
+                width: 4,
+                height: 2
+            })
+        )
+    );
     let plain = read("Generic-Generic-RGB.qxf");
     assert!(
         plain
@@ -651,7 +668,7 @@ fn search_allows_typos_by_word_length_and_ranks_prefixes_above_them() {
     };
     // (query, [(maker, model)], the "maker model" found, best first)
     type Case<'a> = (&'a str, &'a [(&'a str, &'a str)], &'a [&'a str]);
-    let cases: [Case; 21] = [
+    let cases: [Case; 28] = [
         ("abcdef", &[("M", "xabcdexx")], &[]), // added and changed: three
         ("abcdef", &[("M", "bcdxxf")], &[]),   // left out, changed, added: three
         ("abcd", &[("M", "bcde")], &[]),       // left out and added: two
@@ -662,9 +679,12 @@ fn search_allows_typos_by_word_length_and_ranks_prefixes_above_them() {
         ("abcd", &[("M", "xbcd")], &["M xbcd"]), // first letter changed
         ("abcd", &[("M", "abcx")], &["M abcx"]), // last letter changed
         ("ab", &[("M", "ax")], &[]),             // no typo in 2 letters
+        ("abc", &[("M", "abd")], &["M abd"]),    // one typo in 3
+        ("abc", &[("M", "axd")], &[]),           // two is too many in 3
         ("abcd", &[("M", "abxd")], &["M abxd"]), // one typo in 4
         ("abcd", &[("M", "axxd")], &[]),         // two is too many
         ("abcd", &[("M", "xabcd")], &["M xabcd"]), // one letter added in front
+        ("abcd", &[("M", "abxcd")], &["M abxcd"]), // one letter added inside
         ("abcd", &[("M", "abc")], &["M abc"]),   // one letter missing
         ("abcdef", &[("M", "abxdxf")], &["M abxdxf"]), // two typos in 6
         ("abcdef", &[("M", "axxdxf")], &[]),     // three is too many
@@ -680,11 +700,31 @@ fn search_allows_typos_by_word_length_and_ranks_prefixes_above_them() {
             &["M abcdxf", "M abcxxf"], // fewer typos first
         ),
         (
+            "abcdef",
+            &[("M", "abxdxf"), ("N", "abcdxf")],
+            &["N abcdxf", "M abxdxf"], // fewer typos first, before the name
+        ),
+        (
+            "abcd",
+            &[("abcd", "abcx"), ("abcde", "zz")],
+            &["abcd abcx", "abcde zz"], // the nearer of maker and model counts
+        ),
+        (
             "ab",
             &[("A", "abcde"), ("B", "abcd")],
             &["B abcd", "A abcde"], // fewer letters left out first
         ),
         ("ab", &[("M", "abcd"), ("M", "ab")], &["M ab", "M abcd"]),
+        (
+            "abcdef wxyz",
+            &[("abcdeq", "wxyza"), ("abcdef", "wxyq")],
+            &["abcdef wxyq", "abcdeq wxyza"], // one typo each, then fewer letters left out
+        ),
+        (
+            "abcdef wxyz",
+            &[("abcdxf", "wxyq"), ("abxdxf", "wxyza")],
+            &["abxdxf wxyza", "abcdxf wxyq"], // one word with typos before two
+        ),
     ];
     for (query, fixtures, expected) in cases {
         let library: Vec<Fixture> = fixtures.iter().map(|(a, b)| fixture(a, b)).collect();

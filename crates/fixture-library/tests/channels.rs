@@ -515,10 +515,11 @@ fn a_fog_fixture_only_dims_its_emitters_with_a_plain_level() {
                 </FixtureDefinition>"#
             );
             for mode in parse("fog.qxf", xml.as_bytes()).unwrap().modes {
-                // a level that does not dim the emitters runs fog
+                // a level that does not dim the emitters runs fog: a dimmer preset that runs fog
+                let level = &mode.channels[0];
                 assert_eq!(
-                    (&mode.channels[0].role(), mode.channels[0].runs_fog()),
-                    (expected, *expected != Dimmer),
+                    (&level.role(), level.runs_fog(), level.is_fog_dimmer()),
+                    (expected, *expected != Dimmer, *expected != Dimmer),
                     "{kind} {}, {ranges}",
                     mode.name
                 );
@@ -693,4 +694,103 @@ fn acts_on_is_read_per_mode() {
             vec![None, None]
         ]
     );
+}
+
+// a channel without a <Group>: the group QLC+ gives its preset (QLCChannel::setPreset in
+// engine/src/qlcchannel.cpp). A <Group> it declares wins.
+#[test]
+fn a_channel_has_its_declared_group_else_the_qlc_group_of_its_preset() {
+    let cases = [
+        ("IntensityDimmer", "", Some("Intensity")),
+        ("IntensityRedFine", "", Some("Intensity")),
+        ("PositionPanFine", "", Some("Pan")),
+        ("PositionTilt", "", Some("Tilt")),
+        ("PositionXAxis", "", Some("Pan")),
+        ("PositionYAxis", "", Some("Tilt")),
+        ("SpeedPanTiltFastSlow", "", Some("Speed")),
+        ("ColorRGBMixer", "", Some("Colour")),
+        ("GoboIndexFine", "", Some("Gobo")),
+        ("ShutterIrisMaxToMin", "", Some("Shutter")),
+        ("BeamZoomFine", "", Some("Beam")),
+        ("PrismRotationSlowFast", "", Some("Prism")),
+        ("NoFunction", "", Some("Nothing")),
+        ("Unknown", "", None),
+        ("", "", None),
+        ("", "<Group Byte=\"0\">Effect</Group>", Some("Effect")),
+        (
+            "IntensityDimmer",
+            "<Group Byte=\"0\">Effect</Group>",
+            Some("Effect"),
+        ),
+    ];
+    for (preset, children, expected) in cases {
+        let preset = if preset.is_empty() {
+            String::new()
+        } else {
+            format!(r#" Preset="{preset}""#)
+        };
+        let channel = only_channel(&format!(
+            r#"<Channel Name="C"{preset}>{children}</Channel>"#
+        ));
+        assert_eq!(
+            channel.declared.pairing_group(),
+            expected,
+            "{preset} {children}"
+        );
+    }
+}
+
+// two presets from QLC+'s list (engine/src/qlcchannel.h) of one control, a coarse and its fine
+// or two ways it runs: the family without Fine, the way it runs, Master, X and Y axis as pan and tilt
+#[test]
+fn a_fine_preset_is_in_the_family_of_its_coarse() {
+    let cases = [
+        (
+            "IntensityMasterDimmer",
+            "IntensityMasterDimmerFine",
+            "IntensityDimmer",
+        ),
+        ("IntensityDimmer", "IntensityDimmerFine", "IntensityDimmer"),
+        ("IntensityRed", "IntensityRedFine", "IntensityRed"),
+        ("PositionPan", "PositionPanFine", "PositionPan"),
+        ("PositionXAxis", "PositionPanFine", "PositionPan"),
+        ("PositionYAxis", "PositionTiltFine", "PositionTilt"),
+        ("ShutterIrisMinToMax", "ShutterIrisFine", "ShutterIris"),
+        ("ShutterIrisMaxToMin", "ShutterIrisFine", "ShutterIris"),
+        ("BeamFocusNearFar", "BeamFocusFine", "BeamFocus"),
+        ("BeamFocusFarNear", "BeamFocusFine", "BeamFocus"),
+        ("BeamZoomSmallBig", "BeamZoomFine", "BeamZoom"),
+        ("BeamZoomBigSmall", "BeamZoomFine", "BeamZoom"),
+        ("SpeedPanSlowFast", "SpeedPanFastSlow", "SpeedPan"),
+    ];
+    for (coarse, fine, family) in cases {
+        let families = [coarse, fine].map(|preset| {
+            only_channel(&format!(r#"<Channel Name="C" Preset="{preset}"/>"#))
+                .declared
+                .pairing_family()
+        });
+        assert_eq!(
+            families,
+            [Some(family), Some(family)].map(|f| f.map(String::from)),
+            "{coarse} {fine}"
+        );
+    }
+    let undeclared = only_channel(r#"<Channel Name="C"><Group Byte="0">Pan</Group></Channel>"#);
+    assert_eq!(undeclared.declared.pairing_family(), None);
+}
+
+// QLC+ names a wheel's index (where it stands) GoboIndex, its slots GoboWheel
+#[test]
+fn an_index_preset_names_where_a_wheel_stands_not_its_slots() {
+    let cases = [
+        (r#"Preset="GoboIndex""#, true),
+        (r#"Preset="GoboIndexFine""#, true),
+        (r#"Preset="GoboWheel""#, false),
+        (r#"Preset="ColorWheel""#, false),
+        ("", false),
+    ];
+    for (preset, index) in cases {
+        let channel = only_channel(&format!(r#"<Channel Name="C" {preset}/>"#));
+        assert_eq!(channel.declared.is_index_preset(), index, "{preset}");
+    }
 }
