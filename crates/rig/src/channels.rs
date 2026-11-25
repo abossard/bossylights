@@ -158,19 +158,8 @@ pub enum Sense {
     Falling,
 }
 
-/// A coarse byte and its fine byte: one 16-bit value.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Pair {
-    pub coarse: u32,
-    pub fine: u32,
-}
-
-/// One value of a compound: a channel or a pair.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Field {
-    Byte(u32),
-    Word(Pair),
-}
+/// One value of a compound: a channel, or a coarse and fine pair as one 16-bit value.
+pub use engine_core::{Field, Pair};
 
 /// A byte or a word, for [`to_native`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -4,8 +4,7 @@ mod common;
 
 use common::fixture;
 use engine_core::{
-    ChannelNumbers, EngineCommand, LightChange, Lights, PatchCommand, Property, Refusal, Rgb,
-    Target, Text, Universes, Value,
+    ChannelNumbers, Lights, PatchCommand, Property, Refusal, Rgb, Target, Text, Universes, Value,
 };
 use fixture_library::Fixture;
 use rig::{Patch, PatchEffect};
@@ -73,28 +72,26 @@ fn library() -> Vec<Fixture> {
     .into()
 }
 
-/// An effect in words: `writers`, `darken 0+1`, `colour 0+1`, `patched 1`.
+/// An effect in words: `fields`, `gone 0+1`, `colour 0+1`, `release colour 0+1`,
+/// `patched 1`.
 fn said(effect: &PatchEffect) -> String {
     let run = |run: engine_core::LightRun| format!("{}+{}", run.first().index(), run.count());
+    let runs =
+        |runs: &[engine_core::LightRun]| runs.iter().map(|r| run(*r)).collect::<Vec<_>>().join(" ");
     match effect {
         PatchEffect::Patched { fixture } => format!("patched {fixture}"),
-        PatchEffect::Writers(_) => "writers".to_string(),
-        PatchEffect::Send(EngineCommand::Darken { lights }) => format!("darken {}", run(*lights)),
-        PatchEffect::Grab { value, runs } => {
-            let runs: Vec<String> = runs.iter().map(|r| run(*r)).collect();
+        PatchEffect::Fields(_) => "fields".to_string(),
+        PatchEffect::Gone { lights } => format!("gone {}", run(*lights)),
+        PatchEffect::Grab { value, runs: of } => {
             let property = format!("{:?}", value.property()).to_lowercase();
-            format!("{property} {}", runs.join(" "))
+            format!("{property} {}", runs(of))
         }
-        PatchEffect::Send(EngineCommand::Lights {
-            lights,
-            change: LightChange::Release { property },
-        }) => format!(
+        PatchEffect::Release { property, runs: of } => format!(
             "release {} {}",
             format!("{property:?}").to_lowercase(),
-            run(*lights)
+            runs(of)
         ),
         PatchEffect::Send(other) => format!("{other:?}"),
-        PatchEffect::Runs { change, runs } => format!("{change:?} {runs:?}"),
     }
 }
 
@@ -142,7 +139,7 @@ fn a_patch_command_makes_a_new_patch_and_says_what_follows() {
             many,
             vec![],
             par_3,
-            Ok(&["patched 1", "writers"]),
+            Ok(&["patched 1", "fields"]),
             &["1 PAR 3: Generic RGB, RGB at 1.37 (3) lights 1+1"],
         ),
         (
@@ -170,7 +167,7 @@ fn a_patch_command_makes_a_new_patch_and_says_what_follows() {
             many,
             vec![],
             par("X", 1, 510),
-            Ok(&["patched 1", "writers"]),
+            Ok(&["patched 1", "fields"]),
             &["1 X: Generic RGB, RGB at 1.510 (3) lights 1+1"],
         ),
         (
@@ -192,7 +189,7 @@ fn a_patch_command_makes_a_new_patch_and_says_what_follows() {
             many,
             vec![par_3],
             bar,
-            Ok(&["patched 2", "writers"]),
+            Ok(&["patched 2", "fields"]),
             &[
                 "1 PAR 3: Generic RGB, RGB at 1.37 (3) lights 1+1",
                 "2 Bar: X-240Bar RGB, 26 Channel at 2.1 (26) lights 2+9",
@@ -217,7 +214,7 @@ fn a_patch_command_makes_a_new_patch_and_says_what_follows() {
             many,
             vec![par_3],
             par("PAR 4", 1, 40),
-            Ok(&["patched 2", "writers"]),
+            Ok(&["patched 2", "fields"]),
             &[
                 "1 PAR 3: Generic RGB, RGB at 1.37 (3) lights 1+1",
                 "2 PAR 4: Generic RGB, RGB at 1.40 (3) lights 2+1",
@@ -231,7 +228,7 @@ fn a_patch_command_makes_a_new_patch_and_says_what_follows() {
                 fixture: 2,
                 at: at(2, 100),
             },
-            Ok(&["writers"]),
+            Ok(&["fields"]),
             &[
                 "1 PAR 3: Generic RGB, RGB at 1.37 (3) lights 1+1",
                 "2 PAR 4: Generic RGB, RGB at 2.100 (3) lights 2+1",
@@ -262,7 +259,7 @@ fn a_patch_command_makes_a_new_patch_and_says_what_follows() {
             many,
             vec![par_3, bar],
             PatchCommand::Unpatch { fixture: 1 },
-            Ok(&["writers", "darken 0+1"]),
+            Ok(&["fields", "gone 0+1"]),
             &["2 Bar: X-240Bar RGB, 26 Channel at 2.1 (26) lights 2+9"],
         ),
         (
@@ -277,7 +274,7 @@ fn a_patch_command_makes_a_new_patch_and_says_what_follows() {
             many,
             vec![par_3, bar, PatchCommand::Unpatch { fixture: 1 }],
             par("PAR 5", 1, 1),
-            Ok(&["patched 1", "writers"]),
+            Ok(&["patched 1", "fields"]),
             &[
                 "1 PAR 5: Generic RGB, RGB at 1.1 (3) lights 1+1",
                 "2 Bar: X-240Bar RGB, 26 Channel at 2.1 (26) lights 2+9",
@@ -545,7 +542,7 @@ fn patches_never_overlap() {
 /// to 10 and open at 11 to 20, so it rests open at 11.
 #[test]
 fn a_prepared_patch_frames_each_channel_at_its_files_rest() {
-    use engine_core::{ChannelSet, Channels, Levels, Priority, State};
+    use engine_core::{ChannelSet, Channels, Grabs, Levels, Priority, State, frame};
     let mistral = vec![fixture("Ayrton-Mistral.qxf")];
     let empty = Patch::new(Universes::ONE, Lights::new(16).unwrap(), common::whole());
     let (patched, _) = empty
@@ -564,12 +561,13 @@ fn a_prepared_patch_frames_each_channel_at_its_files_rest() {
     let mut channels = Box::new(Channels::NEW);
     channels.configure(&[], plan.configured());
     let state = State::new(Priority::RealTime);
-    plan.frame(
+    frame(
         &state,
-        &[Levels::ZERO],
-        &[ChannelSet::NONE],
-        &[],
+        &Grabs::NONE,
+        (&[Levels::ZERO], &[ChannelSet::NONE]),
+        plan.configured(),
         &mut channels,
+        |_| {},
     );
     assert_eq!(channels.values()[0].0[5], 11);
 }

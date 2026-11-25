@@ -1,25 +1,27 @@
-//! Sample a compiled look at one clock position for one light. The compiler supplies
-//! its target order for each linked look, including shared children used in two places.
+//! Sample a compiled look at one clock position for one target: a word per field, where
+//! a field is a channel or a 16-bit pair. The compiler supplies its target order for each
+//! linked look, including shared children used in two places, and the words of each step
+//! and wave per target, so nothing here knows a light or a colour.
 
 #[path = "wave.rs"]
 mod wave;
 
-use crate::{BeatTime, Light, Percent, Position, Repeat, Rgb, Speed, Swatches, Use};
+use crate::{BeatTime, Percent, Repeat, Speed, Use};
 
 /// The maximum number of looks from the root to a leaf, counting both.
 pub const MAX_DEPTH: usize = 8;
 
-/// A compiled look. Sequence ends and measures use the clock's Q32 beats.
+/// A compiled look. Sequence ends and measures use the clock's Q32 beats. A step's and a
+/// wave's words are per target, in the target's [`Binding`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Node {
-    Step {
-        values: Light,
-    },
+    Step,
     Wave {
         /// Whole beats. Keeping the authored period here lets every instruction
         /// fit in the same space as a v5 sequence or step.
         period: u8,
-        swatches: Swatches,
+        /// How many swatches the ramp has: the binding's words hold one set each.
+        swatches: u8,
     },
     Sequence {
         first: usize,
@@ -36,21 +38,33 @@ pub struct Item {
     pub transition: u8,
 }
 
-/// A light's place in the ordered target, or its column and width for a matrix Wave.
-/// A wheel cuts at entry.
+/// A target's place in the ordered target, or its column and width for a matrix Wave,
+/// and where its words for this node start in the program's `words`: one per field of
+/// the target for a step, one set per swatch for a wave. A word that is `None` offers
+/// nothing (a gap).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Binding {
-    pub node: usize,
+    pub node: u32,
     pub index: u16,
     pub count: u16,
-    pub discrete_colour: bool,
+    pub words: u32,
 }
 
-/// The nodes reachable from one playing look. Each light's bindings are sorted by node.
+/// The nodes reachable from one playing look. Each target's bindings are sorted by node.
 pub struct Program<'a> {
     pub nodes: &'a [Node],
     pub items: &'a [Item],
     pub root: usize,
+    /// Every binding's words, by [`Binding::words`].
+    pub words: &'a [Option<u16>],
+}
+
+/// One target of a program: its bindings, and which of its fields fade (the others cut
+/// at entry: wheels, gobos).
+#[derive(Clone, Copy)]
+pub struct Sampled<'a> {
+    pub bindings: &'a [Binding],
+    pub fades: &'a [bool],
 }
 
 impl Program<'_> {
@@ -60,24 +74,29 @@ impl Program<'_> {
         let measure = match self.nodes.get(self.root) {
             Some(Node::Sequence { measure, .. }) => *measure,
             Some(Node::Wave { period, .. }) => u64::from(*period) << 32,
-            Some(Node::Step { .. }) | None => return false,
+            Some(Node::Step) | None => return false,
         };
         let time = elapsed.into().0;
         settings.repeat == Repeat::Once && !time.at_speed(settings.speed).before(time.at(measure))
     }
 
-    /// Sample one light at the clock's elapsed count since this play began.
+    /// Sample one target at the clock's elapsed count since this play began: a word per
+    /// field into `out` (`None`: a gap), its length the target's fields. `spare` holds
+    /// what a crossfade blends from: [`MAX_DEPTH`] times the fields is always enough, a
+    /// shorter one cuts where it runs out. Allocates nothing.
     pub fn sample(
         &self,
-        bindings: &[Binding],
+        target: Sampled<'_>,
         elapsed: impl Into<Elapsed>,
         settings: Use,
-    ) -> Light {
+        out: &mut [Option<u16>],
+        spare: &mut [Option<u16>],
+    ) {
         Sampler {
             program: self,
-            bindings,
+            target,
         }
-        .visit(self.root, elapsed.into().0, settings, MAX_DEPTH)
+        .visit(self.root, elapsed.into().0, settings, MAX_DEPTH, out, spare);
     }
 }
 
@@ -285,31 +304,62 @@ impl Moment {
 
 struct Sampler<'a> {
     program: &'a Program<'a>,
-    bindings: &'a [Binding],
+    target: Sampled<'a>,
 }
 
 impl Sampler<'_> {
     fn binding(&self, node: usize) -> Option<&Binding> {
-        let index = self.bindings.binary_search_by_key(&node, |b| b.node).ok()?;
-        self.bindings.get(index)
+        let bindings = self.target.bindings;
+        let index = bindings
+            .binary_search_by_key(&node, |b| b.node as usize)
+            .ok()?;
+        bindings.get(index)
     }
 
-    /// Descend at most MAX_DEPTH nodes, including the terminal step or Wave.
-    fn visit(&self, node: usize, time: Moment, settings: Use, depth: usize) -> Light {
+    /// The words from `at` on, one per field of `out`, into `out`; `None` past the end.
+    fn words(&self, at: usize, out: &mut [Option<u16>]) {
+        let words = self.program.words.get(at..).unwrap_or_default();
+        for (index, word) in out.iter_mut().enumerate() {
+            *word = words.get(index).copied().flatten();
+        }
+    }
+
+    /// Descend at most MAX_DEPTH nodes, including the terminal step or Wave. Writes every
+    /// field of `out`; a node that shows nothing writes gaps.
+    fn visit(
+        &self,
+        node: usize,
+        time: Moment,
+        settings: Use,
+        depth: usize,
+        out: &mut [Option<u16>],
+        spare: &mut [Option<u16>],
+    ) {
         let (Some(depth), Some(binding)) = (depth.checked_sub(1), self.binding(node)) else {
-            return Light::DARK;
+            out.fill(None);
+            return;
         };
         let (items, measure) = match self.program.nodes.get(node) {
-            Some(Node::Step { values }) => return *values,
-            Some(Node::Wave { period, swatches }) if *period > 0 => {
+            Some(Node::Step) => return self.words(binding.words as usize, out),
+            Some(Node::Wave { period, swatches }) if *period > 0 && *swatches > 0 => {
                 let measure = u64::from(*period) << 32;
-                let Some((phase, _)) = time.phase(measure, settings, binding) else {
-                    return Light::DARK;
-                };
-                return Light {
-                    colour: wave::colour(swatches.as_slice(), phase, time.subcounts(measure)),
-                    ..Light::DARK
-                };
+                match time.phase(measure, settings, binding) {
+                    Some((phase, _)) => {
+                        let ramp = wave::Ramp {
+                            words: self
+                                .program
+                                .words
+                                .get(binding.words as usize..)
+                                .unwrap_or_default(),
+                            swatches: usize::from(*swatches),
+                            fields: out.len(),
+                            fades: self.target.fades,
+                        };
+                        ramp.sample(phase, time.subcounts(measure), out);
+                    }
+                    None => out.fill(None),
+                }
+                return;
             }
             Some(Node::Sequence {
                 first,
@@ -318,54 +368,72 @@ impl Sampler<'_> {
             }) if *measure > 0 && depth != 0 => {
                 let Some(items) = self.program.items.get(*first..first.saturating_add(*count))
                 else {
-                    return Light::DARK;
+                    out.fill(None);
+                    return;
                 };
                 (items, *measure)
             }
-            Some(Node::Sequence { .. } | Node::Wave { .. }) | None => return Light::DARK,
+            Some(Node::Sequence { .. } | Node::Wave { .. }) | None => {
+                out.fill(None);
+                return;
+            }
         };
         let Some((phase, wrapped)) = time.phase(measure, settings, binding) else {
-            return Light::DARK;
+            out.fill(None);
+            return;
         };
         let index = items.partition_point(|item| !phase.before(time.at(item.end)));
         let Some((incoming, start)) = item_at(items, index) else {
-            return Light::DARK;
+            out.fill(None);
+            return;
         };
         let age = phase.since(start);
         let width = time.subcounts(incoming.end.saturating_sub(start));
         let delay = if incoming.settings.spread != Percent::LEAST
-            && matches!(
-                self.program.nodes.get(incoming.child),
-                Some(Node::Step { .. })
-            ) {
+            && matches!(self.program.nodes.get(incoming.child), Some(Node::Step))
+        {
             self.binding(incoming.child)
                 .and_then(|b| time.at(0).shifted(width, incoming.settings.spread, b))
                 .unwrap_or(time.at(0))
         } else {
             time.at(0)
         };
-        let previous = || {
-            let index = index
+        // the outgoing item, into `into`: false when there is none
+        let previous = |into: &mut [Option<u16>], spare: &mut [Option<u16>]| {
+            let Some(index) = index
                 .checked_sub(1)
-                .or_else(|| wrapped.then(|| items.len().saturating_sub(1)))?;
-            let (outgoing, start) = item_at(items, index)?;
-            Some(self.visit(
+                .or_else(|| wrapped.then(|| items.len().saturating_sub(1)))
+            else {
+                return false;
+            };
+            let Some((outgoing, start)) = item_at(items, index) else {
+                return false;
+            };
+            self.visit(
                 outgoing.child,
                 time.left(outgoing.end.saturating_sub(start)),
                 outgoing.settings,
                 depth,
-            ))
+                into,
+                spare,
+            );
+            true
         };
         if age.before(delay) {
-            return previous().unwrap_or(Light::DARK);
+            if !previous(out, spare) {
+                out.fill(None);
+            }
+            return;
         }
-        let now = self.visit(incoming.child, age, incoming.settings, depth);
+        self.visit(incoming.child, age, incoming.settings, depth, out, spare);
         let Some((progress, fade)) = age.fade_weight(delay, width, incoming.transition) else {
-            return now;
+            return;
         };
-        match previous() {
-            Some(from) => blend(from, now, progress, fade, binding.discrete_colour),
-            None => now,
+        let Some((from, deeper)) = spare.split_at_mut_checked(out.len()) else {
+            return;
+        };
+        if previous(from, deeper) {
+            blend(from, out, self.target.fades, progress, fade);
         }
     }
 }
@@ -394,35 +462,26 @@ fn interpolate(from: u16, to: u16, weight: Moment, span: u128) -> u16 {
     (numerator / span) as u16
 }
 
-/// Only the incoming sample can claim a property. A common continuous value
-/// interpolates in 16 bits, rounded to nearest. Gobo and wheel colour cut at entry.
-fn blend(from: Light, mut to: Light, progress: Moment, fade: u128, discrete_colour: bool) -> Light {
-    let lerp = |a, b| interpolate(a, b, progress, fade);
-    if let (Some(a), Some(b)) = (from.intensity, to.intensity) {
-        to.intensity = Some(lerp(a, b));
+/// Only the incoming sample can claim a field. A field that fades and has a word on
+/// both sides interpolates in 16 bits, rounded to nearest; the others cut at entry.
+fn blend(
+    from: &[Option<u16>],
+    to: &mut [Option<u16>],
+    fades: &[bool],
+    progress: Moment,
+    fade: u128,
+) {
+    for ((to, from), fades) in to.iter_mut().zip(from).zip(fades) {
+        if *fades && let (Some(a), Some(b)) = (*from, *to) {
+            *to = Some(interpolate(a, b, progress, fade));
+        }
     }
-    if let (Some(a), Some(b)) = (from.zoom, to.zoom) {
-        to.zoom = Some(lerp(a, b));
-    }
-    if let (Some(a), Some(b)) = (from.position, to.position) {
-        to.position = Some(Position {
-            pan: lerp(a.pan, b.pan),
-            tilt: lerp(a.tilt, b.tilt),
-        });
-    }
-    if !discrete_colour && let (Some(a), Some(b)) = (from.colour, to.colour) {
-        to.colour = Some(Rgb {
-            red: lerp(a.red, b.red),
-            green: lerp(a.green, b.green),
-            blue: lerp(a.blue, b.blue),
-        });
-    }
-    to
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{Light, Position, Rgb};
 
     const BEAT: u64 = 1 << 32;
     const UNIT: u64 = BEAT / 16;
@@ -447,10 +506,88 @@ mod tests {
         }
     }
 
+    /// A light's parts as the fields of one target: intensity, red, green, blue, pan,
+    /// tilt, zoom, the three gobo wheels.
+    const FIELDS: usize = 10;
+
+    fn words(light: &Light) -> [Option<u16>; FIELDS] {
+        let colour = light.colour;
+        let position = light.position;
+        let gobo = |wheel: usize| light.gobos.get(wheel).copied().flatten().map(u16::from);
+        [
+            light.intensity,
+            colour.map(|c| c.red),
+            colour.map(|c| c.green),
+            colour.map(|c| c.blue),
+            position.map(|p| p.pan),
+            position.map(|p| p.tilt),
+            light.zoom,
+            gobo(0),
+            gobo(1),
+            gobo(2),
+        ]
+    }
+
+    fn light(words: &[Option<u16>; FIELDS]) -> Light {
+        let [intensity, red, green, blue, pan, tilt, zoom, g1, g2, g3] = *words;
+        Light {
+            intensity,
+            colour: red
+                .zip(green)
+                .zip(blue)
+                .map(|((red, green), blue)| Rgb { red, green, blue }),
+            position: pan.zip(tilt).map(|(pan, tilt)| Position { pan, tilt }),
+            zoom,
+            gobos: [g1, g2, g3].map(|g| g.and_then(|g| u8::try_from(g).ok())),
+        }
+    }
+
+    /// The old shape of a sample, a light, for the tests written with lights: the gobos
+    /// cut, and the colour too when it is on a wheel.
+    trait Lit {
+        fn light_at(&self, bindings: &[Binding], at: impl Into<Elapsed>, settings: Use) -> Light;
+        fn wheel_at(
+            &self,
+            bindings: &[Binding],
+            at: impl Into<Elapsed>,
+            settings: Use,
+            wheel: bool,
+        ) -> Light;
+    }
+
+    impl Lit for Program<'_> {
+        fn light_at(&self, bindings: &[Binding], at: impl Into<Elapsed>, settings: Use) -> Light {
+            self.wheel_at(bindings, at, settings, false)
+        }
+
+        fn wheel_at(
+            &self,
+            bindings: &[Binding],
+            at: impl Into<Elapsed>,
+            settings: Use,
+            wheel: bool,
+        ) -> Light {
+            let fades = [
+                true, !wheel, !wheel, !wheel, true, true, true, false, false, false,
+            ];
+            let target = Sampled {
+                bindings,
+                fades: &fades,
+            };
+            let mut out = [None; FIELDS];
+            let mut spare = [None; FIELDS * MAX_DEPTH];
+            self.sample(target, at, settings, &mut out, &mut spare);
+            light(&out)
+        }
+    }
+
     #[derive(Default)]
     struct Graph {
         nodes: Vec<Node>,
         items: Vec<Item>,
+        words: Vec<Option<u16>>,
+        /// Where each node's words start.
+        starts: Vec<usize>,
     }
 
     impl Graph {
@@ -462,7 +599,9 @@ mod tests {
         }
 
         fn light(&mut self, values: Light) -> usize {
-            self.nodes.push(Node::Step { values });
+            self.nodes.push(Node::Step);
+            self.starts.push(self.words.len());
+            self.words.extend(words(&values));
             self.nodes.len() - 1
         }
 
@@ -484,6 +623,7 @@ mod tests {
                 count: rows.len(),
                 measure,
             });
+            self.starts.push(0);
             self.nodes.len() - 1
         }
 
@@ -492,16 +632,17 @@ mod tests {
                 nodes: &self.nodes,
                 items: &self.items,
                 root,
+                words: &self.words,
             }
         }
 
         fn bindings(&self, index: u16, count: u16) -> Vec<Binding> {
             (0..self.nodes.len())
                 .map(|node| Binding {
-                    node,
+                    node: node as u32,
                     index,
                     count,
-                    discrete_colour: false,
+                    words: self.starts.get(node).copied().unwrap_or(0) as u32,
                 })
                 .collect()
         }
@@ -616,7 +757,7 @@ mod tests {
             let p = graph.program(root);
             assert_eq!(
                 (
-                    p.sample(&bindings, at, settings).intensity,
+                    p.light_at(&bindings, at, settings).intensity,
                     p.finished(at, settings)
                 ),
                 (expected, ended),
@@ -704,7 +845,7 @@ mod tests {
             assert_eq!(
                 graph
                     .program(root)
-                    .sample(&graph.bindings(index, 2), at, settings)
+                    .light_at(&graph.bindings(index, 2), at, settings)
                     .intensity,
                 expected,
                 "{name}"
@@ -740,7 +881,7 @@ mod tests {
                 assert_eq!(
                     graph
                         .program(root)
-                        .sample(&bindings, u64::from(width) * UNIT, settings)
+                        .light_at(&bindings, u64::from(width) * UNIT, settings)
                         .intensity,
                     Some(expected)
                 );
@@ -767,7 +908,7 @@ mod tests {
             assert_eq!(
                 graph
                     .program(root)
-                    .sample(&graph.bindings(index, 3), count, normal)
+                    .light_at(&graph.bindings(index, 3), count, normal)
                     .intensity,
                 expected
             );
@@ -792,7 +933,7 @@ mod tests {
         let levels = [0, 1, 2].map(|light| {
             graph
                 .program(parent)
-                .sample(&graph.bindings(light, 3), 0, spread)
+                .light_at(&graph.bindings(light, 3), 0, spread)
                 .intensity
         });
         assert_eq!(levels, [Some(100); 3]);
@@ -833,7 +974,7 @@ mod tests {
                 assert_eq!(
                     graph
                         .program(root)
-                        .sample(&bindings, at, settings)
+                        .light_at(&bindings, at, settings)
                         .intensity,
                     Some(expected),
                     "{speed:?} at {at}"
@@ -865,7 +1006,7 @@ mod tests {
             let elapsed = clock.elapsed_at(Duration::from_micros(micros));
             (
                 elapsed >= UNIT,
-                program.sample(&bindings, elapsed, normal).intensity,
+                program.light_at(&bindings, elapsed, normal).intensity,
             )
         });
         assert_eq!(
@@ -916,7 +1057,10 @@ mod tests {
             ("loop transition progresses", wraps, 40 * UNIT, 12000),
         ] {
             assert_eq!(
-                graph.program(root).sample(&bindings, at, normal).intensity,
+                graph
+                    .program(root)
+                    .light_at(&bindings, at, normal)
+                    .intensity,
                 Some(expect),
                 "{name}"
             );
@@ -936,9 +1080,12 @@ mod tests {
             (root, 0, None),
         ] {
             let mut bindings = graph.bindings(0, 1);
-            bindings.retain(|b| b.node != missing);
+            bindings.retain(|b| b.node as usize != missing);
             assert_eq!(
-                graph.program(root).sample(&bindings, at, normal).intensity,
+                graph
+                    .program(root)
+                    .light_at(&bindings, at, normal)
+                    .intensity,
                 expected
             );
         }
@@ -976,12 +1123,9 @@ mod tests {
             (false, BEAT + BEAT / 2, 450, 30, 25),
             (true, BEAT + BEAT / 2, 600, 30, 25),
         ] {
-            let mut bindings = graph.bindings(0, 1);
-            for binding in &mut bindings {
-                binding.discrete_colour = wheel;
-            }
+            let bindings = graph.bindings(0, 1);
             assert_eq!(
-                graph.program(root).sample(&bindings, at, normal),
+                graph.program(root).wheel_at(&bindings, at, normal, wheel),
                 Light {
                     colour: Some(rgb(red)),
                     position: Some(Position { pan, tilt }),

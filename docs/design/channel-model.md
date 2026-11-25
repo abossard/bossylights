@@ -1,6 +1,6 @@
 # The channel model: the engine manages channels
 
-Issue #239. Replaces the light record. Design only, no code yet. Owner answers: the decisions page, 2026-11-20 (ch-1 to ch-9, chk-1 to chk-10, cx-1 to cx-6, s1-*).
+Issue #239. Replaces the light record. Built so far: the channel core, routes, the lowering and one mixer per channel (#247 to #250). The rest is design. Owner answers: the decisions page, 2026-11-20 (ch-1 to ch-9, chk-1 to chk-10, cx-1 to cx-6, s1-*).
 
 ## The idea in one picture
 
@@ -93,11 +93,11 @@ Outside the dense arrays, all bounded and sized at start or reserved before they
 
 | Store | Size | Notes |
 |---|---|---|
-| Source table | 1,024 entries of 24 B (rank, kind, start order, start time, speed, id) | one per live play, grab or Identify. Explain needs start and speed |
+| Source table | 1,024 entries of 24 B (rank, kind, start order, start time, speed, id) | one per live play, grab or Identify. Explain needs start and speed. Built: 32 plays by slot, then 992 grabs |
 | Raw holds | up to `HOLDS = 32,768` entries `(channel u32, byte u8)` (today's 64 universes), refused `TooManyHolds` beyond | sparse list, also copied into the snapshot, so a hold can be listed and read back. A haze fader is one of these |
 | Pair table | `(coarse u32, fine u32)` sorted | built at patch |
 | Follower index | the channels whose `follows` is not 0, as a sorted `u32` list | so a modifier pass visits only followers. Swapped as one revision |
-| Plans | curves and sparse targets in `Arc`, 64 MiB cap as today | built off tick, retired by the free thread. Frozen offers of a kept play live in its entry list |
+| Plans | curves and sparse targets in `Arc`, 64 MiB cap as today | built off tick, retired by the free thread. A kept play keeps its frozen moment (a place in the plan, not a clock time) and is sampled there each frame (#250 D3) |
 | Route spans | up to 1,024 per output | immutable, in the output |
 
 ### Budget for the biggest show
@@ -169,7 +169,7 @@ Default rules, from the fixture file (cx-3: unknown channels start independent).
 - Brightness on a dimmerless fixture is baked into the emitter bytes (cx-4) unless such a virtual dimmer exists.
 - Every default is only a default: Patch stores the changes as overrides (`rest`, `follows`, `dark`, `fade`, `highest`) per channel.
 - The Who wins row "highest wins for brightness" is a bulk edit of `highest` on every channel whose function is Dimmer. `SetMixRules` loses its brightness field in v12. Until T7 the v11 field stays on the wire and the front turns it into this bulk edit, so the flag on the channel is the only truth. A pair has one policy for both halves.
-- Where a v11 brightness goes is an interim rule until light values leave (#253): it is baked into the colour of every light without a dimmer channel of its own, a head beside a shared dimmer too (planner, 24 Nov). A colour with no brightness is not dimmed. The lasting rule for a bar with a shared dimmer (today a bar at 50% gives 25%) comes with the controls kit.
+- Where a v11 brightness goes is an interim rule (rule B) until light values leave (#253): it is baked into the colour of every light without a dimmer channel of its own, a head beside a shared dimmer too (planner, 24 Nov). A colour with no brightness is not dimmed. The lasting rule for a bar with a shared dimmer (today a bar at 50% gives 25%) comes with the controls kit.
 - A v11 step that sets only brightness on a fixture without a dimmer compiles to **no offers** (there is no brightness channel to hold). A step with colour and brightness compiles to the colour scaled by the brightness. `Highest` has no effect on such fixtures: their colour is latest-wins, and `highest` needs a virtual dimmer, whose control channel can be `highest`. The `who_wins_on_the_wire` expectations on dimmerless pars are rewritten in T4.
 - A consequence of cx-4, stated for the owner: on a fixture without a dimmer a colour press at Manual also holds that fixture's brightness, because brightness is in the emitter bytes. "Red alert over the autopilot chase" holds the colour and the level together. A virtual dimmer for a group brings the split back.
 - More cases later (a haze kill, a group master) are more slots or a wider mask, never new code paths.
@@ -238,7 +238,7 @@ stateDiagram-v2
   Ended --> [*]
 ```
 
-- Rank, ties, release and stay are the rules of [who-wins.md](who-wins.md), now per channel. The property rows there are replaced when T4 lands.
+- Rank, ties, release and stay are the rules of [who-wins.md](who-wins.md), now per channel.
 - Explain recomputes one channel with the same `mix` function over retained inputs: the source table (start, speed, rank), the plans and grab lists the front holds, the raw holds and the eight modifier levels, all stamped with the frame. It returns the winner and the runner-up (`under`) exactly, and cannot drift from the tick. Only the latest snapshot frame is retained; an older frame reports "expired".
 
 ## Fades and jumps
@@ -302,6 +302,7 @@ sequenceDiagram
 | Plans, grab lists, follower plan, route spans | the front, before the command is sent. They travel in the command |
 | Lane boxes | `Lane::start`, off tick, sized by the route length |
 | Old plans, devices, lists | go back on the return queue, freed by the free thread |
+| Grab boxes | made by the front, which keeps a clone until the tick applied the command that drops it: the tick never frees one, even on a `ReleaseAll` of 992 grabs (#250) |
 | Capacity | the front refuses at admission when slots, visits or bytes are short, and reserves the release slot |
 
 - `engine-core` keeps no `std` and no `alloc`. The tick crate keeps the lock, channel, file and print bans of `clippy.toml`.
@@ -343,6 +344,7 @@ flowchart LR
 | **Recipe**: how the screens built it (group, selector, order, palette link, spread) | Project, opaque text up to 64 KiB, never read by the engine | the screens |
 | **Plan**: curves and channel targets | in memory, `Arc`, sent to the tick | the tick |
 
+- Built until #253: a plan or a grab names a light by index and holds words per field (`None` is a gap). The field table (`rig::FieldPlan`), swapped whole on the tick per patch edit, is the one step from that index to channels, so a Move keeps a playing look. No other tick code knows more of a light.
 - A target is a **ref**: `Fixture{id, channel}` or `Raw{channel}`. The front resolves refs against the current patch when it compiles. Moving a fixture recompiles every look that names it, in the same edit. A look follows its fixture, never an old address. Reusing an address never retargets a look.
 - Sequences keep the graph of looks and its admission checks (depth, expansion, offers) and are flattened to one plan. A channel an item does not mention becomes a `Gap` in that item's span.
 - A look target on a pair names the pair: `Fixture{id, channel}` of the coarse byte or a compound ref. A `Raw` ref to one member of a pair is refused.

@@ -1,11 +1,11 @@
 //! Command admission and installation. This is the engine front: it owns the project,
 //! patch, plays reserved for admission, and output openings before the tick sees them.
 
-use crate::grabs::Grabs;
+use crate::grabs::{Change as GrabSet, Changes, Grabs};
 use crate::lane::Lane;
 use crate::*;
 use looks::Plan;
-use rig::{PatchEffect, Whole, WriterPlan};
+use rig::{FieldPlan, PatchEffect, Whole};
 
 mod opening;
 use opening::{
@@ -110,10 +110,11 @@ pub(crate) enum Brings {
     Reroute(LaneDelivery, bool),
     /// Tell the opener when prior attachments passed the tick and reclaimer.
     Probe(Arc<AtomicBool>),
-    /// The writers of the patch, for `Writers`.
-    Writers(WriterPlan),
-    /// Some runs of a group in place, for `Runs`: nothing goes back.
-    Runs([Option<LightRun>; RUNS_IN_PLACE]),
+    /// The field table of the patch, for `Fields`.
+    Fields(FieldPlan),
+    /// The grab changes of one press, for `Grabs`: nothing goes back, the front keeps
+    /// them until the tick applied them.
+    Grabs(Changes),
     /// The plan of a play, for `Start` and `Plan`.
     Plan(Version),
 }
@@ -126,7 +127,7 @@ pub(crate) enum Brings {
 pub(crate) enum Retired {
     Probe(Arc<AtomicBool>),
     Device(Box<Lane>),
-    Writers(WriterPlan),
+    Fields(FieldPlan),
     Plan(Arc<Plan>),
 }
 
@@ -991,7 +992,7 @@ impl Sender {
                 }) {
                     return Err(Refusal::LookInUse { look: live.look });
                 }
-                let begun = self.publish(effects, rebound.as_ref())?;
+                let begun = self.publish(effects, rebound.as_ref(), patch.as_ref())?;
                 if let Some(patch) = patch {
                     self.patch = Arc::new(patch);
                 }
@@ -1014,7 +1015,7 @@ impl Sender {
                 }) {
                     return Err(Refusal::EmptyPalette);
                 }
-                self.publish(Vec::new(), Some(&looks))?;
+                self.publish(Vec::new(), Some(&looks), None)?;
                 self.looks = Arc::new(looks);
                 Begun::Queued
             }
@@ -1128,12 +1129,15 @@ impl Sender {
                 self.push(EngineCommand::ReleaseAll, Brings::Nothing)?;
                 self.forget(|live| live.rank == Rank::Manual);
                 self.grabs.clear();
+                self.grabs.sent(self.sent, None);
                 Begun::Queued
             }
             Change::ReleaseProperty { property, runs } => {
                 let held = self.grabs.releasing(property, &runs);
-                self.lights(LightChange::Release { property }, &held)?;
-                self.grabs.let_go(Some(property), &held);
+                let patch = Arc::clone(&self.patch);
+                self.grab_changes(run_visits(&held), false, |grabs| {
+                    grabs.let_go(Some(property), &held, &patch)
+                })?;
                 Begun::Queued
             }
             Change::UpdateGrab { grab, value } => {
@@ -1144,23 +1148,18 @@ impl Sender {
                     // only the lights it still holds take the value
                     let held = self.grabs.held(grab);
                     self.patch.supports(&held, value)?;
-                    self.lights(LightChange::Update { value, grab }, &held)?;
+                    let patch = Arc::clone(&self.patch);
+                    self.grab_changes(run_visits(&held), true, |grabs| {
+                        grabs.update(grab, value, &patch)
+                    })?;
                 }
                 Begun::Queued
             }
             Change::EndGrab { grab } => {
-                if let Some(property) = self.grabs.property(grab) {
+                if self.grabs.property(grab).is_some() {
                     let end = stops(Rank::Manual, self.looks.rules());
                     let held = self.grabs.held(grab);
-                    self.lights(
-                        LightChange::End {
-                            property,
-                            grab,
-                            end,
-                        },
-                        &held,
-                    )?;
-                    self.grabs.end(grab, property, &held, end);
+                    self.grab_changes(run_visits(&held), false, |grabs| grabs.end(grab, end))?;
                 }
                 Begun::Queued
             }
@@ -1170,6 +1169,7 @@ impl Sender {
                 self.forget(|live| unkept(live.rank, live.hold.state(), rules));
                 if unkept(Rank::Manual, PlayState::Kept, rules) {
                     self.grabs.clear_kept();
+                    self.grabs.sent(self.sent, None);
                 }
                 self.looks = Arc::new(looks);
                 Begun::Queued
@@ -1238,6 +1238,7 @@ impl Sender {
     /// Reconcile ended and frozen versions before checking the next admission.
     fn reap(&mut self) {
         let applied = self.shared.applied.load(Ordering::Acquire);
+        self.grabs.passed(applied);
         while self
             .prefix_work
             .front()
@@ -1330,12 +1331,13 @@ impl Sender {
         let looks = looks.rebind(&patch)?;
         self.publish(
             vec![
-                PatchEffect::Writers(patch.prepare()),
+                PatchEffect::Fields(patch.prepare()),
                 PatchEffect::Send(EngineCommand::Rules {
                     rules: looks.rules(),
                 }),
             ],
             None,
+            Some(&patch),
         )?;
         self.patch = Arc::new(patch);
         self.looks = Arc::new(looks);
@@ -1361,8 +1363,15 @@ impl Sender {
         &mut self,
         effects: Vec<PatchEffect>,
         looks: Option<&Looks>,
+        patch: Option<&Patch>,
     ) -> Result<Begun, Refusal> {
-        let places: usize = effects.iter().map(places).sum();
+        let grabbing = effects.iter().any(|e| {
+            matches!(
+                e,
+                PatchEffect::Grab { .. } | PatchEffect::Release { .. } | PatchEffect::Gone { .. }
+            )
+        });
+        let places = effects.iter().map(places).sum::<usize>() + usize::from(grabbing);
         let mut changed = Vec::new();
         let mut playing = self.playing_work();
         if let Some(looks) = looks {
@@ -1385,11 +1394,11 @@ impl Sender {
                 }
             }
         }
-        let writers = effects
+        let tables = effects
             .iter()
-            .filter(|e| matches!(e, PatchEffect::Writers(_)))
+            .filter(|e| matches!(e, PatchEffect::Fields(_)))
             .count();
-        let returns = writers + changed.len();
+        let returns = tables + changed.len();
         self.room(places + changed.len(), returns)?;
         let bytes = changed.iter().map(|v| v.plan.bytes() as u64).sum();
         let lights = effects.iter().map(light_visits).sum();
@@ -1410,37 +1419,46 @@ impl Sender {
             .map_err(|_| Refusal::QueueFull)?;
         let mut queued = Vec::with_capacity(places + changed.len());
         let mut begun = Begun::Queued;
+        let mut sets = Vec::new();
+        let patch = patch.unwrap_or(self.patch.as_ref());
         for effect in effects {
             match effect {
                 PatchEffect::Patched { fixture } => begun = Begun::Patched { fixture },
-                PatchEffect::Writers(writers) => queued.push(Sent {
-                    command: EngineCommand::Writers,
+                PatchEffect::Fields(table) => queued.push(Sent {
+                    command: EngineCommand::Fields,
                     at,
-                    brings: Brings::Writers(writers),
+                    brings: Brings::Fields(table),
                 }),
-                PatchEffect::Send(command) => {
-                    queued.push(Sent {
-                        command,
-                        at,
-                        brings: Brings::Nothing,
-                    });
-                    if let EngineCommand::Darken { lights } = command {
-                        self.grabs.let_go(None, &[lights]);
-                    }
+                PatchEffect::Send(command) => queued.push(Sent {
+                    command,
+                    at,
+                    brings: Brings::Nothing,
+                }),
+                PatchEffect::Gone { lights } => {
+                    sets.extend(self.grabs.let_go(None, &[lights], patch));
                 }
-                PatchEffect::Runs { change, runs } => {
-                    queued.extend(run_commands(change, &runs, at));
+                PatchEffect::Release { property, runs } => {
+                    let held = self.grabs.releasing(property, &runs);
+                    sets.extend(self.grabs.let_go(Some(property), &held, patch));
                 }
                 PatchEffect::Grab { value, runs } => {
                     let grab = GrabId {
                         generation: self.grabbed.wrapping_add(1),
                     };
-                    queued.extend(run_commands(LightChange::Grab { value, grab }, &runs, at));
                     self.grabbed = grab.generation;
-                    self.grabs.grab(grab, value.property(), runs);
+                    sets.extend(self.grabs.hold(grab, value, runs, patch));
                     begun = Begun::Grabbed { grab };
                 }
             }
+        }
+        // one command for every grab change of the edit, in the place booked for it
+        let sets: Option<Changes> = grabbing.then(|| sets.into());
+        if let Some(sets) = &sets {
+            queued.push(Sent {
+                command: EngineCommand::Grabs,
+                at,
+                brings: Brings::Grabs(Arc::clone(sets)),
+            });
         }
         queued.extend(changed.iter().map(|v| Sent {
             command: EngineCommand::Plan { play: v.play },
@@ -1448,6 +1466,9 @@ impl Sender {
             brings: Brings::Plan(v.clone()),
         }));
         self.sent += chunk.fill_from_iter(queued) as u64;
+        if grabbing {
+            self.grabs.sent(self.sent, sets);
+        }
         self.retired += returns as u64;
         self.plan_bytes += bytes;
         if lights > 0 {
@@ -1469,24 +1490,34 @@ impl Sender {
         Ok(begun)
     }
 
-    /// Queues `change` on the lights of `runs`, all in one wake: the runs travel in
-    /// place, in places of the queue made visible at once, so nothing goes back and it
-    /// needs only those places.
-    fn lights(&mut self, change: LightChange, runs: &[LightRun]) -> Result<(), Refusal> {
-        if runs.is_empty() {
+    /// Queues the grab changes `make` makes in the book, all in one wake, in one place of
+    /// the queue: the book keeps every box until the tick applied them. `visits` are
+    /// booked for the lights they touch, checked against the work limit when `check`.
+    /// Nothing changes when there is no room.
+    fn grab_changes(
+        &mut self,
+        visits: usize,
+        check: bool,
+        make: impl FnOnce(&mut Grabs) -> Vec<GrabSet>,
+    ) -> Result<(), Refusal> {
+        if visits == 0 {
             return Ok(());
         }
-        let visits = run_visits(runs);
-        if matches!(change, LightChange::Update { .. }) {
+        if check {
             self.check_work(self.playing_work(), visits)?;
         }
-        let pieces = runs.len().div_ceil(RUNS_IN_PLACE);
         let chunk = self
             .commands
-            .write_chunk_uninit(pieces)
+            .write_chunk_uninit(1)
             .map_err(|_| Refusal::QueueFull)?;
-        let sent = chunk.fill_from_iter(run_commands(change, runs, self.clock.now()));
+        let sets: Changes = make(&mut self.grabs).into();
+        let sent = chunk.fill_from_iter(std::iter::once(Sent {
+            command: EngineCommand::Grabs,
+            at: self.clock.now(),
+            brings: Brings::Grabs(Arc::clone(&sets)),
+        }));
         self.sent += sent as u64;
+        self.grabs.sent(self.sent, Some(sets));
         self.prefix_work
             .push_back((self.sent, PrefixWork::Lights(visits)));
         Ok(())
@@ -1805,6 +1836,18 @@ impl Sender {
         }
     }
 
+    /// Every light a grab holds, live or kept, after every admitted command: what the
+    /// picture shows.
+    pub fn held_lights(&self) -> Vec<engine_core::HeldLight> {
+        self.grabs.held_lights()
+    }
+
+    /// One more for each admitted command that changed the grabs: [`Sender::held_lights`]
+    /// changes only with it.
+    pub fn grabs_revision(&self) -> u64 {
+        self.grabs.revision()
+    }
+
     /// The patch as it is now.
     pub fn patch(&self) -> Arc<Patch> {
         Arc::clone(&self.patch)
@@ -1850,10 +1893,9 @@ impl Sender {
             | EngineCommand::ReleaseChannels
             | EngineCommand::ReleaseAll
             | EngineCommand::Blackout { .. }
-            | EngineCommand::Writers
-            | EngineCommand::Runs { .. }
-            | EngineCommand::Lights { .. }
-            | EngineCommand::Darken { .. }
+            | EngineCommand::Fields
+            | EngineCommand::Grab { .. }
+            | EngineCommand::Grabs
             | EngineCommand::Start { .. }
             | EngineCommand::Keep { .. }
             | EngineCommand::Rules { .. }
@@ -1880,7 +1922,7 @@ impl Sender {
                     command,
                     EngineCommand::Plan { .. }
                         | EngineCommand::Release { .. }
-                        | EngineCommand::Writers
+                        | EngineCommand::Fields
                 )
         };
         // one more box on its way back or held by the tick thread: all but a release
@@ -1938,56 +1980,28 @@ impl Sender {
     }
 }
 
-fn run_commands(
-    change: LightChange,
-    runs: &[LightRun],
-    at: Duration,
-) -> impl Iterator<Item = Sent> {
-    runs.chunks(RUNS_IN_PLACE).map(move |part| {
-        let (command, brings) = if let [run] = part {
-            (change.on(*run), Brings::Nothing)
-        } else {
-            let mut in_place = [None; RUNS_IN_PLACE];
-            for (place, run) in in_place.iter_mut().zip(part) {
-                *place = Some(*run);
-            }
-            (EngineCommand::Runs { change }, Brings::Runs(in_place))
-        };
-        Sent {
-            command,
-            at,
-            brings,
-        }
-    })
-}
-
 fn run_visits(runs: &[LightRun]) -> usize {
     runs.iter().map(|run| usize::from(run.count())).sum()
 }
 
+/// The lights an effect's grab changes visit.
 fn light_visits(effect: &PatchEffect) -> usize {
     match effect {
-        PatchEffect::Runs { runs, .. } | PatchEffect::Grab { runs, .. } => run_visits(runs),
-        PatchEffect::Send(command) => {
-            if let EngineCommand::Lights { lights, .. } | EngineCommand::Darken { lights } = command
-            {
-                usize::from(lights.count())
-            } else {
-                0
-            }
-        }
-        PatchEffect::Writers(_) | PatchEffect::Patched { .. } => 0,
+        PatchEffect::Release { runs, .. } | PatchEffect::Grab { runs, .. } => run_visits(runs),
+        PatchEffect::Gone { lights } => usize::from(lights.count()),
+        PatchEffect::Fields(_) | PatchEffect::Send(_) | PatchEffect::Patched { .. } => 0,
     }
 }
 
-/// Places of the command queue `effect` takes.
+/// Places of the command queue `effect` takes of its own. The grab changes of an edit
+/// share one more.
 fn places(effect: &PatchEffect) -> usize {
     match effect {
-        PatchEffect::Patched { .. } => 0,
-        PatchEffect::Writers(_) | PatchEffect::Send(_) => 1,
-        PatchEffect::Runs { runs, .. } | PatchEffect::Grab { runs, .. } => {
-            runs.len().div_ceil(RUNS_IN_PLACE)
-        }
+        PatchEffect::Fields(_) | PatchEffect::Send(_) => 1,
+        PatchEffect::Patched { .. }
+        | PatchEffect::Release { .. }
+        | PatchEffect::Gone { .. }
+        | PatchEffect::Grab { .. } => 0,
     }
 }
 

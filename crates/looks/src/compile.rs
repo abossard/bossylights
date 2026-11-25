@@ -1,12 +1,16 @@
-//! Immutable plans cross to the tick by shared ownership. Only the sample buffer
-//! changes there. A standalone step goes straight to the Mixer as runs of lights.
+//! Immutable plans cross to the tick by shared ownership. A plan names lights by index
+//! and holds words per field of each light: the field table (`rig::Targets`) gives each
+//! light's fields on the tick, so a Move swaps the table and the plan follows. A
+//! standalone step offers its words as they are; a sequence or a wave is sampled per
+//! light into the table's scratch, and each word goes to the Mixer.
 
 use alloc::{boxed::Box, vec::Vec};
 use core::mem::size_of_val;
 use engine_core::{
-    Binding, Elapsed, Entry, Item, Light, LightRun, Node, Program, Refusal, Step, Use,
+    Binding, Elapsed, Field, Item, Light, LightNumber, Lights, Node, Program, Refusal, Sampled,
+    Step, Swatches, Use,
 };
-use rig::{Patch, WaveBinding};
+use rig::{LightFields, Patch, Targets, WaveBinding, Words};
 
 /// Maximum play visits booked for one wake. The engine shares unused visits
 /// with light commands and guarantees room for one direct light grab.
@@ -28,13 +32,13 @@ pub(crate) fn sample_work(lights: usize, visits_per_light: usize) -> Result<usiz
 /// share the same immutable objects until their last owner lets go.
 pub const PLAN_BYTES: usize = 64 * 1024 * 1024;
 
-/// A step's values on its checked target runs, shared by static playback and nested
+/// A step's words on its checked target runs, shared by static playback and nested
 /// sequence compilation.
-pub fn compile(step: &Step, patch: &Patch) -> Result<Box<[Entry]>, Refusal> {
+pub fn compile(step: &Step, patch: &Patch) -> Result<Words, Refusal> {
     patch.bind_step(step)
 }
 
-pub(crate) fn numbers(run: LightRun) -> core::ops::Range<u16> {
+pub(crate) fn numbers(run: engine_core::LightRun) -> core::ops::Range<u16> {
     run.first().index()..run.first().index() + run.count()
 }
 
@@ -44,29 +48,58 @@ pub(crate) fn ordered_group(group: engine_core::Text, patch: &Patch) -> Result<V
     patch.ordered_group(group)
 }
 
-/// The original leaf and its bound lights, for validating changes against held samples.
+/// The original leaf and its bound words, for validating changes against held samples.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Leaf {
     pub step: Step,
-    pub entries: Box<[Entry]>,
+    pub words: Words,
 }
 
 impl Leaf {
     pub fn new(step: Step, patch: &Patch) -> Result<Self, Refusal> {
         Ok(Self {
             step,
-            entries: compile(&step, patch)?,
+            words: compile(&step, patch)?,
         })
     }
 
     fn matches(&self, patch: &Patch) -> bool {
-        compile(&self.step, patch).is_ok_and(|now| now == self.entries)
+        compile(&self.step, patch).is_ok_and(|now| now == self.words)
     }
 }
 
+/// What a node shows: the words of each light bound to it come from it.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Shows {
+    Step(Step),
+    Wave(Swatches),
+    Sequence,
+}
+
+impl Shows {
+    /// The words a light of `fields` takes from this node, after `into`: a step's value
+    /// on each field, a wave's swatches one set after the other.
+    pub fn words(&self, fields: &LightFields, into: &mut Vec<Option<u16>>) {
+        match self {
+            Shows::Step(step) => into.extend(fields.words(&step.values)),
+            Shows::Wave(swatches) => {
+                for colour in swatches.as_slice() {
+                    let swatch = Light {
+                        colour: Some(*colour),
+                        ..Light::DARK
+                    };
+                    into.extend(fields.words(&swatch));
+                }
+            }
+            Shows::Sequence => {}
+        }
+    }
+}
+
+/// One light of a timed plan, by index, and its bindings sorted by node.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Target {
-    pub light: LightRun,
+    pub light: u16,
     pub bindings: Box<[Binding]>,
 }
 
@@ -78,7 +111,12 @@ pub(crate) struct Timed {
     pub palettes: Box<[u16]>,
     pub nodes: Box<[Node]>,
     pub items: Box<[Item]>,
+    /// What each node shows, to check a retained plan against a changed patch.
+    pub shows: Box<[Shows]>,
+    /// Sorted by light.
     pub targets: Box<[Target]>,
+    /// The words of every binding. Equal words are kept once.
+    pub words: Box<[Option<u16>]>,
     pub leaves: Box<[Leaf]>,
     pub waves: Box<[WaveBinding]>,
 }
@@ -89,7 +127,30 @@ impl Timed {
             root: self.root,
             nodes: &self.nodes,
             items: &self.items,
+            words: &self.words,
         }
+    }
+
+    /// Each light still has the words of each of its bindings: a light whose fields
+    /// changed (another mode, unpatched) does not.
+    fn fits(&self, patch: &Patch) -> bool {
+        let mut words = Vec::new();
+        self.targets.iter().all(|target| {
+            let Some(fields) =
+                LightNumber::new(target.light, Lights::MOST).and_then(|light| patch.fields(light))
+            else {
+                return false;
+            };
+            target.bindings.iter().all(|binding| {
+                words.clear();
+                let Some(show) = self.shows.get(binding.node as usize) else {
+                    return false;
+                };
+                show.words(fields, &mut words);
+                let at = binding.words as usize;
+                self.words.get(at..at + words.len()) == Some(words.as_slice())
+            })
+        })
     }
 }
 
@@ -102,13 +163,15 @@ enum PlanKind {
 impl PlanKind {
     fn storage(&self) -> usize {
         match self {
-            PlanKind::Step(leaf) => size_of_val(leaf.entries.as_ref()),
+            PlanKind::Step(leaf) => leaf.words.bytes(),
             PlanKind::Timed(timed) => {
                 size_of_val(timed.saved.as_ref())
                     + size_of_val(timed.palettes.as_ref())
                     + size_of_val(timed.nodes.as_ref())
                     + size_of_val(timed.items.as_ref())
+                    + size_of_val(timed.shows.as_ref())
                     + size_of_val(timed.targets.as_ref())
+                    + size_of_val(timed.words.as_ref())
                     + timed.waves.iter().map(WaveBinding::bytes).sum::<usize>()
                     + size_of_val(timed.leaves.as_ref())
                     + timed
@@ -119,7 +182,7 @@ impl PlanKind {
                     + timed
                         .leaves
                         .iter()
-                        .map(|leaf| size_of_val(leaf.entries.as_ref()))
+                        .map(|leaf| leaf.words.bytes())
                         .sum::<usize>()
             }
         }
@@ -143,14 +206,10 @@ impl Plan {
 
     pub(crate) fn step(look: u16, step: Step, patch: &Patch, room: usize) -> Result<Self, Refusal> {
         let leaf = Leaf::new(step, patch)?;
-        if size_of_val(leaf.entries.as_ref()) > room {
+        if leaf.words.bytes() > room {
             return Err(Refusal::WorkLimit);
         }
-        let lights = leaf
-            .entries
-            .iter()
-            .map(|entry| usize::from(entry.lights.count()))
-            .sum();
+        let lights = leaf.words.lights();
         Ok(Self::new(
             look,
             PlanKind::Step(leaf),
@@ -158,8 +217,18 @@ impl Plan {
         ))
     }
 
-    pub(crate) fn timed(look: u16, timed: Timed, work: usize) -> Self {
-        Self::new(look, PlanKind::Timed(timed), work)
+    /// A timed plan whose storage fits `room`: the words are known only once built.
+    pub(crate) fn timed(
+        look: u16,
+        timed: Timed,
+        work: usize,
+        room: usize,
+    ) -> Result<Self, Refusal> {
+        let kind = PlanKind::Timed(timed);
+        if kind.storage() > room {
+            return Err(Refusal::WorkLimit);
+        }
+        Ok(Self::new(look, kind, work))
     }
 
     fn new(look: u16, kind: PlanKind, work: usize) -> Self {
@@ -189,14 +258,6 @@ impl Plan {
         matches!(self.kind, PlanKind::Step(_))
     }
 
-    /// Scratch entries needed, one per light of a timed root.
-    pub fn lights(&self) -> usize {
-        match &self.kind {
-            PlanKind::Step(_) => 0,
-            PlanKind::Timed(timed) => timed.targets.len(),
-        }
-    }
-
     /// Worst-case visits of a sample and its mix.
     pub const fn work(&self) -> usize {
         self.work
@@ -207,12 +268,16 @@ impl Plan {
         self.bytes
     }
 
+    /// Whether the plan still means the same on `patch`: each step names the same lights
+    /// with the same words, each wave the same lights, each light of a timed plan the
+    /// same words. A Move keeps every word: only the table's fields move.
     pub fn bindings_match(&self, patch: &Patch) -> bool {
         match &self.kind {
             PlanKind::Step(leaf) => leaf.matches(patch),
             PlanKind::Timed(timed) => {
                 timed.leaves.iter().all(|leaf| leaf.matches(patch))
                     && timed.waves.iter().all(|wave| wave.matches(patch))
+                    && timed.fits(patch)
             }
         }
     }
@@ -224,32 +289,43 @@ impl Plan {
         }
     }
 
-    /// Fill caller-owned scratch. A sample with no properties has nothing to keep.
-    pub fn sample(&self, elapsed: impl Into<Elapsed>, usage: Use, scratch: &mut [Entry]) -> bool {
+    /// Each word the plan offers at `elapsed` on its field, through `targets`: `emit`
+    /// takes it. A timed plan samples each light into `scratch` (the table's, room for
+    /// the light with the most fields at every depth). Whether it offered anything: a
+    /// sample with nothing has nothing to keep. Allocates nothing.
+    pub fn offer(
+        &self,
+        (elapsed, usage): (Elapsed, Use),
+        (targets, scratch): (Targets<'_>, &mut [Option<u16>]),
+        mut emit: impl FnMut(Field, u16),
+    ) -> bool {
+        let mut offered = false;
+        let mut each = |field, word| {
+            offered = true;
+            emit(field, word);
+        };
         match &self.kind {
-            PlanKind::Step(leaf) => leaf.step.values != Light::DARK,
+            PlanKind::Step(leaf) => leaf.words.offer(targets, each),
             PlanKind::Timed(timed) => {
-                let mut supplied = false;
-                let elapsed = elapsed.into();
                 let program = timed.program();
-                for (entry, target) in scratch.iter_mut().zip(&timed.targets) {
-                    let values = program.sample(&target.bindings, elapsed, usage);
-                    *entry = Entry {
-                        lights: target.light,
-                        values,
+                for target in &timed.targets {
+                    let (fields, fades) = targets.of(target.light);
+                    let Some((out, spare)) = scratch.split_at_mut_checked(fields.len()) else {
+                        continue;
                     };
-                    supplied |= values != Light::DARK;
+                    let sampled = Sampled {
+                        bindings: &target.bindings,
+                        fades,
+                    };
+                    program.sample(sampled, elapsed, usage, out, spare);
+                    for (field, word) in fields.iter().zip(out.iter()) {
+                        if let Some(word) = word {
+                            each(*field, *word);
+                        }
+                    }
                 }
-                supplied
             }
         }
-    }
-
-    /// The last sample for the Mixer, static runs or the timed root's scratch.
-    pub fn entries<'a>(&'a self, scratch: &'a [Entry]) -> &'a [Entry] {
-        match &self.kind {
-            PlanKind::Step(leaf) => &leaf.entries,
-            PlanKind::Timed(timed) => scratch.get(..timed.targets.len()).unwrap_or_default(),
-        }
+        offered
     }
 }

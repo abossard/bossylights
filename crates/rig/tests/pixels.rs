@@ -5,9 +5,9 @@ mod common;
 use common::{fixture, lights, said};
 use engine_core::{
     ChannelNumbers, Color, LightNumber, Lights, PatchCommand, Pixels, Refusal, Text, Universes,
-    Writer,
 };
 use engine_core::{Command, OutputKind, OutputNumber, Project, ProjectEvent, RunNumbers};
+use rig::writer::Writer;
 use rig::{Patch, PatchEffect};
 use std::net::{Ipv4Addr, SocketAddrV4};
 

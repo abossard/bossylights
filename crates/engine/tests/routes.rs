@@ -1,7 +1,7 @@
 use engine::Unsent;
 use engine::{
     Begun, ChannelNumbers, Color, Command, Engine, OutputNumber, ProjectOutput, QUEUE, Rate,
-    Refusal, Route, RunNumbers, Span, Target, Text, Universes, Value,
+    Refusal, Rgb, Route, RunNumbers, Span, Target, Text, Universes, Value,
 };
 use std::io;
 
@@ -105,9 +105,11 @@ fn a_grab_update_can_fill_the_last_place_left_by_an_output_resize() {
             },
         })
         .unwrap();
-    let press = Command::SetIntensity {
+    let press = Command::SetColour {
         target: Target::Light { light: 1 },
-        intensity: 0,
+        red: 0,
+        green: 0,
+        blue: 0,
     };
     let Begun::Grabbed { grab } = sender.begin(press, &[]).unwrap() else {
         panic!("a press starts a grab");
@@ -117,9 +119,13 @@ fn a_grab_update_can_fill_the_last_place_left_by_an_output_resize() {
     };
     let opened = resize.open();
     let filler = Command::Blackout { on: false };
-    let update = |level| Command::UpdateGrab {
+    let update = |red| Command::UpdateGrab {
         grab,
-        value: Value::Intensity(level),
+        value: Value::Colour(Rgb {
+            red,
+            green: 0,
+            blue: 0,
+        }),
     };
 
     // One place belongs to finish. From an empty FIFO the other QUEUE - 1
@@ -129,10 +135,10 @@ fn a_grab_update_can_fill_the_last_place_left_by_an_output_resize() {
         for _ in 2..QUEUE {
             sender.send(filler).unwrap();
         }
-        assert_eq!(sender.send(update(1234)), Ok(()));
+        assert_eq!(sender.send(update(0x1234)), Ok(()));
         // Neither another chunk nor a single command may take finish's place.
         // If a wake made room in between, repeat from an empty FIFO.
-        [update(4321), filler]
+        [update(0x4321), filler]
             .into_iter()
             .all(|command| match sender.send(command) {
                 Err(Unsent::Refused(Refusal::QueueFull)) => true,
@@ -143,10 +149,7 @@ fn a_grab_update_can_fill_the_last_place_left_by_an_output_resize() {
     sender.finish(opened).unwrap();
     let snapshot = engine.fresh().unwrap();
     assert_eq!(snapshot.applied(), sender.sent());
-    assert_eq!(
-        snapshot.light(1).and_then(|light| light.intensity),
-        Some(1234)
-    );
+    assert_eq!(snapshot.sent(1, 1), 0x12);
     assert_eq!(
         snapshot
             .output(output)

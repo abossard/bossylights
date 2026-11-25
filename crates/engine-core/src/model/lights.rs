@@ -69,6 +69,16 @@ impl LightRun {
         self.count
     }
 
+    /// This run and the `more` lights right after it, as one. Only for the lights of two
+    /// runs that touch, so it stays in the engine's lights.
+    #[must_use]
+    pub const fn joined(self, more: u16) -> Self {
+        Self {
+            first: self.first,
+            count: self.count.saturating_add(more),
+        }
+    }
+
     /// These lights of `lights`, the values by number. Fewer when `lights` is shorter.
     pub fn of<T>(self, lights: &mut [T]) -> &mut [T] {
         let first = usize::from(self.first).min(lights.len());

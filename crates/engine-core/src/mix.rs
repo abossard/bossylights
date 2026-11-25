@@ -1,42 +1,33 @@
 //! Who wins: the one place that decides between two values for one channel
-//! (`docs/design/who-wins.md`). Nothing else compares or overrides a level.
+//! (`docs/design/who-wins.md`, `docs/design/channel-model.md`). Nothing else compares or
+//! overrides a level. Each channel is won on its own.
 //!
-//! | Rank | | Wins over |
-//! |---|---|---|
-//! | 1 | blackout | everything |
-//! | 2 | a raw channel held on the DMX screen | the light that writes that channel, until released |
-//! | 3 | a held value of a light | its default |
-//!
-//! Rows 1 and 2 are decided channel by channel in one pass by `Channels`: a raw hold,
-//! then Blackout as a modifier every channel follows. Row 3 is [`mix`], where two
-//! writers meet.
-//!
-//! Two lights never reach one channel (decision 48): the patch refuses two fixtures on
-//! one channel, and the Rig makes a channel two heads name the fixture's own, one writer.
-//! Who wins between lights is decided per light property, before the Rig.
-//!
-//! | Between sources of one light property | Winner |
+//! | Step | Rule |
 //! |---|---|
-//! | two ranks | Manual over Show over Autopilot. A direct hold is Manual. Zero and black take part |
-//! | one rank | the latest start; [`Brightness::Highest`]: the highest brightness, equal ones by start |
-//! | absent | lets the other through |
-//! | nothing | absent: the writers write the definition's default |
+//! | 1 Offers | a live source offers a byte, or a 16-bit pair as one word. A source may offer nothing at a moment (a gap): a lower source shows through. A channel nobody offers keeps its rest |
+//! | 2 Rank | Manual over Show over Autopilot. A direct grab is Manual |
+//! | 3 Among equals | the latest start. A channel with `highest`: the greater brightness (the distance from `dark`, 16 bits on a pair), the latest on a tie |
+//! | 4 Raw hold | replaces the byte, also with 0 (`Channels`) |
+//! | 6 Modifiers | each follower moves toward `dark` by the levels it follows: Blackout (`Channels`) |
 //!
-//! | A play stops | [`MixRules`] | What is left |
+//! [`Offers`] is steps 1 to 3. The source table has [`SOURCES`] entries: the plays by
+//! slot, then the grabs by [`GrabEntry`]. A channel's source tag names its entry.
+//!
+//! | A source ends | [`MixRules`] | What is left |
 //! |---|---|---|
-//! | Manual, `StopLook` | [`ManualEnd::UntilRelease`] | kept: its values at its rank and start, until released or started again |
+//! | Manual, `StopLook` | [`ManualEnd::UntilRelease`] | kept: each channel's last offer at its rank and start, until released or started again |
 //! | Manual, `StopLook` | [`ManualEnd::UntilStop`] | nothing: what is underneath shows |
 //! | Show or Autopilot, `StopLook` | [`OtherEnd::Reveal`] | nothing |
-//! | Show or Autopilot, `StopLook` | [`OtherEnd::Stay`] | kept |
+//! | Show or Autopilot, `StopLook` | [`OtherEnd::Stay`] | kept; a channel in a gap keeps none |
 //! | Manual, `EndFlash`; any, `ReleaseHold` | any | nothing |
-//! | a grab, `EndGrab` | [`ManualEnd::UntilRelease`] | kept: its value at its start, until released |
+//! | a grab, `EndGrab` | [`ManualEnd::UntilRelease`] | kept: its offers at its start, until released |
 //! | a grab, `EndGrab` | [`ManualEnd::UntilStop`] | nothing |
 //! | a grab, `ReleaseProperty`, `ReleaseAll` | any | nothing; `ReleaseProperty` leaves the plays |
 //! | kept, rules change to remove it | `UntilStop` for Manual, `Reveal` for the others | nothing |
 
-use crate::LightChange;
-use crate::playback::{Entry, PlayState, Plays, Rank};
-use crate::{Brightness, GrabId, Light, ManualEnd, MixRules, OtherEnd, Property};
+use crate::channel::{ADDRESSES, CHANNELS, Channels, Field, Levels, Pair, SourceTag};
+use crate::playback::{PLAYS, PlayState, Plays, Rank};
+use crate::{ManualEnd, MixRules, OtherEnd};
 
 /// What a stop leaves of a play.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -63,288 +54,272 @@ pub const fn unkept(rank: Rank, state: PlayState, rules: MixRules) -> bool {
     matches!(state, PlayState::Kept) && matches!(stops(rank, rules), End::Remove)
 }
 
-/// Who holds a light's property: a rank and a start order.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Claim {
-    rank: Rank,
-    order: u64,
-}
-
-/// Who holds each property of a light this frame, by [`Property::index`]. A buffer of
-/// the caller's, one per light, so [`show`] allocates nothing.
-pub type Claims = [Option<Claim>; Property::ALL.len()];
-
-/// Whether `value` of `property` claimed by `claim` wins over `now`'s, claimed by `over`
-/// (`None`: nobody). Either order of two sources gives the same winner.
-fn beats(
-    property: Property,
-    rules: MixRules,
-    (claim, value): (Claim, &Light),
-    (over, now): (Option<Claim>, &Light),
-) -> bool {
-    let Some(over) = over else {
-        return true;
-    };
-    if claim.rank != over.rank {
-        return claim.rank > over.rank;
-    }
-    if let (Property::Intensity, Brightness::Highest, Some(level), Some(was)) =
-        (property, rules.brightness, value.intensity, now.intensity)
-        && level != was
-    {
-        return level > was;
-    }
-    wins(claim.order, over.order)
-}
-/// Who holds a property of a light directly.
-///
-/// ```text
-/// off --Grab--> Grab --Update--> Grab, same start
-///                 |  --End, Keep--> Kept --Rules with UntilStop--> off
-///                 |  --End, Remove--> off
-/// any --Release, ReleaseAll, a later Grab--> off, or the later grab
-/// ```
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Hand {
-    /// A live grab: its updates and its end reach it.
-    Grab(GrabId),
-    /// Its grab ended under [`ManualEnd::UntilRelease`]: the value stays until released.
-    Kept,
-}
-
-/// A held property: who holds it, and the start order it was grabbed at.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Holding {
-    hand: Hand,
-    since: u64,
-}
-
-/// A light's direct holds, all Manual: the values held of it, and per property who holds
-/// it since when. A property has a value exactly when it has a holding.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Held {
-    values: Light,
-    holds: [Option<Holding>; Property::ALL.len()],
-}
-
-impl Held {
-    pub const NONE: Self = Self {
-        values: Light::DARK,
-        holds: [None; Property::ALL.len()],
-    };
-
-    /// The values held.
-    pub const fn values(&self) -> &Light {
-        &self.values
-    }
-
-    /// Offers each held property to the Mixer for this frame.
-    fn offer(&self, out: &mut Light, claims: &mut Claims) {
-        *out = self.values;
-        for (claim, property) in claims.iter_mut().zip(Property::ALL) {
-            *claim = self.values.has(property).then(|| Claim {
-                rank: Rank::Manual,
-                order: self.since(property),
-            });
-        }
-    }
-
-    /// `change` made to this light; a grab takes the start order `order`.
-    pub fn change(&mut self, change: LightChange, order: u64) {
-        match change {
-            LightChange::Grab { value, grab } => self.set(
-                value.property(),
-                &value.light(),
-                Some(Holding {
-                    hand: Hand::Grab(grab),
-                    since: order,
-                }),
-            ),
-            LightChange::Update { value, grab } => {
-                if let Some(holding) = self.grabbed(value.property(), grab) {
-                    self.set(value.property(), &value.light(), Some(holding));
-                }
-            }
-            LightChange::End {
-                property,
-                grab,
-                end,
-            } => {
-                if let Some(holding) = self.grabbed(property, grab) {
-                    match end {
-                        End::Keep => self.set(
-                            property,
-                            &self.values.clone(),
-                            Some(Holding {
-                                hand: Hand::Kept,
-                                ..holding
-                            }),
-                        ),
-                        End::Remove => self.set(property, &Light::DARK, None),
-                    }
-                }
-            }
-            LightChange::Release { property } => self.set(property, &Light::DARK, None),
-        }
-    }
-
-    /// The kept holds `rules` no longer keep let go: switching to `UntilStop`. A live
-    /// grab stays.
-    pub fn unkeep(&mut self, rules: MixRules) {
-        for property in Property::ALL {
-            let kept = self
-                .holding(property)
-                .is_some_and(|holding| holding.hand == Hand::Kept);
-            if kept && unkept(Rank::Manual, PlayState::Kept, rules) {
-                self.set(property, &Light::DARK, None);
-            }
-        }
-    }
-
-    /// `property` takes the value `from` has, held by `holding`: both or neither.
-    fn set(&mut self, property: Property, from: &Light, holding: Option<Holding>) {
-        if let Some(slot) = self.holds.get_mut(property.index()) {
-            *slot = holding;
-            self.values = self.values.with(
-                property,
-                if holding.is_some() {
-                    from
-                } else {
-                    &Light::DARK
-                },
-            );
-        }
-    }
-
-    fn holding(&self, property: Property) -> Option<Holding> {
-        self.holds.get(property.index()).copied().flatten()
-    }
-
-    /// The holding of `property`, when `grab` holds it live.
-    fn grabbed(&self, property: Property, grab: GrabId) -> Option<Holding> {
-        self.holding(property)
-            .filter(|holding| holding.hand == Hand::Grab(grab))
-    }
-
-    fn since(&self, property: Property) -> u64 {
-        self.holding(property).map_or(0, |holding| holding.since)
-    }
-}
-
 /// Whether a source started at `order` wins over one started at `over`: the latest start.
 pub const fn wins(order: u64, over: u64) -> bool {
     order > over
 }
 
-/// What each light shows this frame, written into `out`: per property, the winner of its
-/// direct holds (Manual) and the plays, playing or kept, under `rules`. `plan` gives a
-/// play's entries by slot; `claims` is the caller's buffer beside `out`. The slot order
-/// of the plays does not matter. Allocates nothing.
-pub fn show<'a>(
-    held: &[Held],
-    plays: &Plays,
-    plan: impl Fn(usize) -> &'a [Entry],
-    rules: MixRules,
-    out: &mut [Light],
-    claims: &mut [Claims],
-) {
-    for ((out, claims), held) in out.iter_mut().zip(claims.iter_mut()).zip(held) {
-        held.offer(out, claims);
+/// Entries of the source table: plays and grabs (later Identify). Entry `i` sets the
+/// source tag `2 + i` of each channel it wins. The plays come first, by slot.
+pub const SOURCES: usize = 1024;
+
+/// Direct grabs at once: the entries of the source table after the plays.
+pub const GRABS: usize = SOURCES - PLAYS;
+
+/// What the Mixer compares between two offers for one channel: rank, then start.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Source {
+    rank: Rank,
+    order: u64,
+}
+
+/// A grab's place in the source table, below [`GRABS`]. The front picks it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct GrabEntry(u16);
+
+impl GrabEntry {
+    /// `None` at or past [`GRABS`].
+    pub const fn new(index: usize) -> Option<Self> {
+        if index < GRABS {
+            Some(Self(index as u16))
+        } else {
+            None
+        }
     }
-    for play in plays.sounding() {
-        let claim = Claim {
-            rank: play.rank,
-            order: play.order,
+
+    pub const fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
+/// How a direct grab holds its offers.
+///
+/// ```text
+/// (free) --Start--> Live --Keep--> Kept --Rules with UntilStop--> (free)
+///                     |  --Offers--> Live, same start
+/// any --Free, ReleaseAll--> (free)
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Holding {
+    /// Its finger is down: updates reach it.
+    Live,
+    /// It ended under [`ManualEnd::UntilRelease`]: its offers stay until released.
+    Kept,
+}
+
+/// A direct grab as the tick keeps it: Manual, its start, how it holds. Its offers are
+/// the tick's, by the grab's entry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Grab {
+    pub order: u64,
+    pub holding: Holding,
+}
+
+/// What a command does to one grab entry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GrabChange {
+    /// A new grab takes the entry, live, as the latest start. Its offers come with it.
+    Start,
+    /// Its offers are replaced (an update, or lights a newer grab took); its start and
+    /// holding stay. Nothing on a free entry.
+    Offers,
+    /// Its end under [`ManualEnd::UntilRelease`]: kept. Nothing on a free entry.
+    Keep,
+    /// The entry is free: its offers go.
+    Free,
+}
+
+/// The direct grabs, by entry. A buffer the caller owns beside the state: a command
+/// changes it in place.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Grabs([Option<Grab>; GRABS]);
+
+impl Grabs {
+    pub const NONE: Self = Self([None; GRABS]);
+
+    /// The grab at `entry`, if any.
+    pub fn get(&self, entry: GrabEntry) -> Option<Grab> {
+        self.0.get(entry.index()).copied().flatten()
+    }
+
+    /// Whether `change` takes the start order `order`: it does exactly when it starts a grab.
+    pub(crate) fn change(&mut self, entry: GrabEntry, change: GrabChange, order: u64) -> bool {
+        let Some(slot) = self.0.get_mut(entry.index()) else {
+            return false;
         };
-        for entry in plan(play.play.slot()) {
-            let first = usize::from(entry.lights.first().index());
-            let run = first..first + usize::from(entry.lights.count());
-            let (Some(out), Some(claims)) = (out.get_mut(run.clone()), claims.get_mut(run)) else {
-                continue;
-            };
-            for (light, claims) in out.iter_mut().zip(claims) {
-                for (over, property) in claims.iter_mut().zip(Property::ALL) {
-                    if entry.values.has(property)
-                        && beats(property, rules, (claim, &entry.values), (*over, light))
-                    {
-                        *light = light.with(property, &entry.values);
-                        *over = Some(claim);
-                    }
-                }
+        match (change, *slot) {
+            (GrabChange::Start, _) => {
+                *slot = Some(Grab {
+                    order,
+                    holding: Holding::Live,
+                });
+                return true;
+            }
+            (GrabChange::Keep, Some(grab)) => {
+                *slot = Some(Grab {
+                    holding: Holding::Kept,
+                    ..grab
+                });
+            }
+            (GrabChange::Free, _) => *slot = None,
+            (GrabChange::Offers | GrabChange::Keep, _) => {}
+        }
+        false
+    }
+
+    /// Every grab let go.
+    pub(crate) fn release_all(&mut self) {
+        self.0.fill(None);
+    }
+
+    /// The kept grabs `rules` no longer keep let go: switching to `UntilStop`.
+    pub(crate) fn unkeep(&mut self, rules: MixRules) {
+        let gone = |grab: &Grab| {
+            grab.holding == Holding::Kept && unkept(Rank::Manual, PlayState::Kept, rules)
+        };
+        for slot in &mut self.0 {
+            if slot.as_ref().is_some_and(gone) {
+                *slot = None;
             }
         }
     }
 }
 
-/// What the resolver writes on a channel this frame, and how strongly. The base the
-/// channel pass ([`channels`]) starts from, until plays offer per channel.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Want {
-    /// What the definition gives a channel no light value writes (a shutter held open),
-    /// or 0 where nothing writes.
-    Default(u8),
-    /// The held values of a light, through its writer. A part not held is `Default`: its
-    /// writer writes the channel's default from the definition.
-    Light(u8),
+/// One frame's steps 1 to 3: each source offers its words, and each offer takes its
+/// channel, or its pair, from what holds it when it wins. The order of the offers does not
+/// matter. An offer past the space, or of a source that is not sounding, does nothing.
+pub struct Offers<'a> {
+    pub(crate) channels: &'a mut Channels,
+    pub(crate) plays: &'a Plays,
+    pub(crate) grabs: &'a Grabs,
 }
 
-impl Want {
-    /// The byte it writes.
-    pub const fn level(self) -> u8 {
-        match self {
-            Self::Default(level) | Self::Light(level) => level,
+impl Offers<'_> {
+    /// `word` on `at` from the play in `slot`: a byte takes its high byte.
+    pub fn play(&mut self, slot: usize, at: Field, word: u16) {
+        if slot < PLAYS {
+            self.offer(slot, at, word);
+        }
+    }
+
+    /// `word` on `at` from the grab at `entry`.
+    pub fn grab(&mut self, entry: GrabEntry, at: Field, word: u16) {
+        self.offer(PLAYS + entry.index(), at, word);
+    }
+
+    /// Entry `by` of the source table, while it sounds.
+    fn source(&self, by: usize) -> Option<Source> {
+        match by.checked_sub(PLAYS) {
+            None => self
+                .plays
+                .at(by)
+                .filter(|play| matches!(play.state, PlayState::Playing | PlayState::Kept))
+                .map(|play| Source {
+                    rank: play.rank,
+                    order: play.order,
+                }),
+            Some(entry) => self
+                .grabs
+                .0
+                .get(entry)
+                .copied()
+                .flatten()
+                .map(|grab| Source {
+                    rank: Rank::Manual,
+                    order: grab.order,
+                }),
+        }
+    }
+
+    fn offer(&mut self, by: usize, at: Field, word: u16) {
+        let (Some(new), Some(tag)) = (self.source(by), SourceTag::of(by)) else {
+            return;
+        };
+        let place = |at: u32| usize::try_from(at).ok().filter(|at| *at < CHANNELS);
+        let (Some(coarse), fine) = (match at {
+            Field::Byte(at) => (place(at), None),
+            Field::Word(Pair { coarse, fine }) => (place(coarse), Some(place(fine))),
+        }) else {
+            return;
+        };
+        let fine = match fine {
+            None => None,
+            Some(Some(fine)) => Some(fine),
+            Some(None) => return,
+        };
+        let held = self
+            .channels
+            .source
+            .get(coarse)
+            .and_then(|tag| tag.entry())
+            .and_then(|entry| self.source(entry));
+        let channels = &mut *self.channels;
+        let Some(flags) = channels.flags.get(coarse) else {
+            return;
+        };
+        let dark = word_at(coarse, fine, |at| channels.dark.get(at).copied());
+        let now = word_at(coarse, fine, |at| byte(&channels.value, at));
+        let [high, low] = word.to_be_bytes();
+        let offered = if fine.is_some() {
+            word
+        } else {
+            u16::from(high)
+        };
+        if !takes(
+            new,
+            held,
+            flags.highest(),
+            (offered.abs_diff(dark), now.abs_diff(dark)),
+        ) {
+            return;
+        }
+        for (at, byte) in core::iter::once((coarse, high)).chain(fine.map(|fine| (fine, low))) {
+            if let (Some(row), Some(source)) = (
+                channels.value.get_mut(at / ADDRESSES),
+                channels.source.get_mut(at),
+            ) && let Some(value) = row.0.get_mut(at % ADDRESSES)
+            {
+                (*value, *source) = (byte, tag);
+            }
         }
     }
 }
 
-/// The winner of `first` and `then`, which came after it, where two writers name one
-/// channel: row 3 of the table.
-pub const fn mix(first: Want, then: Want) -> Want {
-    use Want::{Default, Light};
-    match (first, then) {
-        // 3: a held value of a light wins over its default
-        (Default(_), Light(level)) | (Light(level), Default(_)) => Light(level),
-        // the same rank: the later wins. Two lights never meet here (decision 48)
-        (Default(_), Default(_)) | (Light(_), Light(_)) => then,
+/// Whether `new` takes a channel `held` has (if anyone): steps 2 and 3. `bright` is the
+/// offer's distance from the channel's dark value and the held one's.
+fn takes(new: Source, held: Option<Source>, highest: bool, (bright, over): (u16, u16)) -> bool {
+    let Some(held) = held else {
+        return true;
+    };
+    if new.rank != held.rank {
+        return new.rank > held.rank;
+    }
+    if highest && bright != over {
+        return bright > over;
+    }
+    wins(new.order, held.order)
+}
+
+/// A channel's byte, or its pair's word, as `bytes` reads them.
+fn word_at(at: usize, fine: Option<usize>, bytes: impl Fn(usize) -> Option<u8>) -> u16 {
+    let byte = |at: usize| bytes(at).map_or(0, u16::from);
+    match fine {
+        Some(fine) => (byte(at) << 8) | byte(fine),
+        None => byte(at),
     }
 }
 
-/// What the levels of a set of modifier slots multiply to.
+/// The byte of channel `at` (counted from 0 over the space) in rows of a universe.
+fn byte(rows: &[Levels], at: usize) -> Option<u8> {
+    rows.get(at / ADDRESSES)?.0.get(at % ADDRESSES).copied()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::channel::{
         ADDRESSES, BLACKOUT, ChannelNumbers, ChannelSet, Channels, Configured, Flags, Follows,
         Levels, MODIFIERS, Scale, SourceTag, Universes, scale_of,
     };
-    use Want::{Default, Light};
-
-    #[test]
-    fn who_wins_row_by_row() {
-        // (row, first, then, winner, level out)
-        let cases = [
-            (
-                "3 a light over its default",
-                Default(255),
-                Light(0),
-                Light(0),
-                0,
-            ),
-            (
-                "3 a light over its default",
-                Light(7),
-                Default(255),
-                Light(7),
-                7,
-            ),
-            ("3 a light over nothing", Default(0), Light(7), Light(7), 7),
-            ("the later default", Default(1), Default(2), Default(2), 2),
-        ];
-        for (row, first, then, winner, level) in cases {
-            assert_eq!(mix(first, then), winner, "{row}: {first:?} then {then:?}");
-            assert_eq!(mix(first, then).level(), level, "{row}");
-        }
-    }
 
     /// The modifier levels with Blackout on or off, the others full.
     fn blackout(on: bool) -> [u8; MODIFIERS] {
@@ -355,28 +330,14 @@ mod tests {
 
     #[test]
     fn rows_1_and_2_decide_each_channel() {
-        // (row, what the resolver wrote, raw hold, blackout, byte out, source)
+        let play = SourceTag::of(0).unwrap();
+        // (row, what a play offered, raw hold, blackout, byte out, source)
         let cases = [
             ("nothing", None, None, false, 0, SourceTag::REST),
-            (
-                "a default",
-                Some(Default(200)),
-                None,
-                false,
-                200,
-                SourceTag::REST,
-            ),
-            (
-                "a light",
-                Some(Light(255)),
-                None,
-                false,
-                255,
-                SourceTag::LIGHTS,
-            ),
+            ("a light", Some(255), None, false, 255, play),
             (
                 "2 raw over a light",
-                Some(Light(255)),
+                Some(255),
                 Some(9),
                 false,
                 9,
@@ -384,18 +345,10 @@ mod tests {
             ),
             (
                 "2 raw at 0 over a light",
-                Some(Light(255)),
+                Some(255),
                 Some(0),
                 false,
                 0,
-                SourceTag::RAW,
-            ),
-            (
-                "2 raw over a default",
-                Some(Default(255)),
-                Some(9),
-                false,
-                9,
                 SourceTag::RAW,
             ),
             (
@@ -414,22 +367,7 @@ mod tests {
                 0,
                 SourceTag::RAW,
             ),
-            (
-                "1 blackout over a light",
-                Some(Light(255)),
-                None,
-                true,
-                0,
-                SourceTag::LIGHTS,
-            ),
-            (
-                "1 blackout over a default",
-                Some(Default(255)),
-                None,
-                true,
-                0,
-                SourceTag::REST,
-            ),
+            ("1 blackout over a light", Some(255), None, true, 0, play),
             (
                 "1 blackout over nothing",
                 None,
@@ -462,11 +400,9 @@ mod tests {
             let mut all = Box::new(Channels::NEW);
             all.value[0].0[7] = 3; // whatever the frame before left
             all.reset(&patched);
-            if let Some(want) = wrote {
-                all.value[0].0[6] = want.level();
-                if matches!(want, Light(_)) {
-                    all.source[6] = SourceTag::LIGHTS;
-                }
+            if let Some(byte) = wrote {
+                all.value[0].0[6] = byte;
+                all.source[6] = play;
             }
             let (mut raw, mut holds) = ([Levels::ZERO], [ChannelSet::NONE]);
             if let Some(level) = hold {
@@ -822,423 +758,406 @@ mod tests {
 }
 
 #[cfg(test)]
-mod properties {
+mod offers {
     use super::*;
+    use crate::Brightness;
+    use crate::channel::{Configured, Flags};
     use crate::clock::{Clock, When};
-    use crate::playback::{Launches, PLAYS, PlayId, Plays};
-    use crate::{Gobo, LightNumber, LightRun, Lights, Position, Rgb, Value, Wheel};
+    use crate::playback::{Launches, PlayId};
+    use Rank::{Autopilot, Show};
     use core::time::Duration;
 
-    const RED: Rgb = Rgb {
-        red: u16::MAX,
-        green: 0,
-        blue: 0,
-    };
-    const GREEN: Rgb = Rgb {
-        red: 0,
-        green: u16::MAX,
-        blue: 0,
-    };
-    const BLUE: Rgb = Rgb {
-        red: 0,
-        green: 0,
-        blue: u16::MAX,
-    };
+    /// Who offers: a play in a slot at a rank, kept or not, or a grab at an entry.
+    #[derive(Clone, Copy, Debug)]
+    enum By {
+        Play(usize, Rank),
+        Kept(usize, Rank),
+        Waiting(usize),
+        Grab(usize),
+    }
+    use By::{Kept, Play, Waiting};
+    const fn grab(entry: usize) -> By {
+        By::Grab(entry)
+    }
+
+    /// One offer: by whom, its start order, where, the word.
+    type Sent = (By, u64, Field, u16);
+
+    const DIMMER: u32 = 0;
+    const PAIR: Field = Field::Word(Pair { coarse: 1, fine: 2 });
+
+    /// Channel 0 a dimmer, 1 and 2 a pair, as `dark` and `flags` say.
+    fn config(dark: u8, flags: Flags) -> [Configured; 3] {
+        [0, 1, 2].map(|at| Configured {
+            at,
+            rest: 7,
+            dark,
+            flags,
+        })
+    }
+
+    /// The bytes and source tags of channels 0 to 2 once `sent` is offered in its order.
+    fn mixed(config: &[Configured], sent: &[Sent]) -> [(u8, SourceTag); 3] {
+        let channels = offered(config, sent);
+        [0, 1, 2].map(|at| (channels.value[0].0[at], channels.source[at]))
+    }
+
+    /// The channels once `sent` is offered in its order, before raw holds and modifiers.
+    fn offered(config: &[Configured], sent: &[Sent]) -> Box<Channels> {
+        let mut channels = Box::new(Channels::NEW);
+        channels.configure(&[], config);
+        channels.reset(config);
+        let (mut plays, mut grabs) = (Plays::NONE, Grabs::NONE);
+        for (by, order, _, _) in sent {
+            let (slot, rank, when) = match *by {
+                Play(slot, rank) | Kept(slot, rank) => (slot, rank, When::Now),
+                Waiting(slot) => (slot, Show, When::Beat),
+                By::Grab(entry) => {
+                    grabs.change(GrabEntry::new(entry).unwrap(), GrabChange::Start, *order);
+                    continue;
+                }
+            };
+            let id = PlayId::new(slot, 1).unwrap();
+            let clock = Clock::START.settle(Duration::from_millis(1));
+            let mut launches = Launches::from(0).0;
+            plays.start(
+                (id, 7, rank),
+                when,
+                &clock,
+                Duration::ZERO,
+                (*order, &mut launches),
+            );
+            if matches!(by, Kept(..)) {
+                plays.keep(id);
+            }
+        }
+        let mut offers = Offers {
+            channels: &mut channels,
+            plays: &plays,
+            grabs: &grabs,
+        };
+        for (by, _, at, word) in sent {
+            match *by {
+                Play(slot, _) | Kept(slot, _) | Waiting(slot) => offers.play(slot, *at, *word),
+                By::Grab(entry) => offers.grab(GrabEntry::new(entry).unwrap(), *at, *word),
+            }
+        }
+        channels
+    }
+
+    fn tag(by: By) -> SourceTag {
+        SourceTag::of(match by {
+            Play(slot, _) | Kept(slot, _) | Waiting(slot) => slot,
+            By::Grab(entry) => PLAYS + entry,
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn the_offer_table_row_by_row_in_both_orders() {
+        let (latest, highest) = (Flags::FADE, Flags::FADE.with(Flags::HIGHEST));
+        let byte = Field::Byte(DIMMER);
+        let rest = (7, SourceTag::REST);
+        // (row, dark, flags, offers, channels 0 to 2: byte and who)
+        type Row = (&'static str, u8, Flags, Vec<Sent>, [(u8, By); 3]);
+        let rows: [Row; 15] = [
+            ("1 none", 0, latest, vec![], [(7, Waiting(31)); 3]),
+            (
+                "2 one",
+                0,
+                latest,
+                vec![(Play(0, Show), 1, byte, 0x80ff)],
+                [(0x80, Play(0, Show)), (7, Waiting(31)), (7, Waiting(31))],
+            ),
+            (
+                "3 Manual over Show",
+                0,
+                latest,
+                vec![(grab(5), 1, byte, 0x0a00), (Play(3, Show), 2, byte, 0xc800)],
+                [(10, grab(5)), (7, Waiting(31)), (7, Waiting(31))],
+            ),
+            (
+                "3 Show over Autopilot",
+                0,
+                latest,
+                vec![
+                    (Play(1, Show), 1, byte, 0x0a00),
+                    (Play(2, Autopilot), 2, byte, 0xc800),
+                ],
+                [(10, Play(1, Show)), (7, Waiting(31)), (7, Waiting(31))],
+            ),
+            (
+                "4 two Show: the later start",
+                0,
+                latest,
+                vec![
+                    (Play(1, Show), 1, byte, 0x3200),
+                    (Play(2, Show), 2, byte, 0x3c00),
+                ],
+                [(60, Play(2, Show)), (7, Waiting(31)), (7, Waiting(31))],
+            ),
+            (
+                "4 a kept play is a source at its rank and start",
+                0,
+                latest,
+                vec![
+                    (Kept(1, Show), 2, byte, 0x3200),
+                    (Play(2, Show), 1, byte, 0x3c00),
+                ],
+                [(50, Kept(1, Show)), (7, Waiting(31)), (7, Waiting(31))],
+            ),
+            (
+                "6 highest: 200 over a later 40",
+                0,
+                highest,
+                vec![
+                    (Play(1, Show), 1, byte, 0xc800),
+                    (Play(2, Show), 2, byte, 0x2800),
+                ],
+                [(200, Play(1, Show)), (7, Waiting(31)), (7, Waiting(31))],
+            ),
+            (
+                "6 highest still ranks first",
+                0,
+                highest,
+                vec![(Play(1, Show), 1, byte, 0xc800), (grab(0), 2, byte, 0x2800)],
+                [(40, grab(0)), (7, Waiting(31)), (7, Waiting(31))],
+            ),
+            (
+                "7 highest, equal: the later start",
+                0,
+                highest,
+                vec![
+                    (Play(1, Show), 1, byte, 0x6400),
+                    (Play(2, Show), 2, byte, 0x6400),
+                ],
+                [(100, Play(2, Show)), (7, Waiting(31)), (7, Waiting(31))],
+            ),
+            (
+                "8 reverse dimmer: 0 is brightest",
+                255,
+                highest,
+                vec![
+                    (Play(1, Show), 1, byte, 0x0000),
+                    (Play(2, Show), 2, byte, 0xff00),
+                ],
+                [(0, Play(1, Show)), (7, Waiting(31)), (7, Waiting(31))],
+            ),
+            (
+                "9 16-bit dimmer: the word decides, not the coarse",
+                0,
+                highest,
+                vec![
+                    (Play(1, Show), 1, PAIR, 0x0100),
+                    (Play(2, Show), 2, PAIR, 0x00ff),
+                ],
+                [
+                    (7, Waiting(31)),
+                    (0x01, Play(1, Show)),
+                    (0x00, Play(1, Show)),
+                ],
+            ),
+            (
+                "9 16-bit dimmer, equal coarse: the fine decides",
+                0,
+                highest,
+                vec![
+                    (Play(1, Show), 1, PAIR, 0x12ff),
+                    (Play(2, Show), 2, PAIR, 0x1200),
+                ],
+                [
+                    (7, Waiting(31)),
+                    (0x12, Play(1, Show)),
+                    (0xff, Play(1, Show)),
+                ],
+            ),
+            (
+                "10 a pair is never torn",
+                0,
+                latest,
+                vec![
+                    (Play(1, Show), 1, PAIR, 0x1234),
+                    (Play(2, Show), 2, PAIR, 0x5678),
+                ],
+                [
+                    (7, Waiting(31)),
+                    (0x56, Play(2, Show)),
+                    (0x78, Play(2, Show)),
+                ],
+            ),
+            (
+                "11 Autopilot under Manual",
+                0,
+                latest,
+                vec![
+                    (Play(1, Autopilot), 1, byte, 0x1100),
+                    (grab(2), 2, byte, 0x5b00),
+                ],
+                [(91, grab(2)), (7, Waiting(31)), (7, Waiting(31))],
+            ),
+            (
+                "11 the Manual offer ends: Autopilot again",
+                0,
+                latest,
+                vec![(Play(1, Autopilot), 1, byte, 0x1100)],
+                [(17, Play(1, Autopilot)), (7, Waiting(31)), (7, Waiting(31))],
+            ),
+        ];
+        for (row, dark, flags, sent, out) in rows {
+            let want = out.map(|(byte, by)| match by {
+                Waiting(_) => (byte, rest.1),
+                by @ (Play(..) | Kept(..) | By::Grab(_)) => (byte, tag(by)),
+            });
+            let config = config(dark, flags);
+            let mut reversed = sent.clone();
+            reversed.reverse();
+            assert_eq!(mixed(&config, &sent), want, "{row}");
+            assert_eq!(mixed(&config, &reversed), want, "{row}, the other order");
+        }
+    }
+
+    /// Row 13: a pair won by a play, a raw hold on its fine alone: the coarse stays the
+    /// play's, the fine is the hold's.
+    #[test]
+    fn a_raw_hold_on_a_pairs_fine_takes_the_fine_alone() {
+        use crate::channel::{ChannelNumbers, ChannelSet, MODIFIERS, Universes};
+        let config = config(0, Flags::FADE);
+        let mut channels = offered(&config, &[(Play(1, Show), 1, PAIR, 0x1234)]);
+        let fine = ChannelNumbers {
+            universe: 1,
+            address: 3,
+        }
+        .check(Universes::ONE)
+        .unwrap();
+        let (mut raw, mut holds) = ([Levels::ZERO], [ChannelSet::NONE]);
+        raw[0].0[2] = 0x99;
+        fine.mark(&mut holds, true);
+        channels.apply_winners(&config, &raw, &holds, [u8::MAX; MODIFIERS]);
+        assert_eq!(
+            [1, 2].map(|at| (channels.value[0].0[at], channels.source[at])),
+            [(0x12, tag(Play(1, Show))), (0x99, SourceTag::RAW)]
+        );
+    }
+
+    #[test]
+    fn a_source_that_does_not_sound_offers_nothing() {
+        let config = config(0, Flags::FADE);
+        let byte = Field::Byte(DIMMER);
+        let rest = (7, SourceTag::REST);
+        // (case, offers)
+        let cases: [(&str, Vec<Sent>); 2] = [
+            ("a waiting play", vec![(Waiting(4), 1, byte, 0x5000)]),
+            (
+                "past the space",
+                vec![(Play(1, Show), 1, Field::Byte(u32::MAX), 0x5000)],
+            ),
+        ];
+        for (case, sent) in cases {
+            assert_eq!(mixed(&config, &sent)[0], rest, "{case}");
+        }
+    }
+
+    #[test]
+    fn a_grab_entry_follows_its_changes() {
+        let entry = GrabEntry::new(3).unwrap();
+        let live = |order| {
+            Some(Grab {
+                order,
+                holding: Holding::Live,
+            })
+        };
+        let kept = |order| {
+            Some(Grab {
+                order,
+                holding: Holding::Kept,
+            })
+        };
+        // (case, before, change, after, takes the order)
+        let cases = [
+            ("start on free", None, GrabChange::Start, live(9), true),
+            (
+                "start on a kept one",
+                kept(2),
+                GrabChange::Start,
+                live(9),
+                true,
+            ),
+            (
+                "offers keep the start",
+                live(2),
+                GrabChange::Offers,
+                live(2),
+                false,
+            ),
+            ("offers on free", None, GrabChange::Offers, None, false),
+            ("keep", live(2), GrabChange::Keep, kept(2), false),
+            ("keep on free", None, GrabChange::Keep, None, false),
+            ("free", kept(2), GrabChange::Free, None, false),
+        ];
+        for (case, before, change, after, takes) in cases {
+            let mut grabs = Grabs::NONE;
+            grabs.0[3] = before;
+            assert_eq!(grabs.change(entry, change, 9), takes, "{case}");
+            assert_eq!(grabs.get(entry), after, "{case}");
+        }
+        assert_eq!(GrabEntry::new(GRABS), None);
+        assert_eq!(GRABS + PLAYS, SOURCES);
+    }
+
+    #[test]
+    fn new_rules_let_go_of_the_kept_grabs_they_no_longer_keep() {
+        let rules = |manual_end| MixRules {
+            brightness: Brightness::Latest,
+            manual_end,
+            other_end: OtherEnd::Reveal,
+        };
+        // (case, holding, rules, left)
+        let cases = [
+            (
+                "kept, until release",
+                Holding::Kept,
+                ManualEnd::UntilRelease,
+                true,
+            ),
+            (
+                "kept, until stop",
+                Holding::Kept,
+                ManualEnd::UntilStop,
+                false,
+            ),
+            (
+                "live, until stop",
+                Holding::Live,
+                ManualEnd::UntilStop,
+                true,
+            ),
+        ];
+        for (case, holding, manual_end, left) in cases {
+            let mut grabs = Grabs::NONE;
+            grabs.0[0] = Some(Grab { order: 1, holding });
+            grabs.unkeep(rules(manual_end));
+            assert_eq!(grabs.0[0].is_some(), left, "{case}");
+        }
+        let mut grabs = Grabs::NONE;
+        grabs.0 = [Some(Grab {
+            order: 1,
+            holding: Holding::Live,
+        }); GRABS];
+        grabs.release_all();
+        assert_eq!(grabs, Grabs::NONE);
+    }
+}
+
+#[cfg(test)]
+mod ends {
+    use super::*;
+    use crate::Brightness;
+
     const LATEST: MixRules = MixRules {
         brightness: Brightness::Latest,
         manual_end: ManualEnd::UntilRelease,
         other_end: OtherEnd::Reveal,
     };
-    const HIGHEST: MixRules = MixRules {
-        brightness: Brightness::Highest,
-        ..LATEST
-    };
-
-    fn colour(rgb: Rgb) -> Light {
-        Light {
-            colour: Some(rgb),
-            ..Light::DARK
-        }
-    }
-
-    fn intensity(level: u16) -> Light {
-        Light {
-            intensity: Some(level),
-            ..Light::DARK
-        }
-    }
-
-    /// The slot of each gobo wheel, wheel 1 first.
-    fn gobos(gobos: [Option<u8>; Wheel::COUNT]) -> Light {
-        Light {
-            gobos,
-            ..Light::DARK
-        }
-    }
-
-    fn both(level: u16, rgb: Rgb) -> Light {
-        Light {
-            intensity: Some(level),
-            colour: Some(rgb),
-            ..Light::DARK
-        }
-    }
-
-    /// `values` grabbed at `order`, one grab per property.
-    fn held(values: Light, order: u64) -> Held {
-        let mut held = Held::NONE;
-        let grab = GrabId { generation: 1 };
-        let each = [
-            values.intensity.map(Value::Intensity),
-            values.colour.map(Value::Colour),
-            values.position.map(Value::Position),
-            values.zoom.map(Value::Zoom),
-        ];
-        let gobos = (1..=3).filter_map(Wheel::new).map(|wheel| {
-            values
-                .gobo(wheel)
-                .map(|slot| Value::Gobo(Gobo { wheel, slot }))
-        });
-        for value in each.into_iter().chain(gobos).flatten() {
-            held.change(LightChange::Grab { value, grab }, order);
-        }
-        held
-    }
-
-    /// A play of light 1: its rank, its start order, whether it is kept, its values.
-    type Source = (Rank, u64, PlayState, Light);
-
-    const fn play(rank: Rank, order: u64, values: Light) -> Source {
-        (rank, order, PlayState::Playing, values)
-    }
-
-    /// What light 1 shows with `hold` and `sources` played from slot `first` on, one
-    /// slot apart: the slot order is the candidate order.
-    fn shown(hold: Held, sources: &[Source], rules: MixRules, first: usize) -> Light {
-        mixed(hold, sources, rules, first).0
-    }
-
-    /// What light 1 shows, as [`shown`], and who won each property.
-    fn mixed(hold: Held, sources: &[Source], rules: MixRules, first: usize) -> (Light, Claims) {
-        let run =
-            LightRun::new(LightNumber::new(0, Lights::MOST).unwrap(), 1, Lights::MOST).unwrap();
-        let mut plays = Plays::NONE;
-        let mut entries = [None; PLAYS];
-        for (n, (rank, order, state, values)) in sources.iter().enumerate() {
-            let slot = (first + n * (PLAYS - 1)) % PLAYS;
-            let id = PlayId::new(slot, 1).unwrap();
-            plays.start(
-                (id, 7, *rank),
-                When::Now,
-                &Clock::START,
-                Duration::ZERO,
-                (*order, &mut Launches::from(0).0),
-            );
-            if *state == PlayState::Kept {
-                plays.keep(id);
-            }
-            entries[slot] = Some([Entry {
-                lights: run,
-                values: *values,
-            }]);
-        }
-        let mut out = [Light::DARK];
-        let mut claims = [[None; Property::ALL.len()]];
-        show(
-            &[hold],
-            &plays,
-            |slot| entries[slot].as_ref().map_or(&[][..], |e| &e[..]),
-            rules,
-            &mut out,
-            &mut claims,
-        );
-        (out[0], claims[0])
-    }
-
-    #[test]
-    fn the_mixer_table_row_by_row_in_both_candidate_orders() {
-        use Rank::{Autopilot, Manual, Show};
-        let kept = |rank, order, values| (rank, order, PlayState::Kept, values);
-        // (row, direct hold, plays, rules, shown)
-        let cases: [(&str, Held, Vec<Source>, MixRules, Light); 26] = [
-            ("nothing", Held::NONE, vec![], LATEST, Light::DARK),
-            (
-                "a hold alone",
-                held(colour(BLUE), 1),
-                vec![],
-                LATEST,
-                colour(BLUE),
-            ),
-            (
-                "a play alone",
-                Held::NONE,
-                vec![play(Show, 1, colour(RED))],
-                LATEST,
-                colour(RED),
-            ),
-            // rank: Manual > Show > Autopilot, whatever started last
-            (
-                "Manual over a later Show",
-                Held::NONE,
-                vec![play(Manual, 1, colour(RED)), play(Show, 2, colour(GREEN))],
-                LATEST,
-                colour(RED),
-            ),
-            (
-                "Show over a later Autopilot",
-                Held::NONE,
-                vec![
-                    play(Show, 1, colour(GREEN)),
-                    play(Autopilot, 2, colour(BLUE)),
-                ],
-                LATEST,
-                colour(GREEN),
-            ),
-            (
-                "Manual over Show over Autopilot",
-                Held::NONE,
-                vec![
-                    play(Autopilot, 3, colour(BLUE)),
-                    play(Manual, 1, colour(RED)),
-                    play(Show, 2, colour(GREEN)),
-                ],
-                LATEST,
-                colour(RED),
-            ),
-            (
-                "a direct hold is Manual: over a later Show",
-                held(colour(RED), 1),
-                vec![play(Show, 2, colour(GREEN))],
-                LATEST,
-                colour(RED),
-            ),
-            // equal rank: the latest start
-            (
-                "two Shows, the later wins",
-                Held::NONE,
-                vec![play(Show, 1, colour(RED)), play(Show, 2, colour(BLUE))],
-                LATEST,
-                colour(BLUE),
-            ),
-            (
-                "a later Manual play over a hold",
-                held(colour(BLUE), 1),
-                vec![play(Manual, 2, colour(RED))],
-                LATEST,
-                colour(RED),
-            ),
-            (
-                "a later hold over a Manual play",
-                held(colour(BLUE), 2),
-                vec![play(Manual, 1, colour(RED))],
-                LATEST,
-                colour(BLUE),
-            ),
-            (
-                "a later hold of one property only",
-                held(intensity(5), 3),
-                vec![play(Manual, 2, both(9, RED))],
-                LATEST,
-                both(5, RED),
-            ),
-            // zero and black take part, absent lets through
-            (
-                "Manual zero darkens a Show",
-                Held::NONE,
-                vec![
-                    play(Show, 2, both(255, GREEN)),
-                    play(Manual, 1, intensity(0)),
-                ],
-                LATEST,
-                both(0, GREEN),
-            ),
-            (
-                "Manual black claims colour",
-                Held::NONE,
-                vec![
-                    play(Show, 2, colour(GREEN)),
-                    play(Manual, 1, colour(Rgb::BLACK)),
-                ],
-                LATEST,
-                colour(Rgb::BLACK),
-            ),
-            (
-                "absent colour lets the hold through",
-                held(colour(BLUE), 1),
-                vec![play(Manual, 2, intensity(0))],
-                LATEST,
-                both(0, BLUE),
-            ),
-            // brightness: the latest, or the highest within the winning rank
-            (
-                "latest: the later dimmer Show",
-                Held::NONE,
-                vec![play(Show, 1, intensity(200)), play(Show, 2, intensity(100))],
-                LATEST,
-                intensity(100),
-            ),
-            (
-                "highest: the earlier brighter Show",
-                Held::NONE,
-                vec![play(Show, 1, intensity(200)), play(Show, 2, intensity(100))],
-                HIGHEST,
-                intensity(200),
-            ),
-            (
-                "highest: a brighter play over an earlier dimmer hold",
-                held(intensity(100), 5),
-                vec![play(Manual, 3, intensity(200))],
-                HIGHEST,
-                intensity(200),
-            ),
-            (
-                "highest stays in the winning rank",
-                Held::NONE,
-                vec![
-                    play(Autopilot, 1, intensity(255)),
-                    play(Show, 2, intensity(10)),
-                ],
-                HIGHEST,
-                intensity(10),
-            ),
-            (
-                "highest: a dim Manual over a bright Autopilot",
-                Held::NONE,
-                vec![
-                    play(Manual, 1, intensity(10)),
-                    play(Autopilot, 2, intensity(255)),
-                ],
-                HIGHEST,
-                intensity(10),
-            ),
-            (
-                "highest is for brightness only: colour by the latest",
-                Held::NONE,
-                vec![
-                    play(Show, 1, both(200, RED)),
-                    play(Show, 2, both(100, BLUE)),
-                ],
-                HIGHEST,
-                both(200, BLUE),
-            ),
-            // a kept play keeps its rank and start
-            (
-                "a kept Show over a later Autopilot",
-                Held::NONE,
-                vec![
-                    kept(Show, 1, colour(GREEN)),
-                    play(Autopilot, 2, colour(BLUE)),
-                ],
-                LATEST,
-                colour(GREEN),
-            ),
-            (
-                "a kept Show under a later Show",
-                Held::NONE,
-                vec![kept(Show, 1, colour(GREEN)), play(Show, 2, colour(BLUE))],
-                LATEST,
-                colour(BLUE),
-            ),
-            // each gobo wheel is its own claim
-            (
-                "two wheels from two plays, wheel 2 later",
-                Held::NONE,
-                vec![
-                    play(Manual, 1, gobos([Some(3), None, None])),
-                    play(Manual, 2, gobos([None, Some(7), None])),
-                ],
-                LATEST,
-                gobos([Some(3), Some(7), None]),
-            ),
-            (
-                "two wheels from two plays, wheel 1 later",
-                Held::NONE,
-                vec![
-                    play(Manual, 2, gobos([Some(3), None, None])),
-                    play(Manual, 1, gobos([None, Some(7), None])),
-                ],
-                LATEST,
-                gobos([Some(3), Some(7), None]),
-            ),
-            (
-                "a later start takes only its own wheel",
-                Held::NONE,
-                vec![
-                    play(Show, 1, gobos([Some(3), Some(7), Some(2)])),
-                    play(Show, 2, gobos([None, Some(5), None])),
-                ],
-                LATEST,
-                gobos([Some(3), Some(5), Some(2)]),
-            ),
-            (
-                "a hold of wheel 2 leaves wheel 1 to a Show",
-                held(gobos([None, Some(7), None]), 1),
-                vec![play(Show, 2, gobos([Some(3), Some(1), None]))],
-                LATEST,
-                gobos([Some(3), Some(7), None]),
-            ),
-        ];
-        for (row, hold, sources, rules, expected) in cases {
-            for first in 0..PLAYS {
-                assert_eq!(
-                    shown(hold, &sources, rules, first),
-                    expected,
-                    "{row}, from slot {first}"
-                );
-            }
-            let mut reversed = sources.clone();
-            reversed.reverse();
-            assert_eq!(
-                shown(hold, &reversed, rules, 0),
-                expected,
-                "{row}, reversed"
-            );
-        }
-    }
-
-    #[test]
-    fn equal_brightness_is_won_by_the_later_start() {
-        use Rank::{Manual, Show};
-        let equal = vec![play(Show, 1, intensity(100)), play(Show, 2, intensity(100))];
-        // (row, direct hold, plays, rules, the brightness winner's rank and start)
-        let cases = [
-            (
-                "highest, equal",
-                Held::NONE,
-                equal.clone(),
-                HIGHEST,
-                (Show, 2),
-            ),
-            ("latest, equal", Held::NONE, equal, LATEST, (Show, 2)),
-            (
-                "highest, the earlier brighter",
-                Held::NONE,
-                vec![play(Show, 1, intensity(200)), play(Show, 2, intensity(100))],
-                HIGHEST,
-                (Show, 1),
-            ),
-            (
-                "highest, a hold equal to an earlier play",
-                held(intensity(100), 5),
-                vec![play(Manual, 3, intensity(100))],
-                HIGHEST,
-                (Manual, 5),
-            ),
-        ];
-        for (row, hold, sources, rules, (rank, order)) in cases {
-            let won = |sources: &[Source], first| {
-                let (_, claims) = mixed(hold, sources, rules, first);
-                claims[Property::Intensity.index()]
-            };
-            let winner = Some(Claim { rank, order });
-            for first in 0..PLAYS {
-                assert_eq!(won(&sources, first), winner, "{row}, from slot {first}");
-            }
-            let mut reversed = sources.clone();
-            reversed.reverse();
-            assert_eq!(won(&reversed, 0), winner, "{row}, reversed");
-        }
-    }
 
     #[test]
     fn a_stop_keeps_or_removes_by_rank_and_rules() {
@@ -1297,287 +1216,6 @@ mod properties {
                 cleared,
                 "{rank:?} {state:?} {rules:?}"
             );
-        }
-    }
-
-    #[test]
-    fn a_released_hold_lets_the_play_through() {
-        for property in Property::ALL {
-            let all = Light {
-                position: Some(Position { pan: 1, tilt: 2 }),
-                zoom: Some(3),
-                gobos: [Some(2), Some(5), Some(1)],
-                ..both(4, BLUE)
-            };
-            let mut hold = held(all, 3);
-            hold.change(LightChange::Release { property }, 4);
-            assert_eq!(
-                hold.values,
-                all.with(property, &Light::DARK),
-                "{property:?}"
-            );
-            hold.change(LightChange::Release { property }, 5); // again: a no-op
-            assert_eq!(
-                hold.values,
-                all.with(property, &Light::DARK),
-                "{property:?}"
-            );
-            for other in Property::ALL {
-                assert_eq!(hold.since(other), if other == property { 0 } else { 3 });
-            }
-        }
-    }
-
-    #[test]
-    fn a_grab_is_reached_only_by_its_own_gestures() {
-        use LightChange::{End as Ends, Grab, Release, Update};
-        let one = GrabId { generation: 1 };
-        let two = GrabId { generation: 2 };
-        let green = Value::Colour(GREEN);
-        let red = Value::Colour(RED);
-        let white = Value::Colour(Rgb {
-            red: u16::MAX,
-            green: u16::MAX,
-            blue: u16::MAX,
-        });
-        let until_stop = MixRules {
-            manual_end: ManualEnd::UntilStop,
-            ..LATEST
-        };
-        let end = |grab, end| Ends {
-            property: Property::Colour,
-            grab,
-            end,
-        };
-        // (row, changes at start orders 1, 3, 5 and on, rules after, held colour; and
-        // with a Manual blue play started at 2, what light 1 shows)
-        type Row = (&'static str, Vec<LightChange>, MixRules, Option<Rgb>, Rgb);
-        let cases: [Row; 14] = [
-            (
-                "a grab",
-                vec![Grab {
-                    value: green,
-                    grab: one,
-                }],
-                LATEST,
-                Some(GREEN),
-                BLUE,
-            ),
-            (
-                "an update keeps its start",
-                vec![
-                    Grab {
-                        value: green,
-                        grab: one,
-                    },
-                    Update {
-                        value: red,
-                        grab: one,
-                    },
-                ],
-                LATEST,
-                Some(RED),
-                BLUE,
-            ),
-            (
-                "a later grab wins over a play",
-                vec![
-                    Update {
-                        value: red,
-                        grab: one,
-                    },
-                    Grab {
-                        value: green,
-                        grab: one,
-                    },
-                ],
-                LATEST,
-                Some(GREEN),
-                GREEN,
-            ),
-            (
-                "an update of a replaced grab",
-                vec![
-                    Grab {
-                        value: green,
-                        grab: one,
-                    },
-                    Grab {
-                        value: red,
-                        grab: two,
-                    },
-                    Update {
-                        value: white,
-                        grab: one,
-                    },
-                ],
-                LATEST,
-                Some(RED),
-                RED,
-            ),
-            (
-                "an end of a replaced grab",
-                vec![
-                    Grab {
-                        value: green,
-                        grab: one,
-                    },
-                    Grab {
-                        value: red,
-                        grab: two,
-                    },
-                    end(one, End::Remove),
-                ],
-                LATEST,
-                Some(RED),
-                RED,
-            ),
-            (
-                "an end of another property",
-                vec![
-                    Grab {
-                        value: green,
-                        grab: one,
-                    },
-                    Ends {
-                        property: Property::Intensity,
-                        grab: one,
-                        end: End::Remove,
-                    },
-                ],
-                LATEST,
-                Some(GREEN),
-                BLUE,
-            ),
-            (
-                "an end kept",
-                vec![
-                    Grab {
-                        value: green,
-                        grab: one,
-                    },
-                    end(one, End::Keep),
-                ],
-                LATEST,
-                Some(GREEN),
-                BLUE,
-            ),
-            (
-                "an update after the end",
-                vec![
-                    Grab {
-                        value: green,
-                        grab: one,
-                    },
-                    end(one, End::Keep),
-                    Update {
-                        value: red,
-                        grab: one,
-                    },
-                ],
-                LATEST,
-                Some(GREEN),
-                BLUE,
-            ),
-            (
-                "an end removed",
-                vec![
-                    Grab {
-                        value: green,
-                        grab: one,
-                    },
-                    end(one, End::Remove),
-                ],
-                LATEST,
-                None,
-                BLUE,
-            ),
-            (
-                "kept, then UntilStop",
-                vec![
-                    Grab {
-                        value: green,
-                        grab: one,
-                    },
-                    end(one, End::Keep),
-                ],
-                until_stop,
-                None,
-                BLUE,
-            ),
-            (
-                "live, then UntilStop",
-                vec![Grab {
-                    value: green,
-                    grab: one,
-                }],
-                until_stop,
-                Some(GREEN),
-                BLUE,
-            ),
-            (
-                "kept, then a later grab, then UntilStop",
-                vec![
-                    Grab {
-                        value: green,
-                        grab: one,
-                    },
-                    end(one, End::Keep),
-                    Grab {
-                        value: red,
-                        grab: two,
-                    },
-                ],
-                until_stop,
-                Some(RED),
-                RED,
-            ),
-            (
-                "released",
-                vec![
-                    Grab {
-                        value: green,
-                        grab: one,
-                    },
-                    Release {
-                        property: Property::Colour,
-                    },
-                ],
-                LATEST,
-                None,
-                BLUE,
-            ),
-            (
-                "another property released",
-                vec![
-                    Grab {
-                        value: green,
-                        grab: one,
-                    },
-                    Release {
-                        property: Property::Intensity,
-                    },
-                ],
-                LATEST,
-                Some(GREEN),
-                BLUE,
-            ),
-        ];
-        for (row, changes, rules, holds, shows) in cases {
-            let mut hold = Held::NONE;
-            for (n, change) in changes.into_iter().enumerate() {
-                hold.change(change, 1 + 2 * n as u64);
-            }
-            hold.unkeep(rules);
-            assert_eq!(hold.values.colour, holds, "{row}");
-            let blue = [play(Rank::Manual, 2, colour(BLUE))];
-            for first in 0..PLAYS {
-                assert_eq!(
-                    shown(hold, &blue, rules, first).colour,
-                    Some(shows),
-                    "{row}"
-                );
-            }
         }
     }
 }

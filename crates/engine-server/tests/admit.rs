@@ -31,11 +31,15 @@ fn text(text: &str) -> Text {
 }
 
 fn par(address: u16) -> Command {
+    par_in("RGB", address)
+}
+
+fn par_in(mode: &str, address: u16) -> Command {
     Command::Patch {
         name: text("PAR"),
         maker: text("Generic"),
         model: text("Generic RGB"),
-        mode: text("RGB"),
+        mode: text(mode),
         at: ChannelNumbers {
             universe: 1,
             address,
@@ -117,7 +121,8 @@ struct Kept {
 }
 
 impl Front {
-    /// A PAR at 1:1 at full, look 1 red playing, look 2 green saved. The tick held.
+    /// A PAR at 1:1 in its mode RGB Dimmer, its dimmer at full, look 1 red playing, look 2
+    /// green saved. The tick held.
     fn start() -> (Self, PlayId) {
         let heard = Heard::default();
         let stop = Arc::new(AtomicBool::new(false));
@@ -146,7 +151,7 @@ impl Front {
             panic!("the adapter opens");
         };
         front.sender.finish(opening.open()).unwrap();
-        front.begin(par(1)).unwrap();
+        front.begin(par_in("RGB Dimmer", 1)).unwrap();
         let full = Command::SetIntensity {
             target: Target::Fixture { fixture: 1 },
             intensity: u16::MAX,
@@ -193,6 +198,11 @@ impl Front {
             }
         }
         last.unwrap()
+    }
+
+    /// The dimmer at 1:4 in the last frame heard.
+    fn dimmer(&self) -> u8 {
+        self.heard.lock().unwrap().last().map_or(0, |c| c[3])
     }
 
     fn kept(&self) -> Kept {
@@ -271,10 +281,10 @@ fn a_refused_admission_keeps_the_project_the_looks_and_the_next_frame() {
         universes: RunNumbers { first: 1, count: 1 },
         rate: None,
     };
-    // a PAR at 1:4 alone in group "g", idle look 3 saved on the group
+    // a PAR at 1:5 alone in group "g", idle look 3 saved on the group
     let grouped = || {
         vec![
-            par(4),
+            par(5),
             group(&[Member::Fixture { fixture: 2 }]),
             on_group(3),
         ]
@@ -454,11 +464,19 @@ fn a_press_is_admitted_while_another_clients_edit_is_prepared() {
         intensity: 0x8080,
     };
     assert!(matches!(front.begin(dim), Ok(Begun::Grabbed { .. })));
-    assert_eq!(front.frame(), [128, 0, 0], "B's press is in the next frame");
+    assert_eq!(
+        (front.frame(), front.dimmer()),
+        ([255, 0, 0], 128),
+        "B's press is in the next frame"
+    );
     // A's edit, prepared on a base the press did not move, is admitted after it
     let prepared = base.prepare(step(1, GREEN), &front.library).unwrap();
     assert!(matches!(front.sender.admit(prepared), Ok(Begun::Queued)));
-    assert_eq!(front.frame(), [0, 128, 0], "A's step plays green");
+    assert_eq!(
+        (front.frame(), front.dimmer()),
+        ([0, 255, 0], 128),
+        "A's step plays green"
+    );
 }
 
 /// (what, then what, the frame after)

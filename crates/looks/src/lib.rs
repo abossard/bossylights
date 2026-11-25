@@ -212,7 +212,7 @@ impl Looks {
                 Definition::Step(step) => Plan::step(look, step.step(), patch, room),
                 Definition::Sequence(_) | Definition::Pattern(_) => {
                     sequence::compile(&self.saved, look, patch, room)
-                        .map(|(timed, work)| Plan::timed(look, timed, work))
+                        .and_then(|(timed, work)| Plan::timed(look, timed, work, room))
                 }
             }
             .map_err(|reason| {
@@ -270,6 +270,41 @@ mod tests {
             .unwrap()
             .0
             .unwrap()
+    }
+
+    /// What `plan` offers at `at` under `usage` on `patch`, through its field table:
+    /// each light that has a word (counted from 1) and its words in field order.
+    pub(super) fn offered(
+        plan: &Plan,
+        patch: &Patch,
+        at: u64,
+        usage: Use,
+    ) -> Vec<(u16, Vec<Option<u16>>)> {
+        use engine_core::Field;
+        let coarse = |field: Field| match field {
+            Field::Byte(at) => at,
+            Field::Word(pair) => pair.coarse,
+        };
+        let mut table = patch.prepare();
+        let mut got = BTreeMap::new();
+        let (targets, scratch) = table.split();
+        let any = plan.offer((at.into(), usage), (targets, scratch), |field, word| {
+            got.insert(coarse(field), word);
+        });
+        assert_eq!(any, !got.is_empty(), "offered anything");
+        (0..32)
+            .filter_map(|light| {
+                let (fields, _) = table.targets().of(light);
+                let words: Vec<_> = fields
+                    .iter()
+                    .map(|f| got.get(&coarse(*f)).copied())
+                    .collect();
+                words
+                    .iter()
+                    .any(Option::is_some)
+                    .then_some((light + 1, words))
+            })
+            .collect()
     }
 
     pub(super) fn leaf(look: u16) -> Saved {
@@ -335,7 +370,7 @@ mod tests {
 
     #[test]
     fn compiled_spread_uses_each_looks_own_order_and_skips_repeated_lights() {
-        use engine_core::{Entry, Member, Members};
+        use engine_core::{Member, Members, Rgb};
         const BEAT: u64 = 1 << 32;
         let group = Text::new("front").unwrap();
         let spread = Use {
@@ -366,13 +401,12 @@ mod tests {
             ] {
                 let mut saved = leaf(id);
                 saved.step.target = target;
-                saved.step.values.intensity = Some(value);
+                saved.step.values.colour = Some(Rgb {
+                    red: value,
+                    ..Rgb::BLACK
+                });
                 looks = looks.put(saved, &patch).unwrap();
             }
-            let initial = Entry {
-                lights: patch.runs(Target::Light { light: 1 }).unwrap()[0],
-                values: Light::DARK,
-            };
             let delayed = SequenceItem {
                 usage: spread,
                 ..item(2)
@@ -390,16 +424,12 @@ mod tests {
             ] {
                 let looks = looks.put(sequence(4, &items), &patch).unwrap();
                 let plan = looks.plan(4).unwrap();
-                let mut scratch = alloc::vec![initial; plan.lights()];
-                assert!(plan.sample(at, usage, &mut scratch));
-                assert_eq!(
-                    plan.entries(&scratch)
-                        .iter()
-                        .map(|e| e.values.intensity)
-                        .collect::<Vec<_>>(),
-                    expected.map(Some),
-                    "members {members:?} at {at}"
-                );
+                // each light's red word
+                let red: Vec<_> = offered(&plan, &patch, at, usage)
+                    .into_iter()
+                    .map(|(_, words)| words[0])
+                    .collect();
+                assert_eq!(red, expected.map(Some), "members {members:?} at {at}");
             }
         }
     }
@@ -416,6 +446,36 @@ mod tests {
                 looks.put(sequence(9, &children), &patch),
                 Err(Refusal::WorkLimit)
             );
+        }
+    }
+
+    #[test]
+    fn a_plan_is_refused_one_byte_past_its_room() {
+        let patch = patch();
+        // the strip's three lights take the same words: one run, a word per colour field
+        let step_bytes = size_of::<(engine_core::LightRun, u32)>() + 3 * size_of::<Option<u16>>();
+        let step = |room| Plan::step(1, leaf(1).step, &patch, room);
+        let saved: BTreeMap<u16, Arc<SavedLook>> = [leaf(1).into(), sequence(2, &[item(1)])]
+            .into_iter()
+            .map(|saved: SavedLook| (saved.look, Arc::new(saved)))
+            .collect();
+        let timed = |room| {
+            let (timed, work) = crate::sequence::compile(&saved, 2, &patch, usize::MAX).unwrap();
+            Plan::timed(2, timed, work, room)
+        };
+        let sequence_bytes = timed(usize::MAX).unwrap().bytes() - size_of::<Plan>();
+        // (plan, built in its bytes, built a byte short)
+        let plans = [
+            ("a step", step(step_bytes), step(step_bytes - 1)),
+            (
+                "a sequence",
+                timed(sequence_bytes),
+                timed(sequence_bytes - 1),
+            ),
+        ];
+        for (plan, fits, short) in plans {
+            assert!(fits.is_ok(), "{plan} in its bytes");
+            assert_eq!(short.err(), Some(Refusal::WorkLimit), "{plan} a byte short");
         }
     }
 }

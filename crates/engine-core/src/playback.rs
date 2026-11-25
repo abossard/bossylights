@@ -18,7 +18,7 @@
 //! freeze that sample. The Mixer owns rank, start priority and the end rules.
 
 use crate::clock::{BeatTime, Clock, When};
-use crate::{GrabId, Light, LightRun, MixRules, Value};
+use crate::{GrabId, MixRules, Value};
 use core::time::Duration;
 use serde::{Deserialize, Serialize};
 
@@ -317,13 +317,6 @@ impl Serialize for Plays {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.collect_seq(self.iter())
     }
-}
-
-/// A step's values on one run of lights: what a play holds.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Entry {
-    pub lights: LightRun,
-    pub values: Light,
 }
 
 #[cfg(test)]

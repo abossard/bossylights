@@ -6,8 +6,8 @@ use crate::lane::Lane;
 use crate::publication::Hand;
 use crate::snapshot::{OutputHealth, Publication, Times};
 use crate::*;
-use engine_core::{ChannelSet, Held};
-use rig::WriterPlan;
+use engine_core::{Brightness, ChannelSet, Elapsed, GRABS, GrabEntry, Grabs};
+use rig::{FieldPlan, Words};
 
 /// Every channel at rest, on the heap. Its own frame: the 256 KiB a debug build passes
 /// through the stack is gone again before the engine starts its threads.
@@ -24,19 +24,21 @@ pub(crate) struct Ticker {
     /// Each output's own thread, by output number, beside `State::outputs`.
     devices: [Option<Box<Lane>>; MAX_OUTPUTS],
     switching: Box<[Option<Switch>; MAX_OUTPUTS]>,
-    /// The patch's writers: lights to bytes, every frame.
-    writers: WriterPlan,
+    /// The patch's field table: each light index to its fields, every frame.
+    table: FieldPlan,
     /// Each play's plan, by slot, beside `State::plays`.
     plans: [Option<Version>; PLAYS],
-    scratch: [Box<[Entry]>; PLAYS],
-    /// Who holds each property of each light this frame: the Mixer's buffer.
-    claims: Box<[Claims]>,
+    /// The moment each kept play froze at, by slot: sampled there every frame.
+    frozen: [Option<Elapsed>; PLAYS],
     state: State,
     universes: Universes,
     held: Box<[Levels; MAX_UNIVERSES as usize]>,
     holds: Box<[ChannelSet; MAX_UNIVERSES as usize]>,
-    lights: Box<[Light]>,
-    grabs: Box<[Held]>,
+    /// The direct grabs, by entry, beside the words each offers. The front keeps a clone
+    /// of every box until this thread applied the command that dropped it: nothing is
+    /// freed here.
+    grabs: Box<Grabs>,
+    boxes: Box<[Option<Arc<Words>>]>,
     health: Box<[OutputHealth; MAX_OUTPUTS]>,
     latency: Times<LATENESS_BUCKETS>,
     applied: u64,
@@ -365,34 +367,21 @@ impl Ticker {
             #[cfg(feature = "test-support")]
             timings,
         } = start;
-        let first = engine_core::LightNumber::new(0, LIGHTS)
-            .and_then(|first| LightRun::new(first, 1, LIGHTS))
-            .ok_or_else(|| io::Error::other("empty lighting engine"))?;
         Ok(Self {
             shared,
             commands,
             retired,
             devices: std::array::from_fn(|_| None),
             switching: Box::new(std::array::from_fn(|_| None)),
-            writers: WriterPlan::default(),
+            table: FieldPlan::default(),
             plans: std::array::from_fn(|_| None),
-            scratch: std::array::from_fn(|_| {
-                vec![
-                    Entry {
-                        lights: first,
-                        values: Light::DARK
-                    };
-                    usize::from(MAX_LIGHTS)
-                ]
-                .into_boxed_slice()
-            }),
-            claims: vec![[None; Property::ALL.len()]; usize::from(MAX_LIGHTS)].into_boxed_slice(),
+            frozen: [None; PLAYS],
             state: State::new(Priority::RealTime),
             universes,
             held: Box::new([Levels::ZERO; MAX_UNIVERSES as usize]),
             holds: Box::new([ChannelSet::NONE; MAX_UNIVERSES as usize]),
-            lights: vec![Light::DARK; usize::from(MAX_LIGHTS)].into_boxed_slice(),
-            grabs: vec![Held::NONE; usize::from(MAX_LIGHTS)].into_boxed_slice(),
+            grabs: Box::new(Grabs::NONE),
+            boxes: std::iter::repeat_with(|| None).take(GRABS).collect(),
             health: Box::new([OutputHealth::ZERO; MAX_OUTPUTS]),
             latency: Times::ZERO,
             applied: 0,
@@ -458,8 +447,8 @@ impl Ticker {
                         Brings::Nothing
                         | Brings::Reroute(_, _)
                         | Brings::Probe(_)
-                        | Brings::Writers(_)
-                        | Brings::Runs(_)
+                        | Brings::Fields(_)
+                        | Brings::Grabs(_)
                         | Brings::Plan(_) => {}
                     }
                 }
@@ -488,56 +477,7 @@ impl Ticker {
                 }
             }
             self.settle(now);
-            for play in self
-                .state
-                .active_plays()
-                .filter(|p| p.state == PlayState::Playing)
-            {
-                let slot = play.play.slot();
-                if let (Some(Some(version)), Some(out)) =
-                    (self.plans.get(slot), self.scratch.get_mut(slot))
-                {
-                    version
-                        .plan
-                        .sample(self.state.elapsed_since(play.start), version.usage, out);
-                }
-            }
-            {
-                let Self {
-                    state,
-                    universes,
-                    held,
-                    holds,
-                    lights,
-                    grabs,
-                    plans,
-                    scratch,
-                    claims,
-                    writers,
-                    channels,
-                    ..
-                } = &mut self;
-                state.show_plays(
-                    grabs,
-                    |slot| {
-                        plans
-                            .get(slot)
-                            .and_then(Option::as_ref)
-                            .zip(scratch.get(slot))
-                            .map_or(&[], |(v, out)| v.plan.entries(out))
-                    },
-                    lights,
-                    claims,
-                );
-                let count = usize::from(universes.count());
-                writers.frame(
-                    state,
-                    held.get(..count).unwrap_or_default(),
-                    holds.get(..count).unwrap_or_default(),
-                    lights,
-                    channels,
-                );
-            }
+            self.frame();
             self.back();
             self.show_returned(&wake_actions);
             let mut serve = [None; MAX_OUTPUTS];
@@ -569,11 +509,12 @@ impl Ticker {
                     ref universes,
                     ref held,
                     ref holds,
-                    ref lights,
                     ref health,
                     ref latency,
                     ref applied,
                     ref revision,
+                    #[cfg(feature = "test-support")]
+                    ref channels,
                     ..
                 } = self;
                 hand.fill(
@@ -583,7 +524,8 @@ impl Ticker {
                         universes: *universes,
                         held,
                         holds,
-                        lights,
+                        #[cfg(feature = "test-support")]
+                        frame: channels.values(),
                         output_health: health.as_ref(),
                         latency: *latency,
                         applied: *applied,
@@ -629,15 +571,19 @@ impl Ticker {
         if play.state == PlayState::Kept {
             return;
         }
+        let at = self.state.elapsed_since(play.start);
+        let (targets, scratch) = self.table.split();
         if play.state == PlayState::Playing
-            && let (Some(Some(version)), Some(out)) =
-                (self.plans.get(slot), self.scratch.get_mut(slot))
+            && let Some(Some(version)) = self.plans.get(slot)
             && version
                 .plan
-                .sample(self.state.elapsed_since(play.start), version.usage, out)
+                .offer((at, version.usage), (targets, scratch), |_, _| {})
         {
             if let Some(kept) = self.shared.kept.get(slot) {
                 kept.store(version.sent, Ordering::Release);
+            }
+            if let Some(frozen) = self.frozen.get_mut(slot) {
+                *frozen = Some(at);
             }
             self.apply(EngineCommand::Keep { play: id });
         } else {
@@ -655,15 +601,23 @@ impl Ticker {
 
     /// For `Attach` and `RemoveOutput`: puts the device brought at the output, sends the
     /// old one back to be freed and starts the output's lateness afresh. `Attach` without
-    /// a device keeps the one there. For `Writers`: the writers brought take the place of
-    /// the old ones, which go back. For `Runs`: each run brought takes the change, in this
-    /// wake. Others change nothing.
+    /// a device keeps the one there. For `Fields`: the field table brought takes the place
+    /// of the old one, which goes back. For `Grabs`: each grab change brought is applied,
+    /// in order, in this wake; the boxes it lets go stay with the front. Others change
+    /// nothing.
     fn swap(&mut self, command: EngineCommand, brings: Brings) {
         if let EngineCommand::Release { play } = command {
             self.replan(play.slot(), None);
             return;
         }
+        if let EngineCommand::Rules { rules } = command {
+            self.channels.highest(
+                self.table.dimmers(),
+                rules.brightness == Brightness::Highest,
+            );
+        }
         if let EngineCommand::ReleaseAll | EngineCommand::Rules { .. } = command {
+            self.unboxed();
             // Rules can clear a natural hold before the sender has observed it.
             for slot in 0..PLAYS {
                 if !self.state.has_play(slot) {
@@ -731,17 +685,31 @@ impl Ticker {
                 }
                 None
             }
-            Brings::Writers(writers) => {
-                let old = std::mem::replace(&mut self.writers, writers);
+            Brings::Fields(table) => {
+                let old = std::mem::replace(&mut self.table, table);
                 self.channels
-                    .configure(old.configured(), self.writers.configured());
-                let _ = self.retired.push(Retired::Writers(old));
+                    .configure(old.configured(), self.table.configured());
+                self.channels.highest(
+                    self.table.dimmers(),
+                    self.state.rules.brightness == Brightness::Highest,
+                );
+                let _ = self.retired.push(Retired::Fields(old));
                 return;
             }
-            Brings::Runs(runs) => {
-                if let EngineCommand::Runs { change } = command {
-                    for run in runs.into_iter().flatten() {
-                        self.apply(change.on(run));
+            Brings::Grabs(changes) => {
+                // `changes` and every box in it stay with the front until it sees this
+                // command applied: dropping them here frees nothing
+                for set in changes.iter() {
+                    self.apply(EngineCommand::Grab {
+                        entry: set.entry,
+                        change: set.change,
+                    });
+                    if let Some(place) = self.boxes.get_mut(set.entry.index()) {
+                        if self.grabs.get(set.entry).is_none() {
+                            *place = None;
+                        } else if let Some(words) = &set.words {
+                            *place = Some(Arc::clone(words));
+                        }
                     }
                 }
                 return;
@@ -975,6 +943,9 @@ impl Ticker {
         let Some(at) = self.plans.get_mut(slot) else {
             return;
         };
+        if let Some(frozen) = self.frozen.get_mut(slot) {
+            *frozen = None;
+        }
         if let Some(old) = std::mem::replace(at, plan) {
             // The queue has room for every box a wake can retire (see `start`).
             let _ = self.retired.push(Retired::Plan(old.plan));
@@ -983,6 +954,64 @@ impl Ticker {
 
     fn apply(&mut self, command: EngineCommand) {
         self.update(command);
+    }
+
+    /// The boxes of the grab entries the table no longer has let go (`ReleaseAll`, or
+    /// `Rules` that no longer keep them). The front still has each: nothing is freed.
+    fn unboxed(&mut self) {
+        for (entry, place) in self.boxes.iter_mut().enumerate() {
+            if place.is_some() && GrabEntry::new(entry).is_none_or(|e| self.grabs.get(e).is_none())
+            {
+                *place = None;
+            }
+        }
+    }
+
+    /// The frame: each sounding play and grab offers its words on its fields through the
+    /// field table, one mixer decides each channel, raw holds and modifiers follow. A
+    /// playing play samples now, a kept one at its frozen moment.
+    fn frame(&mut self) {
+        let Self {
+            state,
+            universes,
+            held,
+            holds,
+            grabs,
+            boxes,
+            plans,
+            frozen,
+            table,
+            channels,
+            ..
+        } = self;
+        let count = usize::from(universes.count());
+        let (configured, targets, scratch) = table.parts();
+        let raw = (
+            held.get(..count).unwrap_or_default(),
+            holds.get(..count).unwrap_or_default(),
+        );
+        engine_core::frame(state, grabs, raw, configured, channels, |offers| {
+            for play in state.sounding_plays() {
+                let slot = play.play.slot();
+                let at = match play.state {
+                    PlayState::Kept => frozen.get(slot).copied().flatten(),
+                    PlayState::Playing => Some(state.elapsed_since(play.start)),
+                    PlayState::Waiting { .. } => None,
+                };
+                if let (Some(at), Some(Some(version))) = (at, plans.get(slot)) {
+                    version.plan.offer(
+                        (at, version.usage),
+                        (targets, &mut *scratch),
+                        |field, word| offers.play(slot, field, word),
+                    );
+                }
+            }
+            for (entry, words) in boxes.iter().enumerate() {
+                if let (Some(entry), Some(words)) = (GrabEntry::new(entry), words) {
+                    words.offer(targets, |field, word| offers.grab(entry, field, word));
+                }
+            }
+        });
     }
 }
 

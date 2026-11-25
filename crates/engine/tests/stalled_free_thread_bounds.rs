@@ -198,17 +198,26 @@ fn each_live_plan_swap_reserves_a_return_and_release_keeps_its_place() {
             },
         })
         .unwrap();
-    let step = |intensity| Command::PutStep {
+    // A marker as colour, low byte on red and high byte on green: the strip has no
+    // dimmer, so a brightness alone offers nothing.
+    let step = |marker: u16| Command::PutStep {
         look: 1,
         name,
         step: Step {
             target: Target::Light { light: 1 },
             values: Light {
-                intensity: Some(intensity),
+                colour: Some(Rgb {
+                    red: marker << 8,
+                    green: marker & 0xFF00,
+                    blue: 0,
+                }),
                 ..Light::DARK
             },
         }
         .into(),
+    };
+    let shown = |snapshot: &engine::Snapshot| {
+        u16::from_be_bytes([snapshot.sent(1, 2), snapshot.sent(1, 1)])
     };
     sender.send(step(0)).unwrap();
     let play = start(&mut sender, 1);
@@ -219,18 +228,15 @@ fn each_live_plan_swap_reserves_a_return_and_release_keeps_its_place() {
     let returns = engine::QUEUE + engine::MAX_OUTPUTS;
     assert!(sender.looks().plan(1).unwrap().bytes() * returns < PLAN_BYTES);
     let swaps = u16::try_from(returns - 2).unwrap();
-    for intensity in 1..=swaps {
-        sender.send(step(intensity)).unwrap();
-        if intensity % 32 == 0 {
+    for marker in 1..=swaps {
+        sender.send(step(marker)).unwrap();
+        if marker % 32 == 0 {
             wakes.wake_at(at).unwrap();
         }
     }
     engine.latest();
     wakes.wake_at(at).unwrap();
-    assert_eq!(
-        engine.latest().light(1).and_then(|light| light.intensity),
-        Some(swaps)
-    );
+    assert_eq!(shown(engine.latest()), swaps);
     let sent = sender.sent();
     let project = sender.looks();
     let restart = Command::StartLook {
@@ -253,7 +259,7 @@ fn each_live_plan_swap_reserves_a_return_and_release_keeps_its_place() {
     wakes.wake_at(at).unwrap();
     let idle = engine.latest();
     assert_eq!(idle.active_plays().count(), 0);
-    assert_eq!(idle.light(1).and_then(|light| light.intensity), None);
+    assert_eq!(shown(idle), 0);
     // The released plan still occupies its return entry until the free thread runs.
     assert_eq!(
         sender.send(restart),
@@ -270,8 +276,5 @@ fn each_live_plan_swap_reserves_a_return_and_release_keeps_its_place() {
     );
     engine.latest();
     wakes.wake_at(at).unwrap();
-    assert_eq!(
-        engine.latest().light(1).and_then(|light| light.intensity),
-        Some(swaps)
-    );
+    assert_eq!(shown(engine.latest()), swaps);
 }

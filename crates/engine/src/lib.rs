@@ -52,8 +52,8 @@ pub use engine_core::{
     Source, Speed, Swatches, Use, Value, WaveTarget, When,
 };
 use engine_core::{
-    EngineCommand, Histogram, LATENCY_BUCKETS, LATENESS_BUCKETS, MAX_LIGHTS, Watch, bucket, due,
-    percentile, update, wait,
+    EngineCommand, Histogram, LATENCY_BUCKETS, LATENESS_BUCKETS, Watch, bucket, due, percentile,
+    update, wait,
 };
 pub use fixture_library::Fixture;
 pub use looks::{Looks, PLAN_BYTES};
@@ -73,8 +73,7 @@ use front::{free, recover};
 use tick::{Ticker, TickerStart};
 
 use engine_core::{
-    Channels, Claims, End, Entry, LightChange, LightRun, Lights, LookCommand, PLAYS, ProjectEffect,
-    ProjectEvent, stops, unkept,
+    Channels, End, LightRun, Lights, LookCommand, PLAYS, ProjectEffect, ProjectEvent, stops, unkept,
 };
 
 pub use outputs::Device;
@@ -110,9 +109,6 @@ const LIGHTS: Lights = Lights::MOST;
 /// freed yet, so the queue back cannot fill up, and a release needs only a place in the
 /// command queue.
 const RETIRED: usize = QUEUE + MAX_OUTPUTS;
-/// A release of every other light makes the most disjoint runs possible.
-/// Even that selection must fit in an empty FIFO, all in one wake.
-const RUNS_IN_PLACE: usize = (MAX_LIGHTS as usize).div_ceil(2 * QUEUE);
 /// How often the free thread frees retired devices when nobody wakes it.
 const FREE_EVERY: Duration = Duration::from_millis(100);
 /// How long `SetOutput` waits for the devices on their way back before it opens.

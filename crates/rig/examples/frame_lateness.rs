@@ -1,7 +1,8 @@
 //! One engine frame at 60 a second, on a thread with the engine's real-time policy, for a
 //! number of RGB PARs (10 000 if none given), 170 to a universe from the first address.
-//! Each frame every light gets new values; the frame resets the patched channels to their
-//! rest, the writers write, Blackout goes on every other frame. Prints the p99 of how late
+//! Each frame every light takes the next of four values: the frame resets the patched
+//! channels to their rest, one grab offers each light's words on its fields through the
+//! field table, the Mixer decides each channel, Blackout goes on every other frame. Prints the p99 of how late
 //! a frame was done (after it was due) and the worst, in microseconds, and the p99 of the
 //! work itself in nanoseconds. The system's answer on the policy goes to stderr.
 //!
@@ -10,11 +11,13 @@
 //! `cargo run -q --release -p rig --example frame_lateness -- [seconds, 60] [PARs, 10000]`
 
 use engine_core::{
-    ChannelNumbers, ChannelSet, Channels, Configured, EngineCommand, Levels, Light, LightNumber,
-    Lights, MAX_LIGHTS, MAX_UNIVERSES, Priority, Rgb, State, Universes, Writer, frame, next_frame,
-    sleep_before, update,
+    ChannelNumbers, ChannelSet, Channels, EngineCommand, GrabChange, GrabEntry, Grabs, Levels,
+    Light, LightNumber, LightRun, Lights, MAX_LIGHTS, MAX_UNIVERSES, Priority, Rgb, State,
+    Universes, frame, next_frame, sleep_before, update,
 };
+use rig::{FieldPlan, Patch, Placed, Whole, Words};
 use std::hint;
+use std::num::NonZeroU16;
 use std::path::Path;
 use std::process::ExitCode;
 use std::thread;
@@ -47,9 +50,9 @@ fn run((seconds, pars): (u64, u64)) -> Result<String, String> {
     let frames = seconds * 60;
     // made here: the space does not fit on the stack of the thread that runs the frames
     let mut channels = Box::new(Channels::NEW);
-    channels.configure(&[], &rig.0);
+    channels.configure(&[], rig.0.configured());
     let (thread, priority) = rt_thread::spawn("frame_lateness", move |_| {
-        frames_of(&rig, &mut channels, usize::from(pars), frames)
+        frames_of(&rig, &mut channels, frames)
     })
     .map_err(|e| e.to_string())?;
     eprintln!("priority: {priority:?}, {frames} frames of {pars} PARs");
@@ -68,8 +71,9 @@ fn run((seconds, pars): (u64, u64)) -> Result<String, String> {
     ))
 }
 
-/// `pars` RGB PARs of three channels, 170 to a universe: their channels and writers.
-fn patch(pars: u16) -> Result<(Vec<Configured>, Vec<Writer>), String> {
+/// `pars` RGB PARs of three channels, 170 to a universe: the field table, and the words
+/// of every light in each of four values.
+fn patch(pars: u16) -> Result<(FieldPlan, Vec<Words>), String> {
     let file = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../fixture-library/tests/definitions/Generic-Generic-RGB.qxf");
     let bytes = std::fs::read(&file).map_err(|e| e.to_string())?;
@@ -82,33 +86,67 @@ fn patch(pars: u16) -> Result<(Vec<Configured>, Vec<Writer>), String> {
         .ok_or("no RGB mode")?;
     let universes = Universes::new(MAX_UNIVERSES).ok_or("universes")?;
     let lights = Lights::new(MAX_LIGHTS).ok_or("lights")?;
-    let (mut configured, mut writers) = (Vec::new(), Vec::new());
-    for n in 0..pars {
-        let at = ChannelNumbers {
-            universe: 1 + n / 170,
-            address: 1 + n % 170 * 3,
-        };
-        let first = LightNumber::new(n, lights).ok_or("light number")?;
-        let rigged = rig::compile(mode, at, first, universes, lights)
-            .map_err(|e| format!("light {n}: {e:?}"))?;
-        configured.extend(rigged.configured);
-        writers.extend(rigged.writers);
-    }
-    Ok((configured, writers))
+    let placed = (0..pars)
+        .map(|n| {
+            Some(Placed {
+                fixture: NonZeroU16::new(n.checked_add(1)?)?,
+                name: format!("PAR {n}"),
+                maker: fixture.maker.clone(),
+                model: fixture.model.clone(),
+                mode: mode.clone(),
+                at: ChannelNumbers {
+                    universe: 1 + n / 170,
+                    address: 1 + n % 170 * 3,
+                },
+                first: n.checked_add(1)?,
+            })
+        })
+        .collect::<Option<Vec<_>>>()
+        .ok_or("fixture number")?;
+    let patch = Patch::new(universes, lights, Whole(|_| NonZeroU16::MIN))
+        .restore(placed)
+        .map_err(|e| format!("{e:?}"))?;
+    let every = LightNumber::new(0, lights)
+        .and_then(|first| LightRun::new(first, pars, lights))
+        .ok_or("lights")?;
+    let words = (0..4u16)
+        .map(|k| {
+            let step = k.wrapping_mul(97);
+            let value = Light {
+                intensity: Some(step),
+                colour: Some(Rgb {
+                    red: step.wrapping_mul(3),
+                    green: step.wrapping_mul(5),
+                    blue: step.wrapping_mul(7),
+                }),
+                ..Light::DARK
+            };
+            patch.words(&[every], &value)
+        })
+        .collect();
+    Ok((patch.prepare(), words))
 }
 
 /// Runs `frames` frames as the engine's tick does: sleep, spin the last millisecond, then
 /// the frame's work. How late each frame was done, and how long its work took.
 fn frames_of(
-    (configured, writers): &(Vec<Configured>, Vec<Writer>),
+    (plan, words): &(FieldPlan, Vec<Words>),
     channels: &mut Channels,
-    pars: usize,
     frames: u64,
 ) -> (Vec<Duration>, Vec<Duration>) {
-    let mut values = vec![Light::DARK; pars];
     let mut raw = vec![Levels::ZERO; usize::from(MAX_UNIVERSES)];
     let mut holds = vec![ChannelSet::NONE; usize::from(MAX_UNIVERSES)];
+    let mut grabs = Box::new(Grabs::NONE);
     let mut state = State::new(Priority::RealTime);
+    let Some(entry) = GrabEntry::new(0) else {
+        return (Vec::new(), Vec::new());
+    };
+    let start_grab = EngineCommand::Grab {
+        entry,
+        change: GrabChange::Start,
+    };
+    state = update(state, &mut raw, &mut holds, &mut grabs, start_grab);
+    let targets = plan.targets();
     let capacity = usize::try_from(frames).unwrap_or(0);
     let (mut late, mut work) = (Vec::with_capacity(capacity), Vec::with_capacity(capacity));
     let start = Instant::now();
@@ -119,30 +157,22 @@ fn frames_of(
             hint::spin_loop();
         }
         let woke = start.elapsed();
-        let step = frame_number as u16;
-        for (n, value) in (0..).zip(values.iter_mut()) {
-            let step = step.wrapping_mul(97).wrapping_add(n);
-            *value = Light {
-                intensity: Some(step),
-                colour: Some(Rgb {
-                    red: step.wrapping_mul(3),
-                    green: step.wrapping_mul(5),
-                    blue: step.wrapping_mul(7),
-                }),
-                ..Light::DARK
-            };
-        }
         let blackout = EngineCommand::Blackout {
             on: frame_number % 2 == 1,
         };
-        state = update(state, &mut raw, &mut holds, &mut [], blackout);
+        state = update(state, &mut raw, &mut holds, &mut grabs, blackout);
+        let now = words.get(frame_number as usize % words.len());
         frame(
             &state,
-            &raw,
-            &holds,
-            (configured, writers),
-            &values,
+            &grabs,
+            (&raw, &holds),
+            plan.configured(),
             channels,
+            |offers| {
+                if let Some(now) = now {
+                    now.offer(targets, |field, word| offers.grab(entry, field, word));
+                }
+            },
         );
         hint::black_box(channels.values());
         let done = start.elapsed();

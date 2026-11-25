@@ -380,7 +380,7 @@ pub(crate) fn free(mut retired: rtrb::Consumer<Retired>, shared: &Shared) {
             };
             match back {
                 Retired::Probe(ready) => ready.store(true, Ordering::Release),
-                Retired::Device(_) | Retired::Plan(_) | Retired::Writers(_) => drop(back),
+                Retired::Device(_) | Retired::Plan(_) | Retired::Fields(_) => drop(back),
             }
             if bytes > 0 {
                 shared.plan_bytes_freed.fetch_add(bytes, Ordering::Release);

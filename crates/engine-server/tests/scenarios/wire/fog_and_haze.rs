@@ -1,7 +1,7 @@
 //! End to end over the API (#295): a brightness command never moves fog or haze. A
 //! Stairville Hz-200 at 1:37 (Haze, Fan Speed), a Generic Smoke at 1:39 (Pump, Fan) and a
-//! Generic RGB PAR at 1:41 all at half brightness, the PAR red: the PAR sends 128 0 0 on
-//! the DDP socket while the Haze and the Pump stay at 0.
+//! Generic RGB PAR in its mode RGB Dimmer at 1:41 all at half brightness, the PAR red: the
+//! PAR sends 255 0 0 128 on the DDP socket while the Haze and the Pump stay at 0.
 
 use crate::wire_common as common;
 
@@ -31,8 +31,8 @@ fn folder() -> PathBuf {
     folder
 }
 
-/// Universe 1 from 37 on, `count` bytes, once a packet of DDP shows the PAR at `par`.
-async fn when_the_par_shows(udp: &UdpSocket, par: [u8; 3]) -> Vec<u8> {
+/// Universe 1 from 37 to 44, once a packet of DDP shows the PAR at `par`.
+async fn when_the_par_shows(udp: &UdpSocket, par: [u8; 4]) -> Vec<u8> {
     let started = Instant::now();
     let mut packet = vec![0; 1500];
     loop {
@@ -40,7 +40,7 @@ async fn when_the_par_shows(udp: &UdpSocket, par: [u8; 3]) -> Vec<u8> {
             .await
             .expect("a packet within 5 s")
             .unwrap();
-        let seen = packet.get(10 + 36..10 + 43).filter(|_| size >= 10 + 43);
+        let seen = packet.get(10 + 36..10 + 44).filter(|_| size >= 10 + 44);
         if let Some(seen) = seen
             && seen[4..] == par
         {
@@ -74,7 +74,7 @@ async fn a_brightness_never_moves_fog_or_haze() {
     for (fixture, patch) in [
         patch("Stairville", "Hz-200 DMX", "Default", 37),
         patch("Generic", "Generic Smoke", "Normal", 39),
-        patch("Generic", "Generic RGB", "RGB", 41),
+        patch("Generic", "Generic RGB", "RGB Dimmer", 41),
     ]
     .into_iter()
     .enumerate()
@@ -99,9 +99,9 @@ async fn a_brightness_never_moves_fog_or_haze() {
         let reply: Value = command(&mut socket, set).await;
         assert!(taken(&reply), "{reply}");
     }
-    // Haze, Fan Speed, Pump, Fan, then the PAR
+    // Haze, Fan Speed, Pump, Fan, then the PAR: red, green, blue, its dimmer
     assert_eq!(
-        when_the_par_shows(&udp, [128, 0, 0]).await,
-        [0, 0, 0, 0, 128, 0, 0]
+        when_the_par_shows(&udp, [255, 0, 0, 128]).await,
+        [0, 0, 0, 0, 255, 0, 0, 128]
     );
 }

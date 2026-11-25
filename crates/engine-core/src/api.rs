@@ -490,3 +490,13 @@ impl Serialize for OutputNumber {
         (self.slot() + 1).serialize(serializer)
     }
 }
+
+/// A light's held parts, as the picture shows them: its number, counted from 1, and each
+/// part's value, `None` where nothing holds it. The front builds it from its grabs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct HeldLight {
+    pub light: u16,
+    pub intensity: Option<u16>,
+    pub colour: Option<crate::Rgb>,
+}

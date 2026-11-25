@@ -4,8 +4,7 @@ Read [theory.md](theory.md) first: the engine knows channels, the Rig and the sc
 
 | Module | State |
 |---|---|
-| Engine, Mixer (per light property today), Sources (steps, sequences, Wave), Clock, Rig, Fixture library, Output (DMX USB, DDP), Project | built |
-| Mixer per channel | being built (#250) |
+| Engine, Mixer (per channel, #250), Sources (steps, sequences, Wave), Clock, Rig, Fixture library, Output (DMX USB, DDP), Project | built |
 | Rig rules from the file, Master | designed (#251) |
 | Surface, Controllers, Show, Music, Autopilot | design |
 
@@ -119,15 +118,17 @@ flowchart LR
 
 | Owner | Keeps |
 |---|---|
-| **Front** | project, patch, saved looks, command admission, prepared output openings |
-| **Tick** | mutable performance state, cutover stamps, scheduling, frame measurements |
+| **Front** | project, patch, saved looks, command admission, prepared output openings, the grab book (what each grab holds, the held lights of the picture) |
+| **Tick** | mutable performance state, the field table, grab boxes, kept plays' frozen moments, cutover stamps, scheduling, frame measurements |
 | **Lane** | worker control, queued frames, returned-frame accounting |
-| **Snapshot** | immutable performance, channel levels, light values, health and revision reads |
+| **Snapshot** | immutable performance, channel levels, health and revision reads |
 | **`lib.rs`** | crate exports and composition only |
 
 ### Rig: a mode becomes channels (channel model, #239)
 
-`rig::channels::lower` is a calculation off the tick. Since #250 L1 it gives every patched channel its rest, dark, fade and pair on the tick, and the writers join a fine only where it pairs. `resolve` (writers per light) goes when the tick runs on channels (#250 L3).
+`rig::channels::lower` is a calculation off the tick. Since #250 L1 it gives every patched channel its rest, dark, fade and pair on the tick, and the writers join a fine only where it pairs.
+
+The field table (`rig::FieldPlan`, #250 L3) is the interim step from a light index to channels: each light's fields (a channel, or a pair as one word), which fade, the dimmer channels. Swapped whole per patch edit, so a Move keeps a playing look. #253 replaces it with fixture refs.
 
 ```mermaid
 flowchart LR
@@ -148,7 +149,7 @@ All who-wins rules live in the Mixer, in one table. No screen and no other modul
 
 ## How a press travels
 
-The design, once the tick runs on channels (#250). Today the Mixer picks one winner per light property, then `resolve` writes channels through per-light writers.
+Built (#250). A plan names lights by index; the field table gives their channels each frame.
 
 ```mermaid
 sequenceDiagram
@@ -159,10 +160,10 @@ sequenceDiagram
   participant C as Channel space
   participant O as Output
   S->>D: send(start Sunset on Manual)
-  Note over D,R: off the tick, before the press:<br/>Rig turns lights into channels,<br/>the look is compiled to a channel plan
+  Note over D,R: off the tick, before the press:<br/>Rig makes the field table,<br/>the look is compiled to words per light field
   D->>M: apply(command with its plan)
   loop each frame
-    M->>C: offers, one winner per channel, modifiers
+    M->>C: offers through the field table,<br/>one winner per channel, modifiers
     loop each output due
       O->>C: gather this output's route
       C-->>O: bytes in route order

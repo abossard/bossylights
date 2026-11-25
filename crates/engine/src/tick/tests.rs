@@ -1007,13 +1007,7 @@ fn a_command_is_a_press_unless_it_only_manages_outputs() {
     }
     .check(Universes::ONE)
     .unwrap();
-    let lights = engine_core::LightNumber::new(0, LIGHTS)
-        .and_then(|first| LightRun::new(first, 1, LIGHTS))
-        .unwrap();
-    let change = LightChange::Grab {
-        value: Value::Intensity(1),
-        grab: GrabId { generation: 1 },
-    };
+    let entry = engine_core::GrabEntry::new(0).unwrap();
     let play = PlayId::new(0, 1).unwrap();
     // (command, presses it adds)
     let cases = [
@@ -1022,10 +1016,15 @@ fn a_command_is_a_press_unless_it_only_manages_outputs() {
         (EngineCommand::ReleaseChannels, 1),
         (EngineCommand::ReleaseAll, 1),
         (EngineCommand::Blackout { on: true }, 1),
-        (EngineCommand::Writers, 1),
-        (EngineCommand::Lights { lights, change }, 1),
-        (EngineCommand::Darken { lights }, 1),
-        (EngineCommand::Runs { change }, 1),
+        (EngineCommand::Fields, 1),
+        (
+            EngineCommand::Grab {
+                entry,
+                change: engine_core::GrabChange::Start,
+            },
+            1,
+        ),
+        (EngineCommand::Grabs, 1),
         (
             EngineCommand::Start {
                 play,

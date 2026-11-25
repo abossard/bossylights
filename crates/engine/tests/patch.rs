@@ -213,8 +213,9 @@ fn a_patched_fixture_shows_its_light_and_keeps_it_through_any_change_of_the_patc
         fixture: 2,
         name: text("PAR 4, now left"),
     };
-    // PAR 3 (1) at 1.37 and PAR 4 (2) at 1.50, PAR 4 red. Then a change, and where PAR 4
-    // is: (change, PAR 4's universe and address, its bytes there, bytes left at 1.50)
+    // PAR 3 (1) at 1.37 and PAR 4 (2) at 1.50, PAR 4 red by grabs that are live, or ended
+    // and kept (the grab book's Kept row). Then a change, and where PAR 4 is: (change,
+    // PAR 4's universe and address, its bytes there, bytes left at 1.50)
     let cases = [
         (vec![], (1, 50), [255, 0, 0], [255, 0, 0]),
         (vec![moved(2, 2, 100)], (2, 100), [255, 0, 0], [0, 0, 0]),
@@ -236,20 +237,30 @@ fn a_patched_fixture_shows_its_light_and_keeps_it_through_any_change_of_the_patc
             [0, 0, 0],
         ),
     ];
-    for (change, (universe, address), there, left) in cases {
+    for ((change, (universe, address), there, left), kept) in
+        cases.iter().flat_map(|case| [(case, false), (case, true)])
+    {
         let (mut engine, mut sender, heard) = start();
         assert_eq!(send(&mut sender, par("PAR 3", 1, 37)), Ok(Some(1)));
         assert_eq!(send(&mut sender, par("PAR 4", 1, 50)), Ok(Some(2)));
         for command in red(2) {
-            assert_eq!(send(&mut sender, command), Ok(None));
+            let Ok(Begun::Grabbed { grab }) = sender.begin(command, &library()) else {
+                panic!("{command:?} grabs");
+            };
+            if kept {
+                assert_eq!(send(&mut sender, Command::EndGrab { grab }), Ok(None));
+            }
         }
-        for command in &change {
+        for command in change {
             assert!(send(&mut sender, *command).is_ok(), "{command:?}");
         }
         heard.took_everything_sent(&mut engine, &sender);
-        assert_eq!(bytes(&heard, universe, address), there, "{change:?}");
-        assert_eq!(bytes(&heard, 1, 50), left, "{change:?} at 1.50");
-        assert_eq!(bytes(&heard, 1, 37), [0, 0, 0], "{change:?}: PAR 3 is dark");
+        let case = format!("{change:?}, kept {kept}");
+        assert_eq!(bytes(&heard, *universe, *address), *there, "{case}");
+        assert_eq!(bytes(&heard, 1, 50), *left, "{case} at 1.50");
+        assert_eq!(bytes(&heard, 1, 37), [0, 0, 0], "{case}: PAR 3 is dark");
+        // PAR 3 holds nothing (a free entry): moved to 2.1, nothing shows there either
+        assert_eq!(bytes(&heard, 2, 1), [0, 0, 0], "{case}: nothing at 2.1");
     }
 }
 

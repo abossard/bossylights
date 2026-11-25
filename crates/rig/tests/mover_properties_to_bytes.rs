@@ -6,7 +6,6 @@ mod common;
 use common::{all, at, light, lights, mode};
 use engine_core::{
     Gobo, Levels, Light, LightRun, Position, Property, Refusal, Rgb, Universes, Value, Wheel,
-    resolve,
 };
 use fixture_library::{Byte, Does, Function, Mode};
 use rig::{Rigged, Unfit, compile, supports};
@@ -175,12 +174,12 @@ fn each_property_goes_to_its_channels() {
 
 #[test]
 fn a_gobo_cuts_to_its_slot() {
-    let writers = rigged(&shehds()).writers;
+    let rigged = rigged(&shehds());
     let mut out = [Levels::ZERO];
     // (gobo, channel 7) one frame after the other: never a byte between two slots
     for (slot, byte) in [(3, 24), (8, 74), (2, 14), (3, 24)] {
         let light = gobos([Some(slot), None, None]);
-        resolve(&[light], &writers, &mut out);
+        common::shown(&[light], &rigged, &mut out);
         assert_eq!(out[0].0[6], byte, "slot {slot}");
     }
 }

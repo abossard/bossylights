@@ -23,8 +23,9 @@
 //! else its rest.
 
 use crate::channels::Field;
+use crate::writer::{Part, Scale, Take, Writer};
 use alloc::vec::Vec;
-use engine_core::{Light, Scale, Take, Writer};
+use engine_core::Light;
 
 /// One light's fields in channel order, and what a value of the light offers on each.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -44,6 +45,19 @@ impl LightFields {
     /// Its fields, in channel order.
     pub fn fields(&self) -> impl Iterator<Item = Field> + '_ {
         self.0.iter().map(|&(at, _)| at)
+    }
+
+    /// What `value` offers on each field, in channel order: `None` where it has nothing.
+    pub fn words<'a>(&'a self, value: &'a Light) -> impl Iterator<Item = Option<u16>> + 'a {
+        self.0.iter().map(move |(_, feed)| feed.word(value))
+    }
+
+    /// The fields that carry its brightness: its dimmers.
+    pub fn dimmers(&self) -> impl Iterator<Item = Field> + '_ {
+        self.0.iter().filter_map(|(at, feed)| match feed {
+            Feed::Takes(take) if take.of == Part::Intensity => Some(*at),
+            Feed::Takes(_) | Feed::Picks(_) => None,
+        })
     }
 
     /// What `value` offers: a word on each field it has one for, in channel order.

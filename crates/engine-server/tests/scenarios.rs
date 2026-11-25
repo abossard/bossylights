@@ -6,6 +6,8 @@ mod output_stream;
 #[path = "common/mod.rs"]
 mod wire_common;
 
+#[path = "scenarios/wire/channels_won_one_by_one.rs"]
+mod channels_won_one_by_one;
 #[path = "scenarios/reroute/cutover.rs"]
 mod cutover;
 #[path = "scenarios/wire/dmx_usb_pro.rs"]

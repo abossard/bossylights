@@ -3,7 +3,7 @@
 //!
 //! | Policy | Where |
 //! |---|---|
-//! | revision history: each change keeps its moment until a snapshot passes it, paid in bytes | `Moment`, `REVISION_BYTES`, `Api::history` |
+//! | revision history: each edit keeps its moment until a snapshot passes it, paid in bytes. A press that changes the held lights keeps one that no bytes pay for (#312) | `Moment`, `REVISION_BYTES`, `Api::history` |
 //! | an edit prepared on a base another change replaced is prepared again | `PREPARES` |
 //! | an output edit waits for the old route to finish | `CUTOVER_WAIT` |
 //! | health goes to a subscriber at most once per 500 ms of engine time | `HealthPacing` |
@@ -95,6 +95,7 @@ pub async fn serve(
         published,
     );
     let through = Arc::clone(&first.through);
+    let grabs = sender.grabs_revision();
     let front = Front {
         shelf: shelf.clone(),
         moments: taken,
@@ -106,7 +107,11 @@ pub async fn serve(
     let api = Arc::new(Api {
         moments,
         patch,
-        sender: Mutex::new(Publisher { sender, through }),
+        sender: Mutex::new(Publisher {
+            sender,
+            through,
+            grabs,
+        }),
         history: Arc::new(Semaphore::new(engine::PLAN_BYTES)),
         stop,
         pictures,
@@ -172,6 +177,8 @@ struct Picture {
     /// Compare authored revisions for deltas without pinning their compiled plans.
     source: Weak<Looks>,
     show: ShowFile,
+    /// What the grabs hold, in light order.
+    held: Arc<[HeldLight]>,
 }
 
 impl Picture {
@@ -194,12 +201,14 @@ impl Picture {
             looks: Arc::clone(moment.rows.get_or_init(|| moment.looks.all().into())),
             source: Arc::downgrade(&moment.looks),
             show: *show.borrow(),
+            held: Arc::clone(&moment.held),
         }
     }
 }
 
 /// A revision covers every completed FIFO prefix from `sent` through `through`.
-/// A performance command extends that range without retaining another project.
+/// A performance command extends that range without retaining another project, unless
+/// it changes what the grabs hold.
 struct Moment {
     sent: u64,
     through: Arc<AtomicU64>,
@@ -211,6 +220,8 @@ struct Moment {
     looks: Arc<Looks>,
     /// Materialize one plan-free copy for all pictures taken under this revision.
     rows: OnceLock<Arc<[SavedLook]>>,
+    /// What the grabs hold, from the front's book.
+    held: Arc<[HeldLight]>,
 }
 
 impl Moment {
@@ -224,6 +235,7 @@ impl Moment {
             patch: sender.patch(),
             looks: sender.looks(),
             rows: OnceLock::new(),
+            held: sender.held_lights().into(),
         }
     }
 }
@@ -575,6 +587,8 @@ fn is_edit(command: &Command) -> bool {
 struct Publisher {
     sender: Sender,
     through: Arc<AtomicU64>,
+    /// The grabs' revision ([`Sender::grabs_revision`]) the current moment holds.
+    grabs: u64,
 }
 
 /// How often a command prepared on a base another change replaced is prepared again,
@@ -793,7 +807,10 @@ async fn edit(
 
 impl Api {
     /// Changes the front with `change`, and tells the reader the front as `change` left
-    /// it, before another change: each moment is one the engine was in. The show file
+    /// it, before another change: each moment is one the engine was in. A press that
+    /// changes what the grabs hold is a moment of its own, without credit: it keeps its
+    /// held lights (up to one per light), paid by no bytes, until a snapshot passes it.
+    /// Bounded while the reader keeps up, not while it stalls (#312). The show file
     /// hears only of a change of the patch or the looks: a refusal or a press saves
     /// nothing. `None` once the engine stops ([`Api::stopping`]): nothing changes then,
     /// so no change comes after the last save.
@@ -806,16 +823,20 @@ impl Api {
         if *self.stop.borrow() {
             return None;
         }
+        let publisher = &mut *publisher;
         let sender = &mut publisher.sender;
         let before = sender.project_for_snapshot();
         let changed = change(sender);
         let edited = self.patch.send_if_modified(|kept| kept.follow(sender));
-        if edited || !before.same_outputs(&sender.project_for_snapshot()) {
+        let outputs = !before.same_outputs(&sender.project_for_snapshot());
+        let holds = sender.grabs_revision() != publisher.grabs;
+        if edited || outputs || holds {
             sender.revise();
             let mut moment = Moment::of(sender);
             moment.credit = credit.take();
-            debug_assert!(moment.credit.is_some());
+            debug_assert!(moment.credit.is_some() || !(edited || outputs));
             publisher.through = Arc::clone(&moment.through);
+            publisher.grabs = sender.grabs_revision();
             // The reader is gone only once the server stops.
             let _ = self.moments.send(moment);
         } else {
@@ -835,7 +856,6 @@ impl Api {
 }
 
 fn picture(now: &Picture) -> Option<String> {
-    let lights: Vec<HeldLight> = now.snapshot.held_lights().collect();
     json(&Reply::Picture {
         state: now.snapshot.performance(),
         health: now.health.health(),
@@ -846,7 +866,7 @@ fn picture(now: &Picture) -> Option<String> {
         looks: &now.looks,
         show: now.show,
         universes: now.snapshot.universes(),
-        lights: &lights,
+        lights: &now.held,
     })
 }
 
@@ -978,7 +998,7 @@ impl Subscription {
 /// The channels and lights that differ from this connection's last frame.
 fn changed(last: &Picture, now: &Picture) -> Option<String> {
     let channels: Vec<ChannelLevel> = now.snapshot.channel_changes_since(&last.snapshot).collect();
-    let lights: Vec<HeldLight> = now.snapshot.light_changes_since(&last.snapshot).collect();
+    let lights = held_changes(&last.held, &now.held);
     let new = !Arc::ptr_eq(&last.patch, &now.patch);
     let fixtures: Option<Vec<Patched>> = new.then(|| now.patch.fixtures());
     let groups: Option<Vec<Grouped>> = new.then(|| now.patch.groups());
@@ -994,6 +1014,33 @@ fn changed(last: &Picture, now: &Picture) -> Option<String> {
         channels: &channels,
         lights: &lights,
     })
+}
+
+/// The lights whose holds differ between `last` and `now`, both in light order: a light
+/// no longer held as one holding nothing.
+fn held_changes(last: &[HeldLight], now: &[HeldLight]) -> Vec<HeldLight> {
+    let free = |light| HeldLight {
+        light,
+        intensity: None,
+        colour: None,
+    };
+    let (mut last, mut now) = (last.iter().peekable(), now.iter().peekable());
+    let mut changes = Vec::new();
+    loop {
+        let Some(light) = [last.peek(), now.peek()]
+            .into_iter()
+            .flatten()
+            .map(|held| held.light)
+            .min()
+        else {
+            return changes;
+        };
+        let was = last.next_if(|held| held.light == light);
+        let is = now.next_if(|held| held.light == light);
+        if was != is {
+            changes.push(is.copied().unwrap_or(free(light)));
+        }
+    }
 }
 
 /// A reply is plain numbers and names: this does not fail.
@@ -1099,12 +1146,12 @@ mod tests {
             .picture(&b, Instant::now(), health)
             .expect("B's moment is kept");
 
-        // (picture, saved looks, the play's look, light 1's colour)
+        // (picture, saved looks, the play's look, light 1's bytes)
         let cases = [
-            (&a, vec![1], Some(1), Some(green)),
-            (&b, vec![2], None, None),
+            (&a, vec![1], Some(1), [0, 255, 0]),
+            (&b, vec![2], None, [0, 0, 0]),
         ];
-        for (picture, looks, playing, colour) in cases {
+        for (picture, looks, playing, bytes) in cases {
             let saved: Vec<u16> = picture.looks.iter().map(|saved| saved.look).collect();
             assert_eq!(saved, looks);
             let plays: Vec<u16> = picture
@@ -1113,8 +1160,7 @@ mod tests {
                 .map(|play| play.look)
                 .collect();
             assert_eq!(plays.first().copied(), playing);
-            let held = picture.snapshot.held_lights().find(|held| held.light == 1);
-            assert_eq!(held.and_then(|held| held.colour), colour);
+            assert_eq!([1, 2, 3].map(|at| picture.snapshot.sent(1, at)), bytes);
         }
         // Query: each picture as it is
         let query: Value = serde_json::from_str(&picture(&a).unwrap()).unwrap();
@@ -1279,6 +1325,43 @@ mod tests {
             assert_eq!(moment, found, "{case}");
             let after: Vec<u64> = kept.iter().map(|moment| moment.revision).collect();
             assert_eq!(after, left, "{case}");
+        }
+    }
+
+    /// Each way a light goes between two pictures: newly held, held the same, held
+    /// otherwise, no longer held, and lights on either side. Expected answers: the wire
+    /// test `held_lights.rs` (a released light is carried holding nothing).
+    #[test]
+    fn a_change_carries_each_light_whose_holds_differ() {
+        let held = |light, intensity| HeldLight {
+            light,
+            intensity,
+            colour: None,
+        };
+        // (last, now, carried)
+        let cases = [
+            (vec![], vec![], vec![]),
+            (vec![], vec![held(2, Some(1))], vec![held(2, Some(1))]),
+            (vec![held(2, Some(1))], vec![held(2, Some(1))], vec![]),
+            (
+                vec![held(2, Some(1))],
+                vec![held(2, Some(9))],
+                vec![held(2, Some(9))],
+            ),
+            (vec![held(2, Some(1))], vec![], vec![held(2, None)]),
+            (
+                vec![held(1, Some(1)), held(3, Some(3))],
+                vec![held(2, Some(2)), held(3, Some(3))],
+                vec![held(1, None), held(2, Some(2))],
+            ),
+            (
+                vec![held(2, Some(2))],
+                vec![held(1, Some(1)), held(3, Some(3))],
+                vec![held(1, Some(1)), held(2, None), held(3, Some(3))],
+            ),
+        ];
+        for (last, now, carried) in cases {
+            assert_eq!(held_changes(&last, &now), carried, "{last:?} to {now:?}");
         }
     }
 

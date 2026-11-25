@@ -3,10 +3,11 @@
 #![allow(dead_code, reason = "each test file uses its own part")]
 
 use engine_core::{
-    Channel, ChannelNumbers, Color, Less, Levels, Light, LightNumber, Lights, MAX_LIGHTS,
-    OutputKind, Part, Place, Scale, Sense, Take, Travel, Universes, Writer, resolve,
+    Channel, ChannelNumbers, Color, Field, Levels, Light, LightNumber, Lights, MAX_LIGHTS,
+    OutputKind, Universes,
 };
 use fixture_library::{Fixture, Mode, parse};
+use rig::writer::{Less, Part, Place, Scale, Sense, Take, Travel, Writer};
 use rig::{Rigged, Whole};
 use std::num::NonZeroU16;
 use std::path::PathBuf;
@@ -133,16 +134,37 @@ pub fn said(rigged: &Rigged) -> Vec<String> {
     lines.into_iter().map(|(_, line)| line).collect()
 }
 
-/// What `rigged` sends for `lights` into `out`, as a frame makes it: each channel of the
-/// mode at its rest, then what the writers write.
+/// What `rigged` sends for `lights` into `out`, as a frame makes it with these values
+/// alone: each channel of the mode at its rest, then each light's offers on its fields.
 pub fn shown(lights: &[Light], rigged: &Rigged, out: &mut [Levels]) {
     for configured in &rigged.configured {
-        let at = configured.at as usize;
-        if let Some(row) = out.get_mut(at / 512) {
-            row.0[at % 512] = configured.rest;
+        put(out, configured.at, configured.rest);
+    }
+    for (fields, value) in rigged.fields.iter().zip(lights) {
+        for (field, word) in fields.offers(value) {
+            offer(out, field, word);
         }
     }
-    resolve(lights, &rigged.writers, out);
+}
+
+/// `word` on `field` in `out`: a byte takes its high byte, a pair both.
+pub fn offer(out: &mut [Levels], field: Field, word: u16) {
+    let [high, low] = word.to_be_bytes();
+    match field {
+        Field::Byte(at) => put(out, at, high),
+        Field::Word(pair) => {
+            put(out, pair.coarse, high);
+            put(out, pair.fine, low);
+        }
+    }
+}
+
+/// `byte` at channel `at`, counted from 0 over the universes in a row.
+fn put(out: &mut [Levels], at: u32, byte: u8) {
+    let at = at as usize;
+    if let Some(row) = out.get_mut(at / 512) {
+        row.0[at % 512] = byte;
+    }
 }
 
 /// A writer in words: `37 = 8`, `38 light 0: intensity`, `38+39 light 0: red - shared`,

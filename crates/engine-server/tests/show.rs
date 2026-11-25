@@ -590,8 +590,11 @@ async fn mix_rules_must_fit_before_the_next_frame_or_save() {
     let file = show_file("mix_rules");
     let (mut first, listen) = engine(&file, true);
     let mut socket = connect(&listen).await;
+    // A PAR with a dimmer of its own at 40: the brightness setting decides that channel.
+    let mut dimmed = par("PAR 1", 37);
+    dimmed["Patch"]["mode"] = json!("RGB Dimmer");
     assert_eq!(
-        patch_once_read(&mut socket, par("PAR 1", 37)).await,
+        patch_once_read(&mut socket, dimmed).await,
         json!({"Patched": {"fixture": 1}})
     );
     let mut bright = red_step(1, "bright");
@@ -603,8 +606,8 @@ async fn mix_rules_must_fit_before_the_next_frame_or_save() {
     let full = Err(Refusal::ShowFileFull {
         most: show_file::LIMIT.most.try_into().unwrap(),
     });
-    // The latest intensity is zero. Highest would turn the red channel fully on.
-    for (length, reply, red) in [(text.len(), Ok(()), 255), (show_file::MOST_BYTES, full, 0)] {
+    // The latest intensity is zero. Highest would turn the dimmer fully on.
+    for (length, reply, dimmer) in [(text.len(), Ok(()), 255), (show_file::MOST_BYTES, full, 0)] {
         let name = format!("\"name\": \"Red{}\"", "x".repeat(length - text.len()));
         let opened = text.replacen("\"name\": \"Red\"", &name, 1);
         assert_eq!(opened.len(), length);
@@ -632,7 +635,7 @@ async fn mix_rules_must_fit_before_the_next_frame_or_save() {
                 .unwrap();
         }
         wakes.wake().unwrap();
-        until_ddp(&udp, &[0, 0, 0]).await;
+        until_ddp(&udp, &[255, 0, 0, 0]).await;
 
         let project = sender.project();
         let rules = MixRules {
@@ -651,7 +654,7 @@ async fn mix_rules_must_fit_before_the_next_frame_or_save() {
             reply.is_ok()
         );
         wakes.wake().unwrap();
-        until_ddp(&udp, &[red, 0, 0]).await;
+        until_ddp(&udp, &[255, 0, 0, dimmer]).await;
         wakes.run();
 
         // Stop flushes the last revision, as it does in the server.

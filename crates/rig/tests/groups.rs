@@ -4,8 +4,8 @@ mod common;
 
 use common::fixture;
 use engine_core::{
-    ChannelNumbers, EngineCommand, GrabId, LightChange, LightRun, Lights, Member, Members,
-    PatchCommand, Property, Refusal, Rgb, Target, Text, Universes, Value,
+    ChannelNumbers, LightRun, Lights, Member, Members, PatchCommand, Property, Refusal, Rgb,
+    Target, Text, Universes, Value,
 };
 use fixture_library::Fixture;
 use rig::{Patch, PatchEffect};
@@ -74,45 +74,12 @@ fn library() -> Vec<Fixture> {
         .into()
 }
 
-/// An effect in words: `colour 0+3` (first light from 0, count), `writers`, `darken 1+1`.
+/// An effect in words: `colour 0+3` (first light from 0, count), `fields`, `gone 1+1`.
 /// The runs of a group sent as one: `colour 0+1 2+1`.
 fn said(effect: &PatchEffect) -> String {
-    let run = |run: LightRun| format!("{}+{}", run.first().index(), run.count());
     let lower = |property: Property| format!("{property:?}").to_lowercase();
-    let what = |change: LightChange| match change {
-        LightChange::Grab { value, .. } | LightChange::Update { value, .. } => {
-            lower(value.property())
-        }
-        LightChange::End { property, .. } => format!("end {}", lower(property)),
-        LightChange::Release { property } => format!("release {}", lower(property)),
-    };
-    let word = |command: EngineCommand| match command {
-        EngineCommand::Darken { lights } => format!("darken {}", run(lights)),
-        EngineCommand::Lights { lights, change } => format!("{} {}", what(change), run(lights)),
-        other @ (EngineCommand::Tick { .. }
-        | EngineCommand::Handed { .. }
-        | EngineCommand::Sent { .. }
-        | EngineCommand::SetChannel { .. }
-        | EngineCommand::ReleaseChannel { .. }
-        | EngineCommand::ReleaseChannels
-        | EngineCommand::ReleaseAll
-        | EngineCommand::Blackout { .. }
-        | EngineCommand::Attach { .. }
-        | EngineCommand::RemoveOutput { .. }
-        | EngineCommand::Writers
-        | EngineCommand::Runs { .. }
-        | EngineCommand::Start { .. }
-        | EngineCommand::Keep { .. }
-        | EngineCommand::Rules { .. }
-        | EngineCommand::Plan { .. }
-        | EngineCommand::Release { .. }
-        | EngineCommand::Settle { .. }
-        | EngineCommand::Tap
-        | EngineCommand::ReleaseTempo
-        | EngineCommand::Feed { .. }) => format!("{other:?}"),
-    };
-    let runs = |change: LightChange, runs: &[LightRun]| {
-        [what(change)]
+    let runs = |what: String, runs: &[LightRun]| {
+        [what]
             .into_iter()
             .chain(runs.iter().map(|r| run(*r)))
             .collect::<Vec<_>>()
@@ -120,17 +87,18 @@ fn said(effect: &PatchEffect) -> String {
     };
     match effect {
         PatchEffect::Patched { fixture } => format!("patched {fixture}"),
-        PatchEffect::Writers(_) => "writers".to_string(),
-        PatchEffect::Send(command) => word(*command),
-        PatchEffect::Runs { change, runs: of } => runs(*change, of),
-        PatchEffect::Grab { value, runs: of } => runs(
-            LightChange::Grab {
-                value: *value,
-                grab: GrabId { generation: 0 },
-            },
-            of,
-        ),
+        PatchEffect::Fields(_) => "fields".to_string(),
+        PatchEffect::Send(command) => format!("{command:?}"),
+        PatchEffect::Gone { lights } => format!("gone {}", run(*lights)),
+        PatchEffect::Release { property, runs: of } => {
+            runs(format!("release {}", lower(*property)), of)
+        }
+        PatchEffect::Grab { value, runs: of } => runs(lower(value.property()), of),
     }
+}
+
+fn run(run: LightRun) -> String {
+    format!("{}+{}", run.first().index(), run.count())
 }
 
 /// The groups in words: `front: F3 F1 L5`.
@@ -222,19 +190,19 @@ fn a_group_command_makes_new_groups_and_says_what_follows() {
         (
             with(&[front, back]),
             PatchCommand::Unpatch { fixture: 1 },
-            Ok(&["writers", "darken 0+1"]),
+            Ok(&["fields", "gone 0+1"]),
             &["front: F3 F2", "back: L6 L5"],
         ),
         (
             with(&[front, back]),
             PatchCommand::Unpatch { fixture: 4 },
-            Ok(&["writers", "darken 3+9"]),
+            Ok(&["fields", "gone 3+9"]),
             &["front: F3 F1 F2", "back: F1"],
         ),
         (
             with(&[set("bar", &[l(5)])]),
             PatchCommand::Unpatch { fixture: 4 },
-            Ok(&["writers", "darken 3+9"]),
+            Ok(&["fields", "gone 3+9"]),
             &["bar:"],
         ),
         // the order survives any other change of the patch
@@ -247,7 +215,7 @@ fn a_group_command_makes_new_groups_and_says_what_follows() {
                     address: 100,
                 },
             },
-            Ok(&["writers"]),
+            Ok(&["fields"]),
             &["front: F3 F1 F2", "back: L6 L5 F1"],
         ),
         (
@@ -262,7 +230,7 @@ fn a_group_command_makes_new_groups_and_says_what_follows() {
         (
             with(&[front, back]),
             par("PAR 5", 1, 10),
-            Ok(&["patched 5", "writers"]),
+            Ok(&["patched 5", "fields"]),
             &["front: F3 F1 F2", "back: L6 L5 F1"],
         ),
         // set light takes a group: its lights in the fewest runs, lowest first, sent as one

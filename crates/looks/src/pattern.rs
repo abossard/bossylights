@@ -1,6 +1,6 @@
 //! Resolve a Wave's swatches and bind its spatial phase before a play reaches the tick.
 
-use engine_core::{Definition, Node, Palette, Pattern, Refusal};
+use engine_core::{Definition, Node, Palette, Pattern, Refusal, Swatches};
 use rig::{Patch, WaveBinding};
 
 pub(crate) fn reference(pattern: &Pattern) -> Option<u16> {
@@ -16,11 +16,12 @@ pub(crate) fn reference(pattern: &Pattern) -> Option<u16> {
     }
 }
 
+/// The wave's node, its swatches and its bound lights.
 pub(crate) fn compile(
     pattern: &Pattern,
     linked: Option<&Definition>,
     patch: &Patch,
-) -> Result<(Node, WaveBinding), Refusal> {
+) -> Result<(Node, Swatches, WaveBinding), Refusal> {
     let Pattern::Wave {
         target,
         period,
@@ -36,11 +37,13 @@ pub(crate) fn compile(
     if swatches.is_empty() {
         return Err(Refusal::EmptyPalette);
     }
+    let count = u8::try_from(swatches.as_slice().len()).map_err(|_| Refusal::WorkLimit)?;
     Ok((
         Node::Wave {
             period: period.get(),
-            swatches,
+            swatches: count,
         },
+        swatches,
         patch.bind_wave(target)?,
     ))
 }
@@ -48,22 +51,30 @@ pub(crate) fn compile(
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
-    clippy::indexing_slicing,
     reason = "the fixture supplies the named looks, groups and light runs"
 )]
 mod tests {
     use super::*;
     use crate::Looks;
-    use crate::tests::{item, leaf, patch, sequence};
+    use crate::tests::{item, leaf, offered, patch, sequence};
     use crate::{WORK_LIMIT, play_work};
     use alloc::vec::Vec;
     use core::num::NonZeroU16;
     use engine_core::{
-        ChannelNumbers, Color, Light, Lights, PatchCommand, Pixels, SavedLook, SequenceItem,
-        Target, Text, Universes, Use, WaveTarget,
+        ChannelNumbers, Color, Lights, PatchCommand, Pixels, SavedLook, SequenceItem, Text,
+        Universes, Use, WaveTarget,
     };
     use engine_core::{Percent, Period, Width};
     use rig::Whole;
+
+    /// Words of red, green and blue as a colour.
+    fn rgb(words: &[Option<u16>]) -> Option<engine_core::Rgb> {
+        Some(engine_core::Rgb {
+            red: (*words.first()?)?,
+            green: (*words.get(1)?)?,
+            blue: (*words.get(2)?)?,
+        })
+    }
 
     fn wave(
         look: u16,
@@ -84,9 +95,7 @@ mod tests {
 
     #[test]
     fn wave_rebinds_group_order_and_every_palette_reference_in_one_revision() {
-        use engine_core::{
-            AuthoredStep, Entry, Member, Members, Palette, Rgb, Swatches, WaveTarget,
-        };
+        use engine_core::{AuthoredStep, Member, Members, Palette, Rgb, Swatches, WaveTarget};
 
         const BEAT: u64 = 1 << 32;
         let row = Text::new("row").unwrap();
@@ -148,31 +157,24 @@ mod tests {
             Err(Refusal::EmptyPalette)
         );
         assert_eq!(edited.remove(1), Err(Refusal::LookInUse { look: 2 }));
-        for (case, revision, elapsed, expected) in [
-            ("first distinct member", &looks, 0, [65535, 0]),
-            ("wrap", &looks, 2 * BEAT, [65535, 0]),
+        for (case, (revision, on), elapsed, expected) in [
+            ("first distinct member", (&looks, &original), 0, [65535, 0]),
+            ("wrap", (&looks, &original), 2 * BEAT, [65535, 0]),
             (
                 "half-way, round to nearest",
-                &looks,
+                (&looks, &original),
                 BEAT / 2,
                 [32768, 32768],
             ),
-            ("reverse", &reordered, 0, [0, 65535]),
-            ("replace the palette", &edited, 0, [3000, 2000]),
+            ("reverse", (&reordered, &reversed), 0, [0, 65535]),
+            ("replace the palette", (&edited, &reversed), 0, [3000, 2000]),
         ] {
             for (root, usage) in [(2, spread), (3, Use::default())] {
                 let plan = revision.plan(root).unwrap();
                 assert!(plan.uses(1), "{case}, root {root} retains the palette id");
-                let entry = Entry {
-                    lights: original.runs(Target::Light { light: 1 }).unwrap()[0],
-                    values: Light::DARK,
-                };
-                let mut scratch = alloc::vec![entry; plan.lights()];
-                assert!(plan.sample(elapsed, usage, &mut scratch));
-                let samples: Vec<_> = plan
-                    .entries(&scratch)
-                    .iter()
-                    .map(|e| (e.lights.first().index() + 1, e.values.colour))
+                let samples: Vec<_> = offered(&plan, on, elapsed, usage)
+                    .into_iter()
+                    .map(|(light, words)| (light, rgb(&words)))
                     .collect();
                 assert_eq!(
                     samples,
@@ -192,7 +194,7 @@ mod tests {
 
     #[test]
     fn a_three_column_one_row_matrix_uses_its_width_for_spread() {
-        use engine_core::{Entry, Rgb, Swatches};
+        use engine_core::{Rgb, Swatches};
         let patch = patch();
         let colours = [
             Rgb {
@@ -215,25 +217,19 @@ mod tests {
             Palette::Inline(Swatches::new(&colours).unwrap()),
         );
         let plan = Looks::new().put(saved, &patch).unwrap().plan(1).unwrap();
-        let initial = Entry {
-            lights: patch.runs(Target::Light { light: 1 }).unwrap()[0],
-            values: Light::DARK,
+        let spread = Use {
+            spread: Percent::MOST,
+            ..Use::default()
         };
-        let mut scratch = [initial; 3];
-        assert!(plan.sample(
-            0,
-            Use {
-                spread: Percent::MOST,
-                ..Use::default()
-            },
-            &mut scratch
-        ));
         assert_eq!(
-            scratch.map(|entry| (entry.lights.first().index(), entry.values.colour)),
+            offered(&plan, &patch, 0, spread)
+                .into_iter()
+                .map(|(light, words)| (light, rgb(&words)))
+                .collect::<Vec<_>>(),
             [
-                (0, Some(colours[0])),
-                (1, Some(colours[1])),
-                (2, Some(colours[2]))
+                (1, Some(colours[0])),
+                (2, Some(colours[1])),
+                (3, Some(colours[2]))
             ]
         );
     }
@@ -494,6 +490,53 @@ mod tests {
                 .and_then(|looks| looks.plan(1))
                 .map(|plan| play_work(plan.work()));
             assert_eq!(result, expected, "{pixels} pixels");
+        }
+    }
+
+    #[test]
+    fn a_kept_wave_binds_while_its_lights_keep_their_fields() {
+        use engine_core::{Palette, Rgb, Swatches};
+        let patch = patch();
+        let saved = wave(
+            1,
+            WaveTarget::Matrix { fixture: 1 },
+            4,
+            Palette::Inline(Swatches::new(&[Rgb::BLACK]).unwrap()),
+        );
+        let plan = Looks::new().put(saved, &patch).unwrap().plan(1).unwrap();
+        let edit = |patch: &Patch, command| patch.update(command, &[]).unwrap().0.unwrap();
+        let unpatched = edit(&patch, PatchCommand::Unpatch { fixture: 1 });
+        let strip = |color| PatchCommand::PatchStrip {
+            name: Text::new("strip").unwrap(),
+            pixels: Pixels::try_from(3).unwrap(),
+            color,
+            at: ChannelNumbers {
+                universe: 1,
+                address: 1,
+            },
+        };
+        let moved = PatchCommand::Move {
+            fixture: 1,
+            at: ChannelNumbers {
+                universe: 1,
+                address: 101,
+            },
+        };
+        // (edit, the same lights after it, the plan still binds)
+        for (case, patch, binds) in [
+            ("moved", edit(&patch, moved), true),
+            (
+                "patched again as RGB",
+                edit(&unpatched, strip(Color::Rgb)),
+                true,
+            ),
+            (
+                "patched again as RGBW",
+                edit(&unpatched, strip(Color::Rgbw)),
+                false,
+            ),
+        ] {
+            assert_eq!(plan.bindings_match(&patch), binds, "{case}");
         }
     }
 }

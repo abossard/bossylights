@@ -915,6 +915,7 @@ mod workload {
         use crate::Nowhere;
         use engine::{Engine, OutputNumber, Rate, RunNumbers, Universes};
 
+        /// Every universe streamed by each of all 16 outputs: the biggest show admitted.
         fn stream(sender: &mut Sender, universes: Universes) {
             let run = RunNumbers {
                 first: 1,
@@ -922,14 +923,16 @@ mod workload {
             }
             .check(universes)
             .unwrap();
-            sender
-                .attach(
-                    OutputNumber::try_from(1).unwrap(),
-                    Box::new(Nowhere),
-                    run,
-                    Rate::Sixty,
-                )
-                .unwrap();
+            for output in 1..=u8::try_from(engine::MAX_OUTPUTS).unwrap() {
+                sender
+                    .attach(
+                        OutputNumber::try_from(output).unwrap(),
+                        Box::new(Nowhere),
+                        run,
+                        Rate::Sixty,
+                    )
+                    .unwrap();
+            }
         }
 
         #[test]
@@ -1089,14 +1092,8 @@ mod workload {
                 assert_eq!(engine.fresh().unwrap().active_plays().count(), roots);
                 let target = Target::Light { light: 1 };
                 send(&mut sender, colour(target, RED)).unwrap();
-                assert_eq!(
-                    engine
-                        .fresh()
-                        .unwrap()
-                        .light(1)
-                        .and_then(|light| light.colour),
-                    Some(RED)
-                );
+                let shown = engine.fresh().unwrap();
+                assert_eq!([1, 2, 3].map(|at| shown.sent(1, at)), [255, 0, 0]);
                 send(&mut sender, Command::ReleaseColour { target }).unwrap();
                 // Exercise both clients' command paths at the admitted edge.
                 send(&mut sender, wave_group(true)).unwrap();

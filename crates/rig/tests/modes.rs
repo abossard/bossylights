@@ -3,7 +3,8 @@
 mod common;
 
 use common::{all, at, light, lights, mode, said};
-use engine_core::{Levels, Light, Refusal, Rgb, Universes, Writer};
+use engine_core::{Levels, Light, Refusal, Rgb, Universes};
+use rig::writer::{Place, Writer};
 use rig::{Unfit, compile};
 
 #[test]
@@ -289,8 +290,8 @@ fn every_channel_rests_and_is_written_at_most_once() {
                     }
                     Writer::ColourSlot { .. } | Writer::GoboSlot { .. } => vec![],
                     Writer::Takes { at, .. } => match at {
-                        engine_core::Place::Byte(at) => vec![common::address(at)],
-                        engine_core::Place::Pair { coarse, fine } => {
+                        Place::Byte(at) => vec![common::address(at)],
+                        Place::Pair { coarse, fine } => {
                             vec![common::address(coarse), common::address(fine)]
                         }
                     },

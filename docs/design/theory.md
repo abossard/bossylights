@@ -6,9 +6,9 @@ One current theory, rewritten on 2026-11-21. Details live in [channel-model.md](
 
 | Part | State |
 |---|---|
-| Outputs at their own rate, patch, show file, looks, tempo, who wins on lights | built |
+| Outputs at their own rate, patch, show file, looks, tempo | built |
 | Channel core, routes and the DDP fix, the Rig turning a mode into channels (#247, #248, #249) | built |
-| The tick on channels: plays, grabs and holds become channel offers (#250) | being built |
+| The tick on channels: plays, grabs and holds offer channel words, one winner per channel (#250) | built |
 | Rules from metadata, readback, API v12 and show file v7, Identify, 1,024 universes (#251 to #255) | designed |
 
 ## The whole theory in one picture
@@ -122,7 +122,7 @@ flowchart LR
 | Adapters | their wire format | what a channel is for |
 | Screens | lights, compounds, metadata, recipes | addresses on the wire |
 
-Today the core still holds lights and per-light writers. They leave with the tick on channels (#250).
+Until #253 a plan or a grab still names a light by index. The field table (Rig, swapped whole per patch edit) turns the index into channels; no other tick code knows more of a light.
 
 **One channel space.** A channel is a plain index into one space of universes of 512: 64 today, 1,024 designed (#255). "Universe 2, address 37" is only how Patch shows it. An output is a list of spans of that space (its route).
 
@@ -178,7 +178,7 @@ Ten QLC+ function types become one shape. On screen there are two kinds: a **seq
 
 | Step | Plans on the tick |
 |---|---|
-| The tick on channels (#250) | today's plan tree, its values channel bytes and words per target |
+| The tick on channels (#250, built) | today's plan tree, its values words per field of a light (a channel, or a pair as one word) |
 | Flat curves (#258) | Hold, Linear and Gap knots compiled off the tick. The tick has no transition |
 
 A source may offer nothing at a moment (a gap). Then a lower source shows through.

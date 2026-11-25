@@ -56,7 +56,7 @@ use Event::{Feed, Late, Release, Settle, Tap};
 
 #[test]
 fn a_wave_started_between_counts_keeps_its_midpoint_across_a_tap() {
-    use crate::{Binding, Node, Program, Rgb, Swatches, Use};
+    use crate::{Binding, Node, Program, Rgb, Use};
 
     let feed = Clock::START.set_feed(bpm(125));
     let tap_at =
@@ -83,19 +83,29 @@ fn a_wave_started_between_counts_keeps_its_midpoint_across_a_tap() {
     };
     let nodes = [Node::Wave {
         period: 1,
-        swatches: Swatches::new(&[red, green, green]).unwrap(),
+        swatches: 3,
     }];
+    // red, green and blue of each swatch: the words of one RGB target
+    let words: Vec<Option<u16>> = [red, green, green]
+        .iter()
+        .flat_map(|c| [Some(c.red), Some(c.green), Some(c.blue)])
+        .collect();
     let wave = Program {
         nodes: &nodes,
         items: &[],
         root: 0,
+        words: &words,
     };
-    let target = [Binding {
+    let bindings = [Binding {
         node: 0,
         index: 0,
         count: 1,
-        discrete_colour: false,
+        words: 0,
     }];
+    let target = crate::Sampled {
+        bindings: &bindings,
+        fades: &[true; 3],
+    };
     // A three-swatch Wave has red/green midpoints at 1/6 and 5/6 beat.
     for (start, end) in [
         (feed.beat_at(ms(80)), feed.beat_at(ms(480))),
@@ -103,15 +113,10 @@ fn a_wave_started_between_counts_keeps_its_midpoint_across_a_tap() {
         (a.beat_at(ms(480) + short / 6), b.beat_at(change)),
         (b.beat_at(change), c.beat_at(back + short / 6)),
     ] {
-        assert_eq!(
-            wave.sample(&target, crate::Elapsed::between(end, start), Use::default())
-                .colour,
-            Some(Rgb {
-                red: 32_768,
-                green: 32_768,
-                blue: 0
-            })
-        );
+        let (mut out, mut spare) = ([None; 3], [None; 3 * crate::MAX_DEPTH]);
+        let elapsed = crate::Elapsed::between(end, start);
+        wave.sample(target, elapsed, Use::default(), &mut out, &mut spare);
+        assert_eq!(out, [Some(32_768), Some(32_768), Some(0)]);
     }
 }
 

@@ -83,6 +83,23 @@ fn strip(pixels: u16, universes: u16) -> (Engine, engine::Sender, engine::Wakes,
     (engine, sender, wakes, heard)
 }
 
+/// The green byte of strip pixel `light` on the wire: the strip has no dimmer, so the
+/// grabs below hold a colour, not a brightness alone, which would offer nothing.
+fn green(snapshot: &engine::Snapshot, light: u16) -> u8 {
+    let index = 3 * (light - 1) + 1;
+    snapshot.sent(index / 512 + 1, index % 512 + 1)
+}
+
+/// A colour grab of green 11 on `target`.
+fn green_11(target: Target) -> Command {
+    Command::SetColour {
+        target,
+        red: 0,
+        green: 11 << 8,
+        blue: 0,
+    }
+}
+
 #[test]
 fn a_saved_rgb_wave_leaves_room_to_light_its_first_pixel() {
     let name = Text::new("wall").unwrap();
@@ -135,7 +152,8 @@ fn a_saved_rgb_wave_leaves_room_to_light_its_first_pixel() {
         // A full beat later the first pixel is red for either start order.
         let second_at = first_at + beat;
         wakes.set_time(second_at);
-        // A strip without a dimmer emits no Wave colour without a separate hold.
+        // The brightness hold offers nothing on a strip without a dimmer, but books its
+        // write, end and release.
         replies.push(sender.send(second));
         if pixels == 4096 {
             // A full Wave has room for one light's write, end and release.
@@ -156,7 +174,10 @@ fn a_saved_rgb_wave_leaves_room_to_light_its_first_pixel() {
             [1, 2, 3].map(|address| heard.level(1, address)),
             [255, 0, 0]
         );
-        assert_eq!(heard.lit_of(3), Some(1));
+        // The Wave's colour shows as it is, not only where a brightness is held. Spread 0:
+        // every pixel at phase 0 (just started, or one whole period in), so each is red
+        // 255, green and blue 0: one lit byte per pixel.
+        assert_eq!(heard.lit_of(3), Some(usize::from(pixels)));
         wakes.run();
     }
     assert_eq!(replies, [Ok(()); 4]);
@@ -210,10 +231,7 @@ fn playing_strip() -> (Engine, engine::Sender, engine::Wakes) {
 #[test]
 fn direct_grabs_reserve_their_end_and_release_before_they_are_accepted() {
     let (mut engine, mut sender, wakes) = playing_strip();
-    let press = |light| Command::SetIntensity {
-        target: Target::Light { light },
-        intensity: 11,
-    };
+    let press = |light| green_11(Target::Light { light });
     let mut grabs = Vec::new();
     // The playing root leaves twenty visits free. Six distinct grabs each
     // book their write, their possible EndGrab, and their final release.
@@ -235,7 +253,7 @@ fn direct_grabs_reserve_their_end_and_release_before_they_are_accepted() {
     for &grab in grabs.iter().step_by(2) {
         sender.send(Command::EndGrab { grab }).unwrap();
     }
-    let release = Command::ReleaseIntensity {
+    let release = Command::ReleaseColour {
         target: Target::Fixture { fixture: 1 },
     };
     sender.send(release).unwrap();
@@ -247,10 +265,7 @@ fn direct_grabs_reserve_their_end_and_release_before_they_are_accepted() {
     wakes.wake().unwrap();
     let picture = engine.latest();
     for light in 1..=14 {
-        assert_eq!(
-            picture.light(light).and_then(|light| light.intensity),
-            (light == 13).then_some(11)
-        );
+        assert_eq!(green(picture, light), if light == 13 { 11 } else { 0 });
     }
     wakes.run();
 }
@@ -260,12 +275,7 @@ fn a_fragmented_fixture_release_fits_in_one_wake() {
     let pixels = 3200;
     let (mut engine, mut sender, wakes, _) = strip(pixels, 19);
     let target = Target::Fixture { fixture: 1 };
-    sender
-        .send(Command::SetIntensity {
-            target,
-            intensity: 11,
-        })
-        .unwrap();
+    sender.send(green_11(target)).unwrap();
 
     // Leave 1,600 single-light runs held in one fixture.
     let group = Text::new("evens").unwrap();
@@ -281,27 +291,27 @@ fn a_fragmented_fixture_release_fits_in_one_wake() {
             })
             .unwrap();
         sender
-            .send(Command::ReleaseIntensity {
+            .send(Command::ReleaseColour {
                 target: Target::Group { group },
             })
             .unwrap();
         engine.latest();
         wakes.wake().unwrap();
     }
-    let intensities = |engine: &mut Engine| {
+    let greens = |engine: &mut Engine| {
         let picture = engine.latest();
         (1..=pixels)
-            .map(|light| picture.light(light).and_then(|light| light.intensity))
+            .map(|light| green(picture, light))
             .collect::<Vec<_>>()
     };
     let alternating: Vec<_> = (1..=pixels)
-        .map(|light| (light % 2 == 1).then_some(11))
+        .map(|light| if light % 2 == 1 { 11 } else { 0 })
         .collect();
-    assert_eq!(intensities(&mut engine), alternating);
+    assert_eq!(greens(&mut engine), alternating);
 
-    sender.send(Command::ReleaseIntensity { target }).unwrap();
+    sender.send(Command::ReleaseColour { target }).unwrap();
     engine.latest();
     wakes.wake().unwrap();
-    assert_eq!(intensities(&mut engine), vec![None; usize::from(pixels)]);
+    assert_eq!(greens(&mut engine), vec![0; usize::from(pixels)]);
     wakes.run();
 }

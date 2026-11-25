@@ -21,9 +21,9 @@ flowchart LR
 
 | # | Rule | Default | Can be set to | Today |
 |---|---|---|---|---|
-| 1 | What is decided | each channel on its own. A coarse and fine pair is one 16-bit word | fixed | each property of each light (#250 changes it) |
+| 1 | What is decided | each channel on its own. A coarse and fine pair is one 16-bit word | fixed | built |
 | 2 | Rank | manual beats show, show beats autopilot. A direct grab is manual | fixed for now | built |
-| 3 | Among equals | the one that started last wins; first in breaks an equal instant | per channel: the highest wins (the greater distance from `dark`, so a reverse dimmer at 0 beats 255). The Who wins row sets it on every dimmer | latest built; highest is a brightness setting per light property |
+| 3 | Among equals | the one that started last wins; first in breaks an equal instant | per channel: the highest wins (the greater distance from `dark`, so a reverse dimmer at 0 beats 255). The Who wins row sets it on every dimmer | built. A light without a dimmer has none: Highest leaves its colour latest-wins |
 | 4 | Manual control ends | when you press **Release** | when the pad or fader stops | built |
 | 5 | When a show or autopilot look ends | what was underneath shows again | it stays as it was left, until released | built |
 
@@ -99,14 +99,15 @@ Decided with the owner on 2026-11-19 (decision 48). Nothing decides between two 
 
 | Part | Today | Becomes |
 |---|---|---|
-| Who wins | per property of each light, before the Rig (`engine-core/src/mix.rs`) | per channel (#250) |
-| Highest | a brightness setting per light property | a flag per channel, set on every dimmer (#250) |
-| Writing channels | per-light writers through `resolve`, as source `2` | offers per channel (#250) |
+| Who wins | per channel: rank, then latest or highest, a pair as one word (`mix::Offers` in `engine-core/src/mix.rs`) | |
+| Highest | a flag per channel, set on the dimmer channels of the field table by the Who wins row | a flag per channel in Patch (#251) |
+| Sources | 1,024: 32 plays by slot, then 992 grabs. Each offers words per field of a light, through the field table | fixture refs (#253) |
+| A v11 brightness | baked into the colour of a light without its own dimmer; alone it offers nothing; a colour alone shows as it is (rule B, [channel-model.md](channel-model.md)) | #253 |
 | Rest | the file's rest per channel, from the lowering (#250): an open shutter, a wheel's bypass, the default; 0 where nothing is patched | overrides in Patch (#251) |
 | One pass per channel: raw hold, Blackout (#247) | built | |
 | Blackout | every channel follows; to the file's dark where the file has it follow (a shutter closes, CMY on a fixture without a dimmer goes to 255), else 0 | followers from the file (#251) |
 | Master, virtual dimmers | none | #251 |
-| Grabs and kept offers when a light moves | per light | per channel (#250, #251) |
+| Grabs and kept offers when a light moves | follow it: they hold a light index, the new field table gives the new channels. Unpatch lets its grabs go | fixture refs (#253) |
 | Identify | none | #254 |
 
 ## One place

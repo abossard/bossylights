@@ -122,6 +122,7 @@ The list is `ORIGINS` in `crates/engine-server/src/lib.rs`. No pairing or token 
 | any `Send` | `"Stopping"` when the engine stops first: nothing changed. `"Failed"` when the server failed while working on it (API 12): the picture says what is live |
 | `"Query"` | `{"Picture": {"state": ..., "project": ..., "library": ..., "patch": [...], "universes": [[...512 levels]], "health": ...}}`. Each `project.outputs` entry is `null`, `{"Kind": {"kind": ..., "universes": {"first": 1, "count": 3}}}` or `{"Attached": {"universes": ...}}` for a test device. |
 | In every `Picture` | `health` gives each attached output's status and timing over four seconds. With no outputs it is `{"window_ms":4000,"outputs":[]}`. |
+| `lights` in a `Picture` or `Changed` | what grabs hold, from the front's grab book: each held light with its `intensity` and `colour` (`null` where not held), not what plays. `Changed` lists only the lights whose holds changed. The first picture whose frame has the press shows them |
 | `"Subscribe"` | The current `Picture`, then `{"Changed": {"state": ..., "project": ..., "library": ..., "patch": ..., "channels": [...]}}` with each new frame. `patch` is `null` unless it changed since this subscriber's last frame. |
 | While subscribed | `{"Health":{"health":...,"events":[...],"missed":0}}` when health changes, at most once per 500 ms. Events report late timing, device loss and recovery since subscription or the last health delivery. The engine keeps the newest 64 events. `missed` counts older events the subscriber missed. A query leaves its place in the log intact. |
 
@@ -150,15 +151,15 @@ One connection (`talk` in `crates/engine-server/src/lib.rs`). An edit is a comma
 
 | Command | Does |
 |---|---|
-| `SetChannel` (universe, address, value) | holds that channel at the value. It wins over the light that writes it, also at 0 |
-| `ReleaseChannel` (universe, address) | lets it go: the light that writes it shows again, else zero |
+| `SetChannel` (universe, address, value) | holds that channel at the value. It wins over every play and grab, also at 0 |
+| `ReleaseChannel` (universe, address) | lets it go: the channel's winner shows again, else its rest |
 | `ReleaseChannels` | lets every held raw channel go |
 | `ReleaseAll` | lets every Manual play, every direct hold (`SetIntensity`, `SetColour`) and every raw channel go. Show, Autopilot and blackout stay (API 4: in API 3 it let only the raw channels go) |
-| `Blackout` (on) | every channel goes out at zero while on, over everything; the held values stay |
+| `Blackout` (on) | every channel goes to its dark while on (0, a shutter closed), over everything; the held values stay |
 | `SetOutput` (output 1 to 16, kind, universes, rate) | adds or replaces an output. Kind `{"Ddp": {"address": "ip:port", "color": "Rgb" or "Rgbw"}}` or `{"DmxUsbPro": {"adapter": 1}}` (the first ENTTEC DMX USB Pro by USB identity, in the order of their USB serial numbers, when the output first finds one; an adapter not there yet is no error, the output is NotFound until it is plugged in; from then on the output finds that same adapter by its serial, so a lost adapter never comes back as another). Adapters count from 1: 0 is `NotACommand`. Universes `{"first": 1, "count": 3}`, sent as one stream of channels. A DMX USB Pro takes one universe: more is refused with `{"TooManyUniverses": {"most": 1}}`. DDP RGB rounds the joined run down to whole pixels (510 bytes for one universe, 1,023 for two). Rate `"30"`, `"44"`, `"60"` or `null`: 60 for DDP, 44 for the DMX USB Pro. A DMX USB Pro sends at most 44 (theory.md, idea 1): `"60"` is refused with `{"TooFast": {"most": "44"}}` (API 12) |
 | `RemoveOutput` (output) | removes it. Refused with `{"StreamsFixture": {"fixture": 1}}` when a fixture over more than one universe would be left with no output that streams them all; so is a `SetOutput` that changes the run |
 
-Looks and who wins (`docs/history/looks-slice-3.md`, the Mixer's table in `engine-core/src/mix.rs`): per property of each light, Manual over Show over Autopilot, then the latest start. A direct hold is Manual. The picture's `state.plays` lists each play with its `rank`, `state` (`{"Waiting": {"beat": 12}}`, `Playing` or `Kept`) and `start` (the clock's `elapsed` at its start), `state.rules` the settings the frame applies, `state.clock` the beat clock at the frame: `bpm`, `feed`, `source` (`Feed`, `OneTap` or `Tapped`), `beat` (the grid: a whole number is a beat, a multiple of 4 a bar) and `elapsed` (beats since the engine started; a play's own beat is `elapsed` less its `start`).
+Looks and who wins (`docs/history/looks-slice-3.md`, the Mixer's table in `engine-core/src/mix.rs`): per channel, Manual over Show over Autopilot, then the latest start. A direct hold is Manual. A coarse and fine pair is won as one word. The picture's `state.plays` lists each play with its `rank`, `state` (`{"Waiting": {"beat": 12}}`, `Playing` or `Kept`) and `start` (the clock's `elapsed` at its start), `state.rules` the settings the frame applies, `state.clock` the beat clock at the frame: `bpm`, `feed`, `source` (`Feed`, `OneTap` or `Tapped`), `beat` (the grid: a whole number is a beat, a multiple of 4 a bar) and `elapsed` (beats since the engine started; a play's own beat is `elapsed` less its `start`).
 
 | Command | Does | Refused |
 |---|---|---|
@@ -169,7 +170,7 @@ Looks and who wins (`docs/history/looks-slice-3.md`, the Mixer's table in `engin
 | `StopLook` (play) | Cancels a waiting play. For a playing look, `UntilRelease` keeps its Manual sample and `Stay` keeps its Show or Autopilot sample. A rest, `UntilStop` or `Reveal` ends the play | |
 | `EndFlash` (play) | ends a Manual play at once. Another rank or an ended play: nothing | |
 | `ReleaseHold` (play) | ends a play, playing or kept. Ended: nothing. Needs only a place in the command queue, with every play slot taken | |
-| `SetMixRules` (rules: `brightness` `"Latest"` or `"Highest"`, `manual_end` `"UntilRelease"` or `"UntilStop"`, `other_end` `"Reveal"` or `"Stay"`) | saved with the show. `Highest`: the brightest within the winning rank. A switch to `UntilStop` or `Reveal` ends the kept plays of those ranks | |
+| `SetMixRules` (rules: `brightness` `"Latest"` or `"Highest"`, `manual_end` `"UntilRelease"` or `"UntilStop"`, `other_end` `"Reveal"` or `"Stay"`) | saved with the show. `Highest`: the brightest within the winning rank, on each dimmer channel. A light without a dimmer has none: its colour stays latest-wins. A switch to `UntilStop` or `Reveal` ends the kept plays of those ranks | |
 | `SetInternalTempo` (bpm, 30 to 300) | the internal feed's tempo: the tempo now, unless taps set it. 124 at start, not saved | outside 30 to 300: `NotACommand` |
 | `TapTempo` | a tap at the time the engine takes it (no client time). It marks a beat: at an exact beat the grid keeps its number, else it moves on to the next. A second tap 200 ms to 2 s later sets the tempo for every play (`Tapped`) until `ReleaseTempo`; under 200 ms is a bounce, ignored; one tap alone lapses after 2 s; a tap after a longer gap aligns the grid at the tempo now. The elapsed count never jumps | |
 | `ReleaseTempo` | the feed's latest tempo again, at the grid's phase now | |
@@ -202,7 +203,7 @@ A Wave over a matrix can use the palette saved in step 3.
 
 Each sequence item and each `StartLook` accepts its own `use`. A stop samples the play at the stop event. A once-use ends with its final sample, even if the next wake comes later. An empty step supplies a rest.
 
-The patch: a fixture of the library at an address. The front checks each command against it and the library, compiles the writers and lowers each fixture's mode into its channels (`rig`): each channel's rest, dark, fade and pair from the fixture file. Both swap in on the tick thread as one, as it swaps a device. A channel no light writes shows its rest. A frame visits only the patched channels and the raw holds, so its work follows the rig, not the size of the space (`cargo run -q --release -p rig --example frame_lateness -- 10 1` and `-- 10 10000`).
+The patch: a fixture of the library at an address. The front checks each command against it and the library, lowers each fixture's mode into its channels (`rig`: each channel's rest, dark, fade and pair from the fixture file) and makes the field table: each light's fields on those channels. The table swaps in on the tick thread whole, as it swaps a device. A channel nothing offers shows its rest. A frame visits only the patched channels and the raw holds, so its work follows the rig, not the size of the space (`cargo run -q --release -p rig --example frame_lateness -- 10 1` and `-- 10 10000`).
 
 | Command | Does | Refused |
 |---|---|---|
@@ -211,14 +212,14 @@ The patch: a fixture of the library at an address. The front checks each command
 | `Move` (fixture, at) | new address, the same lights: their held values stay | `NotPatched`, as `Patch` |
 | `Unpatch` (fixture) | removes it, its lights' held values go, it and its lights leave every group | `NotPatched` |
 | `Rename` (fixture, name) | | `NotPatched` |
-| `SetIntensity` (target, intensity 0 to 65 535) | holds the intensity | `NotPatched`, `NoSuchLight`, `NoSuchGroup` |
-| `SetColour` (target, red, green, blue, 0 to 65 535 each) | holds the colour | `NotPatched`, `NoSuchLight`, `NoSuchGroup` |
-| `ReleaseIntensity` (target) | lets the intensity go: the dimmer shows the definition's default again, else 0. Not held: nothing changes | `NotPatched`, `NoSuchLight`, `NoSuchGroup` |
+| `SetIntensity` (target, intensity 0 to 65 535) | holds the intensity. On a light without a dimmer of its own it offers nothing (rule B, until #253) | `NotPatched`, `NoSuchLight`, `NoSuchGroup` |
+| `SetColour` (target, red, green, blue, 0 to 65 535 each) | holds the colour. On a light without a dimmer it shows as it is, not dimmed by a held intensity | `NotPatched`, `NoSuchLight`, `NoSuchGroup` |
+| `ReleaseIntensity` (target) | lets the intensity go: the dimmer shows the definition's default again, else 0. Not held, or a light without a dimmer: nothing changes | `NotPatched`, `NoSuchLight`, `NoSuchGroup` |
 | `ReleaseColour` (target) | lets the colour go: each colour channel shows the definition's default again, else 0. Held black is black, not let go. Not held: nothing changes | `NotPatched`, `NoSuchLight`, `NoSuchGroup` |
 | `SetGroup` (name, members) | makes a group, or replaces the one of that name in its place. Members in order, at most 512: `{"Fixture": {"fixture": 1}}` or `{"Light": {"light": 7}}` | `NotPatched`, `NoSuchLight` |
 | `RemoveGroup` (name) | removes it. No such group: nothing changes | |
 
-A target is `{"Fixture": {"fixture": 1}}` (all its lights), `{"Light": {"light": 7}}` or `{"Group": {"group": "front"}}` (every light of every member). The picture carries `groups`: name and members, in the order they were made; `Changed` carries them with the patch. A Wave on a group follows member order. Fixtures and lights count from 1. A fixture with heads (a bar, a panel, a strip) is one light per head in the order of its definition, after the fixture itself when it has a channel in no head (a master dimmer); its `patch` row has `layout`, `{"width": 8, "height": 1}`, or `null`. Past address 512 a fixture runs on at address 1 of the next universe: `PastTheEnd` only past the engine's last universe. No invalid patch: a fixture over more than one universe needs one output whose run streams them all (`NotStreamed` names the universes), and that output cannot go or lose them while it is patched (`StreamsFixture`). Every channel of a fixture an output streams is one it sends: DDP sends whole pixels, so RGB on universes 1 and 2 sends 1023 channels, and a fixture on 2:512 is `NotSent`; an output change that would leave one is `StreamsFixture`. A fixture in one universe needs no output. No two fixtures share a channel: `Patch` or `Move` onto a channel of another fixture is `Overlaps`, and a show file that has one is left alone (`Refused` with `Overlaps`). Who wins on a channel is decided in one place, the Mixer in `engine-core` (`docs/design/who-wins.md`): a held value of a light over a default, then one pass per channel: a held raw channel over the light that writes it, and Blackout, a modifier every channel follows, over everything: a channel goes to the dark its fixture file gives where the file has it follow Blackout (a shutter to its first Closed byte), else to 0.
+A target is `{"Fixture": {"fixture": 1}}` (all its lights), `{"Light": {"light": 7}}` or `{"Group": {"group": "front"}}` (every light of every member). The picture carries `groups`: name and members, in the order they were made; `Changed` carries them with the patch. A Wave on a group follows member order. Fixtures and lights count from 1. A fixture with heads (a bar, a panel, a strip) is one light per head in the order of its definition, after the fixture itself when it has a channel in no head (a master dimmer); its `patch` row has `layout`, `{"width": 8, "height": 1}`, or `null`. Past address 512 a fixture runs on at address 1 of the next universe: `PastTheEnd` only past the engine's last universe. No invalid patch: a fixture over more than one universe needs one output whose run streams them all (`NotStreamed` names the universes), and that output cannot go or lose them while it is patched (`StreamsFixture`). Every channel of a fixture an output streams is one it sends: DDP sends whole pixels, so RGB on universes 1 and 2 sends 1023 channels, and a fixture on 2:512 is `NotSent`; an output change that would leave one is `StreamsFixture`. A fixture in one universe needs no output. No two fixtures share a channel: `Patch` or `Move` onto a channel of another fixture is `Overlaps`, and a show file that has one is left alone (`Refused` with `Overlaps`). Who wins on a channel is decided in one place, the Mixer in `engine-core` (`docs/design/who-wins.md`): each play's and grab's offer on the channel (rank, then latest or highest), else its rest, then a held raw channel over the winner, and Blackout, a modifier every channel follows, over everything: a channel goes to the dark its fixture file gives where the file has it follow Blackout (a shutter to its first Closed byte), else to 0.
 
 ```json
 {"Send": {"command": {"Patch": {"name": "PAR 3", "maker": "Generic", "model": "Generic RGB", "mode": "RGB", "at": {"universe": 1, "address": 37}}}}}
@@ -228,16 +229,35 @@ A target is `{"Fixture": {"fixture": 1}}` (all its lights), `{"Light": {"light":
 {"Send": {"command": {"SetOutput": {"output": 1, "kind": {"Ddp": {"address": "192.168.1.50:4048", "color": "Rgbw"}}, "universes": {"first": 1, "count": 3}, "rate": null}}}}
 ```
 
+## A frame on the tick
+
+```mermaid
+flowchart LR
+  P["plays<br/>Playing: sampled now<br/>Kept: at its frozen moment"] --> FT["field table<br/>light index to fields"]
+  G["grab boxes<br/>words per light"] --> FT
+  FT -- "word on a field" --> M["Mixer<br/>one winner per channel"] --> R["raw holds"] --> B["Blackout"] --> F(["frame"])
+```
+
+One `engine_core::frame` per wake (`Ticker::frame` in `crates/engine/src/tick.rs`).
+
+| Part | What |
+|---|---|
+| Source table | 1,024 entries (`mix::SOURCES`): 32 plays by slot, then 992 grabs. A channel's source tag names its winner |
+| Offer | a word on a field: one channel (the word's high byte goes out) or a coarse and fine pair as one 16-bit word. A pair is never torn |
+| Who wins (`mix::Offers`) | rank (Manual over Show over Autopilot, a grab is Manual), then the latest start. On a `highest` channel (the dimmers, when the brightness rule is Highest): the greater distance from `dark`, the latest on a tie |
+| Field table (`rig::FieldPlan`) | per light index its fields, which fade, the dimmer channels, the patched channels. Swapped whole per patch edit, so a Move keeps a playing look and a grab. The interim step from a light index to channels: #253 replaces light values with fixture refs. No other tick code knows more of a light than this index |
+| Effects (#283, #284) | an effect keeps its cells as (light index, field) and reads `rig::Targets::of(light)` each frame, as `looks::Plan::offer` and the grab boxes (`rig::Words::offer`) do. One way to survive a Move: E2 and E3 add no second one |
+
 ## A play on the tick
 
 The tick keeps each play in a slot: off, `Waiting { beat }`, `Playing` or `Kept`. One table, walked by `a_play_on_the_tick_follows_its_table` (`engine-core/src/lib.rs`). "Plan" is `Plays::takes_plan`: whether a new plan for this play installs, else it goes back.
 
-| State \ tick event | Start, Now | Start, Beat or Bar, not reached | Start, boundary reached | the grid reaches the beat | Keep | Release | ReleaseAll | Rules | Plan for this play |
-|---|---|---|---|---|---|---|---|---|---|
-| off | Playing | Waiting | Playing from the frame | off | off | off | off | off | goes back |
-| Waiting | Playing (new play) | Waiting (new play) | Playing (new play) | Playing from the crossing | off (cancelled) | off | Manual: off, else Waiting | Waiting | installs |
-| Playing | Playing (new play) | Waiting (new play) | Playing (new play) | Playing | Kept | off | Manual: off, else Playing | Playing | installs |
-| Kept | Playing (new play) | Waiting (new play) | Playing (new play) | Kept | Kept | off | Manual: off, else Kept | off where the rules end its rank's stopped plays, else Kept | goes back |
+| State \ tick event | Start, Now | Start, Beat or Bar, not reached | Start, boundary reached | the grid reaches the beat | Keep | Release | ReleaseAll | Rules | Plan for this play | Offers each frame |
+|---|---|---|---|---|---|---|---|---|---|---|
+| off | Playing | Waiting | Playing from the frame | off | off | off | off | off | goes back | nothing |
+| Waiting | Playing (new play) | Waiting (new play) | Playing (new play) | Playing from the crossing | off (cancelled) | off | Manual: off, else Waiting | Waiting | installs | nothing |
+| Playing | Playing (new play) | Waiting (new play) | Playing (new play) | Playing | Kept | off | Manual: off, else Playing | Playing | installs | the plan sampled now (below) |
+| Kept | Playing (new play) | Waiting (new play) | Playing (new play) | Kept | Kept | off | Manual: off, else Kept | off where the rules end its rank's stopped plays, else Kept | goes back | the plan sampled at its frozen moment: each channel's last offer, nothing where it was in a gap |
 
 "For this play" is the same slot and generation. Another generation in the slot is "off" for it.
 
@@ -252,6 +272,47 @@ The tick keeps each play in a slot: off, `Waiting { beat }`, `Playing` or `Kept`
 | Plan | an edit of a look (`PutStep`, `PutSequence`, `PutPattern`) for each live play of it |
 
 The front never sees `Waiting`. `StopLook` on a waiting play is Keep on the tick (off, cancelled) while the front books the play as kept until it reads that the tick ended it: it over-reserves for that time, never under.
+
+What a playing plan offers on one channel (`looks::Plan::offer`, `engine-core/src/evaluate.rs`):
+
+| Plan at this moment | Offer |
+|---|---|
+| a step or a sequence item that names the channel | its word |
+| a step or a sequence item that does not (a gap) | nothing: a lower source shows |
+| a transition, both items name it, a fade channel | the two words blended as one 16-bit word |
+| a transition, both name it, a jump channel (wheel, gobo, shutter) | the incoming item's word |
+| a transition out of a gap / into a gap | the incoming item's word / nothing |
+| a Wave | the swatch words ramped at the phase. A field that does not fade jumps at the swatch |
+| past the end | `Loop` wraps. `Once` ends by the rules: Keep, or off |
+
+| Kept rule | Why |
+|---|---|
+| Keep stores the play's moment (an `Elapsed`, a place in the plan, not a clock time). Each frame samples the plan there | a tempo change after the stop moves no byte. No scratch per play on the tick |
+| A stop at a moment where the plan offers nothing ends the play | nothing to keep |
+
+## A grab on the tick
+
+```mermaid
+flowchart LR
+  P["press<br/>SetIntensity, SetColour,<br/>UpdateGrab, EndGrab, Release..."] --> B["front's grab book<br/>one entry and one box<br/>of words per grab"]
+  B -- "every change of the press<br/>in ONE command (Grabs)" --> T["tick<br/>source entry, box"]
+  T -. "applied count" .-> B
+```
+
+`crates/engine/src/grabs.rs`. One grab entry per grab, one `Arc<Words>` box of words on its lights. A newer grab of a property takes its lights from older ones, so ending it never brings an older grab back.
+
+| State \ event | a grab (here, or newer on its lights) | `UpdateGrab` | `EndGrab` | a release, `Unpatch` | `ReleaseAll` | `SetMixRules` to `UntilStop` |
+|---|---|---|---|---|---|---|
+| (free) | Live | nothing | nothing | nothing | (free) | (free) |
+| Live | Live without them, or (free) | Live, new words | `UntilRelease`: Kept. `UntilStop`: (free) | Live without them, or (free) | (free) | Live |
+| Kept | Kept without them, or (free) | nothing | nothing | Kept without them, or (free) | (free) | (free) |
+
+| Rule | How |
+|---|---|
+| A press needs one queue place | every change of one press goes in one `Grabs` command |
+| The tick never frees a box | the front keeps its clone, and the change list, until the tick's applied count passed the command that let it go |
+| Booking by lights, unchanged | a live light property reserves work for an end and a release; a kept one only its release |
+| A Move | the box holds light indices: the new field table puts its words on the new channels |
 
 ## Fixture library
 

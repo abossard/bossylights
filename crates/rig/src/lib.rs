@@ -1,6 +1,7 @@
-//! The Rig: a mode of a fixture at an address becomes writers. The only crate that knows
-//! an address belongs to a fixture. A calculation: it runs off the tick thread and may use
-//! the heap. The core runs the writers every frame (`engine_core::resolve`).
+//! The Rig: a mode of a fixture at an address becomes writers and each light's fields. The
+//! only crate that knows an address belongs to a fixture. A calculation: it runs off the
+//! tick thread and may use the heap. The tick reads the field table ([`FieldPlan`]) every
+//! frame: a light index to the channels its words go to.
 //!
 //! ```text
 //! mode + address + first light --compile--> writers + how many lights + fields | Unfit
@@ -52,10 +53,13 @@ mod capabilities;
 pub mod channels;
 mod fields;
 mod patch;
+mod table;
+pub mod writer;
 
 pub use capabilities::{shows_one_gobo, supports};
 pub use fields::LightFields;
-pub use patch::{Limit, Patch, PatchEffect, Placed, Unplaced, WaveBinding, Whole, WriterPlan};
+pub use patch::{Limit, Patch, PatchEffect, Placed, Unplaced, WaveBinding, Whole};
+pub use table::{FieldPlan, Targets, Words};
 
 use capabilities::Wheels;
 
@@ -64,10 +68,11 @@ use alloc::vec;
 use alloc::vec::Vec;
 use channels::Field;
 use engine_core::{
-    ADDRESSES, Channel, ChannelNumbers, Color, Configured, Flags, Less, LightNumber, Lights, Part,
-    Pixels, Place, Refusal, Scale, Sense, Take, Travel, Universes, Writer,
+    ADDRESSES, Channel, ChannelNumbers, Color, Configured, Flags, LightNumber, Lights, Pixels,
+    Refusal, Universes,
 };
 use fixture_library::{Byte, Direction, Does, Function, Layout, Mode};
+use writer::{Less, Part, Place, Scale, Sense, Take, Travel, Writer};
 
 /// A mode at an address, compiled.
 #[derive(Clone, Debug, PartialEq, Eq)]

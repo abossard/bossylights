@@ -8,6 +8,8 @@
 //! counting window. The stepped clock takes full command bursts, replans 32 live roots
 //! near the visit limit and ends all 32 while retirement is stalled. It also reads
 //! output health through a device loss, return, refused restart and replacement with all frees counted.
+//! Every grab entry is live and let go by `ReleaseAll`, and a burst grabs and releases in
+//! one frame: the front keeps each box until the tick applied the command that let it go.
 //! The tick frees nothing: the old writers, runs, plans and a replaced device with its thread go to
 //! the free thread. A
 //! counting allocator sees every allocation in this process, except those of the front
@@ -100,6 +102,18 @@ fn place(n: u16) -> ChannelNumbers {
             address: 507 + 3 * (n - 510),
         }
     }
+}
+
+/// The green byte of light `light` (from 1) on the wire: a PAR at its place, then a
+/// strip pixel, the strip starting at universe 3, address 511.
+fn green_byte(picture: &engine::Snapshot, light: u16) -> u8 {
+    let index = if light <= LIGHTS {
+        let at = place(light - 1);
+        (at.universe - 1) * 512 + at.address
+    } else {
+        2 * 512 + 510 + 3 * (light - LIGHTS - 1) + 1
+    };
+    picture.sent(index / 512 + 1, index % 512 + 1)
 }
 
 fn main() {
@@ -417,17 +431,21 @@ fn main() {
             .active_plays()
             .any(|play| play.rank == Rank::Autopilot && play.state == engine::PlayState::Playing);
     }
+    // The raw channels let go, so the picture shows the Mixer's bytes on universe 1.
+    let _ = sender.send(Command::ReleaseChannels);
+    let seen = engine.latest().frame();
+    mock::wait_until("no frame went by", || engine.latest().frame() > seen);
     let state = engine.latest().performance();
     let picture = engine.latest();
-    let lit = (1..=LIGHTS + 100)
-        .filter_map(|light| picture.light(light))
+    // A brightness alone on a light without a dimmer offers nothing: what the grabs hold.
+    let held = counting::uncounted(|| sender.held_lights());
+    let lit = held
+        .iter()
         .filter(|light| light.intensity == Some(u16::MAX))
         .count();
-    let green_lights = (1..=LIGHTS)
-        .filter_map(|light| picture.light(light))
-        .skip(1)
+    let green_lights = (2..=LIGHTS)
         .step_by(2)
-        .filter(|light| light.colour.is_some_and(|c| c.green == u16::MAX))
+        .filter(|&light| green_byte(picture, light) == u8::MAX)
         .count();
     // Nested transition, a shared step replan, and a once-use frozen between wakes.
     // Start and finish inside the allocator window on the production tick.
@@ -479,12 +497,12 @@ fn main() {
         let swatches = Swatches::new(&[
             Rgb {
                 red: u16::MAX,
-                green: 4321,
+                green: 0x4321,
                 blue: 0,
             },
             Rgb {
                 red: 0,
-                green: 4321,
+                green: 0x4321,
                 blue: u16::MAX,
             },
         ])
@@ -516,12 +534,9 @@ fn main() {
     });
     mock::wait_until("both strip pixels receive Wave", || {
         let picture = engine.latest();
-        [LIGHTS + 1, LIGHTS + 3].iter().all(|&light| {
-            picture
-                .light(light)
-                .and_then(|light| light.colour)
-                .is_some_and(|rgb| rgb.green == 4321)
-        })
+        [LIGHTS + 1, LIGHTS + 3]
+            .iter()
+            .all(|&light| green_byte(picture, light) == 0x43)
     });
     // a Manual play live as all is released
     let start = Command::StartLook {
@@ -608,6 +623,7 @@ fn main() {
         "{ticks} ticks made {new_tick_frees} frees on the tick thread"
     );
     linked_ends();
+    every_grab_let_go();
 }
 
 /// With reclamation held, a free anywhere (including on either output thread) fails.
@@ -987,18 +1003,24 @@ fn linked_ends() {
     wakes.hold().unwrap();
     let name = text("once");
     let strip = Target::Fixture { fixture: 1 };
-    let leaf = |intensity, target| Command::PutStep {
+    // A red marker: the strip has no dimmer, so a brightness alone offers nothing.
+    let leaf = |marker: u16, target| Command::PutStep {
         look: 0,
         name,
         step: Step {
             target,
             values: Light {
-                intensity: Some(intensity),
+                colour: Some(Rgb {
+                    red: marker << 8,
+                    green: 0,
+                    blue: 0,
+                }),
                 ..Light::DARK
             },
         }
         .into(),
     };
+    let red = |snapshot: &engine::Snapshot, light: u16| snapshot.sent(1, 3 * light - 2);
     let start = |sender: &mut Sender, slot: usize, rank| match begin(
         sender,
         Command::StartLook {
@@ -1107,10 +1129,7 @@ fn linked_ends() {
             let live = engine.latest();
             assert_eq!(live.active_plays().count(), PLAYS);
             assert!(
-                (1..=93).all(|light| {
-                    live.light(light)
-                        .is_some_and(|light| light.intensity == Some(value + 3))
-                }),
+                (1..=93).all(|light| u16::from(red(live, light)) == value + 3),
                 "the replacement lights every pixel while the 32 plays are still running"
             );
         }
@@ -1147,21 +1166,13 @@ fn linked_ends() {
         if rank == Rank::Manual {
             assert_eq!(snapshot.active_plays().count(), PLAYS);
             assert!(snapshot.active_plays().all(|p| p.state == PlayState::Kept));
-            assert!((1..=93).all(|light| {
-                snapshot
-                    .light(light)
-                    .is_some_and(|light| light.intensity == Some(value))
-            }));
+            assert!((1..=93).all(|light| u16::from(red(snapshot, light)) == value));
             for play in ids {
                 assert!(send(&mut sender, Command::ReleaseHold { play }, &[]));
             }
         } else {
             assert_eq!(snapshot.active_plays().count(), 0);
-            assert!((1..=93).all(|light| {
-                snapshot
-                    .light(light)
-                    .is_some_and(|light| light.intensity.is_none())
-            }));
+            assert!((1..=93).all(|light| red(snapshot, light) == 0));
         }
         if stall {
             engine.stall_reclamation(false);
@@ -1208,6 +1219,92 @@ fn linked_ends() {
     assert_eq!(
         sender.send(restart),
         Err(Unsent::Refused(Refusal::QueueFull))
+    );
+    wakes.run();
+}
+
+/// Every grab entry live (992), then `ReleaseAll`; then a burst of a grab and its
+/// release on 100 lights in one frame. The tick lets each box go without freeing it: the
+/// front keeps its own until the tick applied the command that let the box go.
+fn every_grab_let_go() {
+    use engine_core::GRABS;
+
+    let universes = Universes::new(6).unwrap();
+    let (mut engine, mut sender, wakes) =
+        Engine::start_stepped(universes, Box::new(outputs::open)).unwrap();
+    wakes.hold().unwrap();
+    let all = RunNumbers { first: 1, count: 6 };
+    mock::attach(&mut sender, universes, 1, all, Rate::Sixty);
+    let pixels = u16::try_from(GRABS).unwrap();
+    let strip = Command::PatchStrip {
+        name: text("grabs"),
+        pixels: Pixels::try_from(pixels).unwrap(),
+        color: Color::Rgb,
+        at: ChannelNumbers {
+            universe: 1,
+            address: 1,
+        },
+    };
+    let patched = begin(&mut sender, strip, &[]);
+    assert!(
+        matches!(patched, Ok(Begun::Patched { .. })),
+        "{:?}",
+        patched.err()
+    );
+    let red = |light| Command::SetColour {
+        target: Target::Light { light },
+        red: u16::MAX,
+        green: 0,
+        blue: 0,
+    };
+    let release = |light| Command::ReleaseColour {
+        target: Target::Light { light },
+    };
+    // The red byte of pixel `light` (from 1).
+    let shown = |engine: &mut Engine, light: u16| {
+        let index = 3 * (light - 1);
+        engine.latest().sent(index / 512 + 1, index % 512 + 1)
+    };
+    // Warm the tick on one grab and its release.
+    assert!(send(&mut sender, red(1), &[]));
+    assert!(send(&mut sender, release(1), &[]));
+    engine.latest(); // asked before the wake: the next read is its frame
+    wakes.wake().unwrap();
+    engine.latest();
+
+    let counters = || (counting::allocations(), counting::tick_frees());
+    let before = counters();
+    for light in 1..=pixels {
+        assert!(
+            send(&mut sender, red(light), &[]),
+            "light {light} is grabbed"
+        );
+        if light % 128 == 0 {
+            engine.latest(); // asked before the wake: the next read is its frame
+            wakes.wake().unwrap();
+        }
+    }
+    engine.latest(); // asked before the wake: the next read is its frame
+    wakes.wake().unwrap();
+    let held = counting::uncounted(|| sender.held_lights().len());
+    assert_eq!(held, GRABS, "every grab entry is live");
+    assert_eq!([1, pixels].map(|light| shown(&mut engine, light)), [255; 2]);
+    assert!(send(&mut sender, Command::ReleaseAll, &[]));
+    engine.latest(); // asked before the wake: the next read is its frame
+    wakes.wake().unwrap();
+    assert_eq!([1, pixels].map(|light| shown(&mut engine, light)), [0; 2]);
+    // A grab and its release in one frame, 100 times.
+    for light in 1..=100 {
+        assert!(send(&mut sender, red(light), &[]));
+        assert!(send(&mut sender, release(light), &[]));
+    }
+    engine.latest(); // asked before the wake: the next read is its frame
+    wakes.wake().unwrap();
+    assert_eq!([1, 100].map(|light| shown(&mut engine, light)), [0; 2]);
+    assert_eq!(
+        counters(),
+        before,
+        "letting the grabs go allocated or freed on the tick"
     );
     wakes.run();
 }

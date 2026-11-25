@@ -236,6 +236,8 @@ enum Gesture {
     ReleaseProperty(Target),
     EndGrab,
     ReleaseAll,
+    /// The grab ends and is kept, then rules that no longer keep it.
+    Unkeep,
 }
 
 #[test]
@@ -254,14 +256,16 @@ fn with_reclamation_stalled_every_release_needs_only_a_place_in_the_queue() {
     };
     let (red, green, dark) = ([255, 0, 0], [0, 255, 0], [0, 0, 0]);
     let frame = |pixels: [[u8; 3]; 3]| -> [u8; 9] { pixels.concat().try_into().unwrap() };
-    // (Manual end, grabbed, gesture, DMX after, plays after)
-    let cases = [
+    // (Manual end, grabbed, gesture, DMX after, plays after, lights the book holds a
+    // colour on after)
+    let cases: [(_, _, _, _, _, &[u16]); 10] = [
         (
             ManualEnd::UntilRelease,
             one,
             Gesture::ReleaseHold,
             frame([green, dark, dark]),
             0,
+            &[1],
         ),
         (
             ManualEnd::UntilRelease,
@@ -269,6 +273,7 @@ fn with_reclamation_stalled_every_release_needs_only_a_place_in_the_queue() {
             Gesture::StopLook,
             frame([green, red, dark]),
             PLAYS,
+            &[1],
         ),
         (
             ManualEnd::UntilStop,
@@ -276,6 +281,7 @@ fn with_reclamation_stalled_every_release_needs_only_a_place_in_the_queue() {
             Gesture::StopLook,
             frame([green, dark, dark]),
             0,
+            &[1],
         ),
         (
             ManualEnd::UntilRelease,
@@ -283,6 +289,7 @@ fn with_reclamation_stalled_every_release_needs_only_a_place_in_the_queue() {
             Gesture::EndFlash,
             frame([green, dark, dark]),
             0,
+            &[1],
         ),
         (
             ManualEnd::UntilRelease,
@@ -290,6 +297,7 @@ fn with_reclamation_stalled_every_release_needs_only_a_place_in_the_queue() {
             Gesture::ReleaseProperty(one),
             frame([dark, red, dark]),
             PLAYS,
+            &[],
         ),
         (
             ManualEnd::UntilRelease,
@@ -297,6 +305,7 @@ fn with_reclamation_stalled_every_release_needs_only_a_place_in_the_queue() {
             Gesture::ReleaseProperty(ends),
             frame([dark, red, dark]),
             PLAYS,
+            &[],
         ),
         (
             ManualEnd::UntilStop,
@@ -304,6 +313,7 @@ fn with_reclamation_stalled_every_release_needs_only_a_place_in_the_queue() {
             Gesture::EndGrab,
             frame([dark, red, dark]),
             PLAYS,
+            &[],
         ),
         (
             ManualEnd::UntilStop,
@@ -311,6 +321,7 @@ fn with_reclamation_stalled_every_release_needs_only_a_place_in_the_queue() {
             Gesture::EndGrab,
             frame([dark, red, dark]),
             PLAYS,
+            &[],
         ),
         (
             ManualEnd::UntilRelease,
@@ -318,9 +329,18 @@ fn with_reclamation_stalled_every_release_needs_only_a_place_in_the_queue() {
             Gesture::ReleaseAll,
             frame([dark, dark, dark]),
             0,
+            &[],
+        ),
+        (
+            ManualEnd::UntilRelease,
+            one,
+            Gesture::Unkeep,
+            frame([dark, red, dark]),
+            PLAYS,
+            &[],
         ),
     ];
-    for (manual_end, grabbed, gesture, expected, plays_after) in cases {
+    for (manual_end, grabbed, gesture, expected, plays_after, coloured) in cases {
         let case = format!("{manual_end:?} {grabbed:?} {gesture:?}");
         let (mut engine, mut sender) = Engine::start(Universes::new(1).unwrap()).unwrap();
         let heard = Arc::new(Heard {
@@ -446,6 +466,15 @@ fn with_reclamation_stalled_every_release_needs_only_a_place_in_the_queue() {
             }],
             Gesture::EndGrab => vec![Command::EndGrab { grab }],
             Gesture::ReleaseAll => vec![Command::ReleaseAll],
+            Gesture::Unkeep => vec![
+                Command::EndGrab { grab },
+                Command::SetMixRules {
+                    rules: MixRules {
+                        manual_end: ManualEnd::UntilStop,
+                        ..rules
+                    },
+                },
+            ],
         };
         for command in commands {
             assert_eq!(
@@ -458,6 +487,13 @@ fn with_reclamation_stalled_every_release_needs_only_a_place_in_the_queue() {
         let picture = engine.fresh().unwrap();
         let left = (0..PLAYS).filter(|&slot| picture.has_play(slot)).count();
         assert_eq!(left, plays_after, "{case}: plays");
+        let held: Vec<u16> = sender
+            .held_lights()
+            .iter()
+            .filter(|held| held.colour.is_some())
+            .map(|held| held.light)
+            .collect();
+        assert_eq!(held, coloured, "{case}: the book");
         engine.shared.stalled.store(false, Ordering::Release);
     }
 }
@@ -539,13 +575,18 @@ fn linked_plans_at_the_fifo_cutoff() {
             },
         })
         .unwrap();
-    let put = |look, intensity| Command::PutStep {
+    // A red marker: the strip has no dimmer, so a brightness alone offers nothing.
+    let put = |look, red: Option<u8>| Command::PutStep {
         look,
         name,
         step: Step {
             target: Target::Light { light: 1 },
             values: Light {
-                intensity,
+                colour: red.map(|red| Rgb {
+                    red: u16::from(red) << 8,
+                    green: 0,
+                    blue: 0,
+                }),
                 ..Light::DARK
             },
         }
@@ -580,9 +621,9 @@ fn linked_plans_at_the_fifo_cutoff() {
             bpm: Bpm::new(60).unwrap(),
         })
         .unwrap();
-    sender.send(put(1, Some(123))).unwrap();
+    sender.send(put(1, Some(12))).unwrap();
     sender.send(put(2, None)).unwrap();
-    sender.send(put(3, Some(654))).unwrap();
+    sender.send(put(3, Some(65))).unwrap();
     for root in 10..10 + PLAYS as u16 {
         sender.send(sequence(root, &[1, 3])).unwrap();
     }
@@ -593,7 +634,7 @@ fn linked_plans_at_the_fifo_cutoff() {
     let time = wakes.wake().unwrap() + Duration::from_secs(1);
     wakes.set_time(time);
     let first = begun(&mut sender, start(10, Rank::Show, Repeat::Once));
-    sender.send(put(1, Some(456))).unwrap();
+    sender.send(put(1, Some(45))).unwrap();
     let mut ids = vec![first];
     for root in 11..10 + PLAYS as u16 {
         ids.push(begun(&mut sender, start(root, Rank::Manual, Repeat::Once)));
@@ -603,22 +644,19 @@ fn linked_plans_at_the_fifo_cutoff() {
         engine.latest();
         wakes.wake_at(at).unwrap();
         let snap = engine.latest();
-        (
-            snap.active_plays().collect::<Vec<_>>(),
-            snap.light(1).and_then(|light| light.intensity),
-        )
+        (snap.active_plays().collect::<Vec<_>>(), snap.sent(1, 1))
     };
     let (plays, intensity) = picture(&mut engine, time);
     assert_eq!(plays.len(), PLAYS);
-    assert_eq!(intensity, Some(456));
+    assert_eq!(intensity, 45);
     assert_eq!(plays.first().map(|play| play.play), Some(first));
     // All ends preceded the edit's timestamp, with no wake at the end.
     // The queued plans must be returned even for a removed or already-kept slot.
     let end = time + Duration::from_secs(3);
     wakes.set_time(end);
-    sender.send(put(3, Some(789))).unwrap();
+    sender.send(put(3, Some(78))).unwrap();
     let (plays, intensity) = picture(&mut engine, end);
-    assert_eq!(intensity, Some(654));
+    assert_eq!(intensity, 65);
     assert_eq!(plays.len(), PLAYS - 1);
     assert!(
         plays
@@ -635,30 +673,30 @@ fn linked_plans_at_the_fifo_cutoff() {
     }
     sender.send(sequence(11, &[1, 2])).unwrap();
     let play = begun(&mut sender, start(11, Rank::Manual, Repeat::Loop));
-    assert_eq!(picture(&mut engine, end).1, Some(456));
+    assert_eq!(picture(&mut engine, end).1, 45);
     let rest = end + Duration::from_millis(1500);
     wakes.set_time(rest);
     sender.send(Command::StopLook { play }).unwrap();
     // The stop was in the rest, although the next frame would be in the first item again.
     assert_eq!(
         picture(&mut engine, end + Duration::from_secs(2)),
-        (vec![], None)
+        (vec![], 0)
     );
     sender.send(Command::RemoveLook { look: 11 }).unwrap();
 
     let from = end + Duration::from_secs(2);
     sender.send(sequence(11, &[1, 3, 2])).unwrap();
     let once = begun(&mut sender, start(11, Rank::Manual, Repeat::Once));
-    assert_eq!(picture(&mut engine, from).1, Some(456));
+    assert_eq!(picture(&mut engine, from).1, 45);
     let shortened = from + Duration::from_millis(1500);
-    assert_eq!(picture(&mut engine, shortened).1, Some(789));
+    assert_eq!(picture(&mut engine, shortened).1, 78);
     sender.send(sequence(11, &[1])).unwrap();
     let (plays, sample) = picture(&mut engine, shortened);
     assert_eq!(
         plays.first().map(|play| (play.play, play.state)),
         Some((once, PlayState::Kept))
     );
-    assert_eq!(sample, Some(456));
+    assert_eq!(sample, 45);
     wakes.run();
 }
 
@@ -1078,13 +1116,18 @@ fn check_linked_roots(repeat: Repeat) {
             },
         })
         .unwrap();
-    let leaf = |intensity| Command::PutStep {
+    // A red marker: the strip has no dimmer, so a brightness alone offers nothing.
+    let leaf = |red: u8| Command::PutStep {
         look: 1,
         name,
         step: Step {
             target: Target::Fixture { fixture: 1 },
             values: Light {
-                intensity: Some(intensity),
+                colour: Some(Rgb {
+                    red: u16::from(red) << 8,
+                    green: 0,
+                    blue: 0,
+                }),
                 ..Light::DARK
             },
         }
@@ -1136,8 +1179,8 @@ fn check_linked_roots(repeat: Repeat) {
         let snapshot = engine.latest();
         (
             snapshot.active_plays().collect::<Vec<_>>(),
-            (1..=100)
-                .map(|light| snapshot.light(light).and_then(|light| light.intensity))
+            (0..100)
+                .map(|light| snapshot.sent(1, 3 * light + 1))
                 .collect::<Vec<_>>(),
         )
     };
@@ -1145,7 +1188,7 @@ fn check_linked_roots(repeat: Repeat) {
         .map(|rank| started(&mut sender, start(4, rank)));
     let before = picture(&mut engine);
     assert_eq!(before.0.iter().map(|p| p.play).collect::<Vec<_>>(), ids);
-    assert_eq!(before.1, vec![Some(11); 100]);
+    assert_eq!(before.1, vec![11; 100]);
     let saved = sender.looks().all();
     let tail = sender.sent();
     for (case, command) in [
@@ -1205,12 +1248,14 @@ fn check_linked_roots(repeat: Repeat) {
         sender.send(start(6, Rank::Manual)),
         Err(Unsent::Refused(Refusal::WorkLimit))
     );
-    assert_eq!(picture(&mut engine), (vec![], vec![None; 100]));
+    // The queued colour grabs hold black.
+    assert_eq!(picture(&mut engine), (vec![], vec![0; 100]));
     let retry = started(&mut sender, start(6, Rank::Manual));
     sender.send(leaf(22)).unwrap();
-    let (plays, intensities) = picture(&mut engine);
+    let (plays, reds) = picture(&mut engine);
     assert_eq!(plays.iter().map(|p| p.play).collect::<Vec<_>>(), [retry]);
-    assert_eq!(intensities, vec![Some(22); 100]);
+    // The later start wins over the older colour grabs.
+    assert_eq!(reds, vec![22; 100]);
     wakes.run();
 }
 
@@ -1269,13 +1314,18 @@ fn a_saved_wave_can_start_alone_at_the_work_limit() {
             ),
         })
         .unwrap();
+    const RED: Rgb = Rgb {
+        red: u16::MAX,
+        green: 0,
+        blue: 0,
+    };
     let wave = |look, target| Command::PutPattern {
         look,
         name,
         pattern: Pattern::Wave {
             target,
             period: Period::new(1).unwrap(),
-            palette: Palette::Inline(Swatches::new(&[Rgb::BLACK]).unwrap()),
+            palette: Palette::Inline(Swatches::new(&[RED]).unwrap()),
         },
     };
     let wall = wave(1, WaveTarget::Matrix { fixture: 1 });
@@ -1306,11 +1356,12 @@ fn a_saved_wave_can_start_alone_at_the_work_limit() {
                 .active_plays()
                 .map(|row| row.play)
                 .collect::<Vec<_>>(),
-            snapshot.light(4096).and_then(|light| light.colour),
+            // Light 4096's red: universe 24, address 3 * 4095 - 23 * 512 + 1.
+            snapshot.sent(24, 510),
         )
     };
     let before = applying_frame(&mut engine);
-    assert_eq!(before, (vec![play], Some(Rgb::BLACK)));
+    assert_eq!(before, (vec![play], 255));
     let saved = sender.looks().all();
     let tail = sender.sent();
     for command in [start(2), wave(3, WaveTarget::Group { group: name })] {
@@ -1326,7 +1377,7 @@ fn a_saved_wave_can_start_alone_at_the_work_limit() {
     let Ok(Begun::Started { play: next }) = sender.begin(start(2), &[]) else {
         panic!("release frees the loop's frame reservation");
     };
-    assert_eq!(applying_frame(&mut engine), (vec![next], None));
+    assert_eq!(applying_frame(&mut engine), (vec![next], 0));
 
     // A stop that keeps the Manual Wave must still sample it at the stop.
     // Releasing it in that prefix only frees the following frame sample.
@@ -1355,7 +1406,7 @@ fn a_saved_wave_can_start_alone_at_the_work_limit() {
         sender.send(start(1)),
         Err(Unsent::Refused(Refusal::WorkLimit))
     );
-    assert_eq!(applying_frame(&mut engine), (vec![], None));
+    assert_eq!(applying_frame(&mut engine), (vec![], 0));
     sender.send(start(1)).unwrap();
     assert_eq!(applying_frame(&mut engine).0.len(), 1);
     wakes.run();
@@ -1386,7 +1437,8 @@ fn a_kept_once_parent_retains_its_nested_look_ids_until_release() {
             },
         })
         .unwrap();
-    for (look, intensity) in [(1, 10), (2, 20)] {
+    // Colours: the strip has no dimmer, so a brightness alone offers nothing to keep.
+    for (look, red) in [(1, 10 << 8), (2, 20 << 8)] {
         sender
             .send(Command::PutStep {
                 look,
@@ -1394,7 +1446,11 @@ fn a_kept_once_parent_retains_its_nested_look_ids_until_release() {
                 step: Step {
                     target: Target::Light { light: 1 },
                     values: Light {
-                        intensity: Some(intensity),
+                        colour: Some(Rgb {
+                            red,
+                            green: 0,
+                            blue: 0,
+                        }),
                         ..Light::DARK
                     },
                 }
@@ -1449,5 +1505,151 @@ fn a_kept_once_parent_retains_its_nested_look_ids_until_release() {
     for look in [1, 3] {
         sender.send(Command::RemoveLook { look }).unwrap();
     }
+    wakes.run();
+}
+
+/// The tick never frees a grab's box: the book keeps each box a command lets go, and the
+/// command's own change list, until the tick applied that command. A front that dropped
+/// them at once would leave the tick the last owner.
+#[cfg(feature = "test-support")]
+#[test]
+#[expect(
+    clippy::unwrap_used,
+    reason = "a stepped test that cannot set itself up fails"
+)]
+fn a_grab_box_outlives_the_command_that_lets_it_go_until_the_tick_applied_it() {
+    let (_engine, mut sender, wakes) =
+        Engine::start_stepped(Universes::new(1).unwrap(), Box::new(outputs::open)).unwrap();
+    wakes.hold().unwrap();
+    sender
+        .send(Command::PatchStrip {
+            name: Text::new("strip").unwrap(),
+            pixels: engine_core::Pixels::try_from(1).unwrap(),
+            color: Color::Rgb,
+            at: ChannelNumbers {
+                universe: 1,
+                address: 1,
+            },
+        })
+        .unwrap();
+    let light = Target::Light { light: 1 };
+    let grab = Command::SetColour {
+        target: light,
+        red: u16::MAX,
+        green: 0,
+        blue: 0,
+    };
+    let release = Command::ReleaseColour { target: light };
+    let next = Command::Blackout { on: false };
+    // (step, a wake before the command, boxes waiting for the tick after it)
+    let steps = [
+        ("the grab sent: its change list", grab, false, 1),
+        (
+            "the grab applied, the release sent: the box and its change list",
+            release,
+            true,
+            2,
+        ),
+        ("the release not applied yet", next, false, 2),
+        ("applied", next, true, 0),
+    ];
+    for (step, command, wake, waiting) in steps {
+        if wake {
+            wakes.wake().unwrap();
+        }
+        sender.send(command).unwrap();
+        assert_eq!(sender.grabs.retiring(), waiting, "{step}");
+    }
+    wakes.run();
+}
+
+/// A kept play holds the place in its plan where it stopped: when the tempo doubles after
+/// the stop, its bytes stay, while a playing Wave moves with time.
+#[cfg(feature = "test-support")]
+#[test]
+#[expect(
+    clippy::unwrap_used,
+    clippy::panic,
+    reason = "a missing fixture, play or frame fails this stepped test"
+)]
+fn a_kept_wave_keeps_its_bytes_when_the_tempo_doubles() {
+    let (mut engine, mut sender, wakes) =
+        Engine::start_stepped(Universes::new(1).unwrap(), Box::new(outputs::open)).unwrap();
+    wakes.hold().unwrap();
+    let name = Text::new("kept wave").unwrap();
+    sender
+        .send(Command::PatchStrip {
+            name,
+            pixels: engine_core::Pixels::try_from(8).unwrap(),
+            color: Color::Rgb,
+            at: ChannelNumbers {
+                universe: 1,
+                address: 1,
+            },
+        })
+        .unwrap();
+    let tempo = |bpm| Command::SetInternalTempo {
+        bpm: Bpm::new(bpm).unwrap(),
+    };
+    sender.send(tempo(60)).unwrap();
+    sender
+        .send(Command::SetMixRules {
+            rules: MixRules {
+                other_end: OtherEnd::Stay,
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    let red = Rgb {
+        red: u16::MAX,
+        green: 0,
+        blue: 0,
+    };
+    sender
+        .send(Command::PutPattern {
+            look: 1,
+            name,
+            pattern: Pattern::Wave {
+                target: WaveTarget::Matrix { fixture: 1 },
+                period: Period::new(4).unwrap(),
+                palette: Palette::Inline(Swatches::new(&[red, Rgb::BLACK]).unwrap()),
+            },
+        })
+        .unwrap();
+    let start = wakes.wake().unwrap();
+    wakes.set_time(start);
+    let Ok(Begun::Started { play }) = sender.begin(
+        Command::StartLook {
+            look: 1,
+            rank: Rank::Show,
+            when: When::Now,
+            usage: Default::default(),
+        },
+        &[],
+    ) else {
+        panic!("the Wave starts");
+    };
+    // The red bytes of the 8 pixels in the frame at `at`.
+    let mut reds = |at| {
+        engine.latest();
+        wakes.wake_at(at).unwrap();
+        let snapshot = engine.latest();
+        (1..=8)
+            .map(|pixel| snapshot.sent(1, 3 * pixel - 2))
+            .collect::<Vec<_>>()
+    };
+    let second = |tenths: u64| start + Duration::from_millis(100 * tenths);
+    let playing = reds(second(10));
+    let stopped = reds(second(15));
+    assert_ne!(playing, stopped, "a playing Wave moves");
+    wakes.set_time(second(15));
+    sender.send(Command::StopLook { play }).unwrap();
+    assert_eq!(reds(second(15)), stopped, "kept where it stopped");
+    sender.send(tempo(120)).unwrap();
+    assert_eq!(
+        reds(second(25)),
+        stopped,
+        "the tempo doubled, the kept bytes stay"
+    );
     wakes.run();
 }

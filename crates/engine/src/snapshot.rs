@@ -5,11 +5,11 @@
 //! `Snapshot`.
 
 use crate::{
-    ChannelLevel, Histogram, LATENCY_BUCKETS, LATENESS_BUCKETS, Levels, MAX_LIGHTS, MAX_OUTPUTS,
-    MAX_UNIVERSES, Output, OutputNumber, Priority, State, Universes,
+    ChannelLevel, Histogram, LATENCY_BUCKETS, LATENESS_BUCKETS, Levels, MAX_OUTPUTS, MAX_UNIVERSES,
+    Output, OutputNumber, Priority, State, Universes,
 };
 use engine_core::health::HealthSample;
-use engine_core::{ChannelSet, HeldLight, Light, Play};
+use engine_core::{ChannelSet, Play};
 use std::time::Duration;
 
 /// Mutable tick data copied into one immutable publication. The tick owns every
@@ -19,7 +19,9 @@ pub(crate) struct Publication<'a> {
     pub universes: Universes,
     pub held: &'a [Levels; MAX_UNIVERSES as usize],
     pub holds: &'a [ChannelSet; MAX_UNIVERSES as usize],
-    pub lights: &'a [Light],
+    /// The frame's bytes, for tests: what the Mixer decided.
+    #[cfg(feature = "test-support")]
+    pub frame: &'a [Levels],
     pub output_health: &'a [OutputHealth],
     pub latency: Times<LATENESS_BUCKETS>,
     pub applied: u64,
@@ -33,7 +35,8 @@ pub struct Snapshot {
     universes: Universes,
     held: [Levels; MAX_UNIVERSES as usize],
     holds: [ChannelSet; MAX_UNIVERSES as usize],
-    lights: Box<[Light]>,
+    #[cfg(feature = "test-support")]
+    frame: Box<[Levels; MAX_UNIVERSES as usize]>,
     output_health: [OutputHealth; MAX_OUTPUTS],
     latency: Times<LATENESS_BUCKETS>,
     applied: u64,
@@ -55,7 +58,8 @@ impl Snapshot {
             universes,
             held: [Levels::ZERO; MAX_UNIVERSES as usize],
             holds: [ChannelSet::NONE; MAX_UNIVERSES as usize],
-            lights: vec![Light::DARK; usize::from(MAX_LIGHTS)].into_boxed_slice(),
+            #[cfg(feature = "test-support")]
+            frame: Box::new([Levels::ZERO; MAX_UNIVERSES as usize]),
             output_health: [OutputHealth::ZERO; MAX_OUTPUTS],
             latency: Times::ZERO,
             applied: 0,
@@ -69,7 +73,10 @@ impl Snapshot {
         self.universes = from.universes;
         self.held = *from.held;
         self.holds = *from.holds;
-        self.lights.copy_from_slice(from.lights);
+        #[cfg(feature = "test-support")]
+        for (to, from) in self.frame.iter_mut().zip(from.frame) {
+            *to = *from;
+        }
         self.output_health.copy_from_slice(from.output_health);
         self.latency = from.latency;
         self.applied = from.applied;
@@ -131,14 +138,19 @@ impl Snapshot {
             .unwrap_or_default()
     }
 
-    /// The direct and mixed values of `light`, by its one-based patch number.
-    pub fn light(&self, light: u16) -> Option<Light> {
-        self.lights.get(usize::from(light.checked_sub(1)?)).copied()
-    }
-
-    /// Every light whose held values differ, in patch order.
-    pub fn held_lights(&self) -> impl Iterator<Item = HeldLight> + '_ {
-        engine_core::held_lights(&self.lights)
+    /// The byte the Mixer decided for `address` of `universe` (both from 1) in this
+    /// wake's frame, for tests.
+    #[cfg(feature = "test-support")]
+    pub fn sent(&self, universe: u16, address: u16) -> u8 {
+        let (Some(universe), Some(address)) = (universe.checked_sub(1), address.checked_sub(1))
+        else {
+            return 0;
+        };
+        self.frame
+            .get(usize::from(universe))
+            .and_then(|row| row.0.get(usize::from(address)))
+            .copied()
+            .unwrap_or(0)
     }
 
     /// The channels whose held levels changed since `before`.
@@ -147,14 +159,6 @@ impl Snapshot {
         before: &'a Self,
     ) -> impl Iterator<Item = ChannelLevel> + 'a {
         crate::changes(before.universes(), self.universes())
-    }
-
-    /// Every light whose held values changed since `before`, as it is now.
-    pub fn light_changes_since<'a>(
-        &'a self,
-        before: &'a Self,
-    ) -> impl Iterator<Item = HeldLight> + 'a {
-        engine_core::light_changes(&before.lights, &self.lights)
     }
 
     /// Fills the cumulative measurements for this output at the snapshot's wake time.
@@ -274,7 +278,8 @@ impl<const N: usize> Times<N> {
 #[cfg(all(test, target_pointer_width = "64"))]
 #[test]
 fn snapshot_has_one_press_histogram_and_six_counts_per_output() {
-    const BEFORE: usize = 75_192;
+    // Tests see the frame's bytes through one more pointer.
+    const BEFORE: usize = 75_176 + if cfg!(feature = "test-support") { 8 } else { 0 };
     let added = MAX_OUTPUTS * (size_of::<Times<LATENCY_BUCKETS>>() + 6 * size_of::<u64>());
     assert_eq!(size_of::<Snapshot>(), BEFORE + added);
 }

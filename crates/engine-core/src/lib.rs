@@ -34,23 +34,24 @@ mod model_output;
 #[path = "model/text.rs"]
 mod model_text;
 pub use clock::{BEATS_PER_BAR, BeatTime, Bpm, Clock, Reading, Source, When, beats};
-pub use evaluate::{Binding, Elapsed, Item, MAX_DEPTH, Node, Program};
+pub use evaluate::{Binding, Elapsed, Item, MAX_DEPTH, Node, Program, Sampled};
 mod mix;
-pub use mix::{Claims, End, Held, show, stops, unkept, wins};
+pub use mix::{
+    End, GRABS, Grab, GrabChange, GrabEntry, Grabs, Holding, Offers, SOURCES, stops, unkept, wins,
+};
 mod output;
 mod patch;
 mod playback;
 mod project;
-mod resolve;
 mod show;
 
 pub use api::{
-    AuthoredStep, Definition, OutOfRange, Palette, Pattern, Percent, Period, Repeat, Saved,
-    SavedLook, Sequence, SequenceItem, Speed, Step, Swatches, Use, WaveTarget, Width,
+    AuthoredStep, Definition, HeldLight, OutOfRange, Palette, Pattern, Percent, Period, Repeat,
+    Saved, SavedLook, Sequence, SequenceItem, Speed, Step, Swatches, Use, WaveTarget, Width,
 };
 pub use channel::{
     ADDRESSES, CHANNELS, Channel, ChannelLevel, ChannelNumbers, ChannelSet, Channels, Configured,
-    Flags, Levels, MAX_UNIVERSES, SourceTag, Universes, changes,
+    Field, Flags, Levels, MAX_UNIVERSES, Pair, SourceTag, Universes, changes,
 };
 use channel::{BLACKOUT, MODIFIERS};
 pub use model_failure::{OpenFailure, Refusal};
@@ -71,14 +72,8 @@ pub use output::{
 pub use patch::{
     Grouped, Layout, Member, MemberList, Members, PatchCommand, Patched, Pixels, Target,
 };
-pub use playback::{
-    Entry, LOOKS, Launches, LookCommand, PLAYS, Play, PlayId, PlayState, Plays, Rank,
-};
+pub use playback::{LOOKS, Launches, LookCommand, PLAYS, Play, PlayId, PlayState, Plays, Rank};
 pub use project::{Project, ProjectEffect, ProjectEvent, ProjectOutput};
-pub use resolve::{
-    HeldLight, Less, Part, Place, Scale, Sense, Take, Travel, Writer, held_lights, light_changes,
-    resolve,
-};
 pub use show::{ShowFile, Unopened};
 
 use core::time::Duration;
@@ -259,17 +254,6 @@ impl State {
     /// Whether a plan for `play` can still install.
     pub fn takes_plan(&self, play: PlayId) -> bool {
         self.plays.takes_plan(play)
-    }
-
-    /// Mixes this frame's holds and plays into `out`.
-    pub fn show_plays<'a>(
-        &self,
-        held: &[Held],
-        plan: impl Fn(usize) -> &'a [Entry],
-        out: &mut [Light],
-        claims: &mut [Claims],
-    ) {
-        show(held, &self.plays, plan, self.rules, out, claims);
     }
 
     /// The settled beat count now.
@@ -517,24 +501,19 @@ pub enum EngineCommand {
     RemoveOutput {
         output: OutputNumber,
     },
-    /// The writers of the patch arrive with this command and take the place of the ones
-    /// there, which go back to be freed. No light value changes.
-    Writers,
-    /// Each light of `lights` takes `change`.
-    Lights {
-        lights: LightRun,
-        change: LightChange,
+    /// The patch's field table arrives with this command and takes the place of the one
+    /// there, which goes back to be freed: each patched channel as its file says, and
+    /// each light's fields. No offer changes.
+    Fields,
+    /// The grab at `entry` takes `change`. Offers that start or replace a grab's arrive
+    /// with this command.
+    Grab {
+        entry: GrabEntry,
+        change: GrabChange,
     },
-    /// The lights of an unpatched fixture: their held values go.
-    Darken {
-        lights: LightRun,
-    },
-    /// Runs of a group arrive with this command, in place: each takes `change`. A
-    /// group's commands are queued at once, so one frame shows all of them or none. Alone
-    /// it changes nothing.
-    Runs {
-        change: LightChange,
-    },
+    /// The grab changes of one press arrive with this command, each a [`EngineCommand::Grab`]
+    /// the tick applies in order, all in one frame.
+    Grabs,
     /// `play` of `look` starts at `rank` in its slot, in place of the play there. Its
     /// plan arrives with this command and takes the place of the slot's plan.
     Start {
@@ -575,47 +554,19 @@ pub enum EngineCommand {
     },
 }
 
-/// What a light command does to the direct holds of each light it names, without
-/// naming them. All Manual; who holds what: [`Held`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LightChange {
-    /// `grab` holds the value, as the latest start.
-    Grab { value: Value, grab: GrabId },
-    /// The value, where `grab` still holds its property. The start stays.
-    Update { value: Value, grab: GrabId },
-    /// Where `grab` still holds `property`: kept, or let go.
-    End {
-        property: Property,
-        grab: GrabId,
-        end: End,
-    },
-    /// Every direct hold of `property` let go.
-    Release { property: Property },
-}
-
-impl LightChange {
-    /// The command that makes this change to the lights of `run`.
-    pub const fn on(self, run: LightRun) -> EngineCommand {
-        EngineCommand::Lights {
-            lights: run,
-            change: self,
-        }
-    }
-}
-
 /// The only place state changes: state and command in, new state out. `universes` are
 /// the levels of the raw channels, `holds` which of them are held (a channel not held is
-/// at 0), `lights` the held values per light: buffers the caller owns; a command changes
+/// at 0), `grabs` the direct grabs by entry: buffers the caller owns; a command changes
 /// them in place, so nothing allocates. No command needs anything done outside yet: the
 /// first that does returns it as data beside the state, never in a `Vec`.
 pub fn update(
     state: State,
     universes: &mut [Levels],
     holds: &mut [ChannelSet],
-    lights: &mut [Held],
+    grabs: &mut Grabs,
     command: EngineCommand,
 ) -> State {
-    state.apply(universes, holds, lights, command)
+    state.apply(universes, holds, grabs, command)
 }
 
 impl State {
@@ -623,7 +574,7 @@ impl State {
         self,
         universes: &mut [Levels],
         holds: &mut [ChannelSet],
-        lights: &mut [Held],
+        grabs: &mut Grabs,
         command: EngineCommand,
     ) -> State {
         let state = self;
@@ -696,7 +647,7 @@ impl State {
             EngineCommand::ReleaseAll => {
                 universes.fill(Levels::ZERO);
                 holds.fill(ChannelSet::NONE);
-                lights.fill(Held::NONE);
+                grabs.release_all();
                 let mut plays = state.plays;
                 plays.release_where(|play| play.rank == Rank::Manual);
                 State { plays, ..state }
@@ -706,26 +657,13 @@ impl State {
                 ..state
             },
             // `Plan`: the plays stay; whether its plan installs is `Plays::takes_plan`.
-            EngineCommand::Writers | EngineCommand::Runs { .. } | EngineCommand::Plan { .. } => {
-                state
-            }
-            EngineCommand::Lights {
-                lights: run,
-                change,
-            } => {
-                for light in run.of(lights) {
-                    light.change(change, state.order);
+            EngineCommand::Fields | EngineCommand::Grabs | EngineCommand::Plan { .. } => state,
+            EngineCommand::Grab { entry, change } => {
+                if grabs.change(entry, change, state.order) {
+                    held
+                } else {
+                    state
                 }
-                match change {
-                    LightChange::Grab { .. } => held,
-                    LightChange::Update { .. }
-                    | LightChange::End { .. }
-                    | LightChange::Release { .. } => state,
-                }
-            }
-            EngineCommand::Darken { lights: run } => {
-                run.of(lights).fill(Held::NONE);
-                state
             }
             EngineCommand::Start {
                 play,
@@ -755,9 +693,7 @@ impl State {
             EngineCommand::Rules { rules } => {
                 let mut plays = state.plays;
                 plays.release_where(|play| unkept(play.rank, play.state, rules));
-                for light in lights.iter_mut() {
-                    light.unkeep(rules);
-                }
+                grabs.unkeep(rules);
                 State {
                     plays,
                     rules,
@@ -824,28 +760,25 @@ impl State {
 }
 
 /// The bytes that go out now, written into `channels`, which the caller owns. Every
-/// `patched` channel starts at its rest; the resolver writes what the `writers` make of
-/// the `lights`, on patched channels only; then one pass decides each channel: the raw
-/// channels held (`universes` at `holds`) replace their bytes, and every follower moves
-/// by its modifiers, Blackout among them. No level depends on time yet: the first that
-/// does takes the time as an argument.
+/// `patched` channel starts at its rest; `offer` makes each sounding play and grab offer
+/// its words ([`Offers`]), and who wins takes each channel; then one pass decides each
+/// channel: the raw channels held (`raw` at `holds`) replace their bytes, and every
+/// follower moves by its modifiers, Blackout among them. Allocates nothing.
 pub fn frame(
     state: &State,
-    universes: &[Levels],
-    holds: &[ChannelSet],
-    (patched, writers): (&[Configured], &[Writer]),
-    lights: &[Light],
+    grabs: &Grabs,
+    (raw, holds): (&[Levels], &[ChannelSet]),
+    patched: &[Configured],
     channels: &mut Channels,
+    offer: impl FnOnce(&mut Offers<'_>),
 ) {
-    channels.render(
-        patched,
-        universes,
-        holds,
-        modifiers(state),
-        |levels, source| {
-            resolve::write(lights, writers, levels, source);
-        },
-    );
+    channels.reset(patched);
+    offer(&mut Offers {
+        channels,
+        plays: &state.plays,
+        grabs,
+    });
+    channels.apply_winners(patched, raw, holds, modifiers(state));
 }
 
 /// The level of each modifier slot this frame: Master full until `SetMaster` comes,

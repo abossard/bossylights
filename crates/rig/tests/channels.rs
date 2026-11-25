@@ -4,7 +4,7 @@
 mod common;
 
 use common::mode;
-use engine_core::{Color, Levels, Light, PatchCommand, Pixels, Rgb, Text, Universes, resolve};
+use engine_core::{Color, Levels, Light, PatchCommand, Pixels, Rgb, Text, Universes};
 use fixture_library::{Byte, Direction, Does, Function, Mode, Range};
 use rig::channels::{
     Change, Compound, Config, Field, Follows, PastTheEnd, Sense, Shape, Ties, Travel, Width,
@@ -1740,7 +1740,7 @@ fn a_brightness_never_reaches_a_fog_channel() {
             ..Light::DARK
         };
         let mut frame = [Levels::ZERO];
-        resolve(&[light], &compiled.writers, &mut frame);
+        common::shown(&[light], &compiled, &mut frame);
         frame[0].0[..mode.channels.len()].to_vec()
     });
     assert_eq!(actual, cases.map(|(_, _, expected)| expected));
@@ -1778,7 +1778,7 @@ fn a_fog_channel_is_not_the_lights_dimmer() {
         ..Light::DARK
     };
     let mut frame = [Levels::ZERO];
-    resolve(&[light], &compiled.writers, &mut frame);
+    common::shown(&[light], &compiled, &mut frame);
     // fog at its rest, red at half: the brightness is in the colour
     assert_eq!(frame[0].0[..2], [0, 128]);
 }

@@ -3,7 +3,7 @@
 mod common;
 
 use common::{at, light, lights, mode};
-use engine_core::{Held, Levels, Light, Rgb, Universes, resolve};
+use engine_core::{Levels, Light, Rgb, Universes};
 use rig::compile;
 
 const FULL: u16 = u16::MAX;
@@ -194,13 +194,10 @@ const DEFAULT_RED: &str = r#"<?xml version="1.0"?>
  </Mode>
 </FixtureDefinition>"#;
 
-/// A part nothing holds shows the definition's default, also after a release. A part held
-/// at 0 is 0 (#160).
+/// A part a value does not have shows the definition's default. A part held at 0 is 0
+/// (#160).
 #[test]
 fn a_part_not_held_is_the_definition_default() {
-    use engine_core::{
-        ChannelSet, GrabId, LightChange, LightRun, Priority, Property, State, Value, update,
-    };
     let fixture = fixture_library::parse("default.qxf", DEFAULT_RED.as_bytes()).unwrap();
     let rigged = compile(
         &fixture.modes[0],
@@ -210,48 +207,34 @@ fn a_part_not_held_is_the_definition_default() {
         lights(),
     )
     .unwrap();
-    let one = LightRun::new(light(0), 1, lights()).unwrap();
-    let grab = GrabId { generation: 1 };
-    let set = |value| LightChange::Grab { value, grab }.on(one);
-    let full = set(Value::Intensity(FULL));
-    let colour = |(red, green, blue)| set(Value::Colour(Rgb { red, green, blue }));
-    let release = |property| LightChange::Release { property }.on(one);
-    let release_colour = release(Property::Colour);
-    let release_intensity = release(Property::Intensity);
-    // (name, commands, bytes 37 to 40)
+    let value = |intensity, colour: Option<(u16, u16, u16)>| Light {
+        intensity,
+        colour: colour.map(|(red, green, blue)| Rgb { red, green, blue }),
+        ..Light::DARK
+    };
+    // (name, value, bytes 37 to 40)
     let cases = [
-        ("nothing held", vec![], [0, 200, 0, 0]),
-        ("only intensity set", vec![full], [255, 200, 0, 0]),
+        ("nothing held", value(None, None), [0, 200, 0, 0]),
+        ("only intensity", value(Some(FULL), None), [255, 200, 0, 0]),
         (
-            "colour set, then released",
-            vec![full, colour((0, FULL, 0)), release_colour],
-            [255, 200, 0, 0],
-        ),
-        (
-            "colour set",
-            vec![full, colour((0, FULL, 0))],
+            "colour and intensity",
+            value(Some(FULL), Some((0, FULL, 0))),
             [255, 0, 255, 0],
         ),
         (
             "colour held black",
-            vec![full, colour(BLACK)],
+            value(Some(FULL), Some(BLACK)),
             [255, 0, 0, 0],
         ),
         (
-            "intensity set, then released",
-            vec![full, release_intensity],
-            [0, 200, 0, 0],
+            "only colour",
+            value(None, Some((0, FULL, 0))),
+            [0, 0, 255, 0],
         ),
     ];
-    for (name, commands, expected) in cases {
-        let mut shown = [Held::NONE];
-        let (mut universes, mut holds) = ([Levels::ZERO], [ChannelSet::NONE]);
-        let mut state = State::new(Priority::RealTime);
-        for command in commands {
-            state = update(state, &mut universes, &mut holds, &mut shown, command);
-        }
+    for (name, value, expected) in cases {
         let mut out = [Levels::ZERO];
-        resolve(&[*shown[0].values()], &rigged.writers, &mut out);
+        common::shown(&[value], &rigged, &mut out);
         assert_eq!(out[0].0[36..40], expected, "{name}");
     }
 }

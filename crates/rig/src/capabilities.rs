@@ -22,12 +22,11 @@
 //! lets the value through: it has nothing to show it with.
 
 use crate::Unfit;
+use crate::writer::{Part, Writer};
 use alloc::collections::BTreeMap;
 use alloc::vec;
 use alloc::vec::Vec;
-use engine_core::{
-    Channel, Gobo, Light, LightNumber, LightRun, Part, Property, Refusal, Rgb, Wheel, Writer,
-};
+use engine_core::{Channel, Gobo, Light, LightNumber, LightRun, Property, Refusal, Rgb, Wheel};
 use fixture_library::{Byte, Does, Function, Range};
 
 /// The wheels of one light.

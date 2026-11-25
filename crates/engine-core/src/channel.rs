@@ -75,9 +75,37 @@ impl SourceTag {
     pub const REST: Self = Self(0);
     /// A raw hold from the DMX screen.
     pub const RAW: Self = Self(1);
-    /// The held values of the lights, through their writers. The first entry of the
-    /// source table, the only one until plays and grabs offer per channel.
-    pub const LIGHTS: Self = Self(2);
+
+    /// Entry `entry` of the source table (`crate::mix`). `None` past it.
+    pub const fn of(entry: usize) -> Option<Self> {
+        if entry < crate::mix::SOURCES {
+            Some(Self(entry as u16 + 2))
+        } else {
+            None
+        }
+    }
+
+    /// The entry of the source table this tag names; `None` for rest and a raw hold.
+    pub const fn entry(self) -> Option<usize> {
+        match self.0.checked_sub(2) {
+            Some(entry) => Some(entry as usize),
+            None => None,
+        }
+    }
+}
+
+/// A coarse byte and its fine byte: one 16-bit value, counted from 0 over the space.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Pair {
+    pub coarse: u32,
+    pub fine: u32,
+}
+
+/// Where an offer goes: one channel, or a coarse and fine pair as one 16-bit word.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Field {
+    Byte(u32),
+    Word(Pair),
 }
 
 /// Which modifier slots a channel follows, one bit per slot.
@@ -107,8 +135,13 @@ impl Flags {
         Self(self.0 | other.0)
     }
 
-    pub(crate) const fn fades(self) -> bool {
+    /// Whether it fades between values, else jumps.
+    pub const fn fades(self) -> bool {
         self.0 & Self::FADE.0 != 0
+    }
+
+    pub(crate) const fn highest(self) -> bool {
+        self.0 & Self::HIGHEST.0 != 0
     }
 }
 
@@ -259,20 +292,18 @@ impl Channels {
         }
     }
 
-    /// One frame over the `patched` channels (the list the patch configured, which the
-    /// writers write) and the raw holds: back to rest, `write` (which tags what a light
-    /// wrote), then the winners.
-    pub(crate) fn render(
-        &mut self,
-        patched: &[Configured],
-        raw: &[Levels],
-        holds: &[ChannelSet],
-        levels: [u8; MODIFIERS],
-        write: impl FnOnce(&mut [Levels], &mut [SourceTag]),
-    ) {
-        self.reset(patched);
-        write(&mut self.value, &mut self.source);
-        self.apply_winners(patched, raw, holds, levels);
+    /// `on`: the highest offer wins on each of `dimmers` among equals, else the latest
+    /// (v11 `SetMixRules.brightness`). Called when the rules or the patch change.
+    pub fn highest(&mut self, dimmers: &[u32], on: bool) {
+        for at in dimmers.iter().filter_map(|at| usize::try_from(*at).ok()) {
+            if let Some(flags) = self.flags.get_mut(at) {
+                *flags = if on {
+                    flags.with(Flags::HIGHEST)
+                } else {
+                    Flags(flags.0 & !Flags::HIGHEST.0)
+                };
+            }
+        }
     }
 
     /// Every patched channel, and every channel a raw hold set last frame, back to its
@@ -446,6 +477,7 @@ impl Channel {
     }
 
     /// Whether `sets` has this channel.
+    #[cfg(test)]
     pub(crate) fn marked(self, sets: &[ChannelSet]) -> bool {
         sets.get(usize::from(self.universe))
             .is_some_and(|set| set.has(usize::from(self.address)))

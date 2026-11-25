@@ -1,21 +1,15 @@
 //! A light's value as words on its fields (#250): a table per mode worked by hand, and
-//! today's writers over every mode of the test definitions (and of the QLC+ library when
-//! `QLCPLUS_FIXTURES` names its folder): the same bytes wherever cx-4 does not apply.
+//! the fields the patch gives each light.
 
 mod common;
 
 use common::{at, fixture, light, lights, mode, whole};
 use engine_core::{
-    Channel, ChannelNumbers, Levels, Light, LightNumber, Lights, Part, PatchCommand, Place,
-    Position, Rgb, Text, Universes, Writer,
+    ChannelNumbers, Light, LightNumber, Lights, PatchCommand, Position, Rgb, Text, Universes,
 };
-use fixture_library::parse;
-use rig::channels::{Field, Pair};
-use rig::{Patch, Placed, Rigged, Unfit, compile};
-use std::collections::BTreeSet;
+use rig::channels::Field;
+use rig::{Patch, Placed, compile};
 use std::num::NonZeroU16;
-use std::path::{Path, PathBuf};
-use std::{env, fs};
 
 const FULL: u16 = u16::MAX;
 const HALF: u16 = 0x8000;
@@ -249,245 +243,6 @@ fn a_lights_value_becomes_words_on_its_fields() {
     }
 }
 
-/// QXF files under `folder`, at any depth.
-fn qxf_files(folder: &Path, files: &mut Vec<PathBuf>) {
-    for entry in fs::read_dir(folder).unwrap() {
-        let path = entry.unwrap().path();
-        if path.is_dir() {
-            qxf_files(&path, files);
-        } else if path.extension().is_some_and(|e| e == "qxf") {
-            files.push(path);
-        }
-    }
-}
-
-/// What a frame shows for `lights` over the mode's channels: each at its rest, then
-/// today's writers.
-fn written(rigged: &Rigged, lights: &[Light]) -> Vec<u8> {
-    let mut out = vec![Levels::ZERO; 64];
-    common::shown(lights, rigged, &mut out);
-    rested(rigged, &out)
-}
-
-/// What a frame shows for `value` on light `index` alone: each channel at its rest, then
-/// the light's offers.
-fn offered_over_rest(rigged: &Rigged, index: usize, value: &Light) -> Vec<u8> {
-    let mut out = vec![Levels::ZERO; 64];
-    let mut put = |at: u32, byte: u8| out[at as usize / 512].0[at as usize % 512] = byte;
-    for configured in &rigged.configured {
-        put(configured.at, configured.rest);
-    }
-    for (at, word) in rigged.fields[index].offers(value) {
-        let [high, low] = word.to_be_bytes();
-        match at {
-            Field::Byte(at) => put(at, high),
-            Field::Word(pair) => {
-                put(pair.coarse, high);
-                put(pair.fine, low);
-            }
-        }
-    }
-    rested(rigged, &out)
-}
-
-fn rested(rigged: &Rigged, out: &[Levels]) -> Vec<u8> {
-    rigged
-        .configured
-        .iter()
-        .map(|c| out[c.at as usize / 512].0[c.at as usize % 512])
-        .collect()
-}
-
-/// The full library's two colour wheels whose file rests at the white slot's middle
-/// byte while their writer shows 0, the same slot: (file, mode, channel from 1).
-const SAME_SLOT: [(&str, &str, usize); 2] = [
-    ("Coemar-ProWash-250-LX.qxf", "Standard", 10),
-    ("Laserworld-PRO-1600RGB.qxf", "18 channel", 4),
-];
-
-/// Whether light `index` has a writer that takes its brightness: a dimmer of its own.
-fn has_own_dimmer(rigged: &Rigged, index: usize) -> bool {
-    rigged.writers.iter().any(|writer| {
-        matches!(writer, Writer::Takes { light, take, .. }
-            if usize::from(light.index()) == index && take.of == Part::Intensity)
-    })
-}
-
-#[test]
-fn offers_show_what_todays_writers_show_wherever_cx_4_does_not_apply() {
-    let mut paths = Vec::new();
-    for folder in common::folders() {
-        qxf_files(&folder, &mut paths);
-    }
-    let library = env::var_os("QLCPLUS_FIXTURES");
-    if let Some(root) = &library {
-        qxf_files(Path::new(root), &mut paths);
-    }
-    paths.sort();
-    let tint = Rgb {
-        red: FULL,
-        green: HALF,
-        blue: 0x4000,
-    };
-    let universes = Universes::new(64).unwrap();
-    let (mut modes, mut undimmed) = (0, BTreeSet::new());
-    let mut problems = Vec::new();
-    for path in paths {
-        let file = path.file_name().unwrap().to_string_lossy().into_owned();
-        let Ok(fixture) = parse(&file, &fs::read(&path).unwrap()) else {
-            continue;
-        };
-        for mode in &fixture.modes {
-            let rigged = match compile(mode, at(1), light(0), universes, lights()) {
-                Err(Unfit::Refused(_)) => continue,
-                rigged => rigged.unwrap(),
-            };
-            modes += 1;
-            // every choice of every wheel, at full brightness
-            let picks = rigged.writers.iter().filter_map(|writer| {
-                let mut light = Light {
-                    intensity: Some(FULL),
-                    ..Light::DARK
-                };
-                match *writer {
-                    Writer::ColourSlot { colour, .. } => light.colour = Some(colour),
-                    Writer::GoboSlot { gobo, .. } => {
-                        light.gobos[usize::from(u8::from(gobo.wheel)) - 1] = Some(gobo.slot);
-                    }
-                    Writer::Fixed { .. } | Writer::Takes { .. } | Writer::Picks { .. } => {
-                        return None;
-                    }
-                }
-                Some(light)
-            });
-            let full = Light {
-                intensity: Some(FULL),
-                colour: Some(tint),
-                position: Some(Position {
-                    pan: 0x1234,
-                    tilt: 0xabcd,
-                }),
-                zoom: Some(0x5678),
-                ..Light::DARK
-            };
-            let same: Vec<Light> = [
-                Light::DARK,
-                Light {
-                    intensity: Some(HALF),
-                    ..Light::DARK
-                },
-                full,
-                Light {
-                    intensity: Some(HALF),
-                    colour: Some(tint),
-                    ..Light::DARK
-                },
-            ]
-            .into_iter()
-            .chain(picks)
-            .collect();
-            let tinted = |intensity| Light {
-                intensity,
-                colour: Some(tint),
-                ..Light::DARK
-            };
-            // each channel of the mode, counted from 0 over the universes in a row
-            let places: Vec<Channel> = (0..mode.channels.len())
-                .map(|channel| {
-                    ChannelNumbers {
-                        universe: u16::try_from(channel / 512 + 1).unwrap(),
-                        address: u16::try_from(channel % 512 + 1).unwrap(),
-                    }
-                    .check(universes)
-                    .unwrap()
-                })
-                .collect();
-            let flat = |at: Channel| {
-                u32::try_from(places.iter().position(|&place| place == at).unwrap()).unwrap()
-            };
-            for index in 0..usize::from(rigged.lights) {
-                let shown = |value: Light| {
-                    let mut lights = vec![Light::DARK; usize::from(rigged.lights)];
-                    lights[index] = value;
-                    written(&rigged, &lights)
-                };
-                // the channels, counted from 0, where the offers show other bytes
-                let differ = |value: &Light| -> Vec<usize> {
-                    let (want, got) = (shown(*value), offered_over_rest(&rigged, index, value));
-                    (0..want.len())
-                        .filter(|&c| want[c] != got[c])
-                        .filter(|&c| {
-                            !SAME_SLOT.contains(&(file.as_str(), mode.name.as_str(), c + 1))
-                        })
-                        .collect()
-                };
-                let named = format!("{file} / {} / light {index}", mode.name);
-                // the fields are where the light's writers write, in channel order
-                let own = |light: engine_core::LightNumber| usize::from(light.index()) == index;
-                let wrote: Vec<Field> = rigged
-                    .writers
-                    .iter()
-                    .filter_map(|writer| match *writer {
-                        Writer::Takes { light, at, .. } if own(light) => Some(match at {
-                            Place::Byte(at) => Field::Byte(flat(at)),
-                            Place::Pair { coarse, fine } => Field::Word(Pair {
-                                coarse: flat(coarse),
-                                fine: flat(fine),
-                            }),
-                        }),
-                        Writer::Picks { light, at, .. } if own(light) => {
-                            Some(Field::Byte(flat(at)))
-                        }
-                        Writer::Takes { .. }
-                        | Writer::Picks { .. }
-                        | Writer::Fixed { .. }
-                        | Writer::ColourSlot { .. }
-                        | Writer::GoboSlot { .. } => None,
-                    })
-                    .collect();
-                let fields: Vec<Field> = rigged.fields[index].fields().collect();
-                if fields != wrote {
-                    problems.push(format!("{named}: fields {fields:?}, writers at {wrote:?}"));
-                }
-                for value in &same {
-                    let moved = differ(value);
-                    if !moved.is_empty() {
-                        problems.push(format!("{named}: {value:?} differs at {moved:?}"));
-                    }
-                }
-                // a colour alone on a light without a dimmer: the colour at full brightness,
-                // where today's writers show it dark (cx-4)
-                let alone = tinted(None);
-                let moved = differ(&alone);
-                if moved.is_empty() {
-                    continue;
-                }
-                let (got, at_full) = (
-                    offered_over_rest(&rigged, index, &alone),
-                    shown(tinted(Some(FULL))),
-                );
-                if has_own_dimmer(&rigged, index) || moved.iter().any(|&c| got[c] != at_full[c]) {
-                    problems.push(format!("{named}: {alone:?} differs at {moved:?}"));
-                }
-                undimmed.insert((file.clone(), mode.name.clone()));
-            }
-        }
-    }
-    assert!(
-        problems.is_empty(),
-        "{} problems:\n{}",
-        problems.len(),
-        problems.join("\n")
-    );
-    println!(
-        "{modes} modes; a colour alone shows at full instead of dark in {}",
-        undimmed.len()
-    );
-    if library.is_none() {
-        assert_eq!((modes, undimmed.len()), (175, 40));
-    }
-}
-
 fn text(text: &str) -> Text {
     Text::new(text).unwrap()
 }
@@ -556,20 +311,30 @@ fn the_patch_gives_each_light_its_fields() {
         }])
         .unwrap();
     let mac_fields = "102 103 104 105 109 116+117 118+119";
-    // (patch, the fields of lights 0, 1, 2 in words; - for a light no fixture has)
-    let cases: [(Patch, [&str; 3]); 6] = [
-        (by(vec![par(1, 37)]), ["37 38 39", "-", "-"]),
-        (by(vec![par(1, 37), mac]), ["37 38 39", mac_fields, "-"]),
+    // (patch, the fields of lights 0, 1, 2 in words; - for a light no fixture has,
+    //  the dimmer channels: the MAC's "Dimmer blades", the bar's "Dimmer")
+    let cases: [(Patch, [&str; 3], &str); 6] = [
+        (by(vec![par(1, 37)]), ["37 38 39", "-", "-"], ""),
+        (
+            by(vec![par(1, 37), mac]),
+            ["37 38 39", mac_fields, "-"],
+            "102",
+        ),
         (
             by(vec![par(1, 37), mac, moved]),
             ["2.1 2.2 2.3", mac_fields, "-"],
+            "102",
         ),
-        (by(vec![par(1, 37), mac, gone]), ["-", mac_fields, "-"]),
+        (
+            by(vec![par(1, 37), mac, gone]),
+            ["-", mac_fields, "-"],
+            "102",
+        ),
         // the bar's own light is its shared dimmer, then a light per head
-        (by(vec![bar]), ["14", "1 2 3", "4 5 6"]),
-        (opened, ["-", "37 38 39", "-"]),
+        (by(vec![bar]), ["14", "1 2 3", "4 5 6"], "14"),
+        (opened, ["-", "37 38 39", "-"], ""),
     ];
-    for (patch, want) in cases {
+    for (patch, want, dimmers) in cases {
         let got = [0, 1, 2].map(|index| {
             patch
                 .fields(LightNumber::new(index, lights).unwrap())
@@ -587,5 +352,8 @@ fn the_patch_gives_each_light_its_fields() {
                 })
         });
         assert_eq!(got, want);
+        let table = patch.prepare();
+        let got: Vec<_> = table.dimmers().iter().map(|at| said_at(*at)).collect();
+        assert_eq!(got.join(" "), dimmers, "{want:?}");
     }
 }

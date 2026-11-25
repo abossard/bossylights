@@ -2,16 +2,15 @@
 //! contributes its full expansion to admission and keeps its own timing and spread.
 
 use crate::compile::{
-    Leaf, Target as SampleTarget, Timed, WORK_LIMIT, numbers, ordered_group, sample_work,
+    Leaf, Shows, Target as SampleTarget, Timed, WORK_LIMIT, numbers, ordered_group, sample_work,
 };
 use crate::pattern;
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use core::mem::size_of_val;
 use engine_core::{
-    Binding, Definition, Item, LightNumber, LightRun, Lights, MAX_DEPTH, Node, Percent, Refusal,
-    SavedLook, Sequence, Target,
+    Binding, Definition, Item, LightNumber, Lights, MAX_DEPTH, Node, Percent, Refusal, SavedLook,
+    Sequence, Target,
 };
 use rig::{Patch, WaveBinding};
 
@@ -28,6 +27,7 @@ struct Size {
 
 struct Built {
     node: Node,
+    shows: Shows,
     ordered: Vec<u16>,
     /// A matrix repeats the horizontal spread on every row. Other nodes use the whole target.
     columns: Option<u16>,
@@ -69,18 +69,18 @@ impl Builder<'_> {
                 let leaf = Leaf::new(step.step(), self.patch)?;
                 let ordered = match step.target {
                     Target::Group { group } => ordered_group(group, self.patch)?,
-                    Target::Light { .. } | Target::Fixture { .. } => leaf
-                        .entries
-                        .iter()
-                        .flat_map(|entry| numbers(entry.lights))
+                    Target::Light { .. } | Target::Fixture { .. } => self
+                        .patch
+                        .runs(step.target)?
+                        .into_iter()
+                        .flat_map(numbers)
                         .collect(),
                 };
                 let expansion = ordered.len();
                 self.leaves.push(leaf);
                 Built {
-                    node: Node::Step {
-                        values: step.values,
-                    },
+                    node: Node::Step,
+                    shows: Shows::Step(step.step()),
                     ordered,
                     columns: None,
                     size: Size {
@@ -100,7 +100,7 @@ impl Builder<'_> {
                             .ok_or(Refusal::NoSuchLook)
                     })
                     .transpose()?;
-                let (node, wave) = pattern::compile(pattern, palette, self.patch)?;
+                let (node, swatches, wave) = pattern::compile(pattern, palette, self.patch)?;
                 let ordered = wave.ordered(self.patch)?;
                 let targets = u16::try_from(ordered.len()).map_err(|_| Refusal::WorkLimit)?;
                 let columns = Some(wave.stride(targets));
@@ -110,6 +110,7 @@ impl Builder<'_> {
                 self.palettes.extend(palette);
                 Built {
                     node,
+                    shows: Shows::Wave(swatches),
                     ordered,
                     columns,
                     size: Size {
@@ -184,8 +185,7 @@ impl Builder<'_> {
             let child = self.built(item.child)?;
             let before = self.built(previous.child)?;
             let outgoing = if item.transition > 0
-                || (item.settings.spread > Percent::LEAST
-                    && matches!(child.node, Node::Step { .. }))
+                || (item.settings.spread > Percent::LEAST && matches!(child.node, Node::Step))
             {
                 before.size.visits
             } else {
@@ -203,6 +203,7 @@ impl Builder<'_> {
         self.items.extend(items);
         Ok(Built {
             node,
+            shows: Shows::Sequence,
             ordered,
             columns: None,
             size,
@@ -258,39 +259,55 @@ pub(crate) fn compile(
         + builder
             .leaves
             .iter()
-            .map(|leaf| size_of_val(leaf.entries.as_ref()))
+            .map(|leaf| leaf.words.bytes())
             .sum::<usize>();
     if storage > room {
         return Err(Refusal::WorkLimit);
     }
-    let wheels = patch.discrete_colours();
     let mut by_light: BTreeMap<u16, Vec<Binding>> = BTreeMap::new();
-    let mut nodes = Vec::with_capacity(builder.nodes.len());
+    let (mut nodes, mut shows) = (
+        Vec::with_capacity(builder.nodes.len()),
+        Vec::with_capacity(builder.nodes.len()),
+    );
+    // the words of every binding, equal words once
+    let (mut words, mut kept) = (Vec::new(), BTreeMap::<Vec<Option<u16>>, u32>::new());
+    let mut each = Vec::new();
     for (node, built) in builder.nodes.into_iter().enumerate() {
         nodes.push(built.node);
         let targets = u16::try_from(built.ordered.len()).map_err(|_| Refusal::WorkLimit)?;
         let count = built.columns.unwrap_or(targets);
+        let node = u32::try_from(node).map_err(|_| Refusal::WorkLimit)?;
         for (index, light) in (0..targets).zip(built.ordered) {
+            let fields = LightNumber::new(light, Lights::MOST)
+                .and_then(|light| patch.fields(light))
+                .ok_or(Refusal::NoSuchLight)?;
+            each.clear();
+            built.shows.words(fields, &mut each);
+            let start = match kept.get(&each) {
+                Some(&start) => start,
+                None => {
+                    let start = u32::try_from(words.len()).map_err(|_| Refusal::WorkLimit)?;
+                    words.extend_from_slice(&each);
+                    kept.insert(each.clone(), start);
+                    start
+                }
+            };
             by_light.entry(light).or_default().push(Binding {
                 node,
                 index: index % count,
                 count,
-                discrete_colour: wheels.contains(&light),
+                words: start,
             });
         }
+        shows.push(built.shows);
     }
     let targets = by_light
         .into_iter()
-        .map(|(index, bindings)| {
-            let light = LightNumber::new(index, Lights::MOST)
-                .and_then(|light| LightRun::new(light, 1, Lights::MOST))
-                .ok_or(Refusal::NoSuchLight)?;
-            Ok(SampleTarget {
-                light,
-                bindings: bindings.into_boxed_slice(),
-            })
+        .map(|(light, bindings)| SampleTarget {
+            light,
+            bindings: bindings.into_boxed_slice(),
         })
-        .collect::<Result<_, Refusal>>()?;
+        .collect();
     Ok((
         Timed {
             root,
@@ -298,7 +315,9 @@ pub(crate) fn compile(
             palettes: builder.palettes.into_iter().collect(),
             nodes: nodes.into_boxed_slice(),
             items: builder.items.into_boxed_slice(),
+            shows: shows.into_boxed_slice(),
             targets,
+            words: words.into_boxed_slice(),
             leaves: builder.leaves.into_boxed_slice(),
             waves: builder.waves.into_boxed_slice(),
         },
