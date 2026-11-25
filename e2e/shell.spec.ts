@@ -20,8 +20,12 @@ interface Shell {
   said: () => string;
 }
 
+/** Every program a test started. A test that times out never reaches its `finally`, and its worker ends without them: `afterEach` stops them, so none meets the next test (#317). */
+const started = new Set<ChildProcess>();
+
 function startShell(address = ADDRESS, env: Record<string, string> = {}): Shell {
   const child = spawn(programs.bossylights, [], { env: { ...process.env, BOSSYLIGHTS_ENGINE: address, ...env } });
+  started.add(child);
   let text = "";
   child.stdout?.on("data", (chunk: Buffer) => (text += chunk.toString()));
   child.stderr?.on("data", (chunk: Buffer) => (text += chunk.toString()));
@@ -29,10 +33,10 @@ function startShell(address = ADDRESS, env: Record<string, string> = {}): Shell 
   return { process: child, said: () => text };
 }
 
-async function kill(shell: Shell) {
-  if (shell.process.exitCode !== null || shell.process.signalCode !== null) return;
-  const exited = new Promise((done) => shell.process.once("exit", done));
-  shell.process.kill("SIGKILL");
+async function kill(child: ChildProcess) {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  const exited = new Promise((done) => child.once("exit", done));
+  child.kill("SIGKILL");
   await exited;
 }
 
@@ -57,6 +61,15 @@ test.beforeAll(() => {
   programs = cargoBuild(["-q", "-p", "shell", "-p", "engine-server"]);
 });
 
+// However the test ended: no window and no engine on the test port are left.
+test.afterEach(async () => {
+  for (const child of started) await kill(child);
+  started.clear();
+  if ((await health()) === 200) expect(await request(ADDRESS, "Stop")).toBe("Stopping");
+  await expect.poll(health, WAIT).toBe("nobody");
+  await expect.poll(gone, WAIT).toBe(true);
+});
+
 test("kill the shell: the engine keeps sending, a new shell adopts it and the frame count goes on", async () => {
   test.setTimeout(120_000);
   const udp = createSocket("udp4");
@@ -64,7 +77,6 @@ test("kill the shell: the engine keeps sending, a new shell adopts it and the fr
   udp.on("message", () => packets++);
   await new Promise<void>((bound) => udp.bind(0, "127.0.0.1", bound));
   const first = startShell();
-  let second: Shell | undefined;
   try {
     await expect.poll(first.said, WAIT).toContain(`started the engine on ${ADDRESS}`);
     await expect.poll(first.said, WAIT).toContain(`the window talks to the engine on ${ADDRESS}`);
@@ -74,22 +86,17 @@ test("kill the shell: the engine keeps sending, a new shell adopts it and the fr
     expect(await send(ADDRESS, command)).toBe("Accepted");
     const before = (await query(ADDRESS)).state.frame;
 
-    await kill(first);
+    await kill(first.process);
     packets = 0;
     await expect.poll(() => packets, WAIT).toBeGreaterThan(30); // still sending, with no shell
     expect(await health()).toBe(200);
 
-    second = startShell();
+    const second = startShell();
     await expect.poll(second.said, WAIT).toContain(`adopted the engine on ${ADDRESS}`);
     const state = (await query(ADDRESS)).state;
     expect(state.frame).toBeGreaterThan(before);
     expect(state.outputs[15]?.rate).toBe("30"); // the same engine: it still has the output
   } finally {
-    await kill(first);
-    if (second) await kill(second);
-    if ((await health()) === 200) expect(await request(ADDRESS, "Stop")).toBe("Stopping");
-    await expect.poll(health, WAIT).toBe("nobody");
-    await expect.poll(gone, WAIT).toBe(true);
     udp.close();
   }
 });
@@ -126,7 +133,7 @@ for (const [whose, before] of engines) {
     const packets: Buffer[] = [];
     udp.on("message", (packet) => packets.push(packet));
     await new Promise<void>((bound) => udp.bind(0, "127.0.0.1", bound));
-    const engine = before ? spawn(programs["bossylights-engine"], ["--listen", ADDRESS], { stdio: "ignore", detached: true }) : undefined;
+    if (before) started.add(spawn(programs["bossylights-engine"], ["--listen", ADDRESS], { stdio: "ignore", detached: true }));
     if (before) await expect.poll(health, WAIT).toBe(200);
     const window = await closingPage();
     const shell = startShell(ADDRESS, { BOSSYLIGHTS_UI: window.page, BOSSYLIGHTS_WINDOW_SCRIPT: window.script });
@@ -147,13 +154,8 @@ for (const [whose, before] of engines) {
       expect(packets.at(-1)?.[10]).toBe(77);
       expect(await health()).toBe(200);
     } finally {
-      await kill(shell);
+      await kill(shell.process);
       await window.stop();
-      if ((await health()) === 200) expect(await request(ADDRESS, "Stop")).toBe("Stopping");
-      await expect.poll(health, WAIT).toBe("nobody");
-      await expect.poll(gone, WAIT).toBe(true);
-      engine?.kill(); // the engine this test started: none left behind when the test fails
-      engine?.unref();
       udp.close();
     }
   });
@@ -211,33 +213,21 @@ test("the window shows the engine on the test port", async ({ baseURL }) => {
       { cause },
     );
   } finally {
-    await kill(shell);
+    await kill(shell.process);
     await window.close();
-    if ((await health()) === 200) expect(await request(ADDRESS, "Stop")).toBe("Stopping");
-    await expect.poll(health, WAIT).toBe("nobody");
-    await expect.poll(gone, WAIT).toBe(true);
   }
 });
 
 test("a second shell for the same engine opens no window and stops nothing", async () => {
   test.setTimeout(120_000);
   const first = startShell();
-  let second = first;
-  try {
-    await expect.poll(first.said, WAIT).toContain("the window talks to");
-    await expect.poll(health, WAIT).toBe(200); // the engine the first shell started is up
-    second = startShell();
-    await expect.poll(second.said, WAIT).toContain("a window for the engine on");
-    await expect.poll(() => second.process.exitCode, WAIT).toBe(0);
-    expect(second.said()).not.toContain("the window talks to");
-    expect(await health()).toBe(200);
-  } finally {
-    await kill(second);
-    await kill(first);
-    if ((await health()) === 200) expect(await request(ADDRESS, "Stop")).toBe("Stopping");
-    await expect.poll(health, WAIT).toBe("nobody");
-    await expect.poll(gone, WAIT).toBe(true);
-  }
+  await expect.poll(first.said, WAIT).toContain("the window talks to");
+  await expect.poll(health, WAIT).toBe(200); // the engine the first shell started is up
+  const second = startShell();
+  await expect.poll(second.said, WAIT).toContain("a window for the engine on");
+  await expect.poll(() => second.process.exitCode, WAIT).toBe(0);
+  expect(second.said()).not.toContain("the window talks to");
+  expect(await health()).toBe(200);
 });
 
 test("another engine version on the port: the shell says so and starts nothing", async () => {
@@ -254,7 +244,7 @@ test("another engine version on the port: the shell says so and starts nothing",
     expect(shell.said()).toContain("starting nothing");
     expect(shell.said()).not.toContain("started the engine");
   } finally {
-    await kill(shell);
+    await kill(shell.process);
     await new Promise((closed) => other.close(closed));
   }
 });
@@ -264,10 +254,6 @@ test("an engine of its own that ends at start: the shell does not say the window
   // An address of no machine here (TEST-NET-1): nothing answers on it, and the engine cannot listen on it.
   const nowhere = NOWHERE;
   const shell = startShell(nowhere);
-  try {
-    await expect.poll(shell.said, WAIT).toContain(`the window has no engine on ${nowhere}`);
-    expect(shell.said()).not.toContain("the window talks to");
-  } finally {
-    await kill(shell);
-  }
+  await expect.poll(shell.said, WAIT).toContain(`the window has no engine on ${nowhere}`);
+  expect(shell.said()).not.toContain("the window talks to");
 });

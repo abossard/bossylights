@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { firstFailure, logPath, mutantsReport, mutantsSummary, parseArgs, suitesOf, testSummary } from "./verify.mjs";
+import { firstFailure, leftovers, logPath, mutantsReport, mutantsSummary, parseArgs, suitesOf, testSummary } from "./verify.mjs";
 
 test("suites are the npm run parts of the test script", () => {
   assert.deepEqual(suitesOf("npm run test:checks && npm run test:rust && npm run test:ui"), ["test:checks", "test:rust", "test:ui"]);
@@ -65,6 +65,21 @@ test("a failure with no matching line points at the log", () => {
   const text = testSummary("abc", [{ suite: "a", ok: false, status: 3, log: "/d/a.log", output: "fine\n" }]);
   assert.match(text, /first failure \(a\): exit 3, see \/d\/a\.log$/);
 });
+
+// [ps line, what is left over]: only a program started from the copy's own folder.
+const copy = "/private/var/T/bossylights-verify-Co2KSx";
+const leftoverCases = [
+  [`1129 ${copy}/target/debug/bossylights`, [{ pid: 1129, args: `${copy}/target/debug/bossylights` }]],
+  [`  9171 ${copy}/target/debug/bossylights-engine --listen 127.0.0.1:65313`, [{ pid: 9171, args: `${copy}/target/debug/bossylights-engine --listen 127.0.0.1:65313` }]],
+  [`9143 node ${copy}/node_modules/.bin/playwright test`, []],
+  ["9172 target/debug/bossylights-engine --listen 127.0.0.1:55127", []],
+  ["1130 /private/var/T/bossylights-verify-OrmJmd/target/debug/bossylights", []],
+  [`1131 ${copy}-other/target/debug/bossylights`, []],
+  ["", []],
+];
+for (const [line, expected] of leftoverCases) {
+  test(`left over: ${JSON.stringify(line)}`, () => assert.deepEqual(leftovers(`  PID ARGS\n${line}\n`, copy), expected));
+}
 
 const mutant = (file, line, name, summary) => ({ summary, scenario: { Mutant: { file, name, span: { start: { line } } } } });
 test("mutants list every missed and timeout line, never the caught ones", () => {

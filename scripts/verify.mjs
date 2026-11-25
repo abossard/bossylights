@@ -35,6 +35,15 @@ export function logPath(dir, suite) {
   return `${dir}/${suite.replace(/[^A-Za-z0-9._-]/g, "-")}.log`;
 }
 
+/** What still runs from the copy at `dir` once a suite is over, read from `ps -eo pid=,args=`: [{ pid, args }]. Only programs started from the copy itself (a test window, its engine), never another run's or the owner's. */
+export function leftovers(ps, dir) {
+  return ps
+    .split("\n")
+    .map((line) => line.trim().match(/^(\d+) +(.*)$/))
+    .filter((row) => row && row[2].startsWith(`${dir}/`))
+    .map(([, pid, args]) => ({ pid: Number(pid), args }));
+}
+
 /** cargo-mutants' outcomes.json as caught, missed (file:line), timeouts. Missed lines are always listed. */
 export function mutantsSummary({ caught, missed, timeout, unviable, outcomes }) {
   const where = (kind) =>

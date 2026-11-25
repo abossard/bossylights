@@ -6,6 +6,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { logPath, mutantsReport, parseArgs, suitesOf, testSummary } from "./verify.mjs";
+import { stopLeftovers } from "./verify-leftovers.mjs";
 
 const run = (command, args, cwd, options = {}) =>
   spawnSync(command, args, { cwd, encoding: "utf8", maxBuffer: 1 << 28, ...options });
@@ -39,7 +40,8 @@ try {
   const suites = suitesOf(JSON.parse(readFileSync(join(dir, "package.json"), "utf8")).scripts.test);
   const results = suites.map((suite) => {
     const r = run("npm", ["run", suite], dir, { env });
-    const output = `${r.stdout}\n${r.stderr}${r.error ? `\nerror: ${r.error.message}` : ""}`;
+    const stopped = stopLeftovers(dir);
+    const output = [`${r.stdout}\n${r.stderr}${r.error ? `\nerror: ${r.error.message}` : ""}`, ...stopped].join("\n");
     const log = logPath(logDir, suite);
     writeFileSync(log, output);
     const status = r.status ?? 1; // killed by a signal or not started: status is null
