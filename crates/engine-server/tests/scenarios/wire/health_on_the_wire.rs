@@ -527,7 +527,7 @@ async fn a_press_1_ms_before_a_deadline_served_2_ms_after_is_in_the_first_eligib
     let measured = &row(health)["measurement"]["Window"];
     assert_eq!(
         measured["press_to_light"],
-        json!({"p95_us": 3000, "worst_us": 3000, "samples": 1}),
+        json!({"p50_us": 3000, "p95_us": 3000, "worst_us": 3000, "samples": 1}),
         "{health}"
     );
     assert_eq!(measured["press_missing"], 0);

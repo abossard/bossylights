@@ -81,7 +81,7 @@ export type OutputMeasurement = "Measuring" | "ClockDiscontinuity" | { "Window":
 
 export type LatenessWindow = { p99_us: number, worst_us: number, samples: number, };
 
-export type PressWindow = { p95_us: number, worst_us: number, samples: number, };
+export type PressWindow = { p50_us: number, p95_us: number, worst_us: number, samples: number, };
 
 export type LateReason = "HandoffLateness" | "PressToLight" | "Both";
 

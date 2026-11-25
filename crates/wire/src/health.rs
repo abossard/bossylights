@@ -98,6 +98,7 @@ pub struct LatenessWindow {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub struct PressWindow {
+    pub p50_us: u32,
     pub p95_us: u32,
     pub worst_us: u32,
     pub samples: u32,
@@ -120,6 +121,7 @@ impl From<health::MetricWindow> for LatenessWindow {
 impl From<health::MetricWindow> for PressWindow {
     fn from(metric: health::MetricWindow) -> Self {
         Self {
+            p50_us: micros(metric.median),
             p95_us: micros(metric.percentile),
             worst_us: micros(metric.worst),
             samples: metric.samples,
@@ -202,16 +204,28 @@ mod tests {
 
     #[test]
     fn metric_times_are_whole_microseconds_saturated_to_u32() {
-        for (percentile, worst, p_us, worst_us) in [
-            (Duration::from_nanos(999), Duration::from_nanos(2_999), 0, 2),
+        // (median, percentile, worst, and each in whole microseconds)
+        for (median, percentile, worst, p50_us, p_us, worst_us) in [
             (
+                Duration::from_nanos(1_999),
+                Duration::from_nanos(999),
+                Duration::from_nanos(2_999),
+                1,
+                0,
+                2,
+            ),
+            // Past u32 by 2 and 3 µs: a cast that wraps would give 1 and 2.
+            (
+                Duration::from_micros(u64::from(u32::MAX) + 2),
                 Duration::from_micros(u64::from(u32::MAX) + 1),
-                Duration::MAX,
+                Duration::from_micros(u64::from(u32::MAX) + 3),
+                u32::MAX,
                 u32::MAX,
                 u32::MAX,
             ),
         ] {
             let metric = MetricWindow {
+                median,
                 percentile,
                 worst,
                 samples: 20,
@@ -227,6 +241,7 @@ mod tests {
             assert_eq!(
                 PressWindow::from(metric),
                 PressWindow {
+                    p50_us,
                     p95_us: p_us,
                     worst_us,
                     samples: 20

@@ -51,9 +51,11 @@ impl HealthSample {
     }
 }
 
-/// Bounds on timing in this window. The percentile is p99 for lateness and p95 for press.
+/// Bounds on timing in this window: the median, the percentile (p99 for lateness, p95
+/// for press) and the worst.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MetricWindow {
+    pub median: Duration,
     pub percentile: Duration,
     pub worst: Duration,
     pub samples: u32,
@@ -75,6 +77,7 @@ pub struct Window {
 pub const LATENESS_TARGET: Duration = Duration::from_millis(1);
 const LATENESS_PERCENT: u64 = 99;
 const PRESS_PERCENT: u64 = 95;
+const MEDIAN_PERCENT: u64 = 50;
 const MIN_SAMPLES: u128 = 20;
 
 pub const fn press_target(rate: Rate) -> Duration {
@@ -112,14 +115,17 @@ impl<const N: usize> Difference<N> {
     fn measurement(&self, percent: u64, cumulative_worst: Duration) -> Option<MetricWindow> {
         let bound = |bucket| bound::<N>(bucket, cumulative_worst);
         let highest = self.counts.iter().rposition(|&count| count != 0)?;
-        let rank = rank(self.total, percent);
-        let mut seen = 0;
-        let ranked = self.counts.iter().position(|&count| {
-            seen += u128::from(count);
-            seen >= rank
-        })?;
+        let ranked = |percent| {
+            let rank = rank(self.total, percent);
+            let mut seen = 0;
+            self.counts.iter().position(|&count| {
+                seen += u128::from(count);
+                seen >= rank
+            })
+        };
         Some(MetricWindow {
-            percentile: bound(ranked),
+            median: bound(ranked(MEDIAN_PERCENT)?),
+            percentile: bound(ranked(percent)?),
             worst: bound(highest),
             samples: u32::try_from(self.total).unwrap_or(u32::MAX),
         })
@@ -808,43 +814,66 @@ mod tests {
 
     #[test]
     fn window_reports_percentile_and_worst_bounds() {
-        // Each metric gains 100 samples: low, middle, high. All times below are microseconds.
+        // Each metric gains its row's counts: low, middle, high. All times below are microseconds.
         // History may supply a larger worst. Only buckets gained in this window count.
         let typical = ([95, 4, 1], [95, 4, 1]);
         // p99 and p95 rank into the middle bucket here, p98 and p94 would not.
         let edge_ranks = ([98, 1, 1], [94, 1, 5]);
+        // The median ranks into the low bucket of the first, the middle one of the second:
+        // p51 and p49 would not.
+        let median_ranks = ([50, 1, 49], [49, 2, 49]);
+        // 101 samples: the median's nearest rank is 51 (50.5 rounded up), the middle bucket.
+        // A rank rounded down would stay in the low one.
+        let odd_total = ([50, 1, 50], [50, 1, 50]);
+        // Bounds are (median, percentile, worst).
         for (history, late, press, counts, late_bounds, press_bounds) in [
             (
                 90_000,
                 [10, 201, 714],
                 [499, 819, 929],
                 typical,
-                (300, 800),
-                (500, 1_000),
+                (100, 300, 800),
+                (500, 500, 1_000),
             ),
             (
                 0,
                 [10, 201, 214],
                 [430, 460, 470],
                 typical,
-                (214, 214),
-                (470, 470),
+                (100, 214, 214),
+                (470, 470, 470),
             ),
             (
                 0,
                 [25_005, 29_000, 64_001],
                 [50_100, 55_000, 81_002],
                 typical,
-                (64_001, 64_001),
-                (81_002, 81_002),
+                (64_001, 64_001, 64_001),
+                (81_002, 81_002, 81_002),
             ),
             (
                 0,
                 [10, 201, 714],
                 [10, 201, 714],
                 edge_ranks,
-                (300, 714),
-                (300, 714),
+                (100, 300, 714),
+                (100, 300, 714),
+            ),
+            (
+                0,
+                [10, 201, 714],
+                [10, 201, 714],
+                median_ranks,
+                (100, 714, 714),
+                (300, 714, 714),
+            ),
+            (
+                0,
+                [10, 201, 714],
+                [10, 201, 714],
+                odd_total,
+                (300, 714, 714),
+                (300, 714, 714),
             ),
         ] {
             let mut earlier = start();
@@ -867,16 +896,17 @@ mod tests {
                 later.press_worst = later.press_worst.max(latency);
             }
             let measured = window(&earlier, &later);
-            for (metric, (percentile, worst)) in [
-                (measured.lateness, late_bounds),
-                (measured.press_to_light, press_bounds),
+            for (metric, gained, (median, percentile, worst)) in [
+                (measured.lateness, counts.0, late_bounds),
+                (measured.press_to_light, counts.1, press_bounds),
             ] {
                 assert_eq!(
                     metric,
                     Some(MetricWindow {
+                        median: Duration::from_micros(median),
                         percentile: Duration::from_micros(percentile),
                         worst: Duration::from_micros(worst),
-                        samples: 100,
+                        samples: u32::try_from(gained.iter().sum::<u64>()).unwrap_or(u32::MAX),
                     })
                 );
             }
@@ -906,7 +936,9 @@ mod tests {
         assert_eq!(measured.verdict, Verdict::Bad(LateReason::Both));
         assert_eq!(
             [measured.lateness, measured.press_to_light],
+            // Half the samples rank the median into the first bucket: its upper edge.
             [lateness_worst, press_worst].map(|time| Some(MetricWindow {
+                median: Duration::from_micros(100),
                 percentile: time,
                 worst: time,
                 samples: u32::MAX,

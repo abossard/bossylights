@@ -651,6 +651,7 @@ mod tests {
                     samples: u32::MAX,
                 }),
                 press_to_light: Some(PressWindow {
+                    p50_us: u32::MAX,
                     p95_us: u32::MAX,
                     worst_us: u32::MAX,
                     samples: u32::MAX,
