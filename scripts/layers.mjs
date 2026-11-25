@@ -24,7 +24,7 @@ export const CRATES = {
   "show-file": { kind: "calc", deps: ["engine-core", "fixture-library", "rig", "looks", "serde", "serde_json"] }, // the patch as a show file's text and back, checked as the commands check. Reads no files
   wire: { kind: "calc", deps: ["engine-core", "fixture-library", "serde"] }, // the app's messages: Request, Reply, the health and library views. The core knows only commands and channels (Q16)
   "rt-thread": { kind: "tick", deps: ["engine-core", "libc"] }, // the only unsafe: asks for real-time priority
-  outputs: { kind: "tick", deps: ["engine-core", "nix", "rtrb", "serialport"] }, // opens devices, takes frames: only it knows bytes
+  outputs: { kind: "tick", deps: ["engine-core", "nix", "rtrb", "serialport", "socket2"] }, // opens devices, takes frames: only it knows bytes
   "engine-slot": { kind: "action", deps: [] }, // tests: the machine's one engine slot, an OS file lock (#319)
   engine: { kind: "tick", deps: ["engine-core", "rt-thread", "outputs", "rig", "looks", "fixture-library", "rtrb", "engine-slot"] }, // the front owns the patch: it checks a patch against the library and compiles the field table
   "audio-in": { kind: "calc", deps: [] }, // samples and the caller's clock in, levels and beats out. Capture is its own action crate

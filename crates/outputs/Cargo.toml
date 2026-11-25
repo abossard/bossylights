@@ -13,7 +13,8 @@ workspace = true
 engine-core = { path = "../engine-core" }
 rtrb = "0.4.1"
 serialport = { version = "4.10.1", default-features = false }
-nix = { version = "0.26.4", default-features = false, features = ["fs"] }
+nix = { version = "0.26.4", default-features = false, features = ["fs", "net"] }
+socket2 = { version = "0.6.5", features = ["all"] } # MIT OR Apache-2.0: shares port 6454 with other programs
 
 [dev-dependencies]
 artnet_protocol = "0.4.4" # MIT: an outside decoder for the Art-Net tests

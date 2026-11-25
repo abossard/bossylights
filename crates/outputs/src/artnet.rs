@@ -1,6 +1,7 @@
 //! Art-Net 4 over UDP, as `docs/design/outputs-artnet.md` reads the spec. A frame is one
 //! stream of channel bytes; it goes out as one ArtDmx per universe of 512 slots, to the
-//! output's first Port-Address and on, each universe with its own sequence.
+//! output's first Port-Address and on, each universe with its own sequence: to a typed
+//! address, or to every node a [`Discovery`] found that lists the universe.
 //!
 //! | Byte | ArtDmx field |
 //! |---|---|
@@ -12,6 +13,13 @@
 //! | 14 | Port-Address bits 7 to 0 (Sub-Net and Universe) |
 //! | 15 | Port-Address bits 14 to 8 (Net) |
 //! | 16 to 17 | length of the slots, high byte first, even, 2 to 512 |
+
+mod discovery;
+mod nodes;
+mod poll;
+
+pub use discovery::{Discovery, broadcasts};
+pub use nodes::{Node, Presence};
 
 use crate::udp::{Protocol, Udp};
 use crate::{Device, Limits, Rate};
