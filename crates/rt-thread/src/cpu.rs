@@ -136,12 +136,16 @@ mod tests {
         const NAME: &str = "cpu-many";
         const MANY: usize = 300; // more than the room for 256 the list starts with
         let stop = Arc::new(AtomicBool::new(false));
+        let (running, ran) = mpsc::channel();
         let threads: Vec<_> = (0..MANY)
             .filter_map(|_| {
                 let stop = Arc::clone(&stop);
+                let running = running.clone();
                 thread::Builder::new()
                     .name(NAME.into())
                     .spawn(move || {
+                        let _ = running.send(());
+                        drop(running);
                         while !stop.load(Ordering::Acquire) {
                             thread::park();
                         }
@@ -150,6 +154,12 @@ mod tests {
             })
             .collect();
         assert_eq!(threads.len(), MANY, "the system gave every thread");
+        // A thread names itself when it first runs, before its closure (std
+        // `thread/lifecycle.rs`; macOS names only the calling thread): list them once
+        // every one has sent. Each sender is dropped once used, ours too: a thread that
+        // ends unsent ends the receive short, and the test fails.
+        drop(running);
+        assert_eq!(ran.iter().take(MANY).count(), MANY, "every thread ran");
         let listed =
             cpu_by_thread().map(|threads| threads.iter().filter(|(name, _)| name == NAME).count());
         stop.store(true, Ordering::Release);
