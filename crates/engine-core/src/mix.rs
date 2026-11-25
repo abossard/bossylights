@@ -767,12 +767,14 @@ mod offers {
     use Rank::{Autopilot, Show};
     use core::time::Duration;
 
-    /// Who offers: a play in a slot at a rank, kept or not, or a grab at an entry.
+    /// Who offers: a play in a slot at a rank, kept or not, a slot where no play
+    /// started, or a grab at an entry.
     #[derive(Clone, Copy, Debug)]
     enum By {
         Play(usize, Rank),
         Kept(usize, Rank),
         Waiting(usize),
+        NoPlay(usize),
         Grab(usize),
     }
     use By::{Kept, Play, Waiting};
@@ -812,6 +814,7 @@ mod offers {
             let (slot, rank, when) = match *by {
                 Play(slot, rank) | Kept(slot, rank) => (slot, rank, When::Now),
                 Waiting(slot) => (slot, Show, When::Beat),
+                By::NoPlay(_) => continue,
                 By::Grab(entry) => {
                     grabs.change(GrabEntry::new(entry).unwrap(), GrabChange::Start, *order);
                     continue;
@@ -838,7 +841,9 @@ mod offers {
         };
         for (by, _, at, word) in sent {
             match *by {
-                Play(slot, _) | Kept(slot, _) | Waiting(slot) => offers.play(slot, *at, *word),
+                Play(slot, _) | Kept(slot, _) | Waiting(slot) | By::NoPlay(slot) => {
+                    offers.play(slot, *at, *word);
+                }
                 By::Grab(entry) => offers.grab(GrabEntry::new(entry).unwrap(), *at, *word),
             }
         }
@@ -847,7 +852,7 @@ mod offers {
 
     fn tag(by: By) -> SourceTag {
         SourceTag::of(match by {
-            Play(slot, _) | Kept(slot, _) | Waiting(slot) => slot,
+            Play(slot, _) | Kept(slot, _) | Waiting(slot) | By::NoPlay(slot) => slot,
             By::Grab(entry) => PLAYS + entry,
         })
         .unwrap()
@@ -1005,7 +1010,7 @@ mod offers {
         ];
         for (row, dark, flags, sent, out) in rows {
             let want = out.map(|(byte, by)| match by {
-                Waiting(_) => (byte, rest.1),
+                Waiting(_) | By::NoPlay(_) => (byte, rest.1),
                 by @ (Play(..) | Kept(..) | By::Grab(_)) => (byte, tag(by)),
             });
             let config = config(dark, flags);
@@ -1043,17 +1048,48 @@ mod offers {
     fn a_source_that_does_not_sound_offers_nothing() {
         let config = config(0, Flags::FADE);
         let byte = Field::Byte(DIMMER);
-        let rest = (7, SourceTag::REST);
-        // (case, offers)
-        let cases: [(&str, Vec<Sent>); 2] = [
-            ("a waiting play", vec![(Waiting(4), 1, byte, 0x5000)]),
+        let last = CHANNELS as u32 - 1;
+        let past = Field::Word(Pair {
+            coarse: last,
+            fine: last + 1,
+        });
+        let grab_0 = (grab(0), 1, PAIR, 0x5000);
+        // (case, offers, the ones of them that sound: the space is as if only they offered)
+        let cases: [(&str, Vec<Sent>, Vec<Sent>); 4] = [
+            (
+                "a waiting play",
+                vec![(Waiting(4), 1, byte, 0x5000)],
+                vec![],
+            ),
             (
                 "past the space",
                 vec![(Play(1, Show), 1, Field::Byte(u32::MAX), 0x5000)],
+                vec![],
+            ),
+            (
+                "a pair whose fine byte is past the space",
+                vec![(Play(1, Show), 1, past, 0x5000)],
+                vec![],
+            ),
+            (
+                "a slot past the play table, while grab 0 sounds",
+                vec![grab_0, (By::NoPlay(PLAYS), 2, byte, 0x5000)],
+                vec![grab_0],
             ),
         ];
-        for (case, sent) in cases {
-            assert_eq!(mixed(&config, &sent)[0], rest, "{case}");
+        for (case, sent, sounding) in cases {
+            let (seen, only) = (offered(&config, &sent), offered(&config, &sounding));
+            assert!(seen.value == only.value, "{case}: bytes");
+            assert!(seen.source == only.source, "{case}: sources");
+        }
+    }
+
+    #[test]
+    fn a_source_wins_over_an_earlier_start_only() {
+        // docs/engine.md, "Who wins": among equal ranks, the latest start. (order, over, wins)
+        let cases = [(2, 1, true), (1, 2, false), (1, 1, false)];
+        for (order, over, won) in cases {
+            assert_eq!(wins(order, over), won, "{order} over {over}");
         }
     }
 

@@ -355,4 +355,31 @@ mod tests {
             assert_eq!(take.value(&light), value, "{take:?} of {light:?}");
         }
     }
+
+    #[test]
+    fn a_take_lays_its_value_over_its_travel() {
+        // 0 is the low byte's 00, full the high byte's ff, between them in a line, to the
+        // nearest. (low, high, value, 16-bit word, by hand)
+        let cases = [
+            (0, 255, 0, 0),
+            (0, 255, FULL, FULL),
+            (10, 20, 0, 0x0a00),
+            (10, 20, FULL, 0x14ff),
+            // 0x0a00 + 0x0aff x 0x8000 / 0xffff = 2560 + 1408.02
+            (10, 20, HALF, 0x0f80),
+            // 200 x 0xff / 0xffff = 0.78, to the nearest 1
+            (0, 0, 200, 1),
+        ];
+        for (low, high, value, word) in cases {
+            let take = Take {
+                travel: Travel { low, high },
+                ..take(Part::Zoom, Less::Nothing, Scale::Whole, Sense::Rising)
+            };
+            let light = Light {
+                zoom: Some(value),
+                ..Light::DARK
+            };
+            assert_eq!(take.value(&light), Some(word), "{low} to {high}, {value}");
+        }
+    }
 }

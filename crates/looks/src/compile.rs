@@ -329,3 +329,57 @@ impl Plan {
         offered
     }
 }
+
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "the fixture supplies the named look and the patch edits"
+)]
+mod tests {
+    use crate::Looks;
+    use crate::tests::{leaf, patch};
+    use engine_core::{ChannelNumbers, Color, PatchCommand, Pixels, Text};
+    use rig::Patch;
+
+    #[test]
+    fn a_kept_step_binds_while_its_lights_keep_their_words() {
+        let patch = patch();
+        let plan = Looks::new().put(leaf(1), &patch).unwrap().plan(1).unwrap();
+        let edit = |patch: &Patch, command| patch.update(command, &[]).unwrap().0.unwrap();
+        let unpatched = edit(&patch, PatchCommand::Unpatch { fixture: 1 });
+        let strip = |color| PatchCommand::PatchStrip {
+            name: Text::new("strip").unwrap(),
+            pixels: Pixels::try_from(3).unwrap(),
+            color,
+            at: ChannelNumbers {
+                universe: 1,
+                address: 1,
+            },
+        };
+        let moved = PatchCommand::Move {
+            fixture: 1,
+            at: ChannelNumbers {
+                universe: 1,
+                address: 101,
+            },
+        };
+        // (edit, the step still binds): docs/engine.md, a Move keeps the same lights,
+        // Unpatch removes them, and an RGBW light has a field more than the saved words
+        for (case, patch, binds) in [
+            ("moved", edit(&patch, moved), true),
+            ("unpatched", unpatched.clone(), false),
+            (
+                "patched again as RGB",
+                edit(&unpatched, strip(Color::Rgb)),
+                true,
+            ),
+            (
+                "patched again as RGBW",
+                edit(&unpatched, strip(Color::Rgbw)),
+                false,
+            ),
+        ] {
+            assert_eq!(plan.bindings_match(&patch), binds, "{case}");
+        }
+    }
+}

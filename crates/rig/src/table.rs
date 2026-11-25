@@ -210,3 +210,44 @@ impl Words {
         core::mem::size_of_val(self.runs.as_slice()) + core::mem::size_of_val(self.pool.as_slice())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::vec;
+    use engine_core::{LightNumber, Lights};
+
+    #[test]
+    fn words_name_their_lights_and_keep_each_run_and_word_once() {
+        let lights = Lights::new(8).unwrap();
+        let light = |at| LightRun::new(LightNumber::new(at, lights).unwrap(), 1, lights).unwrap();
+        // A run is a LightRun (two u16) and its u32 start: 8 bytes. A word is an
+        // Option<u16>: 4 bytes. (case, each light's words, lights, bytes by hand)
+        let cases = [
+            ("none", vec![], 0, 0),
+            (
+                "three lights side by side, equal words: one run, two words",
+                (0..3).map(|at| (at, vec![Some(1), None])).collect(),
+                3,
+                8 + 2 * 4,
+            ),
+            (
+                "two lights apart, other words: two runs, two words",
+                vec![(0, vec![Some(1)]), (5, vec![Some(2)])],
+                2,
+                2 * 8 + 2 * 4,
+            ),
+            (
+                "two lights apart, equal words: two runs, one word",
+                vec![(0, vec![Some(1)]), (2, vec![Some(1)])],
+                2,
+                2 * 8 + 4,
+            ),
+        ];
+        for (case, each, named, bytes) in cases {
+            let words = Words::new(each.into_iter().map(|(at, words)| (light(at), words)));
+            assert_eq!(words.lights(), named, "{case}: lights");
+            assert_eq!(words.bytes(), bytes, "{case}: bytes");
+        }
+    }
+}

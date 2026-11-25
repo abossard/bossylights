@@ -324,3 +324,75 @@ pub(crate) fn compile(
         work,
     ))
 }
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used, reason = "the fixture supplies the named looks")]
+mod tests {
+    use crate::Looks;
+    use crate::tests::{item, leaf, patch, sequence};
+    use engine_core::{Percent, SequenceItem, Use};
+
+    #[test]
+    fn an_item_books_its_outgoing_child_only_when_it_can_show_it() {
+        let patch = patch();
+        // look 1 a step, look 3 a sequence of it
+        let looks = Looks::new()
+            .put(leaf(1), &patch)
+            .unwrap()
+            .put(sequence(3, &[item(1)]), &patch)
+            .unwrap();
+        let half = Percent::new(50).unwrap();
+        // sequence 4: a plain item of step 1, then `second`. Its work with `second`
+        // used plain is the baseline.
+        let work = |second: SequenceItem| {
+            let looks = looks.put(sequence(4, &[item(1), second]), &patch).unwrap();
+            looks.plan(4).unwrap().work()
+        };
+        // (case, second item, it shows its outgoing child): docs/history/looks-slice-3.md,
+        // a transition blends from the outgoing child, a spread step shows it before its
+        // delayed entry, a spread sequence only offsets its phase
+        for (case, second, shows_outgoing) in [
+            (
+                "a transition into a step",
+                SequenceItem {
+                    transition: half,
+                    ..item(1)
+                },
+                true,
+            ),
+            (
+                "a spread step",
+                SequenceItem {
+                    usage: Use {
+                        spread: half,
+                        ..Use::default()
+                    },
+                    ..item(1)
+                },
+                true,
+            ),
+            (
+                "a transition into a sequence",
+                SequenceItem {
+                    transition: half,
+                    ..item(3)
+                },
+                true,
+            ),
+            (
+                "a spread sequence",
+                SequenceItem {
+                    usage: Use {
+                        spread: half,
+                        ..Use::default()
+                    },
+                    ..item(3)
+                },
+                false,
+            ),
+        ] {
+            let plain = work(item(second.look));
+            assert_eq!(work(second) > plain, shows_outgoing, "{case}");
+        }
+    }
+}

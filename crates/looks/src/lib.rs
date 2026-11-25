@@ -463,7 +463,20 @@ mod tests {
             let (timed, work) = crate::sequence::compile(&saved, 2, &patch, usize::MAX).unwrap();
             Plan::timed(2, timed, work, room)
         };
-        let sequence_bytes = timed(usize::MAX).unwrap().bytes() - size_of::<Plan>();
+        // sequence 2 over step 1, counted by hand (count x size per term):
+        // saved looks 1 and 2, palettes none, nodes step and sequence, one item,
+        // a shows per node, the three lights, the step's three words kept once (the
+        // sequence has none), waves none, one leaf, two bindings per light, and the
+        // leaf's own words as the step above
+        let sequence_bytes = 2 * size_of::<u16>()
+            + 2 * size_of::<engine_core::Node>()
+            + size_of::<engine_core::Item>()
+            + 2 * size_of::<compile::Shows>()
+            + 3 * size_of::<compile::Target>()
+            + 3 * size_of::<Option<u16>>()
+            + size_of::<compile::Leaf>()
+            + 3 * 2 * size_of::<engine_core::Binding>()
+            + step_bytes;
         // (plan, built in its bytes, built a byte short)
         let plans = [
             ("a step", step(step_bytes), step(step_bytes - 1)),

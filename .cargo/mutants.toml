@@ -8,4 +8,12 @@ exclude_re = [
   # `left = i` instead of `i + 1`: the first cell's `left + 1` is then `i + 1`, never below
   # its diagonal `i` plus a change cost of 0 or 1, so the minimum stays.
   'fixture-library/src/search\.rs:36:26: replace \+ with \* in distance',
+  # Inside `!=` checks of the same two values (rank, brightness): `>` and `>=` agree.
+  'engine-core/src/mix\.rs:295:25: replace > with >= in takes',
+  'engine-core/src/mix\.rs:298:23: replace > with >= in takes',
+  # The low byte of `x << 8` is 0: or and xor agree.
+  'engine-core/src/mix\.rs:307:39: replace \| with \^ in word_at',
+  'rig/src/writer\.rs:150:47: replace \| with \^ in Travel::over',
+  # Debug of the field table prints its name only, for diagnostics.
+  'rig/src/table\.rs:34:9: replace <impl fmt::Debug for FieldPlan>::fmt -> fmt::Result with Ok\(Default::default\(\)\)',
 ]

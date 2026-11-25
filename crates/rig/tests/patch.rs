@@ -571,3 +571,42 @@ fn a_prepared_patch_frames_each_channel_at_its_files_rest() {
     );
     assert_eq!(channels.values()[0].0[5], 11);
 }
+
+#[test]
+fn a_step_binds_its_values_to_the_lights_of_its_target() {
+    use engine_core::{Levels, Light, Step};
+    let library = library();
+    let mut patched = Patch::new(Universes::ONE, Lights::new(16).unwrap(), common::whole());
+    for command in [par("PAR 1", 1, 1), par("PAR 2", 1, 4)] {
+        patched = patched.update(command, &library).unwrap().0.unwrap();
+    }
+    let red = Light {
+        intensity: Some(0xffff),
+        colour: Some(Rgb {
+            red: 0xffff,
+            green: 0,
+            blue: 0,
+        }),
+        ..Light::DARK
+    };
+    // Generic-Generic-RGB.qxf, mode RGB: red, green, blue, one byte each. (target, lights
+    // it names, the first six bytes)
+    let cases = [
+        (fixture_(2), 1, [0, 0, 0, 255, 0, 0]),
+        (Target::Light { light: 1 }, 1, [255, 0, 0, 0, 0, 0]),
+    ];
+    for (target, named, bytes) in cases {
+        let words = patched
+            .bind_step(&Step {
+                target,
+                values: red,
+            })
+            .unwrap();
+        let mut out = [Levels::ZERO];
+        words.offer(patched.prepare().targets(), |field, word| {
+            common::offer(&mut out, field, word);
+        });
+        assert_eq!(words.lights(), named, "{target:?}: lights");
+        assert_eq!(out[0].0[..6], bytes, "{target:?}: bytes");
+    }
+}

@@ -631,6 +631,53 @@ mod tests {
     }
 
     #[test]
+    fn a_source_tag_names_an_entry_of_the_table() {
+        // docs/engine.md, "Source table": 1,024 entries; rest and a raw hold name none
+        // (case, tag, the entry it names)
+        let cases = [
+            ("rest", Some(SourceTag::REST), None),
+            ("a raw hold", Some(SourceTag::RAW), None),
+            ("the first entry", SourceTag::of(0), Some(0)),
+            ("the last entry", SourceTag::of(1023), Some(1023)),
+            ("past the table", SourceTag::of(1024), None),
+        ];
+        for (case, tag, entry) in cases {
+            assert_eq!(tag.and_then(SourceTag::entry), entry, "{case}");
+        }
+    }
+
+    #[test]
+    fn the_brightness_rule_turns_highest_on_and_off_on_the_dimmers_only() {
+        let one = |at, flags| Configured {
+            at,
+            rest: 0,
+            dark: 0,
+            flags,
+        };
+        let pair = Flags::FADE.with(Flags::PAIR);
+        // channels 0 and 1 are dimmers, 2 and 3 are not
+        let patched = [
+            one(0, pair),
+            one(1, Flags::FADE),
+            one(2, Flags::NONE),
+            one(3, pair),
+        ];
+        let mut all = Box::new(Channels::NEW);
+        all.configure(&[], &patched);
+        // docs/design/channel-model.md, "Bit of flags": 0 fade, 1 highest, 2 pair. The rule
+        // sets bit 1 on the dimmers and keeps the others. (on, each channel's flags byte)
+        let cases = [
+            (true, [0b111, 0b011, 0b000, 0b101]),
+            (false, [0b101, 0b001, 0b000, 0b101]),
+        ];
+        for (on, bytes) in cases {
+            all.highest(&[0, 1], on);
+            let seen: [u8; 4] = core::array::from_fn(|at| all.flags[at].0);
+            assert_eq!(seen, bytes, "highest {on}");
+        }
+    }
+
+    #[test]
     fn a_patch_configures_its_channels_and_gives_the_old_ones_back() {
         let one = |at, rest, dark, flags| Configured {
             at,
