@@ -13,8 +13,8 @@ use engine::{
 use outputs::dmx_usb_pro::{DmxUsbPro, Find, MESSAGE, never_wait};
 use serialport::{SerialPort, TTYPort};
 use std::io::Read;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -204,19 +204,26 @@ fn exclusive_adapter() -> (Open, TTYPort, String) {
     (open, ours, name)
 }
 
-/// Reads the test's end until a frame with `level` on channel 1 arrives.
-fn hear(end: &mut TTYPort, level: u8) {
+/// Takes every byte on the test's end, as a real adapter does, until `keep` is let go of.
+/// A pseudo terminal holds less than two messages (1024 bytes on macOS), and a port that
+/// takes no byte for half a second counts as lost: the next output that looks would get
+/// the adapter (#314). Says on `heard` once a frame with `level` on channel 1 arrived.
+fn take_all(mut end: TTYPort, level: u8, heard: &mpsc::Sender<()>, keep: &mpsc::Receiver<()>) {
     let wanted = [0x7E, 6, 0x01, 0x02, 0, level];
-    let mut heard = Vec::new();
+    let mut seen = Vec::new();
     let mut chunk = [0; MESSAGE];
-    let started = Instant::now();
-    while !heard.windows(wanted.len()).any(|w| w == wanted) {
-        assert!(
-            started.elapsed() < Duration::from_secs(5),
-            "never heard {level}"
-        );
-        if let Ok(read) = end.read(&mut chunk) {
-            heard.extend_from_slice(chunk.get(..read).unwrap_or_default());
+    end.set_timeout(Duration::from_millis(10)).unwrap();
+    while keep.try_recv() == Err(mpsc::TryRecvError::Empty) {
+        let Ok(read) = end.read(&mut chunk) else {
+            // No port open on the other side fails at once.
+            thread::sleep(Duration::from_millis(5)); // poll
+            continue;
+        };
+        if !seen.windows(wanted.len()).any(|w| w == wanted) {
+            seen.extend_from_slice(chunk.get(..read).unwrap_or_default());
+            if seen.windows(wanted.len()).any(|w| w == wanted) {
+                let _ = heard.send(());
+            }
         }
     }
 }
@@ -278,8 +285,11 @@ fn a_dmx_usb_pro_output_is_set_again_replaced_and_moved_through_send() {
         ),
     ];
     for (level, (commands, answers, drives)) in (1..).zip(cases) {
-        let (open, mut end, _) = exclusive_adapter();
+        let (open, end, _) = exclusive_adapter();
         let (mut engine, mut sender) = Engine::start_with(Universes::ONE, open).unwrap();
+        let (heard, hearing) = mpsc::channel();
+        let (_keep, reading) = mpsc::channel();
+        thread::spawn(move || take_all(end, level, &heard, &reading));
         assert_eq!(send_all(&mut sender, &commands), answers, "{commands:?}");
         let set = Command::SetChannel {
             channel: ChannelNumbers {
@@ -289,7 +299,10 @@ fn a_dmx_usb_pro_output_is_set_again_replaced_and_moved_through_send() {
             value: level,
         };
         assert_eq!(sender.send(set), Ok(()), "{commands:?}");
-        hear(&mut end, level);
+        assert!(
+            hearing.recv_timeout(Duration::from_secs(5)).is_ok(),
+            "never heard {level}"
+        );
         // The level is heard above; the status may come a wake later: what came of a frame is
         // counted when its box comes back from the output's thread (#174).
         let started = Instant::now();
