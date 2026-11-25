@@ -1,11 +1,12 @@
 // `npm run land -- <wip/branch> <message-file>`: a reviewed WIP branch becomes one commit on main.
 // Reads every fact first (land.mjs decides), then writes: squash onto origin/main without a working tree
-// (merge-tree, commit-tree), `npm run verify` on that commit, a plain push (a moved main refuses it),
-// then the branch and its worktree go. Nothing in any checkout is touched before the push.
+// (merge-tree, commit-tree), a plain push (a moved main refuses it), then the branch and its worktree go.
+// It runs no check: it lands only a tree that `npm run verify --mutants` passed and recorded.
+// Nothing in any checkout is touched before the push.
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { existsSync, readFileSync } from "node:fs";
 import { cleanupSteps, parseArgs, pushFailure, refusal, worktreeOf } from "./land.mjs";
+import { recordPath } from "./verify.mjs";
 
 const run = (command, args) => spawnSync(command, args, { encoding: "utf8", maxBuffer: 1 << 26 });
 const failure = (command, args, r) => `${command} ${args.join(" ")}: ${(r.error?.message ?? r.stderr).trim()}`;
@@ -35,6 +36,8 @@ try {
   const worktree = worktreeOf(git("worktree", "list", "--porcelain"), branch);
   const merge = remoteTip && run("git", ["merge-tree", "--write-tree", base, remoteTip]);
   if (merge && merge.status > 1) throw new Error(`git merge-tree: ${merge.stderr.trim()}`);
+  const tree = merge?.status === 0 ? merge.stdout.split("\n")[0] : null;
+  const recorded = tree && recordPath(git("rev-parse", "--path-format=absolute", "--git-common-dir"), tree);
   const facts = {
     branch,
     remoteTip,
@@ -43,7 +46,10 @@ try {
     worktree,
     dirty: worktree !== null && git("-C", worktree, "status", "--porcelain") !== "",
     conflict: merge?.status === 1,
-    empty: merge?.status === 0 && merge.stdout.split("\n")[0] === git("rev-parse", `${base}^{tree}`),
+    empty: tree !== null && tree === git("rev-parse", `${base}^{tree}`),
+    tree,
+    tipTree: remoteTip && git("rev-parse", `${remoteTip}^{tree}`),
+    record: recorded && existsSync(recorded) ? JSON.parse(readFileSync(recorded, "utf8")) : null,
     base,
     message,
     ci: json("run", "list", "--workflow", "ci.yml", "--branch", "main", "--event", "push", "--commit", base,
@@ -53,10 +59,10 @@ try {
   const why = refusal(facts);
   if (why) throw new Error(why);
 
-  const sha = git("commit-tree", merge.stdout.split("\n")[0], "-p", base, "-F", messageFile);
+  const sha = git("commit-tree", tree, "-p", base, "-F", messageFile);
   console.log(`land: ${sha.slice(0, 7)} is ${branch} (${remoteTip.slice(0, 7)}) squashed onto origin/main (${base.slice(0, 7)})`);
-  const verify = spawnSync(process.execPath, [fileURLToPath(new URL("./verify-run.mjs", import.meta.url)), sha], { stdio: "inherit" });
-  if (verify.status !== 0) throw new Error(`verify failed on ${sha.slice(0, 7)}: main and ${branch} are as they were`);
+  const { commit, suites, mutants } = facts.record;
+  console.log(`land: its tree passed verify of ${commit.slice(0, 7)}: ${suites.join(", ")}; mutants caught ${mutants.caught}, missed ${mutants.missed}, timeout ${mutants.timeout}`);
   const pushed = run("git", ["push", "origin", `${sha}:refs/heads/main`]);
   if (pushed.status !== 0) throw new Error(pushFailure(pushed.stderr));
   console.log(`land: ${sha.slice(0, 7)} is on origin/main`);

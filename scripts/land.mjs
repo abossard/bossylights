@@ -34,11 +34,21 @@ export function ciRefusal({ ci, base, issues, message }) {
 }
 
 /**
+ * Why the passed check does not cover what land would push, or null. tree: the tree of the squash onto origin/main,
+ * tipTree: the tree of the branch alone, record: what `npm run verify` recorded for `tree`, or null.
+ */
+export function recordRefusal({ branch, tree, tipTree, record }) {
+  if (record?.tree === tree && record.suites?.length > 0 && record.mutants?.missed === 0) return null;
+  if (tree !== tipTree) return `${branch} squashed onto origin/main is another tree than ${branch}: merge origin/main into it, push, verify again`;
+  return `no passed "npm run verify -- <commit> --mutants" for the tree of ${branch}: verify its tip, then land`;
+}
+
+/**
  * Why `branch` may not land, or null. Facts, all read before anything is written:
  * remoteTip, localTip (null when absent), here (this checkout's folder), worktree (the branch's folder or null),
- * dirty, conflict, empty (the merge leaves origin/main's tree as it is), and what ciRefusal reads.
+ * dirty, conflict, empty (the merge leaves origin/main's tree as it is), what recordRefusal and ciRefusal read.
  */
-export function refusal({ branch, remoteTip, localTip, here, worktree, dirty, conflict, empty, ...ci }) {
+export function refusal({ branch, remoteTip, localTip, here, worktree, dirty, conflict, empty, tree, tipTree, record, ...ci }) {
   const folder = branch.replaceAll("/", "-");
   if (remoteTip === null) return `origin has no ${branch}: push it, the review reads the pushed branch`;
   if (localTip !== null && localTip !== remoteTip) return `local ${branch} differs from origin: push it or drop the local commits`;
@@ -47,7 +57,7 @@ export function refusal({ branch, remoteTip, localTip, here, worktree, dirty, co
   if (dirty) return `the worktree of ${branch} has uncommitted changes`;
   if (conflict) return `${branch} does not merge cleanly onto origin/main: rebase it`;
   if (empty) return `${branch} changes nothing on origin/main: landed already, or no change`;
-  return ciRefusal(ci);
+  return recordRefusal({ branch, tree, tipTree, record }) ?? ciRefusal(ci);
 }
 
 /**

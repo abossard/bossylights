@@ -1,11 +1,12 @@
 // `npm run verify -- <commit> [--mutants]`: a clean copy of the commit, outside the shared checkout.
 // `git archive` reads the object store only: the working tree, index and stash stay as they are.
 // The copy is built with the default target folder (CARGO_TARGET_DIR unset) and removed at the end.
+// A passed run with mutants records its git tree in the shared git folder: `npm run land` trusts it for the same tree.
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { logPath, mutantsReport, parseArgs, suitesOf, testSummary } from "./verify.mjs";
+import { dirname, join } from "node:path";
+import { logPath, mutantsReport, parseArgs, recordOf, recordPath, suitesOf, testSummary } from "./verify.mjs";
 import { stopLeftovers } from "./verify-leftovers.mjs";
 
 const run = (command, args, cwd, options = {}) =>
@@ -28,6 +29,12 @@ if (sha.status !== 0) {
   process.exit(2);
 }
 const commit = sha.stdout.trim();
+const tree = run("git", ["rev-parse", `${commit}^{tree}`], process.cwd()).stdout.trim();
+// Mutants on what the branch adds to main: from where it left origin/main. A commit on main itself: its own diff.
+const forkPoint = run("git", ["merge-base", "refs/remotes/origin/main", commit], process.cwd()).stdout.trim();
+const base = forkPoint && forkPoint !== commit ? forkPoint : `${commit}^`;
+const record = recordPath(run("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], process.cwd()).stdout.trim(), tree);
+rmSync(record, { force: true }); // the last run of a tree decides: a run that ends early leaves none
 const dir = mkdtempSync(join(tmpdir(), "bossylights-verify-"));
 const logDir = mkdtempSync(join(tmpdir(), "bossylights-verify-logs-")); // kept: it outlives the copy
 let failed = false;
@@ -50,8 +57,9 @@ try {
   failed = results.some((r) => !r.ok);
   console.log(testSummary(commit.slice(0, 7), results));
 
+  let mutants = null;
   if (args.mutants) {
-    const diff = run("git", ["diff", `${commit}^`, commit], process.cwd()).stdout;
+    const diff = run("git", ["diff", base, commit], process.cwd()).stdout;
     const diffFile = join(dir, "verify.diff");
     writeFileSync(diffFile, diff);
     const m = run("cargo", ["mutants", "--no-shuffle", "--in-diff", diffFile], dir, { env });
@@ -59,9 +67,17 @@ try {
     if (![NO_MUTANTS, 2, 3].includes(m.status)) throw new Error(`cargo mutants failed (exit ${m.status}): ${m.stderr.split("\n").filter(Boolean).at(-1)}`);
     const file = join(dir, "mutants.out", "outcomes.json");
     const outcomes = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : null;
-    const report = mutantsReport({ status: m.status, outcomes, stderr: m.stderr });
-    console.log(report.text);
-    if (!report.ok) failed = true;
+    mutants = mutantsReport({ status: m.status, outcomes, stderr: m.stderr });
+    console.log(mutants.text);
+    if (!mutants.ok) failed = true;
+  }
+  const passed = recordOf({ commit, tree, base, results, mutants });
+  if (passed.record) {
+    mkdirSync(dirname(record), { recursive: true });
+    writeFileSync(record, `${JSON.stringify(passed.record, null, 2)}\n`);
+    console.log(`verify: recorded tree ${tree.slice(0, 7)} in ${record}: land trusts it`);
+  } else {
+    console.log(`verify: no record (${passed.why}): land refuses this tree`);
   }
 } catch (error) {
   console.error(`verify: ${error.message}`);

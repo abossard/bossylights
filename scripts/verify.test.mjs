@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { firstFailure, leftovers, logPath, mutantsReport, mutantsSummary, parseArgs, suitesOf, testSummary } from "./verify.mjs";
+import { firstFailure, leftovers, logPath, mutantsReport, mutantsSummary, parseArgs, recordOf, recordPath, suitesOf, testSummary } from "./verify.mjs";
 
 test("suites are the npm run parts of the test script", () => {
   assert.deepEqual(suitesOf("npm run test:checks && npm run test:rust && npm run test:ui"), ["test:checks", "test:rust", "test:ui"]);
@@ -100,8 +100,39 @@ test("mutants list every missed and timeout line, never the caught ones", () => 
 
 test("no outcomes file: exit 0 is no mutants, any other exit is a failure line", () => {
   const none = mutantsReport({ status: 0, outcomes: null, stderr: "" });
-  assert.deepEqual(none, { ok: true, text: "mutants: none in this diff" });
+  assert.deepEqual(none, { ok: true, text: "mutants: none in this diff", counts: { caught: 0, missed: 0, timeout: 0, unviable: 0 } });
   const bad = mutantsReport({ status: 1, outcomes: null, stderr: "a\nboom\n" });
   assert.equal(bad.ok, false);
   assert.match(bad.text, /no outcomes file \(cargo mutants exit 1\): boom/);
+  assert.equal(bad.counts, null);
+});
+
+const counts = (missed, timeout = 0) => ({ caught: 4, missed, timeout, unviable: 1 });
+const allPass = [{ suite: "test:checks", ok: true }, { suite: "test:rust", ok: true }];
+const run = { commit: "c".repeat(40), tree: "f".repeat(40), base: "b".repeat(40), results: allPass, mutants: { ok: true, counts: counts(0) } };
+// [name, what differs from a passed run with mutants, why there is no record, or null when it records]
+const recordCases = [
+  ["every suite passed, mutants none missed", {}, null],
+  ["mutants timed out, none missed", { mutants: { ok: true, counts: counts(0, 2) } }, null],
+  ["a red run never records", { results: [allPass[0], { suite: "test:rust", ok: false }] }, /a suite failed/],
+  ["no suite ran", { results: [] }, /a suite failed/],
+  ["mutants missed never records", { mutants: { ok: true, counts: counts(1) } }, /1 mutant\(s\) missed: kill each, or pin it/],
+  ["mutants missed and timed out never records", { mutants: { ok: true, counts: counts(1, 2) } }, /1 mutant\(s\) missed/],
+  ["mutants not asked", { mutants: null }, /verify with --mutants/],
+  ["mutants did not run through", { mutants: { ok: false, counts: null } }, /did not run through/],
+];
+for (const [name, differs, why] of recordCases) {
+  test(`record: ${name}`, () => {
+    const made = recordOf({ ...run, ...differs });
+    if (why) {
+      assert.equal(made.record, null);
+      assert.match(made.why, why);
+    } else {
+      assert.deepEqual(made, { record: { tree: run.tree, commit: run.commit, base: run.base, suites: ["test:checks", "test:rust"], mutants: (differs.mutants ?? run.mutants).counts }, why: null });
+    }
+  });
+}
+
+test("a record lives in the shared git folder, named by its tree", () => {
+  assert.equal(recordPath("/p/bossylights/.git", "f".repeat(40)), `/p/bossylights/.git/bossylights-verified/${"f".repeat(40)}.json`);
 });

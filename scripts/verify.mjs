@@ -58,9 +58,31 @@ export function mutantsSummary({ caught, missed, timeout, unviable, outcomes }) 
 
 // What the run of cargo-mutants left: its outcomes (or none) and its exit code. Exit 0 with no
 // outcomes file means it found nothing to mutate; any other missing file is a failure.
+// counts: caught, missed, timeout, unviable, or null when it did not run through.
 export function mutantsReport({ status, outcomes, stderr }) {
-  if (outcomes) return { ok: true, text: mutantsSummary(outcomes) };
-  if (status === 0) return { ok: true, text: "mutants: none in this diff" };
+  if (outcomes) {
+    const { caught, missed, timeout, unviable } = outcomes;
+    return { ok: true, text: mutantsSummary(outcomes), counts: { caught, missed, timeout, unviable } };
+  }
+  if (status === 0) return { ok: true, text: "mutants: none in this diff", counts: { caught: 0, missed: 0, timeout: 0, unviable: 0 } };
   const last = stderr.split("\n").filter(Boolean).at(-1) ?? "no output";
-  return { ok: false, text: `mutants: no outcomes file (cargo mutants exit ${status}): ${last}` };
+  return { ok: false, text: `mutants: no outcomes file (cargo mutants exit ${status}): ${last}`, counts: null };
+}
+
+/**
+ * The record of a passed run, which `npm run land` trusts for the same tree, or why there is none.
+ * Only a run where every suite passed and mutants ran on the diff with none missed records.
+ * results: [{ suite, ok }]. mutants: what mutantsReport gave, or null when --mutants was not asked.
+ */
+export function recordOf({ commit, tree, base, results, mutants }) {
+  if (results.length === 0 || results.some((r) => !r.ok)) return { record: null, why: "a suite failed" };
+  if (!mutants) return { record: null, why: "mutants did not run: verify with --mutants" };
+  if (!mutants.ok) return { record: null, why: "mutants did not run through" };
+  if (mutants.counts.missed > 0) return { record: null, why: `${mutants.counts.missed} mutant(s) missed: kill each, or pin it where it lives with why (#[mutants::skip], .cargo/mutants.toml)` };
+  return { record: { tree, commit, base, suites: results.map((r) => r.suite), mutants: mutants.counts }, why: null };
+}
+
+/** Where the record of a tree lives: in the git folder every worktree shares, outside any tree. */
+export function recordPath(commonDir, tree) {
+  return `${commonDir}/bossylights-verified/${tree}.json`;
 }

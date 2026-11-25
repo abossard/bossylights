@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ciRefusal, cleanupSteps, namesIncident, parseArgs, pushFailure, refusal, worktreeOf } from "./land.mjs";
+import { ciRefusal, cleanupSteps, namesIncident, parseArgs, pushFailure, recordRefusal, refusal, worktreeOf } from "./land.mjs";
 
 // [argv, parsed or null]
 const argCases = [
@@ -77,10 +77,32 @@ for (const [name, facts, refused] of ciCases) {
   });
 }
 
+const tree = "f".repeat(40);
+const passed = { tree, commit: "c".repeat(40), suites: ["test:checks"], mutants: { caught: 1, missed: 0, timeout: 0, unviable: 0 } };
+const same = { branch: "wip/x", tree, tipTree: tree, record: passed };
+// [name, record facts that differ from a verified branch on the newest main, refusal pattern or null]
+const recordCases = [
+  ["same tree, its record: no check again", {}, null],
+  ["same tree, no record", { record: null }, /no passed "npm run verify -- <commit> --mutants" for the tree of wip\/x/],
+  ["another tree: main moved since the branch left it", { tree: "9".repeat(40), record: null }, /merge origin\/main into it, push, verify again/],
+  ["another tree with the record of the branch alone", { tree: "9".repeat(40) }, /merge origin\/main into it, push, verify again/],
+  ["a record of another tree under this tree's name", { record: { ...passed, tree: "8".repeat(40) } }, /no passed/],
+  ["a record with missed mutants (by hand)", { record: { ...passed, mutants: { ...passed.mutants, missed: 3 } } }, /no passed/],
+  ["a record without mutants (by hand)", { record: { tree, commit: passed.commit, suites: passed.suites } }, /no passed/],
+  ["a record with no suite (by hand)", { record: { ...passed, suites: [] } }, /no passed/],
+];
+for (const [name, facts, refused] of recordCases) {
+  test(`land record: ${name}`, () => {
+    const why = recordRefusal({ ...same, ...facts });
+    if (refused) assert.match(why, refused);
+    else assert.equal(why, null);
+  });
+}
+
 const tip = "c".repeat(40);
 const ready = {
   branch: "wip/x", remoteTip: tip, localTip: tip, empty: false, here: "/p/bossylights",
-  worktree: "/p/wip-x", dirty: false, conflict: false, ...ciOk,
+  worktree: "/p/wip-x", dirty: false, conflict: false, ...same, ...ciOk,
 };
 // [name, facts that differ from a branch ready to land, refusal pattern or null]
 const branchCases = [
@@ -95,6 +117,7 @@ const branchCases = [
   ["uncommitted changes", { dirty: true }, /uncommitted/],
   ["conflict with main", { conflict: true }, /rebase/],
   ["CI red", { ci: red }, /is red/],
+  ["not verified", { record: null }, /no passed/],
 ];
 for (const [name, facts, refused] of branchCases) {
   test(`land: ${name}`, () => {
