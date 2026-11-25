@@ -3,7 +3,7 @@
 import { expect, test } from "@playwright/test";
 import { type ChildProcess, execFileSync, spawn, spawnSync } from "node:child_process";
 import { createSocket } from "node:dgram";
-import { createServer } from "node:http";
+import { createServer, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Command, OutputKind } from "../ui/src/engine-api.ts";
 import { cargoBuild } from "../scripts/cargo-build.mjs";
@@ -23,8 +23,11 @@ interface Shell {
 /** Every program a test started. A test that times out never reaches its `finally`, and its worker ends without them: `afterEach` stops them, so none meets the next test (#317). */
 const started = new Set<ChildProcess>();
 
-function startShell(address = ADDRESS, env: Record<string, string> = {}): Shell {
-  const child = spawn(programs.bossylights, [], { env: { ...process.env, BOSSYLIGHTS_ENGINE: address, ...env } });
+/** Starts the shell as the tests do: its window hidden, the app never in front (#316). `{ BOSSYLIGHTS_HIDDEN_WINDOW: undefined }` starts it as a person does. */
+function startShell(address = ADDRESS, env: Record<string, string | undefined> = {}): Shell {
+  const child = spawn(programs.bossylights, [], {
+    env: { ...process.env, BOSSYLIGHTS_ENGINE: address, BOSSYLIGHTS_HIDDEN_WINDOW: "1", ...env },
+  });
   started.add(child);
   let text = "";
   child.stdout?.on("data", (chunk: Buffer) => (text += chunk.toString()));
@@ -101,23 +104,34 @@ test("kill the shell: the engine keeps sending, a new shell adopts it and the fr
   }
 });
 
-/** A page for the window that closes the window, as a person does, once `close` is called. */
+/** A page for the window that closes the window, as a person does, once `close` is called. The page asks, the answer
+ * waits for `close`, and a dropped ask is asked again: a hidden window's timers are slowed, so the page uses none. */
 async function closingPage() {
   let closing = false;
+  const asked: ServerResponse[] = [];
   const server = createServer((ask, answer) => {
     answer.setHeader("access-control-allow-origin", "*");
-    if (ask.url === "/close") answer.end(closing ? "yes" : "no");
-    else answer.end("<!doctype html><title>Bossylights</title><p>closing page</p>");
+    if (ask.url !== "/close") answer.end("<!doctype html><title>Bossylights</title><p>closing page</p>");
+    else if (closing) answer.end("yes");
+    else asked.push(answer);
   });
   await new Promise<void>((listening) => server.listen(0, "127.0.0.1", listening));
   const page = `http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
   return {
     page,
-    script: `setInterval(() => fetch("${page}close").then((r) => r.text()).then((said) => {
+    script: `const ask = () => fetch("${page}close").then((r) => r.text()).then((said) => {
       if (said === "yes") window.__TAURI_INTERNALS__.invoke("plugin:window|close", { label: "main" });
-    }).catch(() => {}), 250);`,
-    close: () => (closing = true),
-    stop: () => new Promise((closed) => server.close(closed)),
+      else ask();
+    }, ask);
+    ask();`,
+    close: () => {
+      closing = true;
+      for (const answer of asked.splice(0)) answer.end("yes");
+    },
+    stop: () => {
+      server.closeAllConnections();
+      return new Promise((closed) => server.close(closed));
+    },
   };
 }
 
@@ -161,18 +175,19 @@ for (const [whose, before] of engines) {
   });
 }
 
-/** What the window's page shows, as the text its layout makes: the page posts it here. */
+/** What the window's page shows, as the text its layout makes, and whether it is visible and focused: the page posts it
+ * here on every change. A hidden window's timers are slowed, so the page uses none. The newest post wins. */
 async function windowText() {
   let posts = 0;
-  let last = new URLSearchParams();
+  let last = new URLSearchParams({ post: "0" });
   let seen = "";
   const server = createServer((ask, answer) => {
     let text = "";
     ask.on("data", (chunk: Buffer) => (text += chunk.toString()));
     ask.on("end", () => {
       posts++;
-      last = new URL(ask.url ?? "/", to).searchParams;
-      seen = text;
+      const said = new URL(ask.url ?? "/", to).searchParams;
+      if (Number(said.get("post")) > Number(last.get("post"))) [last, seen] = [said, text];
       answer.end();
     });
   });
@@ -180,12 +195,27 @@ async function windowText() {
   const to = `http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
   return {
     /** Runs in the window before its page, and on: posts what the page shows. */
-    script: `setInterval(() => {
-      const page = new URLSearchParams({ readyState: document.readyState, href: location.href });
-      fetch("${to}?" + page, { method: "POST", mode: "no-cors", body: document.body?.innerText ?? "" }).catch(() => {});
-    }, 250);`,
+    script: `{
+      let post = 0;
+      const send = () => {
+        const page = new URLSearchParams({
+          post: String(++post),
+          readyState: document.readyState,
+          href: location.href,
+          visibility: document.visibilityState,
+          focus: String(document.hasFocus()),
+        });
+        fetch("${to}?" + page, { method: "POST", mode: "no-cors", body: document.body?.innerText ?? "" }).catch(() => {});
+      };
+      new MutationObserver(send).observe(document, { subtree: true, childList: true, characterData: true });
+      for (const change of ["readystatechange", "visibilitychange"]) document.addEventListener(change, send);
+      for (const change of ["focus", "blur"]) window.addEventListener(change, send);
+      send();
+    }`,
     /** The lines the page showed last, in lower case (the status is styled upper case). */
     lines: () => seen.toLowerCase().split("\n"),
+    /** How the window showed last: page visibility and focus, as the page said them. */
+    showing: () => ({ visibility: last.get("visibility"), focus: last.get("focus") }),
     status: () =>
       `Window posts: ${posts}\nLast readyState: ${last.get("readyState") ?? "(none)"}\nLast href: ${last.get("href") ?? "(none)"}`,
     close: () => new Promise((closed) => server.close(closed)),
@@ -257,3 +287,50 @@ test("an engine of its own that ends at start: the shell does not say the window
   await expect.poll(shell.said, WAIT).toContain(`the window has no engine on ${nowhere}`);
   expect(shell.said()).not.toContain("the window talks to");
 });
+
+/** How macOS shows the app of `pid`: its activation policy ("0" regular, with a Dock icon; "1" accessory, without), whether it is the frontmost app, and how many of its windows are on screen. */
+function macApp(pid: number) {
+  const script = `ObjC.import("AppKit"); ObjC.import("CoreGraphics");
+  function run(argv) {
+    const pid = Number(argv[0]);
+    const app = $.NSRunningApplication.runningApplicationWithProcessIdentifier(pid);
+    const windows = ObjC.deepUnwrap(ObjC.castRefToObject($.CGWindowListCopyWindowInfo($.kCGWindowListOptionOnScreenOnly, 0)));
+    return JSON.stringify({
+      policy: String(app.activationPolicy),
+      frontmost: $.NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier === pid,
+      onScreen: windows.filter((w) => w.kCGWindowOwnerPID === pid).length,
+    });
+  }`;
+  return JSON.parse(execFileSync("osascript", ["-l", "JavaScript", "-e", script, String(pid)], { encoding: "utf8" })) as {
+    policy: string;
+    frontmost: boolean;
+    onScreen: number;
+  };
+}
+
+// [who starts the window, the hook, what the page says, what macOS says]. #316: the tests' windows stay out of the owner's way.
+const starts = [
+  ["the tests start", "1", { visibility: "hidden", focus: "false" }, { policy: "1", frontmost: false, onScreen: 0 }],
+  ["a person starts", undefined, { visibility: "visible", focus: "true" }, { policy: "0", frontmost: true, onScreen: 1 }],
+] as const;
+for (const [who, hook, page, mac] of starts) {
+  test(`a window ${who}: ${page.visibility}, focus ${page.focus}`, async ({ baseURL }) => {
+    // A person's start takes the focus: on the owner's Mac that is what #316 removes, so it runs in CI only.
+    test.skip(hook === undefined && !process.env.CI, "it would take the focus from the person at this computer");
+    test.setTimeout(120_000);
+    const window = await windowText();
+    // No engine: what the window shows is all this test reads.
+    const shell = startShell(NOWHERE, { BOSSYLIGHTS_UI: baseURL!, BOSSYLIGHTS_WINDOW_SCRIPT: window.script, BOSSYLIGHTS_HIDDEN_WINDOW: hook });
+    try {
+      // Linux CI runs on a display with no window manager: no window there gets the focus.
+      const seen = hook === undefined && process.platform === "linux" ? { visibility: page.visibility } : page;
+      await expect.poll(window.showing, WAIT).toMatchObject(seen);
+      if (process.platform === "darwin") expect(macApp(shell.process.pid!)).toEqual(mac);
+    } catch (cause) {
+      throw new Error(`Shell output:\n${shell.said() || "(none)"}\n${window.status()}`, { cause });
+    } finally {
+      await kill(shell.process);
+      await window.close();
+    }
+  });
+}

@@ -1,8 +1,8 @@
 // What only a debug build of the shell may hold: the test hooks of shell/src/main.rs.
-// A release build never reads another page, runs a test script or lets a page close the window.
+// A release build never reads another page, runs a test script, hides its window or lets a page close the window.
 
 /** Names of the debug-only test hooks, as they stand in the program's bytes. */
-export const DEBUG_ONLY = ["BOSSYLIGHTS_UI", "BOSSYLIGHTS_WINDOW_SCRIPT", "test-page-closes-the-window"];
+export const DEBUG_ONLY = ["BOSSYLIGHTS_UI", "BOSSYLIGHTS_WINDOW_SCRIPT", "BOSSYLIGHTS_HIDDEN_WINDOW", "test-page-closes-the-window"];
 
 /** The names of `names` found in a program's bytes (read as latin1). */
 export function found(bytes, names) {

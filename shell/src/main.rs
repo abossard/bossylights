@@ -62,7 +62,15 @@ fn main() {
     let window = window_engine(address, &engine);
     let page = window_page();
     let script = window_script(address) + &test_script();
-    tauri::Builder::default()
+    let showing = showing(start());
+    let builder = tauri::Builder::default();
+    #[cfg(target_os = "macos")]
+    let builder = builder.activate_ignoring_other_apps(showing.activates);
+    #[cfg_attr(
+        not(target_os = "macos"),
+        expect(unused_mut, reason = "only macOS sets a policy")
+    )]
+    let mut app = builder
         .setup(move |app| {
             eprintln!("bossylights: {window}");
             #[cfg(debug_assertions)]
@@ -79,12 +87,65 @@ fn main() {
             tauri::WebviewWindowBuilder::new(app, "main", page)
                 .title("Bossylights")
                 .inner_size(640.0, 420.0)
+                .visible(showing.visible)
+                .focused(showing.activates)
                 .initialization_script(script)
                 .build()?;
             Ok(())
         })
-        .run(tauri::generate_context!())
+        .build(tauri::generate_context!())
         .expect("the window could not be created");
+    // Before the launch, so a Dock icon never shows for a moment.
+    #[cfg(target_os = "macos")]
+    app.set_activation_policy(if showing.in_dock {
+        tauri::ActivationPolicy::Regular
+    } else {
+        tauri::ActivationPolicy::Accessory
+    });
+    app.run(|_, _| {});
+}
+
+/// Who started the window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Start {
+    Person,
+    /// The tests: the window stays out of the way of the person at this computer (#316).
+    #[cfg_attr(
+        all(not(debug_assertions), not(test)),
+        expect(dead_code, reason = "only a debug build starts as the tests")
+    )]
+    Test,
+}
+
+/// How the app and its window show.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Showing {
+    /// The window is on screen.
+    visible: bool,
+    /// The app comes to the front at launch and its window takes the keyboard.
+    activates: bool,
+    /// The app has a Dock icon (macOS).
+    in_dock: bool,
+}
+
+/// How the window of a start shows. A calculation.
+fn showing(start: Start) -> Showing {
+    let person = start == Start::Person;
+    Showing {
+        visible: person,
+        activates: person,
+        in_dock: person,
+    }
+}
+
+/// Who started the window: the tests set `BOSSYLIGHTS_HIDDEN_WINDOW` (a debug build only). A
+/// release build never reads it: its window is always a person's.
+fn start() -> Start {
+    #[cfg(debug_assertions)]
+    if std::env::var_os("BOSSYLIGHTS_HIDDEN_WINDOW").is_some() {
+        return Start::Test;
+    }
+    Start::Person
 }
 
 /// The lock that keeps one window per engine. It goes with the process, however it ends.
@@ -331,6 +392,32 @@ mod tests {
         for (a, b, same) in cases {
             let (a, b) = (a.parse().unwrap(), b.parse().unwrap());
             assert_eq!(lock_name(a) == lock_name(b), same, "{a} and {b}");
+        }
+    }
+
+    #[test]
+    fn a_window_the_tests_start_stays_out_of_the_way() {
+        // (who started the window, how it shows). #316
+        let cases = [
+            (
+                Start::Person,
+                Showing {
+                    visible: true,
+                    activates: true,
+                    in_dock: true,
+                },
+            ),
+            (
+                Start::Test,
+                Showing {
+                    visible: false,
+                    activates: false,
+                    in_dock: false,
+                },
+            ),
+        ];
+        for (start, expected) in cases {
+            assert_eq!(showing(start), expected, "{start:?}");
         }
     }
 
