@@ -83,7 +83,7 @@ sequenceDiagram
 |---|---|
 | Manual ends | until Release: keeps its last offer. Until stop: gone when the pad or fader stops. A haze fader is a channel hold, kept until released |
 | Show or Autopilot ends | reveal: gone. Stay: each channel keeps its last offer at its rank, until released |
-| A new grab on the same target by the same connection | replaces the earlier one. Ending it never brings an older grab back |
+| A new grab on the same target | replaces the earlier one, whoever made it. Ending it never brings an older grab back |
 | A light moves, is unpatched or changes mode | every kept offer on its channels ends in the same edit |
 
 ## One writer per channel

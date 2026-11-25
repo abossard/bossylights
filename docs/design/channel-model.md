@@ -221,7 +221,7 @@ One function, `mix`, in `engine-core`, one panel in the app. Each channel is won
 |---|---|
 | Manual ends | `UntilRelease` keeps its last offer until Release. `UntilStop` removes it when the pad or fader stops. A haze fader is a channel `Hold`, kept until `ReleaseChannel` |
 | Show or Autopilot ends | `Reveal` removes it. `Stay` freezes each channel's last offer at its rank, and a channel in a gap has none. A kept play can be released (`ReleasePlay`) |
-| A new grab on the same target by the same connection | replaces the earlier one. Ending it never brings an older grab back |
+| A new grab on the same target | replaces the earlier one, whoever made it. Ending it never brings an older grab back |
 | A stale end | does nothing |
 | A fixture moves, is unpatched or changes mode | every kept offer on its channels ends in the same edit |
 

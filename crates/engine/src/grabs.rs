@@ -478,7 +478,7 @@ fn selected(runs: &[LightRun], matches: impl Fn(usize) -> bool) -> Vec<LightRun>
 #[expect(clippy::unwrap_used, reason = "a test that cannot set itself up fails")]
 mod tests {
     use super::*;
-    use engine_core::{End, Universes};
+    use engine_core::{End, Gobo, Position, Rgb, Universes};
     use rig::Whole;
     use std::num::NonZeroU16;
 
@@ -549,15 +549,244 @@ mod tests {
         }
     }
 
-    /// What the book gets from an event: the grab's end, a release or an unpatch of the
-    /// first lights, every grab let go, rules that no longer keep.
+    #[test]
+    fn a_grab_books_an_end_and_a_release_per_light_it_holds() {
+        let lights = Lights::new(3).unwrap();
+        let patch = Patch::new(Universes::ONE, lights, Whole(|_| NonZeroU16::MIN));
+        let run = |first, count| {
+            vec![LightRun::new(LightNumber::new(first, lights).unwrap(), count, lights).unwrap()]
+        };
+        let intensity = Value::Intensity(u16::MAX);
+        let colour = Value::Colour(Rgb {
+            red: u16::MAX,
+            green: 0,
+            blue: 0,
+        });
+        // docs/engine.md, "Booking by lights": a live light property books an end and a
+        // release (2), a kept one only its release (1). (the book: each grab's value, first
+        // light, light count, kept; what it books; what a new intensity grab on all three
+        // lights adds: 2 a light, less what the light books already)
+        let cases = [
+            ("nobody holds them", vec![], 0, 6),
+            (
+                "a live grab holds them",
+                vec![(intensity, 0, 3, false)],
+                6,
+                0,
+            ),
+            (
+                "a kept grab holds them",
+                vec![(intensity, 0, 3, true)],
+                3,
+                3,
+            ),
+            (
+                "a live grab holds one",
+                vec![(intensity, 0, 1, false)],
+                2,
+                4,
+            ),
+            (
+                "a kept grab holds one, a live grab two",
+                vec![(intensity, 0, 1, true), (intensity, 1, 2, false)],
+                5,
+                1,
+            ),
+            (
+                "a live grab of colour holds them",
+                vec![(colour, 0, 3, false)],
+                6,
+                6,
+            ),
+        ];
+        for (case, book, booked, adds) in cases {
+            let mut grabs = Grabs::new();
+            for (generation, (value, first, count, kept)) in (0..).zip(book) {
+                let id = GrabId { generation };
+                grabs.hold(id, value, run(first, count), &patch);
+                if kept {
+                    grabs.end(id, End::Keep);
+                }
+            }
+            assert_eq!(grabs.reserved(), booked, "{case}: booked");
+            assert_eq!(
+                grabs.fits(Property::Intensity, &run(0, 3)),
+                Ok(adds),
+                "{case}: a new grab adds"
+            );
+        }
+    }
+
+    /// A step on a full book: an intensity grab on lights (indices), or a grab's end.
+    #[derive(Clone, Copy, Debug)]
+    enum Step {
+        Grab(u32, &'static [u16]),
+        End(u32, End),
+    }
+
+    #[test]
+    fn a_grab_fits_while_the_live_grabs_keep_room_for_its_runs() {
+        let lights = Lights::new(MAX_LIGHTS).unwrap();
+        let patch = Patch::new(Universes::ONE, lights, Whole(|_| NonZeroU16::MIN));
+        let runs = |indices: &mut dyn Iterator<Item = u16>| -> Vec<LightRun> {
+            indices
+                .map(|at| LightRun::new(LightNumber::new(at, lights).unwrap(), 1, lights).unwrap())
+                .collect()
+        };
+        let value = |property| match property {
+            Property::Intensity => Value::Intensity(u16::MAX),
+            Property::Colour => Value::Colour(Rgb {
+                red: u16::MAX,
+                green: 0,
+                blue: 0,
+            }),
+            Property::Position => Value::Position(Position { pan: 0, tilt: 0 }),
+            Property::Zoom => Value::Zoom(0),
+            Property::Gobo(wheel) => Value::Gobo(Gobo { wheel, slot: 1 }),
+        };
+        let full = || {
+            // Every light a run of its own, per property one live grab on the odd lights and
+            // one on the even ones: 16 384 lights x 7 properties = 114 688 runs, the most.
+            // The even intensity lights are two grabs: 0 on lights 0 and 2, 1 on the rest.
+            let mut grabs = Grabs::new();
+            let mut books: Vec<(Property, Vec<LightRun>)> = vec![
+                (Property::Intensity, runs(&mut [0, 2].into_iter())),
+                (Property::Intensity, runs(&mut (4..MAX_LIGHTS).step_by(2))),
+            ];
+            for property in Property::ALL {
+                books.push((property, runs(&mut (1..MAX_LIGHTS).step_by(2))));
+                if property != Property::Intensity {
+                    books.push((property, runs(&mut (0..MAX_LIGHTS).step_by(2))));
+                }
+            }
+            for (generation, (property, runs)) in (0..).zip(books) {
+                grabs.hold(GrabId { generation }, value(property), runs, &patch);
+            }
+            assert_eq!(grabs.runs, 114_688, "the book is full");
+            grabs
+        };
+        let most = Err(Refusal::GrabFull { most: 114_688 });
+        // (steps, the lights a new intensity grab asks for, the answer: refused, or the
+        // visits it adds, 2 a free light, 1 a kept one, 0 a live one)
+        let cases = [
+            (vec![], &[4][..], most),
+            (vec![], &[0, 2][..], Ok(0)),
+            (vec![Step::End(0, End::Keep)], &[0, 2][..], Ok(2)),
+            (vec![Step::End(0, End::Keep)], &[0, 2, 4][..], most),
+            (
+                vec![Step::Grab(100, &[0, 2]), Step::End(100, End::Remove)],
+                &[0, 2][..],
+                Ok(4),
+            ),
+            (
+                vec![Step::Grab(100, &[0, 2]), Step::End(100, End::Remove)],
+                &[0, 2, 4][..],
+                most,
+            ),
+        ];
+        for (steps, asked, answer) in cases {
+            let mut grabs = full();
+            for step in &steps {
+                match *step {
+                    Step::Grab(generation, at) => {
+                        let id = GrabId { generation };
+                        grabs.hold(
+                            id,
+                            value(Property::Intensity),
+                            runs(&mut at.iter().copied()),
+                            &patch,
+                        );
+                    }
+                    Step::End(generation, end) => drop(grabs.end(GrabId { generation }, end)),
+                }
+            }
+            let asked = runs(&mut asked.iter().copied());
+            assert_eq!(
+                grabs.fits(Property::Intensity, &asked),
+                answer,
+                "{steps:?}, then {} runs",
+                asked.len()
+            );
+        }
+    }
+
+    #[test]
+    fn a_grab_fits_while_the_book_has_an_entry_for_it() {
+        let lights = Lights::new(1024).unwrap();
+        let patch = Patch::new(Universes::ONE, lights, Whole(|_| NonZeroU16::MIN));
+        let light = |at| LightRun::new(LightNumber::new(at, lights).unwrap(), 1, lights).unwrap();
+        let value = Value::Intensity(u16::MAX);
+        // docs/engine.md: 1 024 sources, 32 plays, then 992 grabs. Each grab on a light of
+        // its own; (the lights grab 0 holds, the light a new grab asks for, the answer)
+        let most = Err(Refusal::GrabFull { most: 992 });
+        let cases = [
+            ("every entry is taken", vec![light(0)], 1000, most),
+            ("it takes grab 0 whole", vec![light(0)], 0, Ok(0)),
+            (
+                "it takes one of grab 0's two",
+                vec![light(0), light(992)],
+                0,
+                most,
+            ),
+        ];
+        for (case, first, asked, answer) in cases {
+            let mut grabs = Grabs::new();
+            grabs.hold(GrabId { generation: 0 }, value, first, &patch);
+            for generation in 1..992 {
+                grabs.hold(
+                    GrabId { generation },
+                    value,
+                    vec![light(u16::try_from(generation).unwrap())],
+                    &patch,
+                );
+            }
+            assert_eq!(
+                grabs.fits(Property::Intensity, &[light(asked)]),
+                answer,
+                "{case}"
+            );
+        }
+    }
+
+    /// What the book gets from an event: a newer grab, an update or the end of grab 0, a
+    /// release or an unpatch of the first lights, every grab let go, rules that no longer
+    /// keep.
     #[derive(Clone, Copy, Debug)]
     enum Event {
-        EndGrab,
+        Grab(u16),
+        Update,
+        EndGrab(End),
         Release(u16),
         ReleaseAll,
         Unkeep,
         Unpatch(u16),
+    }
+
+    impl Event {
+        /// The event on a book of intensity grabs on two lights: what it tells the tick.
+        fn reach(self, grabs: &mut Grabs, patch: &Patch) -> Vec<Change> {
+            let lights = Lights::new(2).unwrap();
+            let first = |count| {
+                vec![LightRun::new(LightNumber::new(0, lights).unwrap(), count, lights).unwrap()]
+            };
+            let (id, newer) = (GrabId { generation: 0 }, GrabId { generation: 1 });
+            let intensity = Property::Intensity;
+            match self {
+                Event::Grab(count) => grabs.hold(newer, Value::Intensity(1), first(count), patch),
+                Event::Update => grabs.update(id, Value::Intensity(1), patch),
+                Event::EndGrab(end) => grabs.end(id, end),
+                Event::Release(count) => grabs.let_go(Some(intensity), &first(count), patch),
+                Event::ReleaseAll => {
+                    grabs.clear();
+                    Vec::new()
+                }
+                Event::Unkeep => {
+                    grabs.clear_kept();
+                    Vec::new()
+                }
+                Event::Unpatch(count) => grabs.let_go(None, &first(count), patch),
+            }
+        }
     }
 
     #[test]
@@ -571,12 +800,12 @@ mod tests {
         let id = GrabId { generation: 0 };
         // (kept on both lights, or (free), event, the lights each grab of the book holds)
         let cases = [
-            (false, Event::EndGrab, vec![]),
+            (false, Event::EndGrab(End::Keep), vec![]),
             (false, Event::Release(2), vec![]),
             (false, Event::ReleaseAll, vec![]),
             (false, Event::Unkeep, vec![]),
             (false, Event::Unpatch(2), vec![]),
-            (true, Event::EndGrab, vec![run(0, 2)]),
+            (true, Event::EndGrab(End::Keep), vec![run(0, 2)]),
             (true, Event::Release(1), vec![run(1, 1)]),
             (true, Event::Release(2), vec![]),
             (true, Event::ReleaseAll, vec![]),
@@ -590,15 +819,7 @@ mod tests {
                 grabs.hold(id, value, run(0, 2), &patch);
                 grabs.end(id, End::Keep);
             }
-            match event {
-                Event::EndGrab => drop(grabs.end(id, End::Keep)),
-                Event::Release(count) => {
-                    drop(grabs.let_go(Some(value.property()), &run(0, count), &patch));
-                }
-                Event::ReleaseAll => grabs.clear(),
-                Event::Unkeep => grabs.clear_kept(),
-                Event::Unpatch(count) => drop(grabs.let_go(None, &run(0, count), &patch)),
-            }
+            drop(event.reach(&mut grabs, &patch));
             let book: Vec<_> = (0..GRABS)
                 .filter_map(GrabEntry::new)
                 .filter(|entry| grabs.grab(*entry).is_some_and(|grab| grab.id.is_none()))
@@ -607,5 +828,168 @@ mod tests {
             assert_eq!(book, left, "kept {kept}, {event:?}");
             assert_eq!(grabs.live.len(), 0, "kept {kept}, {event:?}: nothing live");
         }
+    }
+
+    #[test]
+    fn the_book_walks_its_live_row() {
+        let lights = Lights::new(2).unwrap();
+        let patch = Patch::new(Universes::ONE, lights, Whole(|_| NonZeroU16::MIN));
+        let run = |first, count| {
+            vec![LightRun::new(LightNumber::new(first, lights).unwrap(), count, lights).unwrap()]
+        };
+        let id = GrabId { generation: 0 };
+        use GrabChange::{Free, Keep, Offers, Start};
+        // docs/engine.md, "A grab on the tick", row Live. (event, what the tick is told by
+        // entry, the lights grab 0 holds live, the lights each kept grab holds, the lights
+        // any grab holds)
+        let cases = [
+            (
+                Event::Grab(2),
+                vec![(0, Free), (0, Start)],
+                vec![],
+                vec![],
+                run(0, 2),
+            ),
+            (
+                Event::Grab(1),
+                vec![(0, Offers), (1, Start)],
+                run(1, 1),
+                vec![],
+                run(0, 2),
+            ),
+            (
+                Event::Update,
+                vec![(0, Offers)],
+                run(0, 2),
+                vec![],
+                run(0, 2),
+            ),
+            (
+                Event::EndGrab(End::Keep),
+                vec![(0, Keep)],
+                vec![],
+                vec![run(0, 2)],
+                run(0, 2),
+            ),
+            (
+                Event::EndGrab(End::Remove),
+                vec![(0, Free)],
+                vec![],
+                vec![],
+                vec![],
+            ),
+            (
+                Event::Release(1),
+                vec![(0, Offers)],
+                run(1, 1),
+                vec![],
+                run(1, 1),
+            ),
+            (Event::Release(2), vec![(0, Free)], vec![], vec![], vec![]),
+            (Event::ReleaseAll, vec![], vec![], vec![], vec![]),
+            (Event::Unkeep, vec![], run(0, 2), vec![], run(0, 2)),
+            (
+                Event::Unpatch(1),
+                vec![(0, Offers)],
+                run(1, 1),
+                vec![],
+                run(1, 1),
+            ),
+            (Event::Unpatch(2), vec![(0, Free)], vec![], vec![], vec![]),
+        ];
+        for (event, told, live, kept, held) in cases {
+            let mut grabs = Grabs::new();
+            grabs.hold(id, Value::Intensity(u16::MAX), run(0, 2), &patch);
+            let changes: Vec<_> = event
+                .reach(&mut grabs, &patch)
+                .iter()
+                .map(|change| (change.entry.index(), change.change))
+                .collect();
+            assert_eq!(changes, told, "{event:?}: the tick is told");
+            assert_eq!(grabs.held(id), live, "{event:?}: grab 0 holds");
+            assert_eq!(
+                grabs.live.contains_key(&id),
+                !live.is_empty(),
+                "{event:?}: grab 0 is live"
+            );
+            let book: Vec<_> = (0..GRABS)
+                .filter_map(GrabEntry::new)
+                .filter(|entry| grabs.grab(*entry).is_some_and(|grab| grab.id.is_none()))
+                .map(|entry| grabs.held_by(entry))
+                .collect();
+            assert_eq!(book, kept, "{event:?}: kept");
+            assert_eq!(
+                grabs.releasing(Property::Intensity, &run(0, 2)),
+                held,
+                "{event:?}: held by any grab"
+            );
+        }
+    }
+
+    #[test]
+    fn a_box_let_go_stays_until_the_tick_applied_the_command() {
+        let lights = Lights::new(2).unwrap();
+        let patch = Patch::new(Universes::ONE, lights, Whole(|_| NonZeroU16::MIN));
+        let run = vec![LightRun::new(LightNumber::new(0, lights).unwrap(), 2, lights).unwrap()];
+        let id = GrabId { generation: 0 };
+        let mut grabs = Grabs::new();
+        let start = grabs.hold(id, Value::Intensity(u16::MAX), run, &patch);
+        let words = start
+            .first()
+            .and_then(|change| change.words.clone())
+            .unwrap();
+        grabs.sent(1, Some(start.into()));
+        let free = grabs.end(id, End::Remove);
+        grabs.sent(2, Some(free.into()));
+        assert_eq!(grabs.revision(), 2, "one more for each command");
+        // docs/engine.md, "The tick never frees a box": the front keeps the change list and
+        // the box until the tick applied the command. (commands the tick applied, who holds
+        // the box: this test, command 1's change list, and the book until command 2)
+        for (applied, holders) in [(0, 3), (1, 2), (2, 1)] {
+            grabs.passed(applied);
+            assert_eq!(Arc::strong_count(&words), holders, "{applied} applied");
+        }
+    }
+
+    #[test]
+    fn the_picture_shows_each_held_light_with_its_intensity_and_colour() {
+        let lights = Lights::new(3).unwrap();
+        let patch = Patch::new(Universes::ONE, lights, Whole(|_| NonZeroU16::MIN));
+        let run = |first, count| {
+            vec![LightRun::new(LightNumber::new(first, lights).unwrap(), count, lights).unwrap()]
+        };
+        let red = Rgb {
+            red: u16::MAX,
+            green: 0,
+            blue: 0,
+        };
+        let mut grabs = Grabs::new();
+        grabs.hold(
+            GrabId { generation: 0 },
+            Value::Intensity(1000),
+            run(0, 2),
+            &patch,
+        );
+        grabs.hold(
+            GrabId { generation: 1 },
+            Value::Colour(red),
+            run(1, 2),
+            &patch,
+        );
+        // docs/engine.md, `lights` in a Picture: each held light from 1, `None` where a
+        // part is not held
+        let held = |light, intensity, colour| HeldLight {
+            light,
+            intensity,
+            colour,
+        };
+        assert_eq!(
+            grabs.held_lights(),
+            [
+                held(1, Some(1000), None),
+                held(2, Some(1000), Some(red)),
+                held(3, None, Some(red)),
+            ]
+        );
     }
 }
