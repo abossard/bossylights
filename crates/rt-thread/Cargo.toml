@@ -12,3 +12,6 @@ workspace = true
 [dependencies]
 engine-core = { path = "../engine-core" }
 libc = "0.2.191"
+
+[dev-dependencies]
+engine-slot = { path = "../engine-slot" } # its test runs a real-time thread: one engine at a time on the machine

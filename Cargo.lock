@@ -854,6 +854,7 @@ name = "engine"
 version = "0.0.0"
 dependencies = [
  "engine-core",
+ "engine-slot",
  "fixture-library",
  "looks",
  "outputs",
@@ -888,6 +889,10 @@ dependencies = [
  "tokio-tungstenite",
  "wire",
 ]
+
+[[package]]
+name = "engine-slot"
+version = "0.0.0"
 
 [[package]]
 name = "equivalent"
@@ -2869,6 +2874,7 @@ name = "rt-thread"
 version = "0.0.0"
 dependencies = [
  "engine-core",
+ "engine-slot",
  "libc",
 ]
 

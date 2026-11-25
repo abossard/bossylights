@@ -25,7 +25,8 @@ export const CRATES = {
   wire: { kind: "calc", deps: ["engine-core", "fixture-library", "serde"] }, // the app's messages: Request, Reply, the health and library views. The core knows only commands and channels (Q16)
   "rt-thread": { kind: "tick", deps: ["engine-core", "libc"] }, // the only unsafe: asks for real-time priority
   outputs: { kind: "tick", deps: ["engine-core", "nix", "rtrb", "serialport"] }, // opens devices, takes frames: only it knows bytes
-  engine: { kind: "tick", deps: ["engine-core", "rt-thread", "outputs", "rig", "looks", "fixture-library", "rtrb"] }, // the front owns the patch: it checks a patch against the library and compiles the field table
+  "engine-slot": { kind: "action", deps: [] }, // tests: the machine's one engine slot, an OS file lock (#319)
+  engine: { kind: "tick", deps: ["engine-core", "rt-thread", "outputs", "rig", "looks", "fixture-library", "rtrb", "engine-slot"] }, // the front owns the patch: it checks a patch against the library and compiles the field table
   "audio-in": { kind: "calc", deps: [] }, // samples and the caller's clock in, levels and beats out. Capture is its own action crate
   "engine-server": { kind: "action", deps: ["engine", "engine-core", "fixture-library", "looks", "show-file", "wire"] }, // reads the fixture folder, answers the library, opens and saves the show file
   shell: { kind: "action", deps: ["wire"] }, // knows the API version it speaks, nothing more

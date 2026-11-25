@@ -808,9 +808,11 @@ fn scorecard_stamps_the_admission_and_the_device_handoff() {
         }
     }
 
+    let slot = engine_slot::take().unwrap();
     let (clock, trace, wakes) = wake::stepped();
     let (writer, mut timings) = timing::TimingWriter::new(clock.clone());
     let (mut engine, mut sender) = Engine::start_on(
+        slot,
         Universes::ONE,
         Box::new(outputs::open),
         clock,

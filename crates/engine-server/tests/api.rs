@@ -630,7 +630,7 @@ async fn see_until(socket: &mut Socket, levels: &mut [Vec<Value>], seen: &mut Se
 async fn every_subscriber_gets_the_same_picture_of_a_frame() {
     // (subscribers)
     for subscribers in [2, 3] {
-        let (address, mut commands, _served) = start().await;
+        let (address, mut commands, served) = start().await;
         let (_udp, add) = receiver().await;
         send(&mut commands, &add).await;
         assert_eq!(answer(&mut commands).await, json!("Accepted"));
@@ -671,6 +671,11 @@ async fn every_subscriber_gets_the_same_picture_of_a_frame() {
                 );
             }
         }
+        // the next round's engine starts once this one is gone (one engine at a time)
+        drop(watching);
+        send(&mut commands, &json!("Stop")).await;
+        assert_eq!(answer(&mut commands).await, json!("Stopping"));
+        served.await.unwrap().unwrap();
     }
 }
 

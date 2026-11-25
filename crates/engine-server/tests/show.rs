@@ -489,7 +489,7 @@ fn red_step(look: u16, name: &str) -> Value {
 #[test]
 fn patch_and_sequence_edits_share_the_bytes_above_the_step_reserve() {
     use engine_core::{LOOKS, SavedLook, Sequence};
-    let (_engine, mut sender) = engine::Engine::start(engine::Universes::new(1).unwrap()).unwrap();
+    let (first, mut sender) = engine::Engine::start(engine::Universes::new(1).unwrap()).unwrap();
     let empty = sender.patch();
     let library = [fixture_library::parse("Generic-Generic-RGB.qxf", GENERIC_RGB).unwrap()];
     sender
@@ -513,6 +513,7 @@ fn patch_and_sequence_edits_share_the_bytes_above_the_step_reserve() {
         1,
     );
     let (patch, _) = show_file::read(&padded, &empty).unwrap();
+    drop((sender, first)); // one engine at a time
     // an open takes a front as it starts
     let (_opened, mut sender) = engine::Engine::start(engine::Universes::new(1).unwrap()).unwrap();
     sender

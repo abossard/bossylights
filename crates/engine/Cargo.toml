@@ -17,11 +17,15 @@ rig = { path = "../rig" }
 looks = { path = "../looks" }
 fixture-library = { path = "../fixture-library" }
 rtrb = "0.4.1"
+engine-slot = { path = "../engine-slot", optional = true } # test-support: an engine takes the machine's one slot
 
 [features]
 # A clock a test steps one wake at a time, and a trace of each due hand-over (src/wake.rs).
 # Only tests turn it on: without it the tick reads the wall and writes no trace.
-test-support = ["engine-core/test-support"]
+test-support = ["engine-core/test-support", "dep:engine-slot"]
+
+[dev-dependencies]
+engine-slot = { path = "../engine-slot" } # the unit tests take the slot without test-support too
 
 [[test]]
 name = "no_alloc"
@@ -65,4 +69,8 @@ required-features = ["test-support"]
 
 [[test]]
 name = "tick"
+required-features = ["test-support"]
+
+[[test]]
+name = "one_engine"
 required-features = ["test-support"]

@@ -163,6 +163,9 @@ pub struct Engine {
     free: Option<JoinHandle<()>>,
     retry: Option<JoinHandle<()>>,
     universes: Universes,
+    /// The machine's one engine slot in tests (#319). Free again after `drop` joined the threads.
+    #[cfg(any(test, feature = "test-support"))]
+    _slot: engine_slot::Slot,
 }
 
 /// Between the threads of the engine. Atomics only.
@@ -215,6 +218,9 @@ impl Shared {
 impl Engine {
     /// Starts the tick thread with the best priority the system gives. No outputs yet:
     /// send `SetOutput`. Fails only when the OS refuses a thread.
+    ///
+    /// In tests every start first waits for the machine's one engine slot (`engine-slot`),
+    /// before the engine's clock runs: at most one engine runs on the machine at a time.
     pub fn start(universes: Universes) -> io::Result<(Self, Sender)> {
         Self::start_with(universes, Box::new(outputs::open))
     }
@@ -222,6 +228,8 @@ impl Engine {
     /// [`Engine::start`], with `open` making the devices `SetOutput` asks for.
     pub fn start_with(universes: Universes, open: Open) -> io::Result<(Self, Sender)> {
         Self::start_on(
+            #[cfg(any(test, feature = "test-support"))]
+            engine_slot::take()?,
             universes,
             open,
             Clock::wall(),
@@ -235,8 +243,9 @@ impl Engine {
     /// each due hand-over and what came of it. The clock starts running.
     #[cfg(feature = "test-support")]
     pub fn start_stepped(universes: Universes, open: Open) -> io::Result<(Self, Sender, Wakes)> {
+        let slot = engine_slot::take()?;
         let (clock, trace, wakes) = wake::stepped();
-        let (engine, sender) = Self::start_on(universes, open, clock, trace, None)?;
+        let (engine, sender) = Self::start_on(slot, universes, open, clock, trace, None)?;
         Ok((engine, sender, wakes))
     }
 
@@ -249,9 +258,11 @@ impl Engine {
     /// Runs the wall-clock engine and real outputs, with a wait-free timing stream.
     #[cfg(feature = "test-support")]
     pub fn start_measured(universes: Universes) -> io::Result<(Self, Sender, Timings)> {
+        let slot = engine_slot::take()?;
         let clock = Clock::wall();
         let (writer, reader) = timing::TimingWriter::new(clock.clone());
         let (engine, sender) = Self::start_on(
+            slot,
             universes,
             Box::new(outputs::open),
             clock,
@@ -262,6 +273,7 @@ impl Engine {
     }
 
     fn start_on(
+        #[cfg(any(test, feature = "test-support"))] slot: engine_slot::Slot,
         universes: Universes,
         open: Open,
         clock: Clock,
@@ -331,6 +343,8 @@ impl Engine {
             free: Some(free),
             retry: Some(retry_worker),
             universes,
+            #[cfg(any(test, feature = "test-support"))]
+            _slot: slot,
         };
         Ok((engine, sender))
     }

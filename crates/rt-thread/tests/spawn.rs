@@ -2,6 +2,7 @@ use rt_thread::{BestEffort, Priority};
 
 #[test]
 fn the_thread_runs_with_the_priority_spawn_reports() {
+    let _slot = engine_slot::take().expect("the machine's engine slot");
     let (thread, priority) =
         rt_thread::spawn("rt-test", |priority| priority).expect("the system gives a thread");
     assert_eq!(thread.join().ok(), Some(priority));

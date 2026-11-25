@@ -361,6 +361,12 @@ fn an_open_takes_patch_and_looks_whole_on_a_front_as_it_starts_or_changes_nothin
         ),
     ];
     for (case, front, foreign, answer, fixtures) in cases {
+        // made first: its engine is gone before this case's starts (one engine at a time)
+        let brought = if foreign {
+            looks_of_another_patch()
+        } else {
+            Looks::new()
+        };
         let (_engine, mut sender, _heard) = start();
         match front {
             Front::AsItStarts => {}
@@ -383,11 +389,6 @@ fn an_open_takes_patch_and_looks_whole_on_a_front_as_it_starts_or_changes_nothin
             }
         }
         let (patch, looks) = (sender.patch(), sender.looks());
-        let brought = if foreign {
-            looks_of_another_patch()
-        } else {
-            Looks::new()
-        };
         let opened = sender.open(a_strip_from(&sender), brought);
         assert_eq!(opened, answer, "{case}");
         if opened.is_err() {

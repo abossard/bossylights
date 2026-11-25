@@ -225,6 +225,9 @@ async fn mover_properties_reach_their_channels_at_address_1() {
         let (mut socket, _) = patched(&heard, &stop, fixture).await;
         play(&mut socket, 1, &values).await;
         until_dmx(&heard, bytes).await;
+        // the next case's engine starts once this one is gone (one engine at a time)
+        common::send(&mut socket, &json!("Stop")).await;
+        assert_eq!(common::answer(&mut socket).await, json!("Stopping"));
         stop.store(true, Ordering::Relaxed);
     }
 }

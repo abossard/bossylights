@@ -279,13 +279,12 @@ impl Drop for SlowToFree {
 #[test]
 fn a_device_the_full_queue_refuses_is_freed_without_holding_up_the_sender() {
     // (attempt) until one attach finds the queue full: a wake may empty it in between.
-    let started = Instant::now();
+    // Counts the time with an engine only: the wait for the machine's engine slot is not trying.
+    let mut tried = Duration::ZERO;
     loop {
-        assert!(
-            started.elapsed() < Duration::from_secs(10),
-            "the queue was never full"
-        );
+        assert!(tried < Duration::from_secs(10), "the queue was never full");
         let (_engine, mut sender) = Engine::start(Universes::ONE).unwrap();
+        let attempt = Instant::now();
         let run = run(1, 1).check(Universes::ONE).unwrap();
         let (let_go, hold) = mpsc::channel();
         let device = Box::new(SlowToFree(hold));
@@ -302,6 +301,7 @@ fn a_device_the_full_queue_refuses_is_freed_without_holding_up_the_sender() {
             Ok(_) => {} // a wake emptied the queue first: try again
             Err(_) => panic!("the sender waited for the refused device to be freed"),
         }
+        tried += attempt.elapsed();
     }
 }
 

@@ -16,3 +16,14 @@ export function releaseShellViolations(release, debug, names) {
     ...names.filter((name) => !debug.includes(name)).map((name) => `the debug shell has no ${name}: update DEBUG_ONLY`),
   ];
 }
+
+/** The file of the machine's engine slot (crates/engine-slot, #319): only a test build may name it. */
+export const SLOT = "bossylights-engine.slot";
+
+/** What is wrong: the release engine names the slot (it would wait for a test's engine), or the slot's source no longer names SLOT (stale). */
+export function releaseEngineViolations(release, slotSource) {
+  return [
+    ...found(release, [SLOT]).map((name) => `the release engine holds the test-only ${name}`),
+    ...(slotSource.includes(`"${SLOT}"`) ? [] : [`crates/engine-slot names no ${SLOT}: update SLOT`]),
+  ];
+}
