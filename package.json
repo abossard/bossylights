@@ -21,10 +21,7 @@
     "mutants": "node scripts/mutants.mjs",
     "test-reach": "node scripts/test-reach-run.mjs",
     "verify": "node scripts/verify-run.mjs",
-    "land": "node scripts/land-run.mjs",
-    "codex": "node scripts/peer-run.mjs codex",
-    "peer": "node scripts/peer-run.mjs",
-    "peer:doctor": "node scripts/peer-doctor.mjs"
+    "land": "node scripts/land-run.mjs"
   },
   "dependencies": {
     "solid-js": "1.9.18"

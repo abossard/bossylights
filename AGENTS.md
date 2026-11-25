@@ -87,7 +87,6 @@ The owner has ADHD and is a visual learner. This applies to every output: docs, 
 ### How the work is run
 
 The crew in tuios: planner, lead, workers and checker, the lead's loop, a worker's steps, mail, step gates. See `docs/agents/orchestration.md`.
-Peer agents (Codex CLI, Copilot CLI) for builds, reviews and research: `npm run peer`, see `docs/agents/peers.md`.
 
 ### Issue tracker
 
@@ -100,7 +99,3 @@ The default label vocabulary. See `docs/agents/triage-labels.md`.
 ### Domain docs
 
 Single-context. See `docs/agents/domain.md`.
-
-### External peers
-
-`auto`. See `docs/agents/cross-model.json`.

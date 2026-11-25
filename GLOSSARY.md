@@ -36,7 +36,6 @@ flowchart LR
 | Milestone | a block of planned work. The first milestones were the engine, the patch and the show file; the third was Looks and who wins (steps, sequences, Waves, the Mixer, tempo, mover lights) |
 | Scorecard | a measurement run that plays a heavy show for 60 seconds and reports lateness and drops per output |
 | Catalog | the page of every control in every situation that you approved before the real screens are built |
-| Peer | an outside coding agent we hand hard tasks to (Codex or Copilot). Opus checks what they return |
 
 ## The tests, by name
 

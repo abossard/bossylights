@@ -442,6 +442,6 @@ Owner answers live on the [decisions page](https://claude.ai/artifact/KBkqWhcVWn
 | Anything with states gets its table in a design doc before code; tests walk every row | the cutover and pairing loops ended only when written down | Q15 |
 | Expected answers in tests come from a source other than the code | an oracle that repeats the code proves nothing | Q13 |
 | A cleanup may fix behaviour where the theory says the code is wrong, bytes listed in the commit | the theory wins | Q11 |
-| Large review: Codex and Copilot read and prove, Claude applies, Opus confirms; one cleanup ticket per area | every finding proven and confirmed | Q9, Q10 |
+| Large review: Opus reads and proves, Claude applies, Opus confirms; one cleanup ticket per area | every finding proven and confirmed | Q9, Q10, #297 |
 | One simple verification command, the same locally, in CI and for people | CI was red for 3 days unseen | Q12 |
 | Short-lived WIP branch per ticket in its own worktree, squashed onto main after the review; branch deleted the same day | big work stays safe and off the shared main | Q14, Q19, Q20 |
