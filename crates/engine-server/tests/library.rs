@@ -16,8 +16,11 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
 /// The test definitions of the fixture library, and one broken file in a maker folder.
-fn folder() -> PathBuf {
-    let folder = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("fixtures-{}", process::id()));
+/// A folder per test: the tests of this binary run side by side, and one copying the
+/// files again must not reach another's engine while it reads them.
+fn folder(test: &str) -> PathBuf {
+    let folder =
+        Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("fixtures-{}-{test}", process::id()));
     let definitions =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../fixture-library/tests/definitions");
     fs::create_dir_all(folder.join("Broken")).unwrap();
@@ -224,7 +227,7 @@ async fn a_refused_mode_is_listed_and_the_files_other_modes_patch() {
 
 #[tokio::test]
 async fn the_state_shows_how_far_the_library_is_read() {
-    let folder = folder();
+    let folder = folder("state");
     let missing = folder.join("missing");
     let cases: [(Vec<&str>, Value); 3] = [
         (vec![], json!("NoFolder")),
@@ -245,7 +248,7 @@ async fn the_state_shows_how_far_the_library_is_read() {
 
 #[tokio::test]
 async fn the_library_answers_search_fixture_and_failures() {
-    let folder = folder();
+    let folder = folder("answers");
     let (_running, mut socket) = engine(&["--fixtures", folder.to_str().unwrap()]).await;
     read(&mut socket).await;
     let rgbw = json!({
