@@ -561,6 +561,12 @@ fn a_run_has_its_lowest_and_highest_patched_channel() {
             None,
         ),
         (
+            "only in the universe before",
+            vec![strip(1, 1, 1)],
+            run(2, 1),
+            None,
+        ),
+        (
             "a strip running on from the universe before",
             vec![strip(2, 1, 511)],
             run(2, 1),

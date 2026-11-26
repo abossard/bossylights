@@ -672,7 +672,7 @@ impl Patch {
         let inside = self.fixtures.iter().filter_map(|e| {
             let first = flat(e.at);
             let (start, end) = (first.max(from), (first + e.mode.channels.len()).min(to));
-            (start < end).then_some((start - from, end - from))
+            (start < end).then(|| (start - from, end - from))
         });
         let lowest = inside.clone().map(|(start, _)| start).min()?;
         let highest = inside.map(|(_, end)| end).max()?;
