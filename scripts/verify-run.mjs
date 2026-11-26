@@ -1,13 +1,15 @@
 // `npm run verify -- <commit> [--mutants]`: the check of what the commit can reach, in the worker's own worktree.
 // The worktree must be clean and at the commit: nothing uncommitted, nothing untracked. Its build folder stays warm.
 // What it leaves to CI it names; CI on main is the clean copy and checks everything.
+// --mutants: the mutants of the diff run on GitHub's machine (`.github/workflows/mutants-diff.yml`, #340) while the
+// suites run here, so the commit must be pushed. The Mac runs no mutants.
 // A passed run with mutants records its git tree in the shared git folder: `npm run land` trusts it for the same tree.
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { logPath, mutantsReport, parseArgs, reachOf, readsOf, recordOf, recordPath, stepsOf, testSummary } from "./verify.mjs";
+import { logPath, mutantsReport, parseArgs, reachOf, readsOf, recordOf, recordPath, runOf, stepsOf, testSummary } from "./verify.mjs";
 import { running, stopLeftovers } from "./verify-leftovers.mjs";
 
 const run = (command, args, cwd, options = {}) =>
@@ -28,6 +30,8 @@ try {
   stop(error.message);
 }
 const git = (...a) => run("git", a, process.cwd());
+const gh = (...a) => run("gh", a, process.cwd(), { env });
+const firstLine = (r) => `${r.stderr}\n${r.stdout}`.split("\n").find(Boolean) ?? `exit ${r.status}`;
 const sha = git("rev-parse", "--verify", `${args.commit}^{commit}`);
 if (sha.status !== 0) stop(`no such commit: ${args.commit}`);
 const commit = sha.stdout.trim();
@@ -61,6 +65,17 @@ try {
   });
   const reach = reachOf(files, crates);
   const plan = stepsOf(reach, JSON.parse(readFileSync(join(dir, "package.json"), "utf8")).scripts, crates.map((c) => c.name));
+  let job = null; // the mutants run on GitHub, started before the suites so both run at once
+  if (args.mutants) {
+    if (gh("api", `repos/{owner}/{repo}/commits/${commit}`, "--silent").status !== 0) throw new Error(`${commit.slice(0, 7)} is not on GitHub: push it, its mutants run there`);
+    const fork = git("rev-parse", base).stdout.trim();
+    // main's version of the workflow: a branch cannot change how it is checked
+    const started = gh("workflow", "run", "mutants-diff.yml", "--ref", "main", "-f", `commit=${commit}`, "-f", `base=${fork}`);
+    if (started.status !== 0) throw new Error(`gh workflow run failed: ${firstLine(started)}`);
+    job = runOf(`${started.stdout}\n${started.stderr}`);
+    if (!job) throw new Error(`gh workflow run printed no run: ${firstLine(started)}`);
+    console.log(`verify: mutants of ${fork.slice(0, 7)}..${commit.slice(0, 7)} run on GitHub: ${job.url}`);
+  }
   console.log(reach.everything ? `verify: ${reach.everything} reaches everything` : `verify: reaches ${reach.crates.join(", ") || "no crate"}${reach.ui ? ", the UI" : ""}`);
 
   const results = plan.steps.map(({ name, command }) => {
@@ -78,16 +93,13 @@ try {
   console.log(`left to CI: ${plan.left.join("; ") || "nothing"}`);
 
   let mutants = null;
-  if (args.mutants) {
-    const diffFile = join(logDir, "verify.diff");
-    writeFileSync(diffFile, git("diff", base, commit).stdout);
+  if (job) {
+    gh("run", "watch", job.id, "--interval", "30"); // its end, not its verdict: the exit file says how cargo-mutants ended
     const out = join(logDir, "mutants");
-    const m = run("cargo", ["mutants", "--no-shuffle", "--in-diff", diffFile, "--output", out], dir, { env });
-    const NO_MUTANTS = 0; // exit codes of cargo-mutants: 0 all caught, 2 missed, 3 timeout
-    if (![NO_MUTANTS, 2, 3].includes(m.status)) throw new Error(`cargo mutants failed (exit ${m.status}): ${m.stderr.split("\n").filter(Boolean).at(-1)}`);
+    const got = gh("run", "download", job.id, "--name", "mutants", "--dir", out).status === 0 && existsSync(join(out, "exit"));
     const file = join(out, "mutants.out", "outcomes.json");
-    const outcomes = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : null;
-    mutants = mutantsReport({ status: m.status, outcomes, stderr: m.stderr });
+    const status = got ? Number(readFileSync(join(out, "exit"), "utf8").trim()) : null;
+    mutants = mutantsReport({ status, outcomes: got && existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : null, run: job.url });
     console.log(mutants.text);
     if (!mutants.ok) failed = true;
   }

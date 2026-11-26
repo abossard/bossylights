@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { firstFailure, leftovers, logPath, mutantsReport, mutantsSummary, parseArgs, reachOf, readsOf, recordOf, recordPath, rustCommands, stepsOf, suitesOf, testSummary } from "./verify.mjs";
+import { firstFailure, leftovers, logPath, mutantsReport, mutantsSummary, parseArgs, reachOf, readsOf, recordOf, recordPath, runOf, rustCommands, stepsOf, suitesOf, testSummary } from "./verify.mjs";
 
 test("suites are the npm run parts of the test script", () => {
   assert.deepEqual(suitesOf("npm run test:checks && npm run test:rust && npm run test:ui"), ["test:checks", "test:rust", "test:ui"]);
@@ -103,14 +103,39 @@ test("mutants list every missed and timeout line, never the caught ones", () => 
   ].join("\n"));
 });
 
-test("no outcomes file: exit 0 is no mutants, any other exit is a failure line", () => {
-  const none = mutantsReport({ status: 0, outcomes: null, stderr: "" });
-  assert.deepEqual(none, { ok: true, text: "mutants: none in this diff", counts: { caught: 0, missed: 0, timeout: 0, unviable: 0 } });
-  const bad = mutantsReport({ status: 1, outcomes: null, stderr: "a\nboom\n" });
-  assert.equal(bad.ok, false);
-  assert.match(bad.text, /no outcomes file \(cargo mutants exit 1\): boom/);
-  assert.equal(bad.counts, null);
-});
+const RUN = "https://github.com/o/r/actions/runs/7";
+const outcomes = { caught: 4, missed: 1, timeout: 0, unviable: 2, outcomes: [mutant("b.rs", 7, "b.rs:7:9: replace g -> u8 with 1", "MissedMutant")] };
+// [name, exit code (null: no result), outcomes, ok, text, counts]
+const reportCases = [
+  ["the job left no result", null, null, false, `mutants: the job left no result: ${RUN}`, null],
+  ["exit 1 is a failure even with outcomes", 1, outcomes, false, `mutants: cargo mutants failed (exit 1): ${RUN}`, null],
+  ["exit 137 (memory cap) is a failure", 137, null, false, `mutants: cargo mutants failed (exit 137): ${RUN}`, null],
+  ["exit 0 with no outcomes is none in the diff", 0, null, true, `mutants: none in this diff\n  run     ${RUN}`, { caught: 0, missed: 0, timeout: 0, unviable: 0 }],
+  ["exit 0 with outcomes lists them and the run", 0, outcomes, true, `${mutantsSummary(outcomes)}\n  run     ${RUN}`, { caught: 4, missed: 1, timeout: 0, unviable: 2 }],
+  ["exit 2 with no outcomes is a failure", 2, null, false, `mutants: no outcomes file (cargo mutants exit 2): ${RUN}`, null],
+  ["exit 2 with outcomes lists them and the run", 2, outcomes, true, `${mutantsSummary(outcomes)}\n  run     ${RUN}`, { caught: 4, missed: 1, timeout: 0, unviable: 2 }],
+  ["exit 3 with outcomes ran through", 3, outcomes, true, `${mutantsSummary(outcomes)}\n  run     ${RUN}`, { caught: 4, missed: 1, timeout: 0, unviable: 2 }],
+];
+for (const [name, status, given, ok, text, counts] of reportCases) {
+  test(`mutants report: ${name}`, () => {
+    assert.deepEqual(mutantsReport({ status, outcomes: given, run: RUN }), { ok, text, counts });
+  });
+}
+
+// [what gh workflow run printed, run id or null]
+const runIdCases = [
+  ["https://github.com/abossard/bossylights/actions/runs/45759402228\n", "45759402228"],
+  ["Created workflow_dispatch event for mutants-diff.yml at main\nhttps://github.com/o/r/actions/runs/12\n", "12"],
+  ["/actions/runs/12 without an address\n", null],
+  ["https://github.com/o/r/pull/12\n", null],
+  ["Created workflow_dispatch event for mutants-diff.yml at main\n", null],
+  ["https://github.com/o/r/actions/workflows/mutants-diff.yml\n", null],
+];
+for (const [printed, id] of runIdCases) {
+  test(`run id of ${JSON.stringify(printed)}`, () => {
+    assert.deepEqual(runOf(printed), id && { id, url: printed.match(/https:\S+/)[0] });
+  });
+}
 
 const counts = (missed, timeout = 0) => ({ caught: 4, missed, timeout, unviable: 1 });
 const allPass = [{ suite: "test:checks", ok: true }, { suite: "test:rust", ok: true }];

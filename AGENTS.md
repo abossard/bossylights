@@ -10,7 +10,7 @@ Rust engine, web UI in a Tauri shell, Apache-2.0. Where the project stands: the 
 | Install | `npm install` |
 | Run (desktop app, dev) | `npm run dev` |
 | Test and check everything (lints, layers, generated types, tests, scorecard). CI runs the same | `npm test` |
-| Check what a commit can reach, in your own clean worktree, and record it for `land`. Names what it leaves to CI | `npm run verify -- <commit> --mutants` |
+| Check what a commit can reach, in your own clean worktree, and record it for `land`. Names what it leaves to CI. Its mutants run on GitHub's machine: push the commit first | `npm run verify -- <commit> --mutants` |
 | Land a reviewed `wip/` branch on `main` (`--last` on a ticket's last slice) | `npm run land -- wip/<ticket> <message-file> [--last]` |
 | Scorecard with timings / mutation score | `npm run scorecard` / `npm run mutants` (needs `cargo-mutants`) |
 | What each test reaches and kills, which tests overlap (`docs/testing.md`) | `npm run test-reach -- rust\|node\|kills <crate>\|report` |

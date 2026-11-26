@@ -138,17 +138,26 @@ export function mutantsSummary({ caught, missed, timeout, unviable, outcomes }) 
   return lines.join("\n");
 }
 
-// What the run of cargo-mutants left: its outcomes (or none) and its exit code. Exit 0 with no
-// outcomes file means it found nothing to mutate; any other missing file is a failure.
-// counts: caught, missed, timeout, unviable, or null when it did not run through.
-export function mutantsReport({ status, outcomes, stderr }) {
+// What the mutants job on GitHub's machine left (#340): cargo-mutants' exit code (null when the job left no
+// result), its outcomes (or none), and the run's address. Exit 0 with no outcomes file means it found nothing to
+// mutate. counts: caught, missed, timeout, unviable, or null when it did not run through.
+export function mutantsReport({ status, outcomes, run }) {
+  const RAN = [0, 2, 3]; // exit codes of cargo-mutants: 0 all caught, 2 missed, 3 timeout
+  const fail = (why) => ({ ok: false, text: `mutants: ${why}: ${run}`, counts: null });
+  if (status === null) return fail("the job left no result");
+  if (!RAN.includes(status)) return fail(`cargo mutants failed (exit ${status})`);
   if (outcomes) {
     const { caught, missed, timeout, unviable } = outcomes;
-    return { ok: true, text: mutantsSummary(outcomes), counts: { caught, missed, timeout, unviable } };
+    return { ok: true, text: `${mutantsSummary(outcomes)}\n  run     ${run}`, counts: { caught, missed, timeout, unviable } };
   }
-  if (status === 0) return { ok: true, text: "mutants: none in this diff", counts: { caught: 0, missed: 0, timeout: 0, unviable: 0 } };
-  const last = stderr.split("\n").filter(Boolean).at(-1) ?? "no output";
-  return { ok: false, text: `mutants: no outcomes file (cargo mutants exit ${status}): ${last}`, counts: null };
+  if (status === 0) return { ok: true, text: `mutants: none in this diff\n  run     ${run}`, counts: { caught: 0, missed: 0, timeout: 0, unviable: 0 } };
+  return fail(`no outcomes file (cargo mutants exit ${status})`);
+}
+
+/** The run that `gh workflow run` started, from what it printed: { id, url }, or null. */
+export function runOf(printed) {
+  const found = printed.match(/https:\/\/\S+\/actions\/runs\/(\d+)/);
+  return found ? { id: found[1], url: found[0] } : null;
 }
 
 /**
