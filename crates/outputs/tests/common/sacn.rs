@@ -1,7 +1,9 @@
-//! A receiver of sACN data packets written from `docs/design/outputs-sacn.md`, not from our
+//! A receiver of sACN data and discovery packets written from `docs/design/outputs-sacn.md`, not from our
 //! sender: it decodes every field and checks every rule. An outside decoder, the `sacn`
 //! crate (MIT OR Apache-2.0), reads the same packet and must agree, and its encoder must
 //! make the same bytes.
+
+#![allow(dead_code, reason = "each test file uses its own part")]
 
 use sacn::packet::{AcnRootLayerProtocol, E131RootLayerData};
 
@@ -40,6 +42,100 @@ fn flags_and_length(packet: &[u8], at: usize, field: &str) {
     );
 }
 
+/// One discovery packet as a receiver sees it.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Listing {
+    pub cid: [u8; 16],
+    /// The source name up to its first zero.
+    pub name: String,
+    pub page: u8,
+    pub last_page: u8,
+    pub universes: Vec<u16>,
+}
+
+/// The source name at 44 to 107: zero-padded UTF-8.
+fn source_name(packet: &[u8]) -> String {
+    let name = &packet[44..108];
+    let end = name
+        .iter()
+        .position(|byte| *byte == 0)
+        .expect("the source name ends with a zero");
+    assert!(
+        name[end..].iter().all(|byte| *byte == 0),
+        "zero-padded name"
+    );
+    String::from_utf8(name[..end].to_vec()).expect("UTF-8")
+}
+
+/// Decodes one discovery packet and checks every rule of the spec. Panics on the first that
+/// breaks.
+pub fn decode_discovery(packet: &[u8]) -> Listing {
+    assert!(
+        (120..=1_144).contains(&packet.len()) && packet.len().is_multiple_of(2),
+        "120 header bytes and 2 per universe, at most 512: {}",
+        packet.len()
+    );
+    assert_eq!(u16_at(packet, 0), 0x0010, "preamble size");
+    assert_eq!(u16_at(packet, 2), 0x0000, "postamble size");
+    assert_eq!(&packet[4..16], b"ASC-E1.17\0\0\0", "packet id");
+    flags_and_length(packet, 16, "root");
+    assert_eq!(u32_at(packet, 18), 8, "root vector: extended");
+    flags_and_length(packet, 38, "framing");
+    assert_eq!(u32_at(packet, 40), 2, "framing vector: universe discovery");
+    let name = source_name(packet);
+    assert_eq!(u32_at(packet, 108), 0, "reserved");
+    flags_and_length(packet, 112, "discovery");
+    assert_eq!(u32_at(packet, 114), 1, "discovery vector: universe list");
+    let (page, last_page) = (packet[118], packet[119]);
+    assert!(page <= last_page, "page {page} of {last_page}");
+    let universes: Vec<u16> = packet[120..]
+        .chunks(2)
+        .map(|pair| u16::from_be_bytes([pair[0], pair[1]]))
+        .collect();
+    assert!(!universes.is_empty(), "a page lists a universe");
+    assert!(
+        universes.windows(2).all(|pair| pair[0] < pair[1]),
+        "ascending, each once: {universes:?}"
+    );
+    assert!(
+        universes.iter().all(|u| (1..=63_999).contains(u)),
+        "universes 1 to 63,999"
+    );
+    let listing = Listing {
+        cid: packet[22..38].try_into().unwrap(),
+        name,
+        page,
+        last_page,
+        universes,
+    };
+    discovery_agrees_with_the_sacn_crate(packet, &listing);
+    listing
+}
+
+fn discovery_agrees_with_the_sacn_crate(packet: &[u8], listing: &Listing) {
+    let parsed = AcnRootLayerProtocol::parse(packet).expect("the sacn crate reads it");
+    assert_eq!(
+        parsed.pack_alloc().expect("the sacn crate packs it"),
+        packet,
+        "sacn crate: the same bytes"
+    );
+    assert_eq!(parsed.pdu.cid.as_bytes(), &listing.cid, "sacn crate: CID");
+    let E131RootLayerData::UniverseDiscoveryPacket(framing) = parsed.pdu.data else {
+        panic!("sacn crate: not a discovery packet");
+    };
+    assert_eq!(framing.source_name, listing.name, "sacn crate: name");
+    assert_eq!(framing.data.page, listing.page, "sacn crate: page");
+    assert_eq!(
+        framing.data.last_page, listing.last_page,
+        "sacn crate: last page"
+    );
+    assert_eq!(
+        &framing.data.universes[..],
+        &listing.universes[..],
+        "sacn crate: universes"
+    );
+}
+
 /// Decodes one packet and checks every rule of the spec. Panics on the first that breaks.
 pub fn decode(packet: &[u8]) -> Data {
     assert!(
@@ -54,15 +150,7 @@ pub fn decode(packet: &[u8]) -> Data {
     assert_eq!(u32_at(packet, 18), 4, "root vector: data");
     flags_and_length(packet, 38, "framing");
     assert_eq!(u32_at(packet, 40), 2, "framing vector: data packet");
-    let name = &packet[44..108];
-    let end = name
-        .iter()
-        .position(|byte| *byte == 0)
-        .expect("the source name ends with a zero");
-    assert!(
-        name[end..].iter().all(|byte| *byte == 0),
-        "zero-padded name"
-    );
+    let name = source_name(packet);
     let priority = packet[108];
     assert!(priority <= 200, "priority 0 to 200: {priority}");
     assert_eq!(u16_at(packet, 109), 0, "sync address: not synchronised");
@@ -90,7 +178,7 @@ pub fn decode(packet: &[u8]) -> Data {
     assert_eq!(packet[125], 0, "start code");
     let data = Data {
         cid: packet[22..38].try_into().unwrap(),
-        name: String::from_utf8(name[..end].to_vec()).expect("UTF-8"),
+        name,
         priority,
         sequence: packet[111],
         options,

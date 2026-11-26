@@ -175,14 +175,21 @@ fn main() {
         ("DDP nobody listens to", refused, Outcome::Failed),
         ("DMX USB Pro", Box::new(pro), Outcome::Accepted),
     ];
+    // An announced output: discovery lists to the receiver, beside the frames.
+    let discovery = outputs::sacn::Discovery::start([7; 16], address).unwrap();
     if multicast_route {
         let to = outputs::sacn::Destination::Multicast(address.port());
         devices.push(("sACN multicast", sacn(to), Outcome::Accepted));
+        let first = outputs::sacn::Universe::new(1).unwrap();
+        let output = engine_core::OutputNumber::try_from(2).unwrap();
+        let announced = discovery.open(to, first, output).unwrap();
+        devices.push(("sACN multicast, announced", announced, Outcome::Accepted));
     }
     for (kind, device, expected) in &mut devices {
         measure(kind, device.as_mut(), *expected, &frame);
     }
     drop(devices);
+    drop(discovery);
     let started = Instant::now();
     while !reader.is_finished() {
         assert!(started.elapsed() < NEVER, "the fake port was never closed"); // guard

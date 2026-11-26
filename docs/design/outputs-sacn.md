@@ -1,6 +1,6 @@
 # sACN (ANSI E1.31): the wire
 
-Status: bytes and device built (`crates/outputs/src/sacn.rs`, #290); not in the app until the wiring ticket (#211). This page is our summary, in our words. The standard sits behind a sign-in, so every row below is checked against ETC's Apache-2.0 reference library and the Wireshark decoder, not against the standard's text. Rows nothing confirmed are marked ❔.
+Status: bytes and device built (`crates/outputs/src/sacn.rs`, #290), discovery built (`crates/outputs/src/sacn/discovery.rs`, #292); not in the app until the wiring ticket (#211). This page is our summary, in our words. The standard sits behind a sign-in, so every row below is checked against ETC's Apache-2.0 reference library and the Wireshark decoder, not against the standard's text. Rows nothing confirmed are marked ❔.
 
 ```mermaid
 flowchart LR
@@ -71,7 +71,44 @@ All numbers big endian. "Flags and length" is `0x7` in the top 4 bits, then the 
 | Discovery | every 10 s, to universe 64,214: pages of up to 512 universes, sorted (❔ whether every source must) | ETC source |
 | CID | a 16-byte UUID (❔ RFC 4122, ❔ the same for the device's life) | ETC |
 
-Sync packet (49 bytes, root vector `0x00000008`, vector `0x00000001`, sequence, sync address) and the discovery packet (root vector `0x00000008`, vector `0x00000002`, name, page, last page, universes) are in the ETC sources above. ETC leaves sync sending unfinished.
+Sync packet (49 bytes, root vector `0x00000008`, vector `0x00000001`, sequence, sync address) is in the ETC sources above. ETC leaves sync sending unfinished.
+
+## A discovery packet: 120 bytes, then 2 per universe (1,144 for 512)
+
+Read from ETC's `pdu.c` and `source_state.c` (pinned commit above). Bytes 0 to 15 and the CID as in a data packet.
+
+| Byte | Field | Value |
+|---|---|---|
+| 16 to 17 | root flags and length | `0x7000` + 104 + 2n: `0x706A` for 1 universe, `0x7468` for 512 |
+| 18 to 21 | root vector | `0x00000008`: extended |
+| 38 to 39 | framing flags and length | `0x7000` + 82 + 2n: `0x7054`, `0x7452` |
+| 40 to 43 | framing vector | `0x00000002`: universe discovery |
+| 44 to 107 | source name | as a data packet |
+| 108 to 111 | reserved | `0x00000000` |
+| 112 to 113 | discovery flags and length | `0x7000` + 8 + 2n: `0x700A`, `0x7408` |
+| 114 to 117 | discovery vector | `0x00000001`: universe list |
+| 118 | page | 0 first |
+| 119 | last page | (N - 1) / 512, N the universes of all pages |
+| 120 on | universes | 2 bytes each, ascending, at most 512 per page |
+
+| Discovery rule | Value | ETC |
+|---|---|---|
+| Where | universe 64,214 (`239.255.250.214`), port 5568, multicast only | `sacn_send_multicast(kSacnDiscoveryUniverse)` |
+| Every | 10 s, all pages back to back | `kSacnUniverseDiscoveryInterval` |
+| Listed | universes with data that are not unicast-only; a terminating one until it ends | `IS_PART_OF_UNIVERSE_DISCOVERY` |
+| None listed | nothing sent | `send_universe_discovery` loop |
+| Sequence | none | |
+
+## The discovery sender
+
+One `Discovery` per engine (`sacn/discovery.rs`). Each multicast output it opened stores what it sends in its own place of a table of 16 atomics, every frame: its first universe and how many (a terminating stream keeps its last, an ended one stores none). A dropped output clears its place. The output thread only stores; the discovery thread reads the table, sorts, removes repeats, pages and sends.
+
+| state \ tick | before `until` | due, list empty | due, list has universes |
+|---|---|---|---|
+| Due | (always due) | Due, nothing sent | Waiting{now + 10 s}, pages sent |
+| Waiting{until} | Waiting{until} | Due, nothing sent | Waiting{now + 10 s}, pages sent |
+
+Due looks every 100 ms. Known limit: when a reroute opens a new device for an output, the old one's drop clears the place until the new one's next frame; a list sent in that gap misses the output for 10 s. Gone when an sACN device moves with its output (#211, the reroute row of the plan).
 
 ## What we will send
 
@@ -90,7 +127,7 @@ Sync packet (49 bytes, root vector `0x00000008`, vector `0x00000001`, sequence, 
 | Stop | 3 rounds of terminated packets, start code only, per universe of the last frame, back to back. Best effort: a busy socket drops the rest of a round | ✅ as the `sacn` crate |
 | Reroute | nothing terminated: the device moves with its output, its counters carry on. A universe a shorter route leaves goes silent; receivers drop it after 2.5 s | ✅ |
 | Multicast interface | the one of the default route, TTL 1 (one network). A lighting network without a gateway has no route, so multicast cannot leave there. Choosing the interface: the wiring ticket | ❔ needed on most desks |
-| Discovery | every 10 s (second step) | ❔ required |
+| Discovery | one stream per engine, name `Bossylights`, the engine's CID: the universes its multicast outputs send, sorted, each once. First as soon as one is sent, then every 10 s. Unicast outputs are not listed | ✅ as ETC (❔ required) |
 | Sync, preview | not sent | optional |
 
 ## The stream machine

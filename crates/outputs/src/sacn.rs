@@ -2,7 +2,8 @@
 //! one stream of channel bytes; it goes out as one data packet per universe of 512 slots,
 //! to the output's first universe and on, each universe with its own sequence. Multicast to
 //! each universe's group by default, unicast to one receiver as the other choice. When the
-//! output ends, [`Device::terminate`] tells the receivers so.
+//! output ends, [`Device::terminate`] tells the receivers so. One [`Discovery`] per engine
+//! tells the network which universes its multicast outputs send.
 //!
 //! | Byte | Data packet field |
 //! |---|---|
@@ -23,8 +24,13 @@
 //! | 125 | start code 0 |
 //! | 126 on | slots, 0 to 512 |
 
+mod discovery;
+
+pub use discovery::{DISCOVERY, Discovery};
+
 use crate::udp::{Link, Protocol, Udp};
 use crate::{Device, Limits, Rate};
+use discovery::Slot;
 use engine_core::{ADDRESSES, OutputNumber, ROUTE_MOST};
 use std::io;
 use std::net::{Ipv4Addr, SocketAddrV4, UdpSocket};
@@ -97,10 +103,22 @@ pub fn open(
     cid: [u8; 16],
     output: OutputNumber,
 ) -> io::Result<Box<dyn Device>> {
+    opened(to, first, cid, output, None)
+}
+
+/// [`open`], and the output tells `announce` what it sends.
+fn opened(
+    to: Destination,
+    first: Universe,
+    cid: [u8; 16],
+    output: OutputNumber,
+    announce: Option<Slot>,
+) -> io::Result<Box<dyn Device>> {
     let source = Source {
         first,
         cid,
         name: name(output),
+        announce,
     };
     let refused = |why| Err(io::Error::new(io::ErrorKind::InvalidInput, why));
     match to {
@@ -128,12 +146,18 @@ pub(crate) struct Source {
     first: Universe,
     cid: [u8; 16],
     name: [u8; NAME],
+    /// Where the output tells discovery what it sends: multicast outputs of a [`Discovery`].
+    announce: Option<Slot>,
 }
 
 /// `Bossylights <output>`, zero-padded to 64 bytes.
 fn name(output: OutputNumber) -> [u8; NAME] {
+    padded(&format!("Bossylights {}", output.slot() + 1))
+}
+
+/// `text`, zero-padded to 64 bytes.
+fn padded(text: &str) -> [u8; NAME] {
     let mut name = [0; NAME];
-    let text = format!("Bossylights {}", output.slot() + 1);
     for (byte, value) in name.iter_mut().zip(text.bytes()) {
         *byte = value;
     }
@@ -254,6 +278,9 @@ impl Protocol for Streams {
             Sends::Terminated => (self.sent, true),
             Sends::Nothing => (0, false),
         };
+        if let Some(slot) = &self.source.announce {
+            slot.set(self.source.first, announced(self.stream, self.sent));
+        }
         (0..universes).map(move |index| {
             if terminated {
                 Cut {
@@ -295,6 +322,14 @@ impl Protocol for Streams {
     fn stop(&mut self) -> u8 {
         self.stream = next(self.stream, Event::Terminate).0;
         rounds_left(self.stream)
+    }
+}
+
+/// The universes discovery lists for a stream that last sent `sent`: until it ended.
+const fn announced(stream: Stream, sent: usize) -> usize {
+    match stream {
+        Stream::Live | Stream::Terminating { .. } => sent,
+        Stream::Ended => 0,
     }
 }
 
@@ -385,6 +420,7 @@ mod tests {
             first: Universe::new(first).unwrap(),
             cid: CID,
             name: name(OutputNumber::try_from(output).unwrap()),
+            announce: None,
         }
     }
 
@@ -579,6 +615,21 @@ mod tests {
         for (stream, event, after, sends, left) in cases {
             assert_eq!(next(stream, event), (after, sends), "{stream:?} {event:?}");
             assert_eq!(rounds_left(after), left, "{stream:?} {event:?}");
+        }
+    }
+
+    #[test]
+    fn discovery_lists_a_stream_until_it_ended() {
+        // (stream, universes of the last data frame, listed)
+        let cases = [
+            (Stream::Live, 3, 3),
+            (Stream::Live, 0, 0),
+            (Stream::Terminating { round: 1 }, 3, 3),
+            (Stream::Terminating { round: 3 }, 3, 3),
+            (Stream::Ended, 3, 0),
+        ];
+        for (stream, sent, expected) in cases {
+            assert_eq!(announced(stream, sent), expected, "{stream:?}");
         }
     }
 

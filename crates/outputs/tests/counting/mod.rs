@@ -1,8 +1,9 @@
 //! The counting allocator of the `no_alloc` tests of `outputs`, `engine` and `rig` (the
 //! others take this file by its path). It counts every allocation and every free in the
 //! process, except the allocations of a thread inside `uncounted` and the work of the
-//! Art-Net discovery thread (it never runs a `take`, and allocates when a node comes or
-//! goes), and apart the frees of the tick thread. Threads are told by their name.
+//! Art-Net and sACN discovery threads (they never run a `take`; one allocates when a node
+//! comes or goes, the other when it lists the universes), and apart the frees of the tick
+//! thread. Threads are told by their name.
 
 #![allow(dead_code, reason = "each test file uses its own part")]
 #![expect(
@@ -19,6 +20,8 @@ use std::thread;
 const TICK: &str = "tick";
 /// The name of the thread that finds Art-Net nodes.
 const DISCOVERY: &str = "artnet-discovery";
+/// The name of the thread that lists sACN universes.
+const SACN_DISCOVERY: &str = "sacn-discovery";
 
 struct Counting;
 
@@ -48,7 +51,7 @@ fn this_thread() -> Thread {
             this.set(Thread::Other);
             let found = match thread::current().name() {
                 Some(TICK) => Thread::Tick,
-                Some(DISCOVERY) => Thread::Discovery,
+                Some(DISCOVERY | SACN_DISCOVERY) => Thread::Discovery,
                 _ => Thread::Other,
             };
             this.set(found);
