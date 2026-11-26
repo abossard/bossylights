@@ -84,6 +84,28 @@ export function cleanupSteps({ branch, remoteTip, localTip, worktree, landed, la
   return { steps: [...local, remote], kept: [], done: localTip ? `${branch} is on ${landed.slice(0, 7)}` : `origin's ${branch} removed` };
 }
 
+/**
+ * What land says about CI on main for the commit it pushed, or null while there is no finished run.
+ * run: the newest push run of ci.yml for `sha`, or undefined. Red: you stay, and the two ways out.
+ */
+export function ciAfterPush(run, sha) {
+  if (run?.headSha !== sha || run.status !== "completed") return null;
+  const short = sha.slice(0, 7);
+  if (run.conclusion === "success") return { green: true, text: `CI on main is green for ${short}: ${run.url}` };
+  if (!RED.includes(run.conclusion)) {
+    return { green: false, text: `CI on main ended ${run.conclusion} for ${short}: ${run.url}\nrun it again (gh run rerun) and stay until it is green` };
+  }
+  return {
+    green: false,
+    text: [
+      `CI on main ended ${run.conclusion} for ${short}: ${run.url}`,
+      `main is red: you stay until it is green, ahead of all other work. Open a "${CI_RED} ..." issue, then within the hour one of:`,
+      "  fix forward: a fix landed as usual, its message names that issue by #number",
+      `  revert: a revert of ${short} landed as usual, its message names that issue by #number`,
+    ].join("\n"),
+  };
+}
+
 /** What a refused push of main says: a moved main is the usual reason, anything else in full. */
 export function pushFailure(stderr) {
   return /\[rejected\]|non-fast-forward|fetch first/.test(stderr) ? `main moved, run land again\n${stderr.trim()}` : stderr.trim();

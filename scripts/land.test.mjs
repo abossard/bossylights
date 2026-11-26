@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ciRefusal, cleanupSteps, namesIncident, parseArgs, pushFailure, recordRefusal, refusal, worktreeOf } from "./land.mjs";
+import { ciAfterPush, ciRefusal, cleanupSteps, namesIncident, parseArgs, pushFailure, recordRefusal, refusal, worktreeOf } from "./land.mjs";
 
 // [argv, parsed or null]
 const argCases = [
@@ -163,4 +163,28 @@ const pushCases = [
 ];
 for (const [stderr, message] of pushCases) {
   test(`land push refused: ${JSON.stringify(stderr.slice(0, 30))}`, () => assert.match(pushFailure(stderr), message));
+}
+
+const pushed = "2".repeat(40);
+const done = { headSha: pushed, status: "completed", conclusion: "success", url: "https://ci/1" };
+// [name, the newest run for the pushed commit, null while waiting or [green, what land says]]
+const afterPushCases = [
+  ["no run yet", undefined, null],
+  ["a run of another commit", { ...done, headSha: "3".repeat(40) }, null],
+  ["queued", { ...done, status: "queued", conclusion: "" }, null],
+  ["running", { ...done, status: "in_progress", conclusion: "" }, null],
+  ["green", {}, [true, /^CI on main is green for 2222222: https:\/\/ci\/1$/]],
+  ["red", { conclusion: "failure" }, [false, /ended failure for 2222222: https:\/\/ci\/1\n[\s\S]*"CI red on main: \.\.\." issue[\s\S]*fix forward: a fix landed as usual, its message names that issue by #number\n  revert: a revert of 2222222 landed as usual, its message names that issue by #number$/]],
+  ["timed out", { conclusion: "timed_out" }, [false, /ended timed_out[\s\S]*you stay until it is green/]],
+  ["could not start", { conclusion: "startup_failure" }, [false, /ended startup_failure[\s\S]*fix forward/]],
+  ["cancelled by hand", { conclusion: "cancelled" }, [false, /ended cancelled for 2222222: https:\/\/ci\/1\nrun it again \(gh run rerun\) and stay until it is green$/]],
+  ["skipped", { conclusion: "skipped" }, [false, /ended skipped[\s\S]*run it again/]],
+];
+for (const [name, differs, said] of afterPushCases) {
+  test(`land after the push: ${name}`, () => {
+    const ci = ciAfterPush(differs === undefined ? undefined : { ...done, ...differs }, pushed);
+    if (!said) return assert.equal(ci, null);
+    assert.equal(ci.green, said[0]);
+    assert.match(ci.text, said[1]);
+  });
 }

@@ -1,12 +1,12 @@
 // `npm run land -- <wip/branch> <message-file>`: a reviewed WIP branch becomes one commit on main.
 // Reads every fact first (land.mjs decides), then writes: squash onto origin/main without a working tree
 // (merge-tree, commit-tree), a plain push (a moved main refuses it), then the branch and its worktree move onto
-// the landed commit, build kept (`--last`: they go).
+// the landed commit, build kept (`--last`: they go). Last it waits for CI on main for its commit: green or red.
 // It runs no check: it lands only a tree that `npm run verify --mutants` passed and recorded.
 // Nothing in any checkout is touched before the push.
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { cleanupSteps, parseArgs, pushFailure, refusal, worktreeOf } from "./land.mjs";
+import { ciAfterPush, cleanupSteps, parseArgs, pushFailure, refusal, worktreeOf } from "./land.mjs";
 import { recordPath } from "./verify.mjs";
 
 const run = (command, args) => spawnSync(command, args, { encoding: "utf8", maxBuffer: 1 << 26 });
@@ -77,6 +77,22 @@ try {
   for (const line of kept) console.error(`land: ${line}`);
   if (kept.length === 0) console.log(`land: ${after.done}`);
   else process.exitCode = 1;
+
+  console.log(`land: waiting for CI on main for ${sha.slice(0, 7)}`);
+  const pause = new Int32Array(new SharedArrayBuffer(4));
+  let ci = null;
+  while (!ci) {
+    Atomics.wait(pause, 0, 0, 30_000);
+    const runs = run("gh", ["run", "list", "--workflow", "ci.yml", "--branch", "main", "--event", "push", "--commit", sha,
+      "--limit", "1", "--json", "headSha,status,conclusion,url"]);
+    if (runs.status !== 0) console.error(`land: ${failure("gh", ["run", "list"], runs)}: asking again`); // no answer yet
+    ci = runs.status === 0 ? ciAfterPush(JSON.parse(runs.stdout)[0], sha) : null;
+  }
+  if (ci.green) console.log(`land: ${ci.text}`);
+  else {
+    console.error(`land: ${ci.text}`);
+    process.exitCode = 1;
+  }
 } catch (error) {
   console.error(`land: ${error.message}`);
   process.exit(1);
