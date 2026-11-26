@@ -64,7 +64,7 @@ flowchart LR
 
 | What `npm run verify` and `npm run land` do | |
 |---|---|
-| `verify -- <sha> [--mutants]` | a clean copy of the commit, every suite of `npm test` with the default target folder, mutants on what the branch adds since it left `origin/main` (missed lines listed). All suites green and no mutant missed: it records the commit's tree in the shared git folder. Any other run removes that tree's record |
+| `verify -- <sha> [--mutants]` | in your own worktree, clean and at the commit: what the change can reach. Changed crates and the crates that depend on them (clippy, tests), `test:checks` always, the UI, e2e and catalog suites when `ui/`, `e2e/`, `shell` or `wire` is reached. Everything when `Cargo.*`, the toolchain, `.cargo/`, `scripts/`, `package*.json`, `.github/` or a file no rule names changed. It prints what it left to CI. Mutants on what the branch adds since it left `origin/main` (missed lines listed). All suites green and no mutant missed: it records the commit's tree in the shared git folder. Any other run removes that tree's record |
 | `land -- wip/<ticket> <message-file> [--last]` | squashes the branch onto `origin/main` and lands it only when that tree has a record: no check again. Another tree (main moved): merge `origin/main`, push, verify again. Then pushes and moves the branch and its worktree onto the landed commit, build kept, for the next slice. `--last` (the ticket's last slice) removes them. Last it waits for CI on `main` for its commit and says green or red. Red: open a `CI red on main:` issue, then fix forward or revert, each a landing that names it. Refuses while CI on `main` is running, missing or cancelled. A red run is passed only when the message names the open `CI red on main:` issue |
 
 ## Mail

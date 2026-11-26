@@ -62,8 +62,9 @@ try {
 
   const sha = git("commit-tree", tree, "-p", base, "-F", messageFile);
   console.log(`land: ${sha.slice(0, 7)} is ${branch} (${remoteTip.slice(0, 7)}) squashed onto origin/main (${base.slice(0, 7)})`);
-  const { commit, suites, mutants } = facts.record;
+  const { commit, suites, left, mutants } = facts.record;
   console.log(`land: its tree passed verify of ${commit.slice(0, 7)}: ${suites.join(", ")}; mutants caught ${mutants.caught}, missed ${mutants.missed}, timeout ${mutants.timeout}`);
+  console.log(`land: left to CI on main: ${left?.join("; ") || "nothing"}`);
   const pushed = run("git", ["push", "origin", `${sha}:refs/heads/main`]);
   if (pushed.status !== 0) throw new Error(pushFailure(pushed.stderr));
   console.log(`land: ${sha.slice(0, 7)} is on origin/main`);
