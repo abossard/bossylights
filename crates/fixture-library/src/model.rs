@@ -45,7 +45,7 @@ pub struct Mode {
     pub channels: Vec<Channel>,
     /// One entry per pixel of a bar or a panel, each the channel numbers (counted from 0)
     /// of that pixel. Empty for a fixture without pixels. A head that names a channel the
-    /// mode does not have is left out, with a warning.
+    /// mode does not have refuses the mode (`Problem::HeadPastEnd`).
     pub pixels: Vec<Vec<u16>>,
     /// The grid of the pixels, from the mode or else the fixture. Left out, with a
     /// warning, when the mode has heads and the grid does not have exactly one cell for each.

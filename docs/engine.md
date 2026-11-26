@@ -368,7 +368,7 @@ The open, all or nothing (`show::open`, `Sender::open`). Every `LeftAlone` row l
 |---|---|---|---|
 | Reading | file not there | Opening (empty patch, no looks) | |
 | Reading | cannot read (a folder, no rights) | `LeftAlone(CannotRead)` | as they start |
-| Reading | over the most bytes, broken, newer, older, taken, refused by a check | `LeftAlone(why)` | as they start |
+| Reading | over the most bytes, broken (a mode with a head past its channels too, Q18), newer, older, taken, refused by a check | `LeftAlone(why)` | as they start |
 | Reading | read | Opening (the file's patch and looks) | |
 | Opening | front not as it starts: a fixture patched, or Mixer settings other than the defaults | `LeftAlone(Refused(Stale))` | unchanged |
 | Opening | patch refused as a change of the patch (`NotStreamed`, …) | `LeftAlone(Refused(reason))` | as they start |
