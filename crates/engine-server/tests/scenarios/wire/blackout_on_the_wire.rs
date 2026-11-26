@@ -11,12 +11,23 @@
 //! | 21 to 32 | Vari-Lite VL2202 Spot, Standard 8bit | 21 intensity to 0, 28 strobe to 3 (its first Closed byte) | pan, tilt, wheels, iris, zoom, control |
 //! | 41 to 43 | Generic RGB, RGB | R G B to 0 | |
 //! | 100 | nothing patched | | a raw hold follows nothing |
+//!
+//! Master scales what follows it (owner, 2026-11-21, #251): `out = dark + (v - dark) x m /
+//! 255`, one rounding. Master 50% is level 128. Worked by hand:
+//!
+//! | At | Fixture (file, mode) | Held | Under Master 128 |
+//! |---|---|---|---|
+//! | 1 to 19 | Cameo HydraBeam 4000, 19 Channel: 1 shared master dimmer, 3 to 6 RGBW in no head, 9, 12, 15, 18 head dimmers, 7 pan 1 | 255, 200, 179, 100 | 255 (keeps its value), 200 (the head dimmers carry it), 90 (179 x 128 / 255 = 89.85), 100 |
+//! | 21 to 34 | Martin Rush MH6 Wash, Standard: 22 and 23 a 16-bit dimmer | 0xB3 0x33 | 0x59 0xF3: 45,875 x 128 / 255 = 23,027.45 (byte by byte 90 26) |
+//! | 41 to 43 | Generic RGB, RGB: orange | 255 128 0 | 128 64 0 (64.25) |
+//! | 51 | a reverse dimmer (below): dark at 255 | 76 | 165: 255 - round(179 x 128 / 255) |
+//! | 61 | nothing patched | 200 | 200 |
 
 use crate::wire_common as common;
 
-use common::{Heard, command, connect, serve};
+use common::{Heard, Socket, command, connect, serve};
 use engine::{Engine, Universes};
-use serde_json::json;
+use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -100,13 +111,40 @@ const TWO_HEADS: &str = r#"<?xml version='1.0' encoding='UTF-8'?>
 </FixtureDefinition>
 "#;
 
-/// A folder of the fogger, the spot, the PAR and the two heads.
+/// One dimmer that runs from full at 0 to dark at 255.
+const REVERSE: &str = r#"<?xml version='1.0' encoding='UTF-8'?>
+<!DOCTYPE FixtureDefinition>
+<FixtureDefinition xmlns="http://www.qlcplus.org/FixtureDefinition">
+ <Creator><Name>Q Light Controller Plus</Name><Version>4.12.0</Version><Author>test</Author></Creator>
+ <Manufacturer>Test</Manufacturer>
+ <Model>Reverse Dimmer</Model>
+ <Type>Dimmer</Type>
+ <Channel Name="Dimmer">
+  <Group Byte="0">Intensity</Group>
+  <Capability Min="0" Max="255" Preset="BigToSmall">Dimmer 100 to 0 %</Capability>
+ </Channel>
+ <Mode Name="1 Channel">
+  <Channel Number="0">Dimmer</Channel>
+ </Mode>
+ <Physical>
+  <Bulb Type="Other" Lumens="0" ColourTemperature="0"/>
+  <Dimensions Weight="1" Width="100" Height="100" Depth="100"/>
+  <Lens Name="Other" DegreesMin="0" DegreesMax="0"/>
+  <Focus Type="Fixed" PanMax="0" TiltMax="0"/>
+  <Technical PowerConsumption="10" DmxConnector="3-pin"/>
+ </Physical>
+</FixtureDefinition>
+"#;
+
+/// A folder of every fixture both tests patch.
 fn folder() -> PathBuf {
     let folder = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("blackout-{}", process::id()));
     fs::create_dir_all(&folder).unwrap();
     let here = Path::new(env!("CARGO_MANIFEST_DIR"));
     for (from, file) in [
         ("../rig/tests/definitions", "Vari-Lite-VL2202-Spot.qxf"),
+        ("../rig/tests/definitions", "Cameo-HydraBeam-4000.qxf"),
+        ("../rig/tests/definitions", "Martin-Rush-MH6-Wash.qxf"),
         (
             "../fixture-library/tests/definitions",
             "Generic-Generic-RGB.qxf",
@@ -116,22 +154,95 @@ fn folder() -> PathBuf {
     }
     fs::write(folder.join("Test-LED-Fogger.qxf"), FOGGER).unwrap();
     fs::write(folder.join("Test-Two-Heads.qxf"), TWO_HEADS).unwrap();
+    fs::write(folder.join("Test-Reverse-Dimmer.qxf"), REVERSE).unwrap();
     folder
 }
 
-/// The held channels: each fixture's, then the unpatched one.
-const HELD: [std::ops::RangeInclusive<u16>; 5] = [1..=6, 11..=17, 21..=32, 41..=43, 100..=100];
+/// A served engine on universe 1 of a fake DMX USB Pro, these fixtures patched.
+struct Desk {
+    socket: Socket,
+    heard: Heard,
+    stop: Arc<AtomicBool>,
+}
 
-/// The bytes at every held channel, in order, once the adapter's last frame shows them.
-fn until_heard(heard: &Heard, want: &[u8], step: &str) {
+impl Desk {
+    /// Patches each `(maker, model, mode, address)` in order: fixtures 1, 2, ...
+    async fn new(fixtures: &[(&str, &str, &str, u16)]) -> Self {
+        let (heard, stop) = (Heard::default(), Arc::new(AtomicBool::new(false)));
+        let open = common::open(Some(Arc::clone(&heard)), Arc::clone(&stop));
+        let (engine, sender) = Engine::start_with(Universes::ONE, open).unwrap();
+        let address = serve(engine, sender, Some(folder())).await;
+        let mut socket = connect(address).await;
+        let usb = json!({"SetOutput": {
+            "output": 1, "kind": {"DmxUsbPro": {"adapter": 1}},
+            "universes": {"first": 1, "count": 1}, "rate": null,
+        }});
+        assert_eq!(command(&mut socket, usb).await, json!("Accepted"));
+        let started = Instant::now();
+        for (fixture, (maker, model, mode, address)) in fixtures.iter().enumerate() {
+            let patch = json!({"Patch": {
+                "name": model, "maker": maker, "model": model, "mode": mode,
+                "at": {"universe": 1, "address": address},
+            }});
+            // the library is read in the background: the first patches may find nothing
+            let reply = loop {
+                let reply = command(&mut socket, patch.clone()).await;
+                if reply != json!({"Refused": {"reason": "NoSuchFixture"}}) {
+                    break reply;
+                }
+                assert!(started.elapsed() < Duration::from_secs(10), "no library");
+                tokio::task::yield_now().await;
+            };
+            assert_eq!(
+                reply,
+                json!({"Patched": {"fixture": fixture + 1}}),
+                "{patch}"
+            );
+        }
+        Self {
+            socket,
+            heard,
+            stop,
+        }
+    }
+
+    /// Holds each `(address, byte)` of universe 1 raw.
+    async fn hold(&mut self, holds: &[(u16, u8)]) {
+        for (address, value) in holds {
+            let hold = json!({"SetChannel": {
+                "channel": {"universe": 1, "address": address}, "value": value,
+            }});
+            assert_eq!(command(&mut self.socket, hold).await, json!("Accepted"));
+        }
+    }
+
+    async fn accepted(&mut self, command_: Value) {
+        assert_eq!(command(&mut self.socket, command_).await, json!("Accepted"));
+    }
+
+    /// Waits until the adapter's last frame shows `want` at the addresses `at`, in order.
+    async fn heard(&self, at: Vec<u16>, want: Vec<u8>, step: &'static str) {
+        let heard = Arc::clone(&self.heard);
+        tokio::task::spawn_blocking(move || until_heard(&heard, &at, &want, step))
+            .await
+            .unwrap();
+    }
+}
+
+impl Drop for Desk {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+    }
+}
+
+/// The bytes at `at` (addresses of universe 1), in order, once the adapter's last frame
+/// shows them.
+fn until_heard(heard: &Heard, at: &[u16], want: &[u8], step: &str) {
     let started = Instant::now();
-    let at = |frame: &[u8; 512]| -> Vec<u8> {
-        HELD.iter()
-            .flat_map(|range| range.clone().map(|a| frame[usize::from(a) - 1]))
-            .collect()
-    };
+    let bytes =
+        |frame: &[u8; 512]| -> Vec<u8> { at.iter().map(|a| frame[usize::from(*a) - 1]).collect() };
     loop {
-        let last = heard.lock().unwrap().last().map(at);
+        let last = heard.lock().unwrap().last().map(bytes);
         if last.as_deref() == Some(want) {
             return;
         }
@@ -145,76 +256,83 @@ fn until_heard(heard: &Heard, want: &[u8], step: &str) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn blackout_moves_only_the_channels_its_rules_name() {
-    let (heard, stop) = (Heard::default(), Arc::new(AtomicBool::new(false)));
-    let open = common::open(Some(Arc::clone(&heard)), Arc::clone(&stop));
-    let (engine, sender) = Engine::start_with(Universes::ONE, open).unwrap();
-    let address = serve(engine, sender, Some(folder())).await;
-    let mut socket = connect(address).await;
-    let usb = json!({"SetOutput": {
-        "output": 1, "kind": {"DmxUsbPro": {"adapter": 1}},
-        "universes": {"first": 1, "count": 1}, "rate": null,
-    }});
-    assert_eq!(command(&mut socket, usb).await, json!("Accepted"));
-    let patch = |maker: &str, model: &str, mode: &str, address: u16| {
-        json!({"Patch": {
-            "name": model, "maker": maker, "model": model, "mode": mode,
-            "at": {"universe": 1, "address": address},
-        }})
-    };
-    let started = Instant::now();
-    for (fixture, patch) in [
-        patch("Test", "LED Fogger", "6 Channel", 1),
-        patch("Test", "Two Heads", "7 Channel", 11),
-        patch("Vari-Lite", "VL2202 Spot", "Standard 8bit", 21),
-        patch("Generic", "Generic RGB", "RGB", 41),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        // the library is read in the background: the first patches may find nothing
-        let reply = loop {
-            let reply = command(&mut socket, patch.clone()).await;
-            if reply != json!({"Refused": {"reason": "NoSuchFixture"}}) {
-                break reply;
-            }
-            assert!(started.elapsed() < Duration::from_secs(10), "no library");
-            tokio::task::yield_now().await;
-        };
-        assert_eq!(
-            reply,
-            json!({"Patched": {"fixture": fixture + 1}}),
-            "{patch}"
-        );
-    }
-    for address in HELD.iter().flat_map(Clone::clone) {
-        let hold =
-            json!({"SetChannel": {"channel": {"universe": 1, "address": address}, "value": 200}});
-        assert_eq!(command(&mut socket, hold).await, json!("Accepted"));
-    }
-    let lit = [200; 29];
+    let mut desk = Desk::new(&[
+        ("Test", "LED Fogger", "6 Channel", 1),
+        ("Test", "Two Heads", "7 Channel", 11),
+        ("Vari-Lite", "VL2202 Spot", "Standard 8bit", 21),
+        ("Generic", "Generic RGB", "RGB", 41),
+    ])
+    .await;
+    // each fixture's channels, then the unpatched one
+    let at: Vec<u16> = [1..=6, 11..=17, 21..=32, 41..=43, 100..=100]
+        .into_iter()
+        .flatten()
+        .collect();
+    let holds: Vec<(u16, u8)> = at.iter().map(|a| (*a, 200)).collect();
+    desk.hold(&holds).await;
+    let lit = vec![200; 29];
     #[rustfmt::skip]
-    let dark = [
+    let dark = vec![
         200, 0, 200, 200, 200, 200, // fogger: only the LED dimmer
         0, 200, 200, 200, 0, 0, 0, // two heads: the dimmer and the head without one
         0, 200, 200, 200, 200, 200, 200, 3, 200, 200, 200, 200, // spot: intensity, strobe closed
         0, 0, 0, // PAR
         200, // unpatched
     ];
-    let blackout = |on: bool| json!({"Blackout": {"on": on}});
-    let steps: [(&str, Option<bool>, &[u8]); 3] = [
-        ("held at 200", None, &lit),
-        ("blackout on", Some(true), &dark),
-        ("blackout off", Some(false), &lit),
+    desk.heard(at.clone(), lit.clone(), "held at 200").await;
+    desk.accepted(json!({"Blackout": {"on": true}})).await;
+    desk.heard(at.clone(), dark, "blackout on").await;
+    desk.accepted(json!({"Blackout": {"on": false}})).await;
+    desk.heard(at, lit, "blackout off").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn master_scales_only_what_follows_it() {
+    let mut desk = Desk::new(&[
+        ("Cameo", "HydraBeam 4000", "19 Channel", 1),
+        ("Martin", "Rush MH6 Wash", "Standard", 21),
+        ("Generic", "Generic RGB", "RGB", 41),
+        ("Test", "Reverse Dimmer", "1 Channel", 51),
+    ])
+    .await;
+    // (address, held): the HydraBeam's shared dimmer, RGBW, pan 1, head dimmers; the
+    // MH6's 16-bit dimmer and its RGBW; the PAR's orange; the reverse dimmer; unpatched
+    #[rustfmt::skip]
+    let holds: Vec<(u16, u8)> = vec![
+        (1, 255), (3, 200), (4, 200), (5, 200), (6, 200), (7, 100),
+        (9, 179), (12, 179), (15, 179), (18, 179),
+        (22, 0xB3), (23, 0x33), (24, 200), (27, 200),
+        (41, 255), (42, 128), (43, 0),
+        (51, 76),
+        (61, 200),
     ];
-    for (step, on, want) in steps {
-        if let Some(on) = on {
-            assert_eq!(command(&mut socket, blackout(on)).await, json!("Accepted"));
-        }
-        let heard = Arc::clone(&heard);
-        let want = want.to_vec();
-        tokio::task::spawn_blocking(move || until_heard(&heard, &want, step))
-            .await
-            .unwrap();
-    }
-    stop.store(true, Ordering::Relaxed);
+    desk.hold(&holds).await;
+    let at: Vec<u16> = holds.iter().map(|(a, _)| *a).collect();
+    let held: Vec<u8> = holds.iter().map(|(_, b)| *b).collect();
+    #[rustfmt::skip]
+    let half = vec![
+        255, 200, 200, 200, 200, 100, // shared dimmer and colour keep, pan stays
+        90, 90, 90, 90, // head dimmers: 179 x 128 / 255
+        0x59, 0xF3, 200, 200, // one word; the dimmer carries the RGBW
+        128, 64, 0, // orange, hue kept
+        165, // reverse: toward 255
+        200, // unpatched
+    ];
+    #[rustfmt::skip]
+    let zero = vec![
+        255, 200, 200, 200, 200, 100,
+        0, 0, 0, 0,
+        0, 0, 200, 200,
+        0, 0, 0,
+        255,
+        200,
+    ];
+    desk.heard(at.clone(), held.clone(), "held").await;
+    let master = |level: u8| json!({"SetMaster": {"level": level}});
+    desk.accepted(master(128)).await;
+    desk.heard(at.clone(), half, "master half").await;
+    desk.accepted(master(0)).await;
+    desk.heard(at.clone(), zero, "master at 0").await;
+    desk.accepted(master(255)).await;
+    desk.heard(at, held, "master full").await;
 }

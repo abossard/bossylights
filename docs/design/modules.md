@@ -5,8 +5,8 @@ Read [theory.md](theory.md) first: the engine knows channels, the Rig and the sc
 | Module | State |
 |---|---|
 | Engine, Mixer (per channel, #250), Sources (steps, sequences, Wave), Clock, Rig, Fixture library, Output (DMX USB, DDP), Project | built |
-| Rig rules from the file | built (#251) |
-| Master, typed grabs, rules in Patch, virtual dimmers | designed (#251) |
+| Rig rules from the file, Master | built (#251) |
+| Typed grabs, rules in Patch, virtual dimmers | designed (#251) |
 | Surface, Controllers, Show, Music, Autopilot | design |
 
 ## The rule: deep modules

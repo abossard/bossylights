@@ -43,7 +43,7 @@ flowchart LR
 
 | Modifier slot | Level | Who follows | Today |
 |---|---|---|---|
-| 0 Master | a command, default 255 | dimmers (a shared dimmer beside head dimmers: not, it follows Blackout only), and emitters no dimmer carries (from the fixture file) | no command, always full (#251) |
+| 0 Master | a command, default 255 | dimmers (a shared dimmer beside head dimmers: not, it follows Blackout only), and emitters no dimmer carries (from the fixture file) | built: `SetMaster`, full at start (#251) |
 | 1 Blackout | 0 while on, 255 while off. A step of its own after Master and the virtual dimmers | as Master, plus a shutter with a Closed range and a shared dimmer beside head dimmers | built: the followers the file gives, to the file's dark (#251) |
 | 2 to 7 virtual dimmers | the value of a control channel | the channels the user picks in Patch. None by default | none yet (#251) |
 
@@ -106,7 +106,8 @@ Decided with the owner on 2026-11-19 (decision 48). Nothing decides between two 
 | Rest | the file's rest per channel, from the lowering (#250): an open shutter, a wheel's bypass, the default; 0 where nothing is patched | overrides in Patch (#251) |
 | One pass per channel: raw hold, Blackout (#247) | built | |
 | Blackout | only the channels the file has follow it, to their dark: dimmers, emitters no dimmer carries, a shutter with a Closed range (it closes), CMY on a fixture without a dimmer (255). Fog, motion, wheels and a channel nobody patched stay. The pass visits the follower index only, a pair as one word | |
-| Master, virtual dimmers | none | #251 |
+| Master | `SetMaster`: its followers move toward dark, one rounding with the other levels. Full at start, not saved | |
+| Virtual dimmers | none | #251 |
 | Grabs and kept offers when a light moves | follow it: they hold a light index, the new field table gives the new channels. Unpatch lets its grabs go | fixture refs (#253) |
 | Identify | none | #254 |
 

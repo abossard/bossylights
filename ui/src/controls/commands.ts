@@ -45,7 +45,7 @@ export const COMMANDS = {
   SkipLook: command("One look of the show or the autopilot stops for the rest of the section", "look"),
   ReleaseHold: command("Give back one thing held by hand", "hold", true),
   ReleaseAll: command("Give back everything held by hand", "", true),
-  SetMaster: command("The level of everything", "level"),
+  SetMaster: command("The level of everything", "level", true),
   SetGroupLevel: command("The level of one fader: a group of lights or a rate", "fader, level"),
   SetPosition: command("Aim the movers. The position is held until Release", "pan, tilt"),
   GoCue: command("The cue list steps forward: its look starts, the one before stops", "list"),

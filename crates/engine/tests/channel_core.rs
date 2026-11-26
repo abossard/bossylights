@@ -111,6 +111,7 @@ fn a_raw_hold_and_blackout_are_in_the_frame_after_the_cutoff() {
     let hold = |channel, value| Command::SetChannel { channel, value };
     let release = |channel| Command::ReleaseChannel { channel };
     let blackout = |on| Command::Blackout { on };
+    let master = |level| Command::SetMaster { level };
     use Sent::{After, Before};
     // (step, commands, sent, first and last channel of that wake's frame)
     let steps = [
@@ -138,6 +139,15 @@ fn a_raw_hold_and_blackout_are_in_the_frame_after_the_cutoff() {
             (0, 0),
         ),
         ("blackout off", vec![blackout(false)], Before, (17, 91)),
+        // 17 x 128 / 255 = 8.5, 91 x 128 / 255 = 45.7
+        ("master half", vec![master(128)], Before, (9, 46)),
+        (
+            "master full after the cutoff: not yet",
+            vec![master(255)],
+            After,
+            (9, 46),
+        ),
+        ("master full in the next frame", vec![], Before, (17, 91)),
         (
             "blackout after the cutoff",
             vec![blackout(true)],

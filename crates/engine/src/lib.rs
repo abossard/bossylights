@@ -135,6 +135,7 @@ pub const fn edits(command: &Command) -> bool {
         | Command::ReleaseChannels
         | Command::ReleaseAll
         | Command::Blackout { .. }
+        | Command::SetMaster { .. }
         | Command::SetOutput { .. }
         | Command::RemoveOutput { .. }
         | Command::SetIntensity { .. }
@@ -378,6 +379,27 @@ impl Drop for Engine {
         if let Some(free) = self.free.take() {
             free.thread().unpark();
             drop(free.join());
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Command, edits};
+
+    /// What the show file keeps is an edit (prepared off the front); a press is not
+    /// (`docs/engine.md`, one connection).
+    #[test]
+    fn edits_are_the_commands_the_show_file_keeps() {
+        // (command, an edit)
+        let cases = [
+            (Command::Unpatch { fixture: 1 }, true),
+            (Command::ReleaseAll, false),
+            (Command::Blackout { on: true }, false),
+            (Command::SetMaster { level: 128 }, false),
+        ];
+        for (command, edit) in cases {
+            assert_eq!(edits(&command), edit, "{command:?}");
         }
     }
 }

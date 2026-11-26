@@ -232,6 +232,7 @@ impl Project {
                 }),
                 Command::ReleaseChannels => send(EngineCommand::ReleaseChannels),
                 Command::Blackout { on } => send(EngineCommand::Blackout { on }),
+                Command::SetMaster { level } => send(EngineCommand::Master { level }),
                 Command::SetOutput {
                     output,
                     kind,
@@ -599,7 +600,7 @@ mod tests {
         let name = Text::new("front").unwrap();
         let members =
             Members::new(&[Member::Fixture { fixture: 3 }, Member::Light { light: 1 }]).unwrap();
-        let cases: [(Vec<ProjectEvent>, ProjectEvent, Done, Option<ProjectOutput>); 23] = [
+        let cases: [(Vec<ProjectEvent>, ProjectEvent, Done, Option<ProjectOutput>); 24] = [
             // the patch checks what names a fixture or a light
             (
                 vec![],
@@ -714,6 +715,14 @@ mod tests {
                 Client(Command::Blackout { on: true }),
                 Ok(Some(ProjectEffect::Send(EngineCommand::Blackout {
                     on: true,
+                }))),
+                None,
+            ),
+            (
+                vec![],
+                Client(Command::SetMaster { level: 128 }),
+                Ok(Some(ProjectEffect::Send(EngineCommand::Master {
+                    level: 128,
                 }))),
                 None,
             ),

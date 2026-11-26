@@ -226,7 +226,7 @@ The union of what the controls send: the first list of engine commands. A propos
 | `SkipLook` | One look of the show or the autopilot stops for the rest of the section | look |  | `console.running.stop` |
 | `ReleaseHold` | Give back one thing held by hand | hold | yes | `console.running.release` |
 | `ReleaseAll` | Give back everything held by hand |  | yes | `console.running.release-all` |
-| `SetMaster` | The level of everything | level |  | `console.fader` |
+| `SetMaster` | The level of everything | level | yes | `console.fader` |
 | `SetGroupLevel` | The level of one fader: a group of lights or a rate | fader, level |  | `console.fader` |
 | `SetPosition` | Aim the movers. The position is held until Release | pan, tilt |  | `console.xy` |
 | `GoCue` | The cue list steps forward: its look starts, the one before stops | list |  | `console.cue.go` |

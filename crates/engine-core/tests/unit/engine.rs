@@ -770,6 +770,20 @@ fn update_turns_a_command_into_a_new_state() {
             raw(&[]),
         ),
         (
+            // ReleaseAll lets holds go, never Master
+            State {
+                master: 128,
+                ..CALM
+            },
+            raw(&[(1, 1, 1)]),
+            EngineCommand::ReleaseAll,
+            State {
+                master: 128,
+                ..CALM
+            },
+            raw(&[]),
+        ),
+        (
             CALM,
             raw(&[(1, 1, 80)]),
             EngineCommand::Blackout { on: true },
@@ -782,6 +796,26 @@ fn update_turns_a_command_into_a_new_state() {
             EngineCommand::Blackout { on: false },
             CALM,
             raw(&[(1, 1, 80)]),
+        ),
+        (
+            CALM,
+            raw(&[(1, 1, 80)]),
+            EngineCommand::Master { level: 128 },
+            State {
+                master: 128,
+                ..CALM
+            },
+            raw(&[(1, 1, 80)]),
+        ),
+        (
+            State {
+                master: 128,
+                ..DARK
+            },
+            raw(&[]),
+            EngineCommand::Master { level: 255 },
+            DARK,
+            raw(&[]),
         ),
         (DARK, raw(&[]), set(1, 2, 50), DARK, raw(&[(1, 2, 50)])), // held in a blackout
         (CALM, raw(&[]), set(1, 2, 0), CALM, raw(&[(1, 2, 0)])),   // held at 0 is held
@@ -923,16 +957,20 @@ fn a_channel_on_a_shorter_buffer_changes_nothing() {
     assert_eq!((one, holds), ([Levels::ZERO], [ChannelSet::NONE]));
 }
 
-/// Both universes patched, at rest 0, but channel 1/2 at 200 (a shutter held open),
-/// each following Blackout.
+/// Both universes patched, at rest 0, fading and following Master and Blackout, but
+/// channel 1/2 at 200: a shutter held open, which jumps and follows Blackout only.
 fn two() -> Vec<Configured> {
     (0..2 * 512)
         .map(|at| Configured {
             at,
             rest: if at == 1 { 200 } else { 0 },
             dark: 0,
-            flags: Flags::NONE,
-            follows: Follows::BLACKOUT,
+            flags: if at == 1 { Flags::NONE } else { Flags::FADE },
+            follows: if at == 1 {
+                Follows::BLACKOUT
+            } else {
+                Follows::MASTER.with(Follows::BLACKOUT)
+            },
         })
         .collect()
 }
@@ -954,10 +992,28 @@ fn frame_says_who_set_each_channel_and_a_release_gives_it_back() {
         channel: channel(universe, address),
     };
     let blackout = |on| EngineCommand::Blackout { on };
+    let master = |level| EngineCommand::Master { level };
     use SourceTag as S;
     // (row, commands, channels 1/1, 1/2 and 2/512: byte and source)
     type Seen = [(u8, SourceTag); 3];
-    let cases: [(&str, Vec<EngineCommand>, Seen); 7] = [
+    let cases: [(&str, Vec<EngineCommand>, Seen); 10] = [
+        (
+            // the shutter jumps and follows Blackout only: Master at 0 leaves it
+            "master at 0: what follows it goes dark, the shutter stays",
+            vec![set(2, 512, 91), master(0)],
+            [(0, lit), (200, S::REST), (0, S::RAW)],
+        ),
+        (
+            // 255 x 128 / 255 = 128; 91 x 128 / 255 = 45.7
+            "master half: the light and the raw scale, the shutter stays",
+            vec![set(2, 512, 91), master(128)],
+            [(128, lit), (200, S::REST), (46, S::RAW)],
+        ),
+        (
+            "master full again",
+            vec![set(2, 512, 91), master(128), master(255)],
+            [(255, lit), (200, S::REST), (91, S::RAW)],
+        ),
         (
             "nothing held",
             vec![],

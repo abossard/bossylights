@@ -712,6 +712,7 @@ impl Press {
             | Command::ReleaseChannel { .. }
             | Command::ReleaseChannels
             | Command::Blackout { .. }
+            | Command::SetMaster { .. }
             | Command::StartLook { .. }
             | Command::StopLook { .. }
             | Command::EndFlash { .. }
@@ -1836,6 +1837,10 @@ mod tests {
             ),
             (serde_json::json!("ReleaseChannels"), Press::Free),
             (serde_json::json!({"Blackout": {"on": true}}), Press::Free),
+            (
+                serde_json::json!({"SetMaster": {"level": 128}}),
+                Press::Free,
+            ),
             (serde_json::json!({"StartLook": {"look": 1}}), Press::Free),
             (serde_json::json!({"StopLook": {"play": play}}), Press::Free),
             (serde_json::json!({"EndFlash": {"play": play}}), Press::Free),

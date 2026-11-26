@@ -53,7 +53,7 @@ pub use channel::{
     ADDRESSES, CHANNELS, Channel, ChannelLevel, ChannelNumbers, ChannelSet, Channels, Configured,
     Field, Flags, Follows, Levels, MAX_UNIVERSES, Pair, SourceTag, Universes, changes,
 };
-use channel::{BLACKOUT, MODIFIERS};
+use channel::{BLACKOUT, MASTER, MODIFIERS};
 pub use model_failure::{OpenFailure, Refusal};
 pub use model_kinds::{Adapter, Color, OutputKind};
 #[cfg(test)]
@@ -88,8 +88,11 @@ pub struct State {
     pub frame: u64,
     /// What the system gave the output thread. Asked once, when the thread starts.
     pub priority: Priority,
-    /// While on, every channel goes out at zero. The held levels stay.
+    /// While on, every channel that follows Blackout goes to its dark. The held levels
+    /// stay.
     pub blackout: bool,
+    /// How much shows of every channel that follows Master: 255 full.
+    pub master: u8,
     /// The outputs, by number. `None` where no output is set.
     #[cfg_attr(feature = "ts", ts(type = "Array<Output | null>"))]
     outputs: [Option<Output>; MAX_OUTPUTS],
@@ -126,6 +129,7 @@ impl State {
             frame: 0,
             priority,
             blackout: false,
+            master: u8::MAX,
             outputs: [None; MAX_OUTPUTS],
             now: Duration::ZERO,
             beat: BEAT,
@@ -310,10 +314,15 @@ pub enum Command {
     /// Let every raw channel go.
     ReleaseChannels,
     /// Let every Manual play, every direct hold and every raw channel go. Show,
-    /// Autopilot, blackout and tempo stay.
+    /// Autopilot, blackout, Master and tempo stay.
     ReleaseAll,
-    /// Every channel out at zero while on. The held levels stay and come back when off.
+    /// While on, every channel that follows Blackout goes to its dark: dimmers, emitters
+    /// no dimmer carries, shutters with a Closed range. Fog, motion and the rest stay.
+    /// The held levels stay and come back when off.
     Blackout { on: bool },
+    /// How much shows of every channel that follows Master, 255 full: a dimmer at 70%
+    /// under Master at 50% sends 35%. Full when the engine starts.
+    SetMaster { level: u8 },
     /// Add an output, or replace the one with this number. Its counters start at zero.
     /// Without a rate, the kind's default.
     SetOutput {
@@ -491,6 +500,9 @@ pub enum EngineCommand {
     Blackout {
         on: bool,
     },
+    Master {
+        level: u8,
+    },
     /// An opened device takes the place of `output`, or the device there stays and only
     /// its run and rate change. Its counters start at zero.
     Attach {
@@ -656,6 +668,10 @@ impl State {
                 blackout: on,
                 ..state
             },
+            EngineCommand::Master { level } => State {
+                master: level,
+                ..state
+            },
             // `Plan`: the plays stay; whether its plan installs is `Plays::takes_plan`.
             EngineCommand::Fields | EngineCommand::Grabs | EngineCommand::Plan { .. } => state,
             EngineCommand::Grab { entry, change } => {
@@ -786,10 +802,13 @@ pub fn frame(
     channels.apply_winners(followers, raw, holds, modifiers(state));
 }
 
-/// The level of each modifier slot this frame: Master full until `SetMaster` comes,
-/// Blackout 0 while on.
+/// The level of each modifier slot this frame: Master as `SetMaster` left it, Blackout 0
+/// while on.
 fn modifiers(state: &State) -> [u8; MODIFIERS] {
     let mut levels = [u8::MAX; MODIFIERS];
+    if let Some(master) = levels.get_mut(MASTER) {
+        *master = state.master;
+    }
     if let Some(blackout) = levels.get_mut(BLACKOUT) {
         *blackout = if state.blackout { 0 } else { u8::MAX };
     }

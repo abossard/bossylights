@@ -1893,6 +1893,7 @@ impl Sender {
             | EngineCommand::ReleaseChannels
             | EngineCommand::ReleaseAll
             | EngineCommand::Blackout { .. }
+            | EngineCommand::Master { .. }
             | EngineCommand::Fields
             | EngineCommand::Grab { .. }
             | EngineCommand::Grabs

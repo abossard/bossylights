@@ -566,7 +566,22 @@ async fn a_request_that_cannot_be_right_is_refused_and_changes_nothing() {
     assert!(levels.into_iter().all(|level| level == 0));
     let state = &picture["Picture"]["state"];
     assert_eq!(state["blackout"], json!(false));
+    assert_eq!(state["master"], json!(255), "Master full at start");
     assert_eq!(state["outputs"][1], json!(null), "no second output");
+    let master = json!({"Send": {"command": {"SetMaster": {"level": 128}}}});
+    send(&mut socket, &master).await;
+    assert_eq!(answer(&mut socket).await, json!("Accepted"));
+    let started = std::time::Instant::now();
+    loop {
+        send(&mut socket, &json!("Query")).await;
+        if answer(&mut socket).await["Picture"]["state"]["master"] == json!(128) {
+            break;
+        }
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(10),
+            "the picture never showed Master 128"
+        );
+    }
     // Forget the packets sent before the refused requests: the next one is computed after them.
     let mut stale = vec![0; 1500];
     while udp.try_recv(&mut stale).is_ok() {}

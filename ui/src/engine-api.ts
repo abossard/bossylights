@@ -3,7 +3,7 @@
 
 export type Request = { "Send": { command: Command, } } | "Query" | "Subscribe" | "Stop" | { "Search": { text: string, } } | { "Fixture": { maker: string, model: string, } } | "Failures";
 
-export type Command = { "SetChannel": { channel: ChannelNumbers, value: number, } } | { "ReleaseChannel": { channel: ChannelNumbers, } } | "ReleaseChannels" | "ReleaseAll" | { "Blackout": { on: boolean, } } | { "SetOutput": { output: OutputNumber, kind: OutputKind, universes: RunNumbers, rate: Rate | null, } } | { "RemoveOutput": { output: OutputNumber, } } | { "Patch": { name: string, maker: string, model: string, mode: string, at: ChannelNumbers, } } | { "PatchStrip": { name: string, pixels: Pixels, color: Color, at: ChannelNumbers, } } | { "Move": { fixture: number, at: ChannelNumbers, } } | { "Unpatch": { fixture: number, } } | { "Rename": { fixture: number, name: string, } } | { "SetIntensity": { target: Target, intensity: number, } } | { "SetColour": { target: Target, red: number, green: number, blue: number, } } | { "ReleaseIntensity": { target: Target, } } | { "ReleaseColour": { target: Target, } } | { "SetProperty": { target: Target, value: Value, } } | { "UpdateGrab": { grab: GrabId, value: Value, } } | { "EndGrab": { grab: GrabId, } } | { "ReleaseProperty": { target: Target, property: Property, } } | { "SetGroup": { name: string, members: Array<Member>, } } | { "RemoveGroup": { name: string, } } | { "PutStep": { look: number, name: string, step: AuthoredStep, } } | { "PutPattern": { look: number, name: string, pattern: Pattern, } } | { "PutSequence": { look: number, name: string, sequence: Sequence, } } | { "RemoveLook": { look: number, } } | { "StartLook": { look: number, use?: Use, rank?: Rank, 
+export type Command = { "SetChannel": { channel: ChannelNumbers, value: number, } } | { "ReleaseChannel": { channel: ChannelNumbers, } } | "ReleaseChannels" | "ReleaseAll" | { "Blackout": { on: boolean, } } | { "SetMaster": { level: number, } } | { "SetOutput": { output: OutputNumber, kind: OutputKind, universes: RunNumbers, rate: Rate | null, } } | { "RemoveOutput": { output: OutputNumber, } } | { "Patch": { name: string, maker: string, model: string, mode: string, at: ChannelNumbers, } } | { "PatchStrip": { name: string, pixels: Pixels, color: Color, at: ChannelNumbers, } } | { "Move": { fixture: number, at: ChannelNumbers, } } | { "Unpatch": { fixture: number, } } | { "Rename": { fixture: number, name: string, } } | { "SetIntensity": { target: Target, intensity: number, } } | { "SetColour": { target: Target, red: number, green: number, blue: number, } } | { "ReleaseIntensity": { target: Target, } } | { "ReleaseColour": { target: Target, } } | { "SetProperty": { target: Target, value: Value, } } | { "UpdateGrab": { grab: GrabId, value: Value, } } | { "EndGrab": { grab: GrabId, } } | { "ReleaseProperty": { target: Target, property: Property, } } | { "SetGroup": { name: string, members: Array<Member>, } } | { "RemoveGroup": { name: string, } } | { "PutStep": { look: number, name: string, step: AuthoredStep, } } | { "PutPattern": { look: number, name: string, pattern: Pattern, } } | { "PutSequence": { look: number, name: string, sequence: Sequence, } } | { "RemoveLook": { look: number, } } | { "StartLook": { look: number, use?: Use, rank?: Rank, 
 /**
  * At once when not given, or on the next beat or bar of the grid: then the
  * play waits, and plays from the frame of that crossing.
@@ -113,9 +113,14 @@ frame: number,
  */
 priority: Priority, 
 /**
- * While on, every channel goes out at zero. The held levels stay.
+ * While on, every channel that follows Blackout goes to its dark. The held levels
+ * stay.
  */
 blackout: boolean, 
+/**
+ * How much shows of every channel that follows Master: 255 full.
+ */
+master: number, 
 /**
  * The outputs, by number. `None` where no output is set.
  */
