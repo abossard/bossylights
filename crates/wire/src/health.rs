@@ -1,7 +1,8 @@
 //! Output health as the API shows it: views of `engine_core::health`.
 
 use core::time::Duration;
-use engine_core::{OutputNumber, Status, health};
+use engine_core::health::{self, AfterHandoff};
+use engine_core::{OutputNumber, Status};
 use serde::Serialize;
 
 /// Timing and device status for each attached output, in output number order.
@@ -9,7 +10,17 @@ use serde::Serialize;
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub struct Health<'a> {
     pub window_ms: u16,
-    pub outputs: &'a [OutputHealth],
+    pub outputs: &'a [OutputRow],
+}
+
+/// An output's row: its health, and what follows its handoff on the way to the light,
+/// for its kind and its patched channels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct OutputRow {
+    #[serde(flatten)]
+    pub health: OutputHealth,
+    pub after_handoff: AfterHandoff,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]

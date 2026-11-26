@@ -13,7 +13,10 @@
 use crate::wire_common as common;
 
 use common::{Heard, Socket, command, connect, send, serve};
-use engine::{Adapter, Device, Engine, Event, Open, Outcome, OutputKind, Universes, Wakes};
+use engine::{
+    Adapter, Device, Engine, Event, Open, Outcome, OutputKind, OutputNumber, Rate, RunNumbers,
+    Universes, Wakes,
+};
 use futures_util::StreamExt;
 use outputs::dmx_usb_pro::DmxUsbPro;
 use serde_json::{Value, json};
@@ -96,6 +99,25 @@ fn ceil_grid(at: Duration) -> Duration {
 
 fn ms(at: Duration) -> u64 {
     u64::try_from(at.as_millis()).unwrap()
+}
+
+/// The DMX wire's source: over the patched slots, or the whole universe with none.
+const PATCHED: &str = "Dmx512AdapterDefault";
+const NOTHING_PATCHED: &str = "Dmx512AdapterDefaultNothingPatched";
+
+/// What follows a DMX USB Pro's handoff (#318 P1c), worked by hand: 518 bytes x 11 bits
+/// at 500,000 baud, 11,396 µs; the widget's default 40 frames a second, 25,000 µs; the
+/// light's slot n ends at 96.03 + 10.67 + (n + 1) x 44 µs (DMX512, ENTTEC API p.3):
+/// slot 1 at 194.7, slot 50 at 2,350.7, slot 102 at 4,638.7, slot 512 at 22,678.7.
+fn usb_after_handoff(wire_low: u32, wire_high: u32, wire: &str) -> Value {
+    let computed = |low: u32, high: u32, source| json!({"Computed": {"low_us": low, "high_us": high, "source": source}});
+    json!([
+        {"stage": "HostToAdapter", "span": "NotKnown"},
+        {"stage": "SerialLink", "span": computed(11_396, 11_396, "Baud")},
+        {"stage": "AdapterFrame", "span": computed(0, 25_000, "AdapterDefault")},
+        {"stage": "DmxWire", "span": computed(wire_low, wire_high, wire)},
+        {"stage": "SlotGap", "span": "NotKnown"},
+    ])
 }
 
 /// The first row of a `Health` reply.
@@ -419,6 +441,7 @@ async fn frames_2_ms_late_warn_once_at_the_second_bad_window_then_recover_once_o
     assert_eq!(
         health["outputs"][0],
         json!({"output": 1, "generation": 1, "status": "Running",
+            "after_handoff": usb_after_handoff(194, 22_679, NOTHING_PATCHED),
             "state": {"Late": {"reason": "HandoffLateness"}},
             "measurement": {"Window": {"end_ms": ms(warned),
                 "lateness": {"p99_us": 2000, "worst_us": 2000, "samples": samples},
@@ -492,6 +515,103 @@ async fn frames_2_ms_late_warn_once_at_the_second_bad_window_then_recover_once_o
     assert_eq!(wire.len(), rig.handed[0].len());
     assert!(wire.iter().all(|level| *level == LEVEL), "{wire:?}");
     rig.stop().await;
+}
+
+/// #318 P1c: each row names what follows its output's handoff, for its kind and over its
+/// patched slots, as they are now. Strips of one RGB pixel at 1.1 and 1.48: slots 1 to 50.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_row_names_what_follows_its_handoff_for_its_kind_and_patched_slots() {
+    let (mut rig, _) = Rig::start().await;
+    for (fixture, address) in [(1, 1), (2, 48)] {
+        let strip = json!({"PatchStrip": {"name": "Pixel", "pixels": 1, "color": "Rgb",
+            "at": {"universe": 1, "address": address}}});
+        let patched = json!({"Patched": {"fixture": fixture}});
+        assert_eq!(command(&mut rig.desk, strip).await, patched);
+    }
+    rig.attach(1).await;
+    let red = json!({"SetColour": {"target": {"Fixture": {"fixture": 1}},
+        "red": 65535, "green": 0, "blue": 0}});
+    let reply = command(&mut rig.desk, red).await;
+    assert!(reply.get("Grabbed").is_some(), "{reply}");
+    rig.step(ON_TIME).await;
+    assert_eq!(rig.wire().last(), Some(&255), "the press on the wire");
+    let rows = |picture: Value| picture["Picture"]["health"]["outputs"].clone();
+    let usb = |rows: &Value| rows[0]["after_handoff"].clone();
+    assert_eq!(
+        usb(&rows(rig.watcher.query().await)),
+        usb_after_handoff(194, 2_351, PATCHED)
+    );
+
+    let moved = json!({"Move": {"fixture": 2, "at": {"universe": 1, "address": 100}}});
+    assert_eq!(command(&mut rig.desk, moved).await, json!("Accepted"));
+    rig.step(ON_TIME).await;
+    assert_eq!(
+        usb(&rows(rig.watcher.query().await)),
+        usb_after_handoff(194, 4_639, PATCHED)
+    );
+
+    let udp = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    let ddp = json!({"SetOutput": {"output": 2,
+        "kind": {"Ddp": {"address": udp.local_addr().unwrap().to_string(), "color": "Rgb"}},
+        "universes": {"first": 1, "count": 1}, "rate": "30"}});
+    assert_eq!(command(&mut rig.desk, ddp).await, json!("Accepted"));
+    // output 2's hand-overs: kept, never drained, its device is no fake adapter
+    rig.handed.push(vec![]);
+    let started = Instant::now();
+    let rows = loop {
+        assert!(started.elapsed() < GIVE_UP, "no row for the DDP output"); // guard
+        rig.step(ON_TIME).await;
+        let rows = rows(rig.watcher.query().await);
+        if !rows[1].is_null() {
+            break rows;
+        }
+    };
+    assert_eq!(
+        rows[0]["after_handoff"],
+        usb_after_handoff(194, 4_639, PATCHED)
+    );
+    assert_eq!(
+        rows[1]["after_handoff"],
+        json!([{"stage": "NetworkAndController", "span": "NotKnown"}])
+    );
+    rig.stop().await;
+}
+
+/// #318 P1c: a device a test brought through the attach door has no kind, so its row names
+/// one part after its handoff, not known.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_row_of_a_device_brought_by_a_test_names_its_one_part_not_known() {
+    struct Taker;
+    impl Device for Taker {
+        fn take(&mut self, _frame: &[u8]) -> Outcome {
+            Outcome::Accepted
+        }
+    }
+    let one = Universes::new(1).unwrap();
+    let (engine, mut sender, wakes) = Engine::start_stepped(one, Box::new(outputs::open)).unwrap();
+    let run = RunNumbers { first: 1, count: 1 }.check(one).unwrap();
+    let output = OutputNumber::try_from(1).unwrap();
+    sender
+        .attach(output, Box::new(Taker), run, Rate::Thirty)
+        .unwrap();
+    let address = serve(engine, sender, None).await;
+    let mut desk = connect(address).await;
+    block_in_place(|| wakes.hold()).unwrap();
+    let started = Instant::now();
+    let rows = loop {
+        assert!(started.elapsed() < GIVE_UP, "no row for the device"); // guard
+        block_in_place(|| wakes.wake()).unwrap();
+        send(&mut desk, &json!("Query")).await;
+        let rows = common::answer(&mut desk).await["Picture"]["health"]["outputs"].clone();
+        if !rows[0].is_null() {
+            break rows;
+        }
+    };
+    assert_eq!(
+        rows[0]["after_handoff"],
+        json!([{"stage": "Device", "span": "NotKnown"}])
+    );
+    send(&mut desk, &json!("Stop")).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -883,7 +1003,7 @@ async fn a_fresh_engine_has_no_health_and_a_slow_socket_counts_what_it_missed_an
     assert_eq!(
         picture["Picture"]["health"]["outputs"][15],
         json!({"output": 16, "generation": 1, "status": "Running", "state": "Measuring",
-            "measurement": "Measuring"})
+            "measurement": "Measuring", "after_handoff": usb_after_handoff(194, 22_679, NOTHING_PATCHED)})
     );
 
     // 10 losses and returns on 16 outputs: 320 events, faster than one Health per 500 ms

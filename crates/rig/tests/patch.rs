@@ -4,7 +4,8 @@ mod common;
 
 use common::fixture;
 use engine_core::{
-    ChannelNumbers, Lights, PatchCommand, Property, Refusal, Rgb, Target, Text, Universes, Value,
+    ChannelNumbers, Lights, PatchCommand, Property, Refusal, Rgb, RunNumbers, Target, Text,
+    Universes, Value,
 };
 use fixture_library::Fixture;
 use rig::{Patch, PatchEffect};
@@ -534,6 +535,69 @@ fn patches_never_overlap() {
         });
         let updated = project.update(command, &library).map(|_| ());
         assert_eq!(updated, expected, "{name}");
+    }
+}
+
+/// Where an output's stream has fixtures: the lowest and highest patched channel, counted
+/// from 1 in the stream of a run. A PAR takes 3 channels, a strip pixel 3.
+#[test]
+fn a_run_has_its_lowest_and_highest_patched_channel() {
+    let library = library();
+    let three = Universes::new(3).unwrap();
+    let run = |first, count| RunNumbers { first, count }.check(three).unwrap();
+    // (name, patch, run, lowest and highest)
+    let cases = [
+        ("nothing patched", vec![], run(1, 1), None),
+        (
+            "slots 1 to 50 from two fixtures",
+            vec![strip(1, 1, 48), strip(1, 1, 1)],
+            run(1, 1),
+            Some(1..=50),
+        ),
+        (
+            "only in another universe",
+            vec![par("A", 2, 1)],
+            run(1, 1),
+            None,
+        ),
+        (
+            "a strip running on from the universe before",
+            vec![strip(2, 1, 511)],
+            run(2, 1),
+            Some(1..=4),
+        ),
+        (
+            "a strip running on into the next universe",
+            vec![strip(2, 1, 511)],
+            run(1, 1),
+            Some(511..=512),
+        ),
+        (
+            "a run of two universes",
+            vec![par("A", 1, 510), par("B", 2, 1)],
+            run(1, 2),
+            Some(510..=515),
+        ),
+        (
+            "a fixture past the run",
+            vec![par("A", 1, 1), par("B", 3, 1)],
+            run(1, 2),
+            Some(1..=3),
+        ),
+        (
+            "the last channel",
+            vec![par("A", 1, 510)],
+            run(1, 1),
+            Some(510..=512),
+        ),
+    ];
+    for (name, commands, run, expected) in cases {
+        let empty = Patch::new(three, Lights::new(64).unwrap(), common::whole());
+        let patch = commands.iter().fold(empty, |patch, command| {
+            let (new, _) = patch.update(*command, &library).unwrap();
+            new.unwrap()
+        });
+        assert_eq!(patch.patched_in(run), expected, "{name}");
     }
 }
 

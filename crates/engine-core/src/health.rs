@@ -2,6 +2,7 @@
 
 use crate::{Histogram, LATENCY_BUCKETS, LATENESS_BUCKETS, Rate, Status, bound, bucket, rank};
 use core::time::Duration;
+use serde::{Serialize, Serializer};
 
 /// One run's counters at an engine time and the outage history of its reused adapter.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -72,6 +73,69 @@ pub struct Window {
     pub failed: u32,
     pub off_beat: u32,
     pub verdict: Verdict,
+}
+
+/// What follows the handoff on the way to the light, in the order a frame passes: the
+/// part of the delay the engine does not measure. Each part is computed from a spec or
+/// named as not known, never a 0 that was not measured. `crates/outputs` fills it for
+/// each kind and names its stages and sources: only it knows a kind.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(type = "Array<HandoffPart>"))]
+pub struct AfterHandoff {
+    parts: [HandoffPart; AfterHandoff::MOST],
+    count: usize,
+}
+
+impl AfterHandoff {
+    /// The most parts one kind names.
+    pub const MOST: usize = 5;
+
+    pub const fn new<const N: usize>(parts: [HandoffPart; N]) -> Self {
+        const { assert!(N <= Self::MOST, "more parts than an AfterHandoff holds") };
+        let mut all = [HandoffPart {
+            stage: "",
+            span: HandoffSpan::NotKnown,
+        }; Self::MOST];
+        all.split_at_mut(N).0.copy_from_slice(&parts);
+        Self {
+            parts: all,
+            count: N,
+        }
+    }
+
+    pub fn parts(&self) -> &[HandoffPart] {
+        self.parts.get(..self.count).unwrap_or(&self.parts)
+    }
+}
+
+impl Serialize for AfterHandoff {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_seq(self.parts())
+    }
+}
+
+/// One part of the way from the handoff to the light, by the name its kind gives it,
+/// and how long it takes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct HandoffPart {
+    pub stage: &'static str,
+    pub span: HandoffSpan,
+}
+
+/// How long a part takes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub enum HandoffSpan {
+    /// From a spec, in whole microseconds: the low end rounded down, the high end up.
+    /// `source` names what it is computed from.
+    Computed {
+        low_us: u32,
+        high_us: u32,
+        source: &'static str,
+    },
+    /// Nothing the engine sees or reads gives it a time.
+    NotKnown,
 }
 
 pub const LATENESS_TARGET: Duration = Duration::from_millis(1);

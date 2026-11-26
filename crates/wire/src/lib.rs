@@ -28,7 +28,7 @@ mod library;
 
 pub use health::{
     Health, HealthEvent, LateReason, LatenessWindow, OutputHealth, OutputHealthEvent,
-    OutputHealthState, OutputMeasurement, PressWindow, RecoveredReason,
+    OutputHealthState, OutputMeasurement, OutputRow, PressWindow, RecoveredReason,
 };
 pub use library::{
     Asked, ChannelFunction, Failure, FixtureKind, Library, Match, ModeChannels, ModeSize,
@@ -161,6 +161,7 @@ pub const MATCHES: usize = 50;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use engine_core::health::{AfterHandoff, HandoffPart, HandoffSpan};
     use engine_core::{
         Adapter, AuthoredStep, BestEffort, Bpm, Brightness, ChannelNumbers, Color, Counters, Gobo,
         Layout, Light, ManualEnd, Member, MixRules, OpenFailure, OtherEnd, Output, OutputKind,
@@ -237,6 +238,10 @@ mod tests {
                 Rate::decl(&config),
                 Reply::decl(&config),
                 Health::decl(&config),
+                OutputRow::decl(&config),
+                AfterHandoff::decl(&config),
+                HandoffPart::decl(&config),
+                HandoffSpan::decl(&config),
                 OutputHealth::decl(&config),
                 OutputHealthState::decl(&config),
                 OutputMeasurement::decl(&config),

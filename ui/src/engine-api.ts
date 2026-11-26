@@ -71,7 +71,15 @@ show: ShowFile, channels: Array<ChannelLevel>,
  */
 lights: Array<HeldLight>, } } | { "Found": { fixtures: Array<Match>, } } | { "Fixture": { maker: string, model: string, kind: FixtureKind, modes: Array<ModeChannels>, } } | { "Failures": { failures: Array<Failure>, } };
 
-export type Health = { window_ms: number, outputs: Array<OutputHealth>, };
+export type Health = { window_ms: number, outputs: Array<OutputRow>, };
+
+export type OutputRow = { after_handoff: AfterHandoff, output: OutputNumber, generation: number, status: Status, state: OutputHealthState, measurement: OutputMeasurement, };
+
+export type AfterHandoff = Array<HandoffPart>;
+
+export type HandoffPart = { stage: string, span: HandoffSpan, };
+
+export type HandoffSpan = { "Computed": { low_us: number, high_us: number, source: string, } } | "NotKnown";
 
 export type OutputHealth = { output: OutputNumber, generation: number, status: Status, state: OutputHealthState, measurement: OutputMeasurement, };
 

@@ -1,10 +1,10 @@
 //! The reader turns cumulative engine snapshots into health rows and a bounded event log.
 //! Only the view travels with a picture. The sampling history stays with this reader.
 
-use engine_core::health::{HealthSample, Timed, Tracker, WINDOW_DURATION};
+use engine_core::health::{AfterHandoff, HealthSample, Timed, Tracker, WINDOW_DURATION};
 use engine_core::{MAX_OUTPUTS, OutputNumber, Status};
 use std::time::Duration;
-use wire::{Health, OutputHealth, OutputHealthEvent, OutputHealthState};
+use wire::{Health, OutputHealth, OutputHealthEvent, OutputHealthState, OutputRow};
 
 const EVENTS: usize = 64;
 
@@ -90,6 +90,14 @@ impl Reader {
     }
 }
 
+/// Health as the API sends it.
+pub(super) fn health(rows: &[OutputRow]) -> Health<'_> {
+    Health {
+        window_ms: WINDOW_DURATION.as_millis() as u16,
+        outputs: rows,
+    }
+}
+
 /// The compact rows and event log fit inline, so publishing them with a frame only copies.
 #[derive(Clone, Default)]
 pub(super) struct View {
@@ -100,11 +108,23 @@ pub(super) struct View {
 }
 
 impl View {
-    pub(super) fn health(&self) -> Health<'_> {
-        Health {
-            window_ms: WINDOW_DURATION.as_millis() as u16,
-            outputs: self.rows.as_ref().map_or(&[], |rows| &rows[..self.count]),
-        }
+    /// What the engine measured, a row for each attached output.
+    pub(super) fn measured(&self) -> &[OutputHealth] {
+        self.rows.as_ref().map_or(&[], |rows| &rows[..self.count])
+    }
+
+    /// The rows as the API sends them: each with what follows its output's handoff.
+    pub(super) fn rows(
+        &self,
+        after_handoff: impl Fn(OutputNumber) -> AfterHandoff,
+    ) -> Vec<OutputRow> {
+        self.measured()
+            .iter()
+            .map(|&health| OutputRow {
+                health,
+                after_handoff: after_handoff(health.output),
+            })
+            .collect()
     }
 
     pub(super) fn revision(&self) -> u64 {
@@ -178,7 +198,7 @@ mod tests {
     }
 
     fn row(reader: &Reader) -> OutputHealth {
-        let [row] = reader.view().health().outputs else {
+        let [row] = reader.view().measured() else {
             panic!("expected one attached output");
         };
         *row
@@ -596,7 +616,7 @@ mod tests {
         let before = reader.view().revision();
         observe(&mut reader, None);
         assert!(reader.view().revision() > before);
-        assert!(reader.view().health().outputs.is_empty());
+        assert!(reader.view().measured().is_empty());
         assert_eq!(reader.view().events_since(cursor), (vec![], 0));
 
         // Even the same generation number after removal starts without a baseline.
@@ -632,12 +652,44 @@ mod tests {
         }
     }
 
+    /// A reply goes to a subscriber at most every 500 ms: the cap catches a row that grows
+    /// by mistake, it is no cost. 28 KiB since #318 P1c: what follows each handoff, at its
+    /// most (every part computed, the longest names a kind gives, the largest numbers),
+    /// adds 11.6 KB to 16 outputs, 28.0 KB in all.
     #[test]
-    fn the_largest_health_reply_fits_in_16_kib() {
-        use engine_core::MAX_OUTPUTS;
-        use wire::{Health, LatenessWindow, PressWindow, Reply};
+    fn the_largest_health_reply_fits_in_28_kib() {
+        use engine_core::health::{AfterHandoff, HandoffPart, HandoffSpan};
+        use engine_core::{Adapter, Color, MAX_OUTPUTS, OutputKind};
+        use std::net::{Ipv4Addr, SocketAddrV4};
+        use wire::{Health, LatenessWindow, OutputRow, PressWindow, Reply};
 
         let reason = LateReason::HandoffLateness;
+        let usb = OutputKind::DmxUsbPro {
+            adapter: Adapter::FIRST,
+        };
+        let ddp = OutputKind::Ddp {
+            address: SocketAddrV4::new(Ipv4Addr::LOCALHOST, 4048),
+            color: Color::Rgb,
+        };
+        let named: Vec<HandoffPart> = [Some(usb), Some(ddp), None]
+            .into_iter()
+            .flat_map(|kind| [(kind, None), (kind, Some(1..=512))])
+            .flat_map(|(kind, patched)| engine::after_handoff(kind, patched).parts().to_vec())
+            .collect();
+        let stage = named.iter().map(|part| part.stage);
+        let source = named.iter().filter_map(|part| match part.span {
+            HandoffSpan::Computed { source, .. } => Some(source),
+            HandoffSpan::NotKnown => None,
+        });
+        let part = HandoffPart {
+            stage: stage.max_by_key(|name| name.len()).unwrap(),
+            span: HandoffSpan::Computed {
+                low_us: u32::MAX,
+                high_us: u32::MAX,
+                source: source.max_by_key(|name| name.len()).unwrap(),
+            },
+        };
+        let after_handoff = AfterHandoff::new([part; AfterHandoff::MOST]);
         let rows: [_; MAX_OUTPUTS] = std::array::from_fn(|slot| OutputHealth {
             output: OutputNumber::try_from(u8::try_from(slot + 1).unwrap()).unwrap(),
             generation: u64::MAX,
@@ -663,8 +715,12 @@ mod tests {
                 frames_handed: u32::MAX,
             },
         });
+        let rows = rows.map(|health| OutputRow {
+            health,
+            after_handoff,
+        });
         let events = [OutputHealthEvent {
-            output: rows[MAX_OUTPUTS - 1].output,
+            output: rows[MAX_OUTPUTS - 1].health.output,
             generation: u64::MAX,
             at_ms: u64::MAX,
             event: HealthEvent::RunningLate { reason },
@@ -679,7 +735,7 @@ mod tests {
         })
         .unwrap();
         eprintln!("Largest Health reply: {} bytes", wire.len());
-        assert!(wire.len() < 16 * 1024, "Health is {} bytes", wire.len());
+        assert!(wire.len() < 28 * 1024, "Health is {} bytes", wire.len());
     }
 
     #[test]

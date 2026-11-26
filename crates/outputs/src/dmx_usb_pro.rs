@@ -19,12 +19,14 @@
 
 use crate::{Adapter, Device, Limits, Outcome};
 use engine_core::ADDRESSES;
+use engine_core::health::{AfterHandoff, HandoffPart, HandoffSpan};
 use nix::errno::Errno;
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
 use serialport::{
     ClearBuffer, DataBits, FlowControl, Parity, SerialPort, SerialPortType, StopBits, TTYPort,
 };
 use std::io::{self, ErrorKind};
+use std::ops::RangeInclusive;
 use std::os::fd::AsRawFd;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
@@ -45,6 +47,17 @@ pub const MESSAGE: usize = 4 + 1 + ADDRESSES + 1;
 /// that comes sooner is dropped instead of queued.
 const LINK_TIME: Duration =
     Duration::from_nanos(MESSAGE as u64 * 11 * 1_000_000_000 * 5 / (BAUD as u64 * 4));
+/// One message on the link, 11 bits a byte (8 data, 2 stop).
+const ON_THE_LINK: Duration =
+    Duration::from_nanos(MESSAGE as u64 * 11 * 1_000_000_000 / BAUD as u64);
+/// DMX512: 250 000 bits a second, 11 bits a slot.
+const SLOT: Duration = Duration::from_micros(44);
+/// The widget's break, mark after break and rate are kept in its flash. We never read
+/// them, so a span counts their defaults (API p.3): break 9 and mark 1 steps of 10.67 µs,
+/// 40 DMX frames a second.
+const DEFAULT_BREAK: Duration = Duration::from_nanos(9 * 10_670);
+const DEFAULT_MARK: Duration = Duration::from_nanos(10_670);
+const DEFAULT_FRAME: Duration = Duration::from_millis(1_000 / 40);
 /// How often the port thread looks for a lost adapter.
 const LOOK_EVERY: Duration = Duration::from_millis(500);
 /// How often an idle port thread checks whether it should stop.
@@ -65,6 +78,46 @@ const STALLED_FOR: Duration = Duration::from_millis(500);
 pub const FINISH_WITHIN: Duration = Duration::from_nanos(
     3 * (STALLED_FOR.as_nanos() + QUEUE_FULL.as_nanos() + LINK_TIME.as_nanos()) as u64,
 );
+
+/// What follows the handoff, part by part. `patched`: the output's lowest and highest
+/// patched slot. With none patched, a channel set by hand can still reach a light on any
+/// slot, so the wire part spans all 512 and its source says why.
+///
+/// | Stage | What | Span, source |
+/// |---|---|---|
+/// | `HostToAdapter` | the port thread's wake, then the USB transfer | not known: neither has a time in its spec |
+/// | `SerialLink` | the message on the serial line to the widget | `Baud`: [`MESSAGE`] bytes, 11 bits each, at [`BAUD`] |
+/// | `AdapterFrame` | the wait for the widget's next DMX frame, on its own timer | `AdapterDefault`: 0 to one frame at its default rate |
+/// | `DmxWire` | the frame on the wire, from the end of the lowest patched slot to the end of the highest | `Dmx512AdapterDefault`: 44 µs a slot, after the default break and mark. `Dmx512AdapterDefaultNothingPatched`: the same over the whole universe |
+/// | `SlotGap` | the widget's gaps between slots | not known: not in its API |
+pub(crate) fn after_handoff(patched: Option<RangeInclusive<u32>>) -> AfterHandoff {
+    let ((lowest, highest), wire) = match patched {
+        Some(slots) => (slots.into_inner(), "Dmx512AdapterDefault"),
+        None => ((1, ADDRESSES as u32), "Dmx512AdapterDefaultNothingPatched"),
+    };
+    // Slot n's last bit is (n + 1) slots after the mark: the start code is slot 0.
+    let slot_end = |slot: u32| DEFAULT_BREAK + DEFAULT_MARK + SLOT * (slot + 1);
+    let not_known = |stage| HandoffPart {
+        stage,
+        span: HandoffSpan::NotKnown,
+    };
+    let computed = |stage, low, high, source| HandoffPart {
+        stage,
+        span: crate::computed(low, high, source),
+    };
+    AfterHandoff::new([
+        not_known("HostToAdapter"),
+        computed("SerialLink", ON_THE_LINK, ON_THE_LINK, "Baud"),
+        computed(
+            "AdapterFrame",
+            Duration::ZERO,
+            DEFAULT_FRAME,
+            "AdapterDefault",
+        ),
+        computed("DmxWire", slot_end(lowest), slot_end(highest), wire),
+        not_known("SlotGap"),
+    ])
+}
 
 /// Writes the first 512 stream bytes, with zeroes in any unused slots.
 fn message(stream: &[u8], out: &mut [u8; MESSAGE]) {

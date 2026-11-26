@@ -25,11 +25,14 @@ pub mod dmx_usb_pro;
 pub mod sacn;
 mod udp;
 
+use engine_core::health::{AfterHandoff, HandoffPart, HandoffSpan};
 pub use engine_core::{Adapter, Color, Levels, Outcome, OutputKind, Rate, Refusal, Run};
 use engine_core::{ROUTE_MOST, RouteFault, SPANS_MOST, Span, route_length};
 
 use std::io;
 use std::num::NonZeroU16;
+use std::ops::RangeInclusive;
+use std::time::Duration;
 
 /// An output, opened and ready for the output thread. Made and dropped off it.
 pub trait Device: Send {
@@ -102,6 +105,38 @@ pub const fn limits(kind: OutputKind) -> Limits {
     match kind {
         OutputKind::Ddp { color, .. } => Limits::ddp(color),
         OutputKind::DmxUsbPro { .. } => Limits::USB,
+    }
+}
+
+/// What follows the handoff on the way to the light, for an output of `kind` whose
+/// lowest and highest patched channels, counted from 1 in its stream, are `patched`.
+/// `None`: a device brought through the engine's attach door, its kind not known.
+pub fn after_handoff(
+    kind: Option<OutputKind>,
+    patched: Option<RangeInclusive<u32>>,
+) -> AfterHandoff {
+    let not_known = |stage| {
+        AfterHandoff::new([HandoffPart {
+            stage,
+            span: HandoffSpan::NotKnown,
+        }])
+    };
+    match kind {
+        Some(OutputKind::DmxUsbPro { .. }) => dmx_usb_pro::after_handoff(patched),
+        // DDP has no timing; the frame's other packets, the network, the controller and its
+        // strips are the user's.
+        Some(OutputKind::Ddp { .. }) => not_known("NetworkAndController"),
+        None => not_known("Device"),
+    }
+}
+
+/// A span from a spec in whole microseconds, rounded outward.
+fn computed(low: Duration, high: Duration, source: &'static str) -> HandoffSpan {
+    let micros = |time: u128| u32::try_from(time).unwrap_or(u32::MAX);
+    HandoffSpan::Computed {
+        low_us: micros(low.as_micros()),
+        high_us: micros(high.as_nanos().div_ceil(1_000)),
+        source,
     }
 }
 
@@ -231,6 +266,84 @@ mod tests {
                 .map(|run| limits(kind).check(run, rate).map(|_| ()));
             assert_eq!(checked, Some(expected), "{kind:?} {first}, {count}");
             assert_eq!(limits(kind).whole.get(), whole, "{kind:?}");
+        }
+    }
+
+    /// Worked by hand (#318 P1c). A message is 518 bytes x 11 bits at 500,000 baud:
+    /// 11,396 µs. The widget's default rate, 40 a second: a frame every 25,000 µs. Slot n
+    /// ends at break 96.03 + mark 10.67 + (n + 1) x 44 µs: slot 1 at 194.7, slot 48 at
+    /// 2,262.7, slot 50 at 2,350.7, slot 512 at 22,678.7 (DMX512, API p.3).
+    #[test]
+    fn each_kind_names_what_follows_its_handoff() {
+        let ddp = |color| {
+            Some(OutputKind::Ddp {
+                address: SocketAddrV4::new(Ipv4Addr::LOCALHOST, 4048),
+                color,
+            })
+        };
+        let pro = Some(OutputKind::DmxUsbPro {
+            adapter: Adapter::FIRST,
+        });
+        let part = |stage, span| HandoffPart { stage, span };
+        let computed = |low_us, high_us, source| HandoffSpan::Computed {
+            low_us,
+            high_us,
+            source,
+        };
+        let pro_parts = |wire_low, wire_high, wire| {
+            vec![
+                part("HostToAdapter", HandoffSpan::NotKnown),
+                part("SerialLink", computed(11_396, 11_396, "Baud")),
+                part("AdapterFrame", computed(0, 25_000, "AdapterDefault")),
+                part("DmxWire", computed(wire_low, wire_high, wire)),
+                part("SlotGap", HandoffSpan::NotKnown),
+            ]
+        };
+        let patched = "Dmx512AdapterDefault";
+        let nothing = "Dmx512AdapterDefaultNothingPatched";
+        let network = vec![part("NetworkAndController", HandoffSpan::NotKnown)];
+        let cases = [
+            (
+                "usb, slots 1 to 50",
+                pro,
+                Some(1..=50),
+                pro_parts(194, 2_351, patched),
+            ),
+            (
+                "usb, slots 48 to 50",
+                pro,
+                Some(48..=50),
+                pro_parts(2_262, 2_351, patched),
+            ),
+            (
+                "usb, every slot",
+                pro,
+                Some(1..=512),
+                pro_parts(194, 22_679, patched),
+            ),
+            (
+                "usb, the last slot",
+                pro,
+                Some(512..=512),
+                pro_parts(22_678, 22_679, patched),
+            ),
+            (
+                "usb, nothing patched",
+                pro,
+                None,
+                pro_parts(194, 22_679, nothing),
+            ),
+            ("ddp rgb", ddp(Color::Rgb), Some(1..=50), network.clone()),
+            ("ddp rgbw, nothing patched", ddp(Color::Rgbw), None, network),
+            (
+                "a test's own device",
+                None,
+                Some(1..=50),
+                vec![part("Device", HandoffSpan::NotKnown)],
+            ),
+        ];
+        for (case, kind, patched, expected) in cases {
+            assert_eq!(after_handoff(kind, patched).parts(), expected, "{case}");
         }
     }
 }

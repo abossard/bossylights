@@ -42,10 +42,11 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::mem::size_of;
 use core::num::NonZeroU16;
+use core::ops::RangeInclusive;
 use engine_core::{
     ChannelNumbers, Configured, EngineCommand, Field, Grouped, Light, LightNumber, LightRun,
-    Lights, Member, OutputKind, PatchCommand, Patched, Project, Property, Refusal, SavedLook, Step,
-    Target, Universes, Value, WaveTarget,
+    Lights, Member, OutputKind, PatchCommand, Patched, Project, Property, Refusal, Run, SavedLook,
+    Step, Target, Universes, Value, WaveTarget,
 };
 use fixture_library::{Fixture, Mode};
 
@@ -657,6 +658,25 @@ impl Patch {
                 }),
             })
             .collect()
+    }
+
+    /// The lowest and the highest channel any fixture is patched on in the stream of
+    /// `run`, counted from 1 in that stream. `None`: no fixture has a channel there.
+    pub fn patched_in(&self, run: Run) -> Option<RangeInclusive<u32>> {
+        let from = flat(ChannelNumbers {
+            universe: run.first(),
+            address: 1,
+        });
+        let to = from + usize::from(run.count()) * ADDRESSES;
+        // each fixture's channels in the stream: from its first, up to after its last
+        let inside = self.fixtures.iter().filter_map(|e| {
+            let first = flat(e.at);
+            let (start, end) = (first.max(from), (first + e.mode.channels.len()).min(to));
+            (start < end).then_some((start - from, end - from))
+        });
+        let lowest = inside.clone().map(|(start, _)| start).min()?;
+        let highest = inside.map(|(_, end)| end).max()?;
+        Some(u32::try_from(lowest + 1).ok()?..=u32::try_from(highest).ok()?)
     }
 
     /// The first fixture that would lose a channel with the outputs of `project`: its

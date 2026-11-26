@@ -34,8 +34,8 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use engine::{
-    Begun, ChannelLevel, Command, Engine, Grouped, Looks, Patch, Patched, Project, ProjectView,
-    Refusal, SavedLook, Sender, Snapshot,
+    Begun, ChannelLevel, Command, Engine, Grouped, Looks, Patch, Patched, Project, ProjectOutput,
+    ProjectView, Refusal, SavedLook, Sender, Snapshot,
 };
 use engine_core::{HeldLight, ShowFile, Text};
 use library::Shelf;
@@ -48,7 +48,7 @@ use std::time::{Duration, Instant};
 use tokio::net::TcpListener;
 use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore, mpsc, watch};
 use tokio::time::MissedTickBehavior;
-use wire::{API_VERSION, Library, Reply, Request};
+use wire::{API_VERSION, Library, OutputRow, Reply, Request};
 
 /// Serves the API on `listener` until a client sends `Stop`. Then every connection is
 /// closed, the last change is saved, and this returns the engine: the caller reports and
@@ -208,6 +208,22 @@ impl Picture {
             show: *show.borrow(),
             held: Arc::clone(&moment.held),
         }
+    }
+}
+
+impl Picture {
+    /// Each output's health row, with what follows its handoff: for its kind, over its
+    /// patched channels, both as they were at this snapshot.
+    fn health_rows(&self) -> Vec<OutputRow> {
+        self.health.rows(|output| {
+            let (kind, patched) = match self.project.output(output) {
+                Some(ProjectOutput::Kind { kind, universes }) => {
+                    (Some(kind), self.patch.patched_in(universes))
+                }
+                Some(ProjectOutput::Attached { .. }) | None => (None, None),
+            };
+            engine::after_handoff(kind, patched)
+        })
     }
 }
 
@@ -943,9 +959,10 @@ impl Api {
 }
 
 fn picture(now: &Picture) -> Option<String> {
+    let rows = now.health_rows();
     json(&Reply::Picture {
         state: now.snapshot.performance(),
-        health: now.health.health(),
+        health: health::health(&rows),
         project: now.project,
         library: now.library,
         patch: &now.patch.fixtures(),
@@ -1066,8 +1083,9 @@ impl Subscription {
         let (events, missed) = view.events_since(self.cursor);
         self.cursor = view.end();
         self.revision = view.revision();
+        let rows = picture.health_rows();
         json(&Reply::Health {
-            health: view.health(),
+            health: health::health(&rows),
             events: &events,
             missed,
         })

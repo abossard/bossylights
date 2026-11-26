@@ -76,7 +76,7 @@ use engine_core::{
     Channels, End, LightRun, Lights, LookCommand, PLAYS, ProjectEffect, ProjectEvent, stops, unkept,
 };
 
-pub use outputs::Device;
+pub use outputs::{Device, after_handoff};
 mod cutover;
 use cutover::{Effect as CutoverEffect, Event as CutoverEvent, State as CutoverState};
 mod lane;
