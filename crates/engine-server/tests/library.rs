@@ -15,21 +15,52 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
 type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
+/// The folder `name` in the test build's own temporary folder, made empty: a later run
+/// that gets the same process id finds nothing of an earlier one in it.
+fn empty(name: &str) -> PathBuf {
+    let folder = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
+    let _ = fs::remove_dir_all(&folder);
+    fs::create_dir_all(&folder).unwrap();
+    folder
+}
+
 /// The test definitions of the fixture library, and one broken file in a maker folder.
 /// A folder per test: the tests of this binary run side by side, and one copying the
 /// files again must not reach another's engine while it reads them.
 fn folder(test: &str) -> PathBuf {
-    let folder =
-        Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("fixtures-{}-{test}", process::id()));
+    let folder = empty(&format!("fixtures-{}-{test}", process::id()));
     let definitions =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../fixture-library/tests/definitions");
-    fs::create_dir_all(folder.join("Broken")).unwrap();
+    fs::create_dir(folder.join("Broken")).unwrap();
     for entry in fs::read_dir(definitions).unwrap() {
         let path = entry.unwrap().path();
         fs::copy(&path, folder.join(path.file_name().unwrap())).unwrap();
     }
     fs::write(folder.join("Broken/broken.qxf"), "<FixtureDefinition>").unwrap();
     folder
+}
+
+/// The names in `folder`, sorted.
+fn names(folder: &Path) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(folder)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect();
+    names.sort();
+    names
+}
+
+/// A later run that gets the same process id makes the same folder: a file gone from the
+/// definitions since must be gone from it too.
+#[test]
+fn a_later_folder_of_the_same_name_holds_only_the_definitions_of_now() {
+    let definitions =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../fixture-library/tests/definitions");
+    fs::write(folder("again").join("Gone-Gone.qxf"), "<FixtureDefinition>").unwrap();
+    let mut now = names(&definitions);
+    now.push("Broken".to_string());
+    now.sort();
+    assert_eq!(names(&folder("again")), now);
 }
 
 /// An engine process and where it listens, killed when the test ends however it ends.
@@ -116,9 +147,7 @@ async fn ask(socket: &mut Socket, request: &Value) -> Value {
 /// `mixed.qxf`, then `twin.qxf`, each of maker Example and model Mixed, whose modes are
 /// `files`, then the Failures.
 async fn patch_each(case: usize, files: &[String], modes: &[&str]) -> (Vec<Value>, Value) {
-    let folder =
-        Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("mixed-{}-{case}", process::id()));
-    fs::create_dir_all(&folder).unwrap();
+    let folder = empty(&format!("mixed-{}-{case}", process::id()));
     for (name, xml) in ["mixed.qxf", "twin.qxf"].into_iter().zip(files) {
         fs::write(
             folder.join(name),
@@ -328,9 +357,7 @@ async fn the_library_answers_search_fixture_and_failures() {
 #[cfg(unix)]
 #[tokio::test]
 async fn a_named_pipe_is_a_failure_and_the_rest_is_read() {
-    let folder = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("pipe-{}", process::id()));
-    let _ = fs::remove_dir_all(&folder);
-    fs::create_dir_all(&folder).unwrap();
+    let folder = empty(&format!("pipe-{}", process::id()));
     let rgb = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../fixture-library/tests/definitions/Generic-Generic-RGB.qxf");
     fs::copy(rgb, folder.join("rgb.qxf")).unwrap();
@@ -357,7 +384,7 @@ async fn a_named_pipe_is_a_failure_and_the_rest_is_read() {
 /// again see the same one for the same frame, also in the frame the library is read.
 #[tokio::test]
 async fn every_client_sees_the_same_library_in_the_same_frame() {
-    let folder = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("many-{}", process::id()));
+    let folder = empty(&format!("many-{}", process::id()));
     let definitions =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../fixture-library/tests/definitions");
     for copy in 0..50 {

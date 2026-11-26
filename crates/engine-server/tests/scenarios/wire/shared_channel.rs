@@ -38,6 +38,7 @@ const SHARED: &str = r#"<?xml version="1.0"?>
 /// A folder of the shared mode and the Generic RGB PAR.
 fn folder() -> PathBuf {
     let folder = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("shared-{}", process::id()));
+    let _ = fs::remove_dir_all(&folder);
     fs::create_dir_all(&folder).unwrap();
     fs::write(folder.join("Test-Shared.qxf"), SHARED).unwrap();
     let rgb = Path::new(env!("CARGO_MANIFEST_DIR"))

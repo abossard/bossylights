@@ -16,6 +16,7 @@ use tokio::net::UdpSocket;
 /// A folder of the hazer, the smoke machine and the Generic RGB PAR.
 fn folder() -> PathBuf {
     let folder = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("fog-{}", process::id()));
+    let _ = fs::remove_dir_all(&folder);
     fs::create_dir_all(&folder).unwrap();
     let here = Path::new(env!("CARGO_MANIFEST_DIR"));
     for (from, file) in [
