@@ -1,6 +1,7 @@
 // `npm run land -- <wip/branch> <message-file>`: a reviewed WIP branch becomes one commit on main.
 // Reads every fact first (land.mjs decides), then writes: squash onto origin/main without a working tree
-// (merge-tree, commit-tree), a plain push (a moved main refuses it), then the branch and its worktree go.
+// (merge-tree, commit-tree), a plain push (a moved main refuses it), then the branch and its worktree move onto
+// the landed commit, build kept (`--last`: they go).
 // It runs no check: it lands only a tree that `npm run verify --mutants` passed and recorded.
 // Nothing in any checkout is touched before the push.
 import { spawnSync } from "node:child_process";
@@ -26,7 +27,7 @@ try {
   console.error(error.message);
   process.exit(2);
 }
-const { branch, messageFile } = args;
+const { branch, messageFile, last } = args;
 try {
   const message = readFileSync(messageFile, "utf8");
   git("fetch", "--no-tags", "--prune", "origin", "+refs/heads/main:refs/remotes/origin/main", `+refs/heads/wip/*:refs/remotes/origin/wip/*`);
@@ -67,14 +68,14 @@ try {
   if (pushed.status !== 0) throw new Error(pushFailure(pushed.stderr));
   console.log(`land: ${sha.slice(0, 7)} is on origin/main`);
 
-  const after = cleanupSteps({ branch, remoteTip, localTip: tipOf(`refs/heads/${branch}`), worktree });
+  const after = cleanupSteps({ branch, remoteTip, localTip: tipOf(`refs/heads/${branch}`), worktree, landed: sha, last });
   let kept = after.kept;
   for (const step of after.steps) {
     const r = run("git", step);
     if (r.status !== 0) kept = [...kept, `kept, ${failure("git", step, r)}`];
   }
   for (const line of kept) console.error(`land: ${line}`);
-  if (kept.length === 0) console.log(`land: ${branch}${worktree ? ` and ${worktree}` : ""} removed`);
+  if (kept.length === 0) console.log(`land: ${after.done}`);
   else process.exitCode = 1;
 } catch (error) {
   console.error(`land: ${error.message}`);

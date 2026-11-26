@@ -2,12 +2,14 @@
 
 export const CI_RED = "CI red on main:";
 
-/** Arguments: <wip/branch> <message-file>. Throws the usage text otherwise. */
+/** Arguments: <wip/branch> <message-file> and an optional --last (the ticket's last slice). Throws the usage text otherwise. */
 export function parseArgs(argv) {
-  if (argv.length !== 2 || !/^wip\/[A-Za-z0-9][\w.-]*$/.test(argv[0]) || argv[1].startsWith("-")) {
-    throw new Error("usage: npm run land -- <wip/branch> <message-file>");
+  const last = argv.includes("--last");
+  const rest = argv.filter((a) => a !== "--last");
+  if (rest.length !== 2 || !/^wip\/[A-Za-z0-9][\w.-]*$/.test(rest[0]) || rest[1].startsWith("-")) {
+    throw new Error("usage: npm run land -- <wip/branch> <message-file> [--last]");
   }
-  return { branch: argv[0], messageFile: argv[1] };
+  return { branch: rest[0], messageFile: rest[1], last };
 }
 
 /** The folder of the worktree that has `branch` checked out, from `git worktree list --porcelain`, or null. */
@@ -61,17 +63,25 @@ export function refusal({ branch, remoteTip, localTip, here, worktree, dirty, co
 }
 
 /**
- * The git steps that remove `branch` after its landing, and what is kept. localTip and worktree are read after
- * the push: a local branch that moved since the fetch keeps its commits and worktree, and the remote branch
- * goes only while it still points at the landed remoteTip.
+ * The git steps after a landing, what is kept, and what was done. A slice keeps its branch and worktree:
+ * both move onto the landed commit, the build folder stays. The last slice (`last`) removes them.
+ * localTip and worktree are read after the push: a local branch that moved since the fetch keeps its commits
+ * and worktree, and the remote branch goes only while it still points at the landed remoteTip.
  */
-export function cleanupSteps({ branch, remoteTip, localTip, worktree }) {
-  const moved = localTip !== null && localTip !== remoteTip;
-  const local = moved ? [] : [...(worktree ? [["worktree", "remove", worktree]] : []), ...(localTip ? [["branch", "-D", branch]] : [])];
-  return {
-    steps: [...local, ["push", `--force-with-lease=refs/heads/${branch}:${remoteTip}`, "origin", "--delete", branch]],
-    kept: moved ? [`local ${branch} moved after the fetch: it and its worktree are kept`] : [],
-  };
+export function cleanupSteps({ branch, remoteTip, localTip, worktree, landed, last }) {
+  const remote = ["push", `--force-with-lease=refs/heads/${branch}:${remoteTip}`, "origin", "--delete", branch];
+  if (localTip !== null && localTip !== remoteTip) {
+    return { steps: [remote], kept: [`local ${branch} moved after the fetch: it and its worktree are kept`], done: `origin's ${branch} removed` };
+  }
+  if (last) {
+    const local = [...(worktree ? [["worktree", "remove", worktree]] : []), ...(localTip ? [["branch", "-D", branch]] : [])];
+    return { steps: [...local, remote], kept: [], done: `${branch}${worktree ? ` and ${worktree}` : ""} removed` };
+  }
+  if (worktree) {
+    return { steps: [["-C", worktree, "reset", "--keep", landed], remote], kept: [], done: `${worktree} is on ${landed.slice(0, 7)}, its build kept: the next slice starts there` };
+  }
+  const local = localTip ? [["branch", "-f", branch, landed]] : [];
+  return { steps: [...local, remote], kept: [], done: localTip ? `${branch} is on ${landed.slice(0, 7)}` : `origin's ${branch} removed` };
 }
 
 /** What a refused push of main says: a moved main is the usual reason, anything else in full. */

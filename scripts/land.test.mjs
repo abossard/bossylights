@@ -4,8 +4,12 @@ import { ciRefusal, cleanupSteps, namesIncident, parseArgs, pushFailure, recordR
 
 // [argv, parsed or null]
 const argCases = [
-  [["wip/ci-one-command", "msg.txt"], { branch: "wip/ci-one-command", messageFile: "msg.txt" }],
-  [["wip/250-big-cut", "/tmp/m"], { branch: "wip/250-big-cut", messageFile: "/tmp/m" }],
+  [["wip/ci-one-command", "msg.txt"], { branch: "wip/ci-one-command", messageFile: "msg.txt", last: false }],
+  [["wip/250-big-cut", "/tmp/m"], { branch: "wip/250-big-cut", messageFile: "/tmp/m", last: false }],
+  [["wip/x", "msg.txt", "--last"], { branch: "wip/x", messageFile: "msg.txt", last: true }],
+  [["--last", "wip/x", "msg.txt"], { branch: "wip/x", messageFile: "msg.txt", last: true }],
+  [["wip/x", "--last"], null],
+  [["wip/x", "msg.txt", "--keep"], null],
   [["main", "msg.txt"], null],
   [["feature/x", "msg.txt"], null],
   [["wip/", "msg.txt"], null],
@@ -128,20 +132,26 @@ for (const [name, facts, refused] of branchCases) {
 }
 
 const late = "e".repeat(40);
+const landed = "1".repeat(40);
 const lease = ["push", `--force-with-lease=refs/heads/wip/x:${tip}`, "origin", "--delete", "wip/x"];
-// [name, local branch and worktree after the push, git steps, what is kept]
+// [name, local branch and worktree after the push, --last, git steps, what is kept, what was done]
 const cleanupCases = [
-  ["local at the landed tip", { localTip: tip, worktree: "/p/wip-x" }, [["worktree", "remove", "/p/wip-x"], ["branch", "-D", "wip/x"], lease], []],
-  ["no local branch, no worktree", { localTip: null, worktree: null }, [lease], []],
-  ["local branch, no worktree", { localTip: tip, worktree: null }, [["branch", "-D", "wip/x"], lease], []],
-  ["a commit after the fetch", { localTip: late, worktree: "/p/wip-x" }, [lease], [/local wip\/x moved/]],
+  ["slice: worktree moves onto main, build kept", { localTip: tip, worktree: "/p/wip-x" }, false, [["-C", "/p/wip-x", "reset", "--keep", landed], lease], [], /\/p\/wip-x is on 1111111, its build kept/],
+  ["slice: local branch, no worktree", { localTip: tip, worktree: null }, false, [["branch", "-f", "wip/x", landed], lease], [], /wip\/x is on 1111111/],
+  ["slice: no local branch, no worktree", { localTip: null, worktree: null }, false, [lease], [], /origin's wip\/x removed/],
+  ["slice: a commit after the fetch", { localTip: late, worktree: "/p/wip-x" }, false, [lease], [/local wip\/x moved/], /origin's wip\/x removed/],
+  ["last: local at the landed tip", { localTip: tip, worktree: "/p/wip-x" }, true, [["worktree", "remove", "/p/wip-x"], ["branch", "-D", "wip/x"], lease], [], /wip\/x and \/p\/wip-x removed/],
+  ["last: no local branch, no worktree", { localTip: null, worktree: null }, true, [lease], [], /^wip\/x removed/],
+  ["last: local branch, no worktree", { localTip: tip, worktree: null }, true, [["branch", "-D", "wip/x"], lease], [], /^wip\/x removed/],
+  ["last: a commit after the fetch", { localTip: late, worktree: "/p/wip-x" }, true, [lease], [/local wip\/x moved/], /origin's wip\/x removed/],
 ];
-for (const [name, after, steps, kept] of cleanupCases) {
+for (const [name, after, last, steps, kept, done] of cleanupCases) {
   test(`land cleanup: ${name}`, () => {
-    const plan = cleanupSteps({ branch: "wip/x", remoteTip: tip, ...after });
+    const plan = cleanupSteps({ branch: "wip/x", remoteTip: tip, landed, last, ...after });
     assert.deepEqual(plan.steps, steps);
     assert.equal(plan.kept.length, kept.length);
     kept.forEach((pattern, i) => assert.match(plan.kept[i], pattern));
+    assert.match(plan.done, done);
   });
 }
 

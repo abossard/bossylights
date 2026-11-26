@@ -65,7 +65,7 @@ flowchart LR
 | What `npm run verify` and `npm run land` do | |
 |---|---|
 | `verify -- <sha> [--mutants]` | a clean copy of the commit, every suite of `npm test` with the default target folder, mutants on what the branch adds since it left `origin/main` (missed lines listed). All suites green and no mutant missed: it records the commit's tree in the shared git folder. Any other run removes that tree's record |
-| `land -- wip/<ticket> <message-file>` | squashes the branch onto `origin/main` and lands it only when that tree has a record: no check again. Another tree (main moved): merge `origin/main`, push, verify again. Then pushes, removes the branch and its worktree. Refuses while CI on `main` is running, missing or cancelled. A red run is passed only when the message names the open `CI red on main:` issue |
+| `land -- wip/<ticket> <message-file> [--last]` | squashes the branch onto `origin/main` and lands it only when that tree has a record: no check again. Another tree (main moved): merge `origin/main`, push, verify again. Then pushes and moves the branch and its worktree onto the landed commit, build kept, for the next slice. `--last` (the ticket's last slice) removes them. Refuses while CI on `main` is running, missing or cancelled. A red run is passed only when the message names the open `CI red on main:` issue |
 
 ## Mail
 
