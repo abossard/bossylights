@@ -74,3 +74,7 @@ required-features = ["test-support"]
 [[test]]
 name = "one_engine"
 required-features = ["test-support"]
+
+[[test]]
+name = "dropped_sender"
+required-features = ["test-support"]

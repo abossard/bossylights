@@ -57,6 +57,13 @@ enum Kept {
     Changes(Changes),
 }
 
+/// The boxes the tick may still hold when the front goes away ([`Grabs::in_flight`]).
+#[expect(
+    dead_code,
+    reason = "held only to be dropped once the tick thread ended, never read"
+)]
+pub(crate) struct InFlight(VecDeque<(u64, Kept)>);
+
 pub struct Grabs {
     /// Per light and property, the entry of the grab that holds it.
     holders: Box<[[Option<GrabEntry>; Property::ALL.len()]]>,
@@ -416,6 +423,13 @@ impl Grabs {
         {
             self.retiring.pop_front();
         }
+    }
+
+    /// The boxes the tick may still hold, for a front that goes away: whoever keeps them
+    /// until the tick thread ended keeps the rule. The others can go with the book: the
+    /// tick lets a box go only by a command, and none comes after the last one sent.
+    pub(crate) fn in_flight(&mut self) -> InFlight {
+        InFlight(std::mem::take(&mut self.retiring))
     }
 
     /// Boxes waiting for the tick, for tests.

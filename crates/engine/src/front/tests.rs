@@ -1919,3 +1919,36 @@ fn a_refused_let_go_changes_nothing() {
         (1, 1)
     );
 }
+
+/// `docs/engine.md`, "The tick never frees a box": a dropped sender leaves the grab boxes
+/// on their way to the tick with the engine. `tests/dropped_sender.rs` counts the frees.
+#[test]
+#[expect(clippy::unwrap_used, reason = "a test that cannot set itself up fails")]
+fn a_dropped_sender_leaves_its_grab_boxes_with_the_engine() {
+    let (engine, mut sender) = Engine::start(Universes::ONE).unwrap();
+    let strip = Command::PatchStrip {
+        name: Text::new("one pixel").unwrap(),
+        pixels: engine_core::Pixels::try_from(1).unwrap(),
+        color: Color::Rgb,
+        at: ChannelNumbers {
+            universe: 1,
+            address: 1,
+        },
+    };
+    let grab = Command::SetColour {
+        target: Target::Light { light: 1 },
+        red: u16::MAX,
+        green: 0,
+        blue: 0,
+    };
+    for command in [strip, grab, Command::ReleaseAll] {
+        sender.send(command).unwrap();
+    }
+    assert_eq!(engine._in_flight.slots(), 0, "nothing before the drop");
+    drop(sender);
+    assert_eq!(
+        engine._in_flight.slots(),
+        1,
+        "the drop hands the book to the engine"
+    );
+}

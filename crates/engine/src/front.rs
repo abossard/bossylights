@@ -2,7 +2,7 @@
 //! patch, plays reserved for admission, and output openings before the tick sees them.
 
 use crate::blackout::{self, Blackout};
-use crate::grabs::{Change as GrabSet, Changes, Grabs};
+use crate::grabs::{Change as GrabSet, Changes, Grabs, InFlight};
 use crate::lane::Lane;
 use crate::*;
 use looks::Plan;
@@ -60,6 +60,9 @@ pub struct Sender {
     generation: u32,
     /// The live grabs: those that still hold a light.
     grabs: Grabs,
+    /// Where the grab boxes on their way to the tick go when this sender drops: the
+    /// engine keeps them until its tick thread ended. One place.
+    in_flight: rtrb::Producer<InFlight>,
     /// The generation of the last grab.
     grabbed: u32,
     /// The last hand given to a connection.
@@ -789,7 +792,18 @@ impl Live {
     }
 }
 
+impl Drop for Sender {
+    /// The grab boxes on their way to the tick go to the engine, which frees them after
+    /// its tick thread ended (`docs/engine.md`, "The tick never frees a box").
+    fn drop(&mut self) {
+        // one place and one drop: it always fits
+        let _ = self.in_flight.push(self.grabs.in_flight());
+    }
+}
+
 impl Sender {
+    /// The sender, and where its drop leaves the grab boxes on their way to the tick:
+    /// the engine keeps that end until its tick thread ended.
     pub(crate) fn new(
         universes: Universes,
         open: Open,
@@ -798,9 +812,10 @@ impl Sender {
         shared: Arc<Shared>,
         free: Thread,
         clock: Clock,
-    ) -> Self {
+    ) -> (Self, rtrb::Consumer<InFlight>) {
         let (abandon, abandoned) = std::sync::mpsc::channel();
-        Self {
+        let (in_flight, kept) = rtrb::RingBuffer::new(1);
+        let sender = Self {
             open: Some(Opener(Arc::new(open.into()))),
             abandon,
             abandoned,
@@ -828,6 +843,7 @@ impl Sender {
             plan_bytes: 0,
             generation: 0,
             grabs: Grabs::new(),
+            in_flight,
             grabbed: 0,
             hands: 0,
             blackout: Blackout::new(),
@@ -839,7 +855,8 @@ impl Sender {
             clock,
             #[cfg(any(test, feature = "test-support"))]
             universes,
-        }
+        };
+        (sender, kept)
     }
 
     /// An output still transferring its device cannot begin another output edit.

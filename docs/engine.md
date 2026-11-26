@@ -329,7 +329,7 @@ flowchart LR
 | Rule | How |
 |---|---|
 | A press needs one queue place | every change of one press goes in one `Grabs` command |
-| The tick never frees a box | the front keeps its clone, and the change list, until the tick's applied count passed the command that let it go |
+| The tick never frees a box | the front keeps its clone, and the change list, until the tick's applied count passed the command that let it go. A dropped sender leaves them with the engine until its tick thread ended |
 | Booking by lights, unchanged | a live light property reserves work for an end and a release; a kept one only its release |
 | A Move | the box holds light indices: the new field table puts its words on the new channels |
 

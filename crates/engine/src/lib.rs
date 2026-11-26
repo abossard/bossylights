@@ -170,6 +170,9 @@ pub struct Engine {
     retry: Option<JoinHandle<()>>,
     universes: Universes,
     readings: Readings,
+    /// The grab boxes a dropped sender had on their way to the tick, never read: freed
+    /// with this field, after `drop` joined the tick thread.
+    _in_flight: rtrb::Consumer<grabs::InFlight>,
     /// The machine's one engine slot in tests (#319). Free again after `drop` joined the threads.
     #[cfg(any(test, feature = "test-support"))]
     _slot: engine_slot::Slot,
@@ -335,7 +338,7 @@ impl Engine {
             ticker.run(priority)
         })?;
         let (readings, open) = Readings::noting(open);
-        let sender = Sender::new(
+        let (sender, in_flight) = Sender::new(
             universes,
             open,
             retry,
@@ -352,6 +355,7 @@ impl Engine {
             retry: Some(retry_worker),
             universes,
             readings,
+            _in_flight: in_flight,
             #[cfg(any(test, feature = "test-support"))]
             _slot: slot,
         };
