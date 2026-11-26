@@ -13,7 +13,16 @@ import { NOWHERE, SHELL_ENGINE } from "./ports";
 const ADDRESS = SHELL_ENGINE;
 /** Where cargo put the shell and the engine: filled before the tests. */
 let programs: Record<string, string> = {};
-const WAIT = { timeout: 30_000 };
+/** How long one wait may take. */
+const WAIT_MS = 30_000;
+/** The waits the running test, or its `afterEach`, has started, added up. */
+let waited = 0;
+
+/** One wait: its own limit, and what it waits for when `message` is given. It counts towards its test's limit (#334). */
+function wait(message?: string) {
+  waited += WAIT_MS;
+  return { timeout: WAIT_MS, message };
+}
 
 interface Shell {
   process: ChildProcess;
@@ -64,26 +73,37 @@ test.beforeAll(() => {
   programs = cargoBuild(["-q", "-p", "shell", "-p", "engine-server"]);
 });
 
+test.beforeEach(() => {
+  waited = 0;
+});
+
 // However the test ended: no window and no engine on the test port are left.
+// #334: a slow start ends at a named wait, never at the test's own limit. So the test's waits added up, and those of
+// `afterEach`, fit in the test's limit (`afterEach` runs in a slot of its own, at least as long).
 test.afterEach(async () => {
+  const inTest = waited;
+  waited = 0;
   for (const child of started) await kill(child);
   started.clear();
   if ((await health()) === 200) expect(await request(ADDRESS, "Stop")).toBe("Stopping");
-  await expect.poll(health, WAIT).toBe("nobody");
-  await expect.poll(gone, WAIT).toBe(true);
+  await expect.poll(health, wait()).toBe("nobody");
+  await expect.poll(gone, wait()).toBe(true);
+  const limit = test.info().timeout;
+  expect(inTest, "the test's waits added up fit in its own limit").toBeLessThanOrEqual(limit);
+  expect(waited, "afterEach's waits added up fit in the test's limit").toBeLessThanOrEqual(limit);
 });
 
 test("kill the shell: the engine keeps sending, a new shell adopts it and the frame count goes on", async () => {
-  test.setTimeout(120_000);
+  test.setTimeout(150_000);
   const udp = createSocket("udp4");
   let packets = 0;
   udp.on("message", () => packets++);
   await new Promise<void>((bound) => udp.bind(0, "127.0.0.1", bound));
   const first = startShell();
   try {
-    await expect.poll(first.said, WAIT).toContain(`started the engine on ${ADDRESS}`);
-    await expect.poll(first.said, WAIT).toContain(`the window talks to the engine on ${ADDRESS}`);
-    await expect.poll(health, WAIT).toBe(200);
+    await expect.poll(first.said, wait()).toContain(`started the engine on ${ADDRESS}`);
+    await expect.poll(first.said, wait()).toContain(`the window talks to the engine on ${ADDRESS}`);
+    await expect.poll(health, wait()).toBe(200);
     const kind: OutputKind = { Ddp: { address: `127.0.0.1:${udp.address().port}`, color: "Rgb" } };
     const command: Command = { SetOutput: { output: 16, kind, universes: { first: 1, count: 1 }, rate: "30" } };
     expect(await send(ADDRESS, command)).toBe("Accepted");
@@ -91,11 +111,11 @@ test("kill the shell: the engine keeps sending, a new shell adopts it and the fr
 
     await kill(first.process);
     packets = 0;
-    await expect.poll(() => packets, WAIT).toBeGreaterThan(30); // still sending, with no shell
+    await expect.poll(() => packets, wait()).toBeGreaterThan(30); // still sending, with no shell
     expect(await health()).toBe(200);
 
     const second = startShell();
-    await expect.poll(second.said, WAIT).toContain(`adopted the engine on ${ADDRESS}`);
+    await expect.poll(second.said, wait()).toContain(`adopted the engine on ${ADDRESS}`);
     const state = (await query(ADDRESS)).state;
     expect(state.frame).toBeGreaterThan(before);
     expect(state.outputs[15]?.rate).toBe("30"); // the same engine: it still has the output
@@ -146,31 +166,31 @@ const engines = [
 ] as const;
 for (const [whose, before] of engines) {
   test(`close the window: the engine ${whose} keeps sending its DDP bytes`, async () => {
-    test.setTimeout(120_000);
+    test.setTimeout(180_000);
     const udp = createSocket("udp4");
     const packets: Buffer[] = [];
     udp.on("message", (packet) => packets.push(packet));
     await new Promise<void>((bound) => udp.bind(0, "127.0.0.1", bound));
     if (before) started.add(spawn(programs["bossylights-engine"], ["--listen", ADDRESS], { stdio: "ignore", detached: true }));
-    if (before) await expect.poll(health, WAIT).toBe(200);
+    if (before) await expect.poll(health, wait()).toBe(200);
     const window = await closingPage();
     const shell = startShell(ADDRESS, { BOSSYLIGHTS_UI: window.page, BOSSYLIGHTS_WINDOW_SCRIPT: window.script });
     try {
-      await expect.poll(shell.said, WAIT).toContain(`${before ? "adopted" : "started"} the engine on ${ADDRESS}`);
-      await expect.poll(health, WAIT).toBe(200);
+      await expect.poll(shell.said, wait()).toContain(`${before ? "adopted" : "started"} the engine on ${ADDRESS}`);
+      await expect.poll(health, wait()).toBe(200);
       const kind: OutputKind = { Ddp: { address: `127.0.0.1:${udp.address().port}`, color: "Rgb" } };
       const output: Command = { SetOutput: { output: 16, kind, universes: { first: 1, count: 1 }, rate: "30" } };
       expect(await send(ADDRESS, output)).toBe("Accepted");
       expect(await send(ADDRESS, { SetChannel: { channel: { universe: 1, address: 1 }, value: 77 } })).toBe("Accepted");
 
       window.close();
-      await expect.poll(window.heard, { ...WAIT, message: "the window's page asks whether to close" }).toBe(true);
+      await expect.poll(window.heard, wait("the window's page asks whether to close")).toBe(true);
       await expect
-        .poll(() => shell.process.exitCode, { ...WAIT, message: "the app ends after its last window closed" })
+        .poll(() => shell.process.exitCode, wait("the app ends after its last window closed"))
         .toBe(0);
       packets.length = 0;
       // DDP (3waylabs): a 10 byte header, then channel 1 of universe 1.
-      await expect.poll(() => packets.length, WAIT).toBeGreaterThan(30);
+      await expect.poll(() => packets.length, wait()).toBeGreaterThan(30);
       expect(packets.at(-1)?.[10]).toBe(77);
       expect(await health()).toBe(200);
     } finally {
@@ -240,7 +260,7 @@ test("the window shows the engine on the test port", async ({ baseURL }) => {
   const window = await windowText();
   const shell = startShell(ADDRESS, { BOSSYLIGHTS_UI: baseURL!, BOSSYLIGHTS_WINDOW_SCRIPT: window.script });
   try {
-    await expect.poll(window.lines, WAIT).toContain("connected");
+    await expect.poll(window.lines, wait()).toContain("connected");
     expect(window.lines()).toContain(`engine on ${ADDRESS}`);
   } catch (cause) {
     throw new Error(
@@ -257,11 +277,11 @@ test("the window shows the engine on the test port", async ({ baseURL }) => {
 test("a second shell for the same engine opens no window and stops nothing", async () => {
   test.setTimeout(120_000);
   const first = startShell();
-  await expect.poll(first.said, WAIT).toContain("the window talks to");
-  await expect.poll(health, WAIT).toBe(200); // the engine the first shell started is up
+  await expect.poll(first.said, wait()).toContain("the window talks to");
+  await expect.poll(health, wait()).toBe(200); // the engine the first shell started is up
   const second = startShell();
-  await expect.poll(second.said, WAIT).toContain("a window for the engine on");
-  await expect.poll(() => second.process.exitCode, WAIT).toBe(0);
+  await expect.poll(second.said, wait()).toContain("a window for the engine on");
+  await expect.poll(() => second.process.exitCode, wait()).toBe(0);
   expect(second.said()).not.toContain("the window talks to");
   expect(await health()).toBe(200);
 });
@@ -276,7 +296,7 @@ test("another engine version on the port: the shell says so and starts nothing",
   await new Promise<void>((listening) => other.listen(Number(port), host, listening));
   const shell = startShell();
   try {
-    await expect.poll(shell.said, WAIT).toContain(`the engine on ${ADDRESS} speaks api 0`);
+    await expect.poll(shell.said, wait()).toContain(`the engine on ${ADDRESS} speaks api 0`);
     expect(shell.said()).toContain("starting nothing");
     expect(shell.said()).not.toContain("started the engine");
   } finally {
@@ -290,7 +310,7 @@ test("an engine of its own that ends at start: the shell does not say the window
   // An address of no machine here (TEST-NET-1): nothing answers on it, and the engine cannot listen on it.
   const nowhere = NOWHERE;
   const shell = startShell(nowhere);
-  await expect.poll(shell.said, WAIT).toContain(`the window has no engine on ${nowhere}`);
+  await expect.poll(shell.said, wait()).toContain(`the window has no engine on ${nowhere}`);
   expect(shell.said()).not.toContain("the window talks to");
 });
 
@@ -321,16 +341,16 @@ const starts = [
 ] as const;
 for (const [who, hook, page, mac] of starts) {
   test(`a window ${who}: ${page.visibility}, focus ${page.focus}`, async ({ baseURL }) => {
+    test.setTimeout(120_000); // before the skip: a skipped test's `afterEach` still waits
     // A person's start takes the focus: on the owner's Mac that is what #316 removes, so it runs in CI only.
     test.skip(hook === undefined && !process.env.CI, "it would take the focus from the person at this computer");
-    test.setTimeout(120_000);
     const window = await windowText();
     // No engine: what the window shows is all this test reads.
     const shell = startShell(NOWHERE, { BOSSYLIGHTS_UI: baseURL!, BOSSYLIGHTS_WINDOW_SCRIPT: window.script, BOSSYLIGHTS_HIDDEN_WINDOW: hook });
     try {
       // Linux CI runs on a display with no window manager: no window there gets the focus.
       const seen = hook === undefined && process.platform === "linux" ? { visibility: page.visibility } : page;
-      await expect.poll(window.showing, WAIT).toMatchObject(seen);
+      await expect.poll(window.showing, wait()).toMatchObject(seen);
       if (process.platform === "darwin") expect(macApp(shell.process.pid!)).toEqual(mac);
     } catch (cause) {
       throw new Error(`Shell output:\n${shell.said() || "(none)"}\n${window.status()}`, { cause });
@@ -361,9 +381,9 @@ test("a window the tests start: its hidden page keeps running", async () => {
   // No engine: the page is all this test reads.
   const shell = startShell(NOWHERE, { BOSSYLIGHTS_UI: page, BOSSYLIGHTS_WINDOW_SCRIPT: script });
   try {
-    await expect.poll(() => first, { ...WAIT, message: "the window loads its page" }).toBeGreaterThan(0);
+    await expect.poll(() => first, wait("the window loads its page")).toBeGreaterThan(0);
     await expect
-      .poll(() => latest - first, { ...WAIT, message: "the hidden page still asks 20 s after it loaded" })
+      .poll(() => latest - first, wait("the hidden page still asks 20 s after it loaded"))
       .toBeGreaterThan(20_000);
   } finally {
     await kill(shell.process);
