@@ -122,6 +122,7 @@ flowchart LR
 | The Engine | a bad command is refused with a reason. Nothing inside changes |
 | The real-time core | cannot fail. No panic, no unwrap, no index that can be out of range |
 | The lights | on any failure the last good frame stays. Never dark by accident |
+| A laser (IDN output) | the one exception: dark on doubt (r-laser-safe). It starts disarmed, sends empty frames until armed, disarms when a send finds nobody there or a broken socket (a busy socket only drops that frame). [outputs-idn.md](design/outputs-idn.md), Laser safety |
 
 ## 7. The real-time core does five things less
 

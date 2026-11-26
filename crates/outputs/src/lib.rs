@@ -22,6 +22,7 @@
 pub mod artnet;
 mod ddp;
 pub mod dmx_usb_pro;
+pub mod idn;
 pub mod sacn;
 mod udp;
 

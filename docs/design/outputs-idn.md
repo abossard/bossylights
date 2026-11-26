@@ -1,6 +1,6 @@
 # IDN (ILDA Digital Network): the wire for lasers
 
-Status: not built. This page is our summary of ILDA's documents, in our words. "S" is IDN-Stream rev 002, "H" the IDN-Hello draft.
+Status: bytes built, not reachable in the app. This page is our summary of ILDA's documents, in our words. "S" is IDN-Stream rev 002, "H" the IDN-Hello draft.
 
 ```mermaid
 sequenceDiagram
@@ -88,6 +88,17 @@ Scan status bits: 7 malfunction, 6 offline, 5 excluded, 4 occupied, 0 takes real
 
 At least X, Y and one colour. Shutter comes from the channel being open, not from the samples.
 
+### The fields, bit by bit
+
+| Field | Bits | Source |
+|---|---|---|
+| Content ID (bytes 2 to 3) | `8000` channel message, `4000` config follows, `3F00` channel id, `00FF` chunk type | S 2.1 |
+| Config flags | bits 5 to 4 data match (0 here), bit 1 close, bit 0 routing (open and route the channel). Word count, service id and mode are 0 without routing | S 2.2 |
+| Chunk header flags | bits 5 to 4 config match (0 here), bit 0 once: draw the frame one time, then wait at home (0, 0) | S 6.2 |
+| Empty frame | a frame chunk with no samples, duration 0: voids the repeating frame | S 6.2 |
+| Discrete mode shutter | opens with the first channel in the mode, closes when the last closes. An empty frame leaves it open | S 3.3 |
+| Close | a void chunk (`C000`) with config flags close only, then Hello `44` | S 2.2, H; DexLogic sender, MIT |
+
 ## Rules
 
 | Rule | Value | Source |
@@ -100,6 +111,75 @@ At least X, Y and one colour. Shutter comes from the channel being open, not fro
 | Link | no packet for **1 s**: link and session close, **output stops** | H 7.2 |
 | Session timeout | exists, no value given | H 6.1 |
 | Size | one Ethernet frame holds about 205 points; a discrete frame may use IP fragments | S 6.1, 6.2 |
+
+## What we send
+
+`crates/outputs/src/idn.rs`. Not reachable in the app yet: the wiring ticket adds the kind.
+
+| | Ours | Spec |
+|---|---|---|
+| Route | 7 channels a point: X coarse and fine, Y coarse and fine, red, green, blue. At most 9,321 points | ✅ one message |
+| X, Y | the channel word (0 to 65,535, centre 32,768) with its top bit flipped: 0 is -32,768, 65,535 is 32,767 | ✅ signed |
+| Frame | one discrete frame per engine frame, one datagram, IP fragments when bigger than the link | ✅ S 6.2 |
+| First point | its colour sent as 0 | ✅ invisible anyway |
+| Duration | (points - 1) x 1,000,000 / points a second, rounded down. Points a second: the output's setting, 1,000 to 100,000 (the longest frame stays inside the 24-bit duration), 30,000 by default | ✅ |
+| Once | never: a frame shorter than the engine's period would go dark between frames | |
+| Config | in every frame message, never changed: routing, default service, discrete, the 8 tags | ✅ at least every 200 ms |
+| Timestamp | µs since the output opened, read once per frame, wraps | ✅ rising, never ahead |
+| Sequence | Hello sequence from 0, +1 per datagram, wraps | ✅ |
+| Where | one projector at a typed address, port 7255 on a real network | ✅ no scan yet |
+| Stop | close channel, then close session, back to back | ✅ graceful close |
+
+### Laser safety (r-laser-safe)
+
+The one exception to "the last good frame stays" (`docs/coding.md` rule 6): a laser goes dark on doubt.
+
+| Case | We send |
+|---|---|
+| Opened | empty frames: disarmed until Arm |
+| Armed, 2 points or more | the frame |
+| Armed, fewer than 2 points | an empty frame |
+| Disarmed | empty frames |
+| A send failed: nobody listens, or the socket broke | disarmed: empty frames after the link is back, until Arm |
+| The engine stops sending | nothing: the projector stops by itself after 1 s (H 7.2) |
+| The cable is pulled (no send error) | still armed: the projector stops after 1 s; when the cable is back the frame is drawn again. Accepted only while IDN is not reachable; #341 disarms on a missing acknowledge before the wiring ticket |
+| Terminate | close channel, close session (the shutter closes, S 3.3) |
+
+### The arm machine
+
+One atomic shared by the output and its `Arm` handle. A table test walks every pair.
+
+```mermaid
+stateDiagram-v2
+  direction LR
+  [*] --> Disarmed
+  Disarmed --> Armed: arm
+  Armed --> Disarmed: disarm
+  Armed --> Disarmed: lost
+```
+
+| arm \ event | arm | disarm | lost (a send failed: not there, broken) |
+|---|---|---|---|
+| Disarmed | Armed | Disarmed | Disarmed |
+| Armed | Armed | Disarmed | Disarmed |
+
+### The channel machine
+
+As sACN's stream. `terminate` is called off the output thread when the output is removed or the engine stops; it sends the closing frame itself.
+
+```mermaid
+stateDiagram-v2
+  direction LR
+  [*] --> Open
+  Open --> Closing: terminate
+  Closing --> Closed: frame (close channel, close session)
+```
+
+| channel \ event | frame | terminate |
+|---|---|---|
+| Open | Open, a frame or an empty frame | Closing, 1 closing frame left |
+| Closing | Closed, close channel and close session | Closing, 1 left |
+| Closed | Closed, nothing sent (the engine is told Accepted: nothing failed; unreachable, the output is gone) | Closed, 0 left |
 
 ## Other laser DACs
 

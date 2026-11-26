@@ -1,4 +1,4 @@
-//! One lane for every protocol over UDP (DDP, Art-Net, sACN). Each is a [`Protocol`]:
+//! One lane for every protocol over UDP (DDP, Art-Net, sACN, IDN). Each is a [`Protocol`]:
 //! a calculation that cuts a frame into packets and writes each into its own buffer. The
 //! lane is the action: it sends each packet on a connected, non-blocking socket, ends the
 //! frame at the first failed send, keeps the health machine and the socket thread that
@@ -35,6 +35,9 @@ pub(crate) trait Protocol: Send {
     fn stop(&mut self) -> u8 {
         0
     }
+
+    /// A send found nobody there or a broken socket. Most protocols carry on.
+    fn lost(&mut self) {}
 }
 
 /// Frames that must go out without a refusal before a device that refused counts as there
@@ -145,6 +148,15 @@ fn next(health: Health, event: Event) -> (Health, Ask) {
         (same, Event::Failed(Busy) | Event::NewSocket) | (same @ Health::Running, Event::Sent) => {
             (same, Ask::Nothing)
         }
+    }
+}
+
+/// Whether `event` lost the device: nobody there or a broken socket. A busy link only
+/// drops the frame.
+const fn lost(event: Event) -> bool {
+    match event {
+        Event::Failed(Fault::DeviceNotThere | Fault::SocketBroken) => true,
+        Event::Sent | Event::Failed(Fault::Busy) | Event::NewSocket => false,
     }
 }
 
@@ -422,6 +434,9 @@ impl<P: Protocol> Device for Udp<P> {
     fn take(&mut self, stream: &[u8]) -> Outcome {
         self.renew();
         let event = self.send(stream);
+        if lost(event) {
+            self.protocol.lost();
+        }
         let (health, ask) = next(self.health, event);
         self.health = health;
         if ask == Ask::NewSocket {
@@ -473,6 +488,21 @@ mod tests {
         ];
         for (error, expected) in cases {
             assert_eq!(fault(&error), expected, "{error:?}");
+        }
+    }
+
+    #[test]
+    fn only_nobody_there_or_a_broken_socket_loses_the_device() {
+        // (event, lost)
+        let cases = [
+            (Event::Sent, false),
+            (Event::Failed(Fault::Busy), false),
+            (Event::Failed(Fault::DeviceNotThere), true),
+            (Event::Failed(Fault::SocketBroken), true),
+            (Event::NewSocket, false),
+        ];
+        for (event, expected) in cases {
+            assert_eq!(lost(event), expected, "{event:?}");
         }
     }
 

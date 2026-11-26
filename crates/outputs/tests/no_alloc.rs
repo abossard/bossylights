@@ -156,6 +156,8 @@ fn main() {
         outputs::sacn::open(to, first, [7; 16], output).unwrap()
     };
     let sacn_unicast = sacn(outputs::sacn::Destination::Unicast(address));
+    let (idn, arm) = outputs::idn::open(address, outputs::idn::PointRate::DEFAULT).unwrap();
+    arm.arm();
     // A machine that sends no multicast (no route, or a CI Mac) checks unicast only.
     let multicast_route = UdpSocket::bind("0.0.0.0:0")
         .and_then(|socket| {
@@ -172,6 +174,7 @@ fn main() {
         ("DDP", ddp, Outcome::Accepted),
         ("Art-Net", art_net, Outcome::Accepted),
         ("sACN unicast", sacn_unicast, Outcome::Accepted),
+        ("IDN, armed", idn, Outcome::Accepted),
         ("DDP nobody listens to", refused, Outcome::Failed),
         ("DMX USB Pro", Box::new(pro), Outcome::Accepted),
     ];
