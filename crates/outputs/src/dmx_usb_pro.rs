@@ -15,9 +15,9 @@
 //! | Thread | Does |
 //! |---|---|
 //! | output thread | [`DmxUsbPro::take`]: puts the message in a one-slot wait-free queue and wakes the port thread. Never calls the serial driver: a vanishing device holds the driver up for many milliseconds |
-//! | port thread, one per adapter | owns the port: writes each message, never more often than the link drains. While the adapter is not there yet, or after a write fails or the port takes no byte for [`STALLED_FOR`] (then it closes the port first), it looks for the adapter every [`LOOK_EVERY`] |
+//! | port thread, one per adapter | owns the port: at each new port asks the widget its settings (label 3), then writes each message, never more often than the link drains. While the adapter is not there yet, or after a write fails or the port takes no byte for [`STALLED_FOR`] (then it closes the port first), it looks for the adapter every [`LOOK_EVERY`] |
 
-use crate::{Adapter, Device, Limits, Outcome};
+use crate::{Adapter, Device, Limits, Outcome, Reading};
 use engine_core::ADDRESSES;
 use engine_core::health::{AfterHandoff, HandoffPart, HandoffSpan};
 use nix::errno::Errno;
@@ -52,12 +52,18 @@ const ON_THE_LINK: Duration =
     Duration::from_nanos(MESSAGE as u64 * 11 * 1_000_000_000 / BAUD as u64);
 /// DMX512: 250 000 bits a second, 11 bits a slot.
 const SLOT: Duration = Duration::from_micros(44);
-/// The widget's break, mark after break and rate are kept in its flash. We never read
-/// them, so a span counts their defaults (API p.3): break 9 and mark 1 steps of 10.67 µs,
-/// 40 DMX frames a second.
-const DEFAULT_BREAK: Duration = Duration::from_nanos(9 * 10_670);
-const DEFAULT_MARK: Duration = Duration::from_nanos(10_670);
-const DEFAULT_FRAME: Duration = Duration::from_millis(1_000 / 40);
+/// One step of the widget's break and mark after break (API p.3).
+const STEP: Duration = Duration::from_nanos(10_670);
+/// Label 3, "get widget parameters", asking for no user memory (API p.3).
+const ASK: [u8; 7] = [0x7E, 3, 2, 0, 0, 0, 0xE7];
+/// Tries at each new port: the widget ignores the first "get parameters" after another
+/// program's run, and answers the second in 3 ms (`docs/spikes/dmx-timing.md`).
+const ASKS: u8 = 2;
+/// How long a try waits for the answer: FTDI's latency timer holds the widget's bytes up
+/// to 16 ms by default; 3 ms measured.
+const ANSWER_WITHIN: Duration = Duration::from_millis(50);
+// Below FTDI's 16 ms latency timer (AN232B-04, its default) no answer would ever come in time.
+const _: () = assert!(ANSWER_WITHIN.as_millis() > 16);
 /// How often the port thread looks for a lost adapter.
 const LOOK_EVERY: Duration = Duration::from_millis(500);
 /// How often an idle port thread checks whether it should stop.
@@ -70,8 +76,8 @@ const QUEUE_FULL: Duration = Duration::from_millis(1);
 /// the adapter being gone, and a person sees a stall within about that time anyway. Later
 /// bytes never restart the clock, so a port that trickles still reaches it.
 const STALLED_FOR: Duration = Duration::from_millis(500);
-/// The most a route finish takes: the message being written when it is asked, the one
-/// queued behind it, then the drain. Each is at most [`STALLED_FOR`], one [`QUEUE_FULL`]
+/// The most a route finish takes: the message (or label 3 request) being written when it
+/// is asked, the one queued behind it, then the drain. Each is at most [`STALLED_FOR`], one [`QUEUE_FULL`]
 /// past it and one [`LINK_TIME`]. Not covered: a listing of USB ports that hangs while
 /// the adapter is lost. The opener then stops waiting, and `take` keeps dropping frames
 /// until the port thread answered, so no frame of the next route meets the old one.
@@ -79,24 +85,116 @@ pub const FINISH_WITHIN: Duration = Duration::from_nanos(
     3 * (STALLED_FOR.as_nanos() + QUEUE_FULL.as_nanos() + LINK_TIME.as_nanos()) as u64,
 );
 
+/// The widget's settings, as label 3 answers them (API p.3): break and mark after break
+/// in steps of 10.67 µs, and its rate in DMX frames a second, 0 for as fast as it can.
+/// Only settings in the API's ranges exist.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Settings {
+    break_steps: u8,
+    mark_steps: u8,
+    rate: u8,
+}
+
+impl Settings {
+    /// What a span counts while nothing was read: the API's defaults.
+    const DEFAULT: Self = Self {
+        break_steps: 9,
+        mark_steps: 1,
+        rate: 40,
+    };
+
+    /// Settings in the API's ranges: break 9 to 127, mark 1 to 127, rate 0 to 40.
+    pub const fn new(break_steps: u8, mark_steps: u8, rate: u8) -> Option<Self> {
+        match (break_steps, mark_steps, rate) {
+            (9..=127, 1..=127, 0..=40) => Some(Self {
+                break_steps,
+                mark_steps,
+                rate,
+            }),
+            _ => None,
+        }
+    }
+
+    /// One word for the port thread to share. 0 is nothing read: its break, 0, is out of
+    /// range.
+    const fn packed(self) -> u32 {
+        u32::from_be_bytes([0, self.break_steps, self.mark_steps, self.rate])
+    }
+
+    /// The settings a [`Settings::packed`] word holds; 0 holds none.
+    const fn unpacked(word: u32) -> Option<Self> {
+        let [_, break_steps, mark_steps, rate] = word.to_be_bytes();
+        Self::new(break_steps, mark_steps, rate)
+    }
+
+    /// Break and mark after break: the time before the start code.
+    fn before_start(self) -> Duration {
+        STEP * (u32::from(self.break_steps) + u32::from(self.mark_steps))
+    }
+
+    /// The longest wait for the widget's next frame: one period at its rate, or the frame
+    /// on the wire when that is longer; at rate 0 only the frame.
+    fn period(self) -> Duration {
+        let frame = self.before_start() + SLOT * (ADDRESSES as u32 + 1);
+        match self.rate {
+            0 => frame,
+            rate => frame.max(Duration::from_nanos(
+                1_000_000_000_u64.div_ceil(u64::from(rate)),
+            )),
+        }
+    }
+}
+
+/// The settings in the first whole label 3 message of `heard`, if they are in the API's
+/// ranges: firmware (2 bytes), break, mark, rate, then user memory (API p.3).
+fn settings_of(heard: &[u8]) -> Option<Settings> {
+    heard
+        .iter()
+        .enumerate()
+        .filter(|&(_, &byte)| byte == 0x7E)
+        .find_map(|(at, _)| {
+            let message = heard.get(at..)?;
+            let (&[_, 3, lsb, msb], rest) = message.split_first_chunk::<4>()? else {
+                return None;
+            };
+            let length = usize::from(u16::from_le_bytes([lsb, msb]));
+            let (data, end) = rest.split_at_checked(length)?;
+            let (&[_, _, break_steps, mark_steps, rate], _) = data.split_first_chunk::<5>()?;
+            (end.first() == Some(&0xE7)).then_some(())?;
+            Settings::new(break_steps, mark_steps, rate)
+        })
+}
+
 /// What follows the handoff, part by part. `patched`: the output's lowest and highest
 /// patched slot. With none patched, a channel set by hand can still reach a light on any
-/// slot, so the wire part spans all 512 and its source says why.
+/// slot, so the wire part spans all 512 and its source says why. `read`: the widget's
+/// settings, if it answered; else its defaults count, and the sources say so.
 ///
 /// | Stage | What | Span, source |
 /// |---|---|---|
 /// | `HostToAdapter` | the port thread's wake, then the USB transfer | not known: neither has a time in its spec |
 /// | `SerialLink` | the message on the serial line to the widget | `Baud`: [`MESSAGE`] bytes, 11 bits each, at [`BAUD`] |
-/// | `AdapterFrame` | the wait for the widget's next DMX frame, on its own timer | `AdapterDefault`: 0 to one frame at its default rate |
-/// | `DmxWire` | the frame on the wire, from the end of the lowest patched slot to the end of the highest | `Dmx512AdapterDefault`: 44 µs a slot, after the default break and mark. `Dmx512AdapterDefaultNothingPatched`: the same over the whole universe |
-/// | `SlotGap` | the widget's gaps between slots | not known: not in its API |
-pub(crate) fn after_handoff(patched: Option<RangeInclusive<u32>>) -> AfterHandoff {
-    let ((lowest, highest), wire) = match patched {
-        Some(slots) => (slots.into_inner(), "Dmx512AdapterDefault"),
-        None => ((1, ADDRESSES as u32), "Dmx512AdapterDefaultNothingPatched"),
+/// | `AdapterFrame` | the wait for the widget's next DMX frame, on its own timer | 0 to one period. `AdapterRead`, `AdapterReadAsFastAsItCan` (rate 0: the frame on the wire), `AdapterDefault` |
+/// | `DmxWire` | the frame on the wire, from the end of the lowest patched slot to the end of the highest | 44 µs a slot, after the break and mark. `Dmx512AdapterRead`, `Dmx512AdapterDefault`, each with `NothingPatched`: the same over the whole universe |
+/// | `SlotGap` | the widget's gaps between slots and between frames | not known: not in its API |
+pub(crate) fn after_handoff(
+    patched: Option<RangeInclusive<u32>>,
+    read: Option<Settings>,
+) -> AfterHandoff {
+    let ((lowest, highest), wire) = match (patched, read) {
+        (Some(slots), Some(_)) => (slots.into_inner(), "Dmx512AdapterRead"),
+        (Some(slots), None) => (slots.into_inner(), "Dmx512AdapterDefault"),
+        (None, Some(_)) => ((1, ADDRESSES as u32), "Dmx512AdapterReadNothingPatched"),
+        (None, None) => ((1, ADDRESSES as u32), "Dmx512AdapterDefaultNothingPatched"),
     };
+    let frame = match read {
+        Some(Settings { rate: 0, .. }) => "AdapterReadAsFastAsItCan",
+        Some(_) => "AdapterRead",
+        None => "AdapterDefault",
+    };
+    let settings = read.unwrap_or(Settings::DEFAULT);
     // Slot n's last bit is (n + 1) slots after the mark: the start code is slot 0.
-    let slot_end = |slot: u32| DEFAULT_BREAK + DEFAULT_MARK + SLOT * (slot + 1);
+    let slot_end = |slot: u32| settings.before_start() + SLOT * (slot + 1);
     let not_known = |stage| HandoffPart {
         stage,
         span: HandoffSpan::NotKnown,
@@ -108,12 +206,7 @@ pub(crate) fn after_handoff(patched: Option<RangeInclusive<u32>>) -> AfterHandof
     AfterHandoff::new([
         not_known("HostToAdapter"),
         computed("SerialLink", ON_THE_LINK, ON_THE_LINK, "Baud"),
-        computed(
-            "AdapterFrame",
-            Duration::ZERO,
-            DEFAULT_FRAME,
-            "AdapterDefault",
-        ),
+        computed("AdapterFrame", Duration::ZERO, settings.period(), frame),
         computed("DmxWire", slot_end(lowest), slot_end(highest), wire),
         not_known("SlotGap"),
     ])
@@ -151,9 +244,9 @@ pub struct DmxUsbPro {
     answers: mpsc::Receiver<()>,
 }
 
-/// What the output thread and the port thread share.
+/// What the output thread, the port thread and a [`Reading`] share.
 #[derive(Default)]
-struct Shared {
+pub(crate) struct Shared {
     /// Set while there is no port: not found yet, or lost.
     lost: AtomicBool,
     stop: AtomicBool,
@@ -162,6 +255,16 @@ struct Shared {
     finish: AtomicU32,
     /// The system error that lost the port, or refused to open it, last; 0 if none.
     lost_with: AtomicI32,
+    /// The settings the widget on the current port answered, [`Settings::packed`]; 0 if
+    /// none yet.
+    settings: AtomicU32,
+}
+
+impl Shared {
+    /// The settings the widget on the current port answered, if it did.
+    pub(crate) fn settings(&self) -> Option<Settings> {
+        Settings::unpacked(self.settings.load(Ordering::Acquire))
+    }
 }
 
 /// Why the port was lost last: the system's error, as the port thread saw it.
@@ -199,6 +302,7 @@ impl DmxUsbPro {
             link,
             messages,
             unsent: None,
+            ask: Ask::Try(1),
             shared: Arc::clone(&shared),
             answer,
         };
@@ -224,6 +328,11 @@ impl DmxUsbPro {
 impl Device for DmxUsbPro {
     fn reconnects_itself(&self) -> bool {
         true
+    }
+
+    /// The settings the widget answers at each new port.
+    fn reading(&self) -> Reading {
+        Reading(Arc::downgrade(&self.shared))
     }
 
     /// Asks the port thread to finish the route and waits for its answer, at most
@@ -342,6 +451,8 @@ struct PortThread {
     /// The message whose write lost the port. Written first once the adapter is found
     /// again, then the one `take` queued meanwhile. A route finish discards both.
     unsent: Option<[u8; MESSAGE]>,
+    /// Where asking the widget on the current port its settings stands.
+    ask: Ask,
     shared: Arc<Shared>,
     #[expect(
         clippy::disallowed_types,
@@ -354,6 +465,7 @@ impl PortThread {
     fn lose(&mut self, with: Errno) {
         self.link = Link::Lost { with };
         self.shared.lost_with.store(with as i32, Ordering::Relaxed);
+        self.shared.settings.store(0, Ordering::Release);
         self.shared.lost.store(true, Ordering::Release);
         self.port = None;
     }
@@ -427,7 +539,8 @@ impl PortThread {
         true
     }
 
-    /// One turn while running: looks for the adapter, or writes one whole message.
+    /// One turn while running: looks for the adapter, asks the widget its settings, or
+    /// writes one whole message.
     fn step(&mut self) {
         if self.port.is_none() {
             // An adapter not found or lost is gone for a while; then look again.
@@ -453,8 +566,13 @@ impl PortThread {
             }
             if let Ok(port) = found {
                 self.port = Some(port);
+                self.ask = Ask::Try(1);
                 self.shared.lost.store(false, Ordering::Release);
             }
+            return;
+        }
+        if let Ask::Try(n) = self.ask {
+            self.ask = after_try(n, self.try_ask());
             return;
         }
         // The one that failed was taken before the one queued.
@@ -463,6 +581,47 @@ impl PortThread {
             return;
         };
         self.write(&message);
+    }
+
+    /// One try at the widget's settings: clears the input, writes label 3, then reads
+    /// what comes for at most [`ANSWER_WITHIN`]. A stop or a finish cuts the wait.
+    fn try_ask(&mut self) -> Tried {
+        let Some(port) = &self.port else {
+            return Tried::Lost;
+        };
+        let _ = port.clear(ClearBuffer::Input);
+        self.link = write_all(port, &ASK, self.link);
+        if let Some(with) = cause(self.link) {
+            self.lose(with);
+            return Tried::Lost;
+        }
+        let until = Instant::now() + ANSWER_WITHIN;
+        let mut heard = [0; 64];
+        let mut length = 0;
+        loop {
+            if cuts_look_short(
+                self.shared.stop.load(Ordering::Relaxed),
+                self.shared.finish.load(Ordering::Acquire),
+            ) {
+                return Tried::Cut;
+            }
+            if let Some(free) = heard.get_mut(length..)
+                && let Ok(read) = nix::unistd::read(port.as_raw_fd(), free)
+            {
+                length += read;
+            }
+            if let Some(settings) = settings_of(heard.get(..length).unwrap_or_default()) {
+                self.shared
+                    .settings
+                    .store(settings.packed(), Ordering::Release);
+                return Tried::Answered;
+            }
+            let left = until.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return Tried::Nothing;
+            }
+            thread::park_timeout(left.min(QUEUE_FULL));
+        }
     }
 
     /// Writes one whole message, then waits out the rest of its link time. A write that
@@ -488,6 +647,47 @@ impl PortThread {
             // A write never leads here: the link was found before it.
             Link::NotFound => {}
         }
+    }
+}
+
+/// Where asking the widget on the current port its settings stands. Every pair:
+/// `docs/design/outputs.md`, "Ask".
+///
+/// ```text
+/// [*] --> Try(1) --nothing--> Try(2) --nothing--> Done
+/// Try(n) --answered--> Read; Try(n) --cut--> Try(n); a port found --> Try(1)
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Ask {
+    /// Try `n` comes next, counted from 1.
+    Try(u8),
+    /// The widget answered: its settings are kept. No more tries on this port.
+    Read,
+    /// [`ASKS`] tries heard nothing: the port stays in use. No more tries on this port.
+    Done,
+}
+
+/// What one try heard.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Tried {
+    /// Settings in the API's ranges, now kept.
+    Answered,
+    /// None in time, out of range or garbled.
+    Nothing,
+    /// A stop or a finish ended the wait.
+    Cut,
+    /// The request's write lost the port.
+    Lost,
+}
+
+/// The next ask after try `n` heard `tried`: a calculation. A cut try does not count; a
+/// lost port is asked again from try 1 once it is found.
+const fn after_try(n: u8, tried: Tried) -> Ask {
+    match tried {
+        Tried::Answered => Ask::Read,
+        Tried::Nothing if n >= ASKS => Ask::Done,
+        Tried::Nothing => Ask::Try(n + 1),
+        Tried::Cut | Tried::Lost => Ask::Try(n),
     }
 }
 
@@ -864,6 +1064,7 @@ pub fn never_wait(port: &TTYPort) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Read, Write};
 
     /// Every pair of the link table in `docs/design/outputs.md`.
     #[test]
@@ -1180,6 +1381,167 @@ mod tests {
                 .and_then(|adapter| pick(&at_set, adapter))
                 .and_then(|wanted| port_of(&now, &wanted));
             assert_eq!(found, port, "case {n}");
+        }
+    }
+
+    /// A port thread on the port side of a pseudo terminal, its shared state, and the
+    /// widget's side, whose reads wait at most a second.
+    fn on_a_pseudo_terminal() -> io::Result<(PortThread, Arc<Shared>, TTYPort)> {
+        let (mut widget, port) = TTYPort::pair()?;
+        never_wait(&port)?;
+        widget.set_timeout(Duration::from_secs(1))?;
+        let (_, messages) = rtrb::RingBuffer::new(1);
+        let (answer, _) = mpsc::sync_channel(1);
+        let shared = Arc::new(Shared::default());
+        let port_thread = PortThread {
+            find: Box::new(|| Err(io::Error::from(ErrorKind::NotFound))),
+            port: Some(port),
+            link: Link::Writing,
+            messages,
+            unsent: None,
+            ask: Ask::Try(1),
+            shared: Arc::clone(&shared),
+            answer,
+        };
+        Ok((port_thread, shared, widget))
+    }
+
+    /// A try writes label 3 whole. A stop or a finish already asked ends its wait at once
+    /// (the Ask table's "a stop or a finish" column); with neither, a silent widget is
+    /// heard as nothing once [`ANSWER_WITHIN`] passed. Nothing is kept either way.
+    #[test]
+    fn a_stop_or_a_finish_cuts_a_try_and_a_silent_widget_is_nothing() -> io::Result<()> {
+        // (case, stop, finish asked, heard)
+        let cases = [
+            ("a stop", true, 0, Tried::Cut),
+            ("a finish", false, 1, Tried::Cut),
+            ("neither: silent", false, 0, Tried::Nothing),
+        ];
+        for (case, stop, finish, heard) in cases {
+            let (mut port_thread, shared, mut widget) = on_a_pseudo_terminal()?;
+            shared.stop.store(stop, Ordering::Relaxed);
+            shared.finish.store(finish, Ordering::Release);
+            assert_eq!(port_thread.try_ask(), heard, "{case}");
+            let mut asked = [0; ASK.len()];
+            widget.read_exact(&mut asked)?;
+            assert_eq!(
+                asked,
+                [0x7E, 3, 2, 0, 0, 0, 0xE7],
+                "{case}: label 3 (API p.3)"
+            );
+            assert_eq!(shared.settings(), None, "{case}");
+        }
+        Ok(())
+    }
+
+    /// An answer that comes in two parts is read whole: the second part, written once the
+    /// port has read the first, joins it.
+    #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the widget's side polls between the parts"
+    )]
+    fn an_answer_in_two_parts_is_read_whole() -> io::Result<()> {
+        let (mut port_thread, shared, mut widget) = on_a_pseudo_terminal()?;
+        // The port's own input queue, on a second handle: empty once the port read it.
+        let input = port_thread
+            .port
+            .as_ref()
+            .ok_or(ErrorKind::NotFound)?
+            .try_clone_native()?;
+        let widget = thread::spawn(move || -> io::Result<TTYPort> {
+            let mut asked = [0; ASK.len()];
+            widget.read_exact(&mut asked)?;
+            let answer = [0x7E, 3, 5, 0, 44, 1, 20, 4, 30, 0xE7];
+            let (first, rest) = answer.split_at(4);
+            widget.write_all(first)?;
+            let started = Instant::now();
+            while input.bytes_to_read()? > 0 && started.elapsed() < Duration::from_secs(1) {
+                thread::sleep(Duration::from_millis(1)); // poll
+            }
+            widget.write_all(rest)?;
+            Ok(widget)
+        });
+        assert_eq!(port_thread.try_ask(), Tried::Answered);
+        assert_eq!(shared.settings(), Settings::new(20, 4, 30));
+        drop(widget.join());
+        Ok(())
+    }
+
+    /// API p.2 (a message) and p.3 (label 3's answer and its ranges).
+    #[test]
+    fn an_answer_holds_settings_only_whole_with_label_3_and_in_range() {
+        let answer = |break_steps, mark_steps, rate| {
+            vec![0x7E, 3, 5, 0, 44, 1, break_steps, mark_steps, rate, 0xE7]
+        };
+        let with_memory = vec![0x7E, 3, 7, 0, 44, 1, 20, 4, 30, 0xAA, 0xBB, 0xE7];
+        let cases = [
+            ("in range", answer(20, 4, 30), Settings::new(20, 4, 30)),
+            ("the lowest", answer(9, 1, 0), Settings::new(9, 1, 0)),
+            (
+                "the highest",
+                answer(127, 127, 40),
+                Settings::new(127, 127, 40),
+            ),
+            ("break 8", answer(8, 4, 30), None),
+            ("break 128", answer(128, 4, 30), None),
+            ("mark 0", answer(20, 0, 30), None),
+            ("mark 128", answer(20, 128, 30), None),
+            ("rate 41", answer(20, 4, 41), None),
+            ("label 6", vec![0x7E, 6, 5, 0, 44, 1, 20, 4, 30, 0xE7], None),
+            ("not whole yet", vec![0x7E, 3, 5, 0, 44, 1, 20, 4, 30], None),
+            (
+                "no end byte",
+                vec![0x7E, 3, 5, 0, 44, 1, 20, 4, 30, 0xE6],
+                None,
+            ),
+            (
+                "data under 5 bytes",
+                vec![0x7E, 3, 4, 0, 44, 1, 20, 4, 0xE7],
+                None,
+            ),
+            (
+                "user memory after the rate",
+                with_memory,
+                Settings::new(20, 4, 30),
+            ),
+            (
+                "bytes before the start",
+                [vec![0, 0x7E, 0xFF], answer(20, 4, 30)].concat(),
+                Settings::new(20, 4, 30),
+            ),
+            ("nothing", vec![], None),
+        ];
+        for (case, heard, expected) in cases {
+            assert_eq!(settings_of(&heard), expected, "{case}");
+            if let Some(settings) = expected {
+                assert_eq!(
+                    Settings::unpacked(settings.packed()),
+                    expected,
+                    "{case}, shared"
+                );
+            }
+        }
+        assert_eq!(Settings::unpacked(0), None, "nothing read");
+    }
+
+    /// Every cell of the Ask table (`docs/design/outputs.md`). A lost port is asked again
+    /// from try 1 once it is found: `step` sets it.
+    #[test]
+    fn every_try_and_what_it_heard() {
+        // (try, heard, next)
+        let cases = [
+            (1, Tried::Answered, Ask::Read),
+            (1, Tried::Nothing, Ask::Try(2)),
+            (1, Tried::Cut, Ask::Try(1)),
+            (1, Tried::Lost, Ask::Try(1)),
+            (2, Tried::Answered, Ask::Read),
+            (2, Tried::Nothing, Ask::Done),
+            (2, Tried::Cut, Ask::Try(2)),
+            (2, Tried::Lost, Ask::Try(2)),
+        ];
+        for (n, tried, next) in cases {
+            assert_eq!(after_try(n, tried), next, "try {n}, {tried:?}");
         }
     }
 

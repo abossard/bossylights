@@ -22,7 +22,7 @@ sequenceDiagram
 | Who | Does |
 |---|---|
 | output thread | `take`: one-slot queue, wake. Never calls the serial driver: a vanishing device holds it up for many milliseconds |
-| port thread | every driver call: writes, drains, looks for the adapter every 500 ms while it has no port |
+| port thread | every driver call: asks the widget its settings at each new port, writes, drains, looks for the adapter every 500 ms while it has no port |
 | opener | asks a route finish and waits for the answer, at most `FINISH_WITHIN` |
 
 ### Link: the port thread's link to the adapter
@@ -67,6 +67,19 @@ A find error is one of two things. `lost_with` keeps the cause of `Lost` and `Ca
 | any other | Refused(e) | |
 
 The serial crate keeps only the kind of an open error (its `From<Error> for io::Error`), so a kind stands for the code std's `decode_error_kind` maps to it: PermissionDenied is EACCES, NotFound ENOENT, ResourceBusy EBUSY, any other EIO.
+
+### Ask: the widget's settings, at each new port
+
+One turn of the port thread: no port, it looks; a port not asked yet, one try; else one message. A try clears the input, writes label 3 (`7E 03 02 00 00 00 E7`) as the Link machine writes any message, then reads what comes for at most 50 ms (`ANSWER_WITHIN`). A stop or a finish ends the wait at once, as it ends a look, so the bound below holds: a request is "the message being written". Label 3 does not stop the widget's DMX output (API p.4: only a request other than 6 or 3 does), so the lights keep their last frame while it asks.
+
+| ask \ heard | an answer in range | out of range, garbled or none in time | a stop or a finish | the write loses the port |
+|---|---|---|---|---|
+| Try 1 | Read: settings kept | Try 2 | Try 1 again after it: a cut try does not count | Lost: nothing kept |
+| Try 2 | Read: settings kept | Done: nothing kept, the port stays in use | Try 2 again after it | Lost: nothing kept |
+| Read | n/a: no more tries on this port | n/a | n/a | Lost: the kept settings are cleared |
+| Done | n/a: no more tries on this port | n/a | n/a | Lost |
+
+A port found (at open, or found again) starts at Try 1 with nothing kept. Two tries: the widget ignores the first "get parameters" after another program's run, and answers the second in 3 ms ([dmx-timing spike](../spikes/dmx-timing.md), "What failed"). In range (API p.3): break 9 to 127 and mark after break 1 to 127 steps of 10.67 µs, rate 0 to 40. While it asks, `take` keeps one frame queued and drops the rest: at most 100 ms at a port open.
 
 ### Life: the port thread's life
 

@@ -32,6 +32,7 @@ use engine_core::{ROUTE_MOST, RouteFault, SPANS_MOST, Span, route_length};
 use std::io;
 use std::num::NonZeroU16;
 use std::ops::RangeInclusive;
+use std::sync::Weak;
 use std::time::Duration;
 
 /// An output, opened and ready for the output thread. Made and dropped off it.
@@ -44,6 +45,12 @@ pub trait Device: Send {
     /// Whether the adapter already owns a worker that reopens a lost connection.
     fn reconnects_itself(&self) -> bool {
         false
+    }
+
+    /// What it reads about itself, for [`after_handoff`]. Most devices read nothing.
+    /// Called off the output thread.
+    fn reading(&self) -> Reading {
+        Reading::default()
     }
 
     /// Finishes accepted writes before a reroute. A lost port discards old-route retries.
@@ -108,12 +115,31 @@ pub const fn limits(kind: OutputKind) -> Limits {
     }
 }
 
+/// What an open device read about itself, readable from any thread: the settings a DMX
+/// USB Pro's widget answered. Reads nothing once its device is gone.
+#[derive(Clone, Default)]
+pub struct Reading(Weak<dmx_usb_pro::Shared>);
+
+impl Reading {
+    /// Whether its device is still open.
+    pub fn is_open(&self) -> bool {
+        self.0.strong_count() > 0
+    }
+
+    /// The settings its device read, if it is open and read them.
+    pub fn settings(&self) -> Option<dmx_usb_pro::Settings> {
+        self.0.upgrade()?.settings()
+    }
+}
+
 /// What follows the handoff on the way to the light, for an output of `kind` whose
 /// lowest and highest patched channels, counted from 1 in its stream, are `patched`.
 /// `None`: a device brought through the engine's attach door, its kind not known.
+/// `read`: the settings its device read ([`Reading`]), if any.
 pub fn after_handoff(
     kind: Option<OutputKind>,
     patched: Option<RangeInclusive<u32>>,
+    read: Option<dmx_usb_pro::Settings>,
 ) -> AfterHandoff {
     let not_known = |stage| {
         AfterHandoff::new([HandoffPart {
@@ -122,7 +148,7 @@ pub fn after_handoff(
         }])
     };
     match kind {
-        Some(OutputKind::DmxUsbPro { .. }) => dmx_usb_pro::after_handoff(patched),
+        Some(OutputKind::DmxUsbPro { .. }) => dmx_usb_pro::after_handoff(patched, read),
         // DDP has no timing; the frame's other packets, the network, the controller and its
         // strips are the user's.
         Some(OutputKind::Ddp { .. }) => not_known("NetworkAndController"),
@@ -198,6 +224,7 @@ pub const fn default_rate(kind: OutputKind) -> Rate {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dmx_usb_pro::Settings;
     use engine_core::{MAX_UNIVERSES, RunNumbers, Universes};
     use std::net::{Ipv4Addr, SocketAddrV4};
 
@@ -269,10 +296,15 @@ mod tests {
         }
     }
 
-    /// Worked by hand (#318 P1c). A message is 518 bytes x 11 bits at 500,000 baud:
-    /// 11,396 µs. The widget's default rate, 40 a second: a frame every 25,000 µs. Slot n
-    /// ends at break 96.03 + mark 10.67 + (n + 1) x 44 µs: slot 1 at 194.7, slot 48 at
-    /// 2,262.7, slot 50 at 2,350.7, slot 512 at 22,678.7 (DMX512, API p.3).
+    /// Worked by hand (#318 P1c, P1c2). A message is 518 bytes x 11 bits at 500,000 baud:
+    /// 11,396 µs. Slot n ends at break + mark + (n + 1) x 44 µs, a break or mark step
+    /// 10.67 µs (DMX512, API p.3). The defaults, break 9 and mark 1 (106.7 µs): slot 1 at
+    /// 194.7, slot 48 at 2,262.7, slot 50 at 2,350.7, slot 512 at 22,678.7; 40 frames a
+    /// second, a frame every 25,000 µs. Break 20 and mark 4 (256.08 µs): slot 1 at 344.08,
+    /// slot 50 at 2,500.08, slot 512 at 22,828.08; rate 30, every 33,333.3 µs. Break and
+    /// mark 127 (2,710.18 µs): slot 1 at 2,798.18, slot 50 at 4,954.18; the frame on the
+    /// wire, 2,710.18 + 513 x 44 = 25,282.18 µs, is longer than 1 s / 40. Rate 0: the frame
+    /// on the wire only, 22,678.7 µs at the defaults. Rate 1: 1 s.
     #[test]
     fn each_kind_names_what_follows_its_handoff() {
         let ddp = |color| {
@@ -290,60 +322,133 @@ mod tests {
             high_us,
             source,
         };
-        let pro_parts = |wire_low, wire_high, wire| {
+        let pro_parts = |(frame_high, frame), wire_low, wire_high, wire| {
             vec![
                 part("HostToAdapter", HandoffSpan::NotKnown),
                 part("SerialLink", computed(11_396, 11_396, "Baud")),
-                part("AdapterFrame", computed(0, 25_000, "AdapterDefault")),
+                part("AdapterFrame", computed(0, frame_high, frame)),
                 part("DmxWire", computed(wire_low, wire_high, wire)),
                 part("SlotGap", HandoffSpan::NotKnown),
             ]
         };
+        let default = (25_000, "AdapterDefault");
+        let read = |high| (high, "AdapterRead");
         let patched = "Dmx512AdapterDefault";
         let nothing = "Dmx512AdapterDefaultNothingPatched";
+        let read_patched = "Dmx512AdapterRead";
+        let settings = |break_steps, mark_steps, rate| Settings::new(break_steps, mark_steps, rate);
         let network = vec![part("NetworkAndController", HandoffSpan::NotKnown)];
         let cases = [
             (
                 "usb, slots 1 to 50",
                 pro,
                 Some(1..=50),
-                pro_parts(194, 2_351, patched),
+                None,
+                pro_parts(default, 194, 2_351, patched),
             ),
             (
                 "usb, slots 48 to 50",
                 pro,
                 Some(48..=50),
-                pro_parts(2_262, 2_351, patched),
+                None,
+                pro_parts(default, 2_262, 2_351, patched),
             ),
             (
                 "usb, every slot",
                 pro,
                 Some(1..=512),
-                pro_parts(194, 22_679, patched),
+                None,
+                pro_parts(default, 194, 22_679, patched),
             ),
             (
                 "usb, the last slot",
                 pro,
                 Some(512..=512),
-                pro_parts(22_678, 22_679, patched),
+                None,
+                pro_parts(default, 22_678, 22_679, patched),
             ),
             (
                 "usb, nothing patched",
                 pro,
                 None,
-                pro_parts(194, 22_679, nothing),
+                None,
+                pro_parts(default, 194, 22_679, nothing),
             ),
-            ("ddp rgb", ddp(Color::Rgb), Some(1..=50), network.clone()),
-            ("ddp rgbw, nothing patched", ddp(Color::Rgbw), None, network),
+            (
+                "usb, read break 20, mark 4, rate 30, slots 1 to 50",
+                pro,
+                Some(1..=50),
+                settings(20, 4, 30),
+                pro_parts(read(33_334), 344, 2_501, read_patched),
+            ),
+            (
+                "usb, read the defaults, slots 1 to 50",
+                pro,
+                Some(1..=50),
+                settings(9, 1, 40),
+                pro_parts(read(25_000), 194, 2_351, read_patched),
+            ),
+            (
+                "usb, read break and mark 127, rate 40: the frame is longer than the period",
+                pro,
+                Some(1..=50),
+                settings(127, 127, 40),
+                pro_parts(read(25_283), 2_798, 4_955, read_patched),
+            ),
+            (
+                "usb, read rate 0: as fast as it can",
+                pro,
+                Some(1..=50),
+                settings(9, 1, 0),
+                pro_parts(
+                    (22_679, "AdapterReadAsFastAsItCan"),
+                    194,
+                    2_351,
+                    read_patched,
+                ),
+            ),
+            (
+                "usb, read rate 1",
+                pro,
+                Some(1..=50),
+                settings(9, 1, 1),
+                pro_parts(read(1_000_000), 194, 2_351, read_patched),
+            ),
+            (
+                "usb, read, nothing patched",
+                pro,
+                None,
+                settings(20, 4, 30),
+                pro_parts(read(33_334), 344, 22_829, "Dmx512AdapterReadNothingPatched"),
+            ),
+            (
+                "ddp rgb",
+                ddp(Color::Rgb),
+                Some(1..=50),
+                None,
+                network.clone(),
+            ),
+            (
+                "ddp rgbw, nothing patched",
+                ddp(Color::Rgbw),
+                None,
+                None,
+                network,
+            ),
             (
                 "a test's own device",
                 None,
                 Some(1..=50),
+                None,
                 vec![part("Device", HandoffSpan::NotKnown)],
             ),
         ];
-        for (case, kind, patched, expected) in cases {
-            assert_eq!(after_handoff(kind, patched).parts(), expected, "{case}");
+        for (case, kind, patched, read, expected) in cases {
+            assert_eq!(
+                after_handoff(kind, patched, read).parts(),
+                expected,
+                "{case}"
+            );
         }
     }
 }

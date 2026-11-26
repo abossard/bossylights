@@ -14,6 +14,16 @@ exclude_re = [
   # The low byte of `x << 8` is 0: or and xor agree.
   'engine-core/src/mix\.rs:307:39: replace \| with \^ in word_at',
   'rig/src/writer\.rs:150:47: replace \| with \^ in Travel::over',
+  # The default body is `Reading::default()`: the same value.
+  'outputs/src/lib\.rs:\d+:\d+: replace Device::reading -> Reading with Default::default\(\)',
+  # Killed in another crate: `engine` names no kind's device (check-names), and cargo mutants
+  # runs only the mutated crate's tests. engine-server's health_on_the_wire
+  # `a_widget_that_answers_has_its_own_break_mark_and_rate_in_its_row` catches each
+  # (`cargo mutants --package engine --test-package engine-server`, #318 P1c2).
+  'engine/src/lib\.rs:\d+:\d+: replace Engine::readings -> Readings with Default::default\(\)',
+  'engine/src/readings\.rs:\d+:\d+: replace Readings::note with \(\)',
+  'engine/src/readings\.rs:\d+:\d+: replace != with == in Readings::note',
+  'engine/src/readings\.rs:\d+:\d+: replace == with != in Readings::after_handoff',
   # Debug of the field table prints its name only, for diagnostics.
   'rig/src/table\.rs:34:9: replace <impl fmt::Debug for FieldPlan>::fmt -> fmt::Result with Ok\(Default::default\(\)\)',
 ]

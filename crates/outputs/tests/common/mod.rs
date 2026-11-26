@@ -78,9 +78,20 @@ pub fn end(mut ours: TTYPort) -> io::Result<TTYPort> {
     Ok(ours)
 }
 
-/// The next whole message on the test's end.
+/// Label 3, "get widget parameters", no user memory (API p.3): the port thread asks it
+/// at each new port, before its first message.
+pub const ASKED: [u8; 7] = [0x7E, 3, 2, 0, 0, 0, 0xE7];
+
+/// The next whole message on the test's end, past any label 3 request.
 pub fn read_message(end: &mut TTYPort) -> [u8; MESSAGE] {
     let mut message = [0; MESSAGE];
-    end.read_exact(&mut message).expect("a whole message");
+    let (head, rest) = message.split_at_mut(ASKED.len());
+    loop {
+        end.read_exact(head).expect("a whole message");
+        if *head != ASKED {
+            break;
+        }
+    }
+    end.read_exact(rest).expect("a whole message");
     message
 }

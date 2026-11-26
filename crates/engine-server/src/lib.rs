@@ -79,11 +79,11 @@ pub async fn serve(
             stop.subscribe(),
         ))
     });
+    let mut health = health::Reader::new(engine.readings());
     let first = Moment::of(&sender);
     // A snapshot of a wake after every command queued so far: taken under `first`.
     let requested_at = Instant::now();
     let snapshot = engine.fresh().map_err(io::Error::other)?;
-    let mut health = health::Reader::new();
     health.observe(|output, sample| snapshot.health_sample(output, sample));
     let published = health.publish();
     let picture = Picture::of(
@@ -215,15 +215,13 @@ impl Picture {
     /// Each output's health row, with what follows its handoff: for its kind, over its
     /// patched channels, both as they were at this snapshot.
     fn health_rows(&self) -> Vec<OutputRow> {
-        self.health.rows(|output| {
-            let (kind, patched) = match self.project.output(output) {
+        self.health
+            .rows(|output| match self.project.output(output) {
                 Some(ProjectOutput::Kind { kind, universes }) => {
                     (Some(kind), self.patch.patched_in(universes))
                 }
                 Some(ProjectOutput::Attached { .. }) | None => (None, None),
-            };
-            engine::after_handoff(kind, patched)
-        })
+            })
     }
 }
 

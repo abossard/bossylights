@@ -69,13 +69,14 @@ No checksum, no escaping: the length frames the data. An unknown label is ignore
 | Message | label 6, length 513, start code 0, 512 slots (route zero-padded) | 25 to 513 bytes ✅ |
 | Universe size | always 512 | API: the length sets the size; FAQ: always 512 goes out. Sending 512 avoids the question |
 | Rate | 44 a second, or lower | the widget sends at most 40 (its default). At 44 about 4 messages a second are replaced before they go out |
-| Labels 3, 4, 10 | never sent | optional |
-| Reading | nothing read back | optional |
+| Label 3 | asked at each new port, before its first label 6, at most twice ([outputs.md](outputs.md), "Ask") | optional |
+| Labels 4, 10 | never sent | optional |
+| Reading | label 3's answer: break, mark after break and rate set the delay Health shows after the handoff. No answer: the API's defaults, and Health says so | optional |
 
 ## Gaps for the planner
 
 | # | Gap | Effect | Recommended |
 |---|---|---|---|
 | U1 | we send 44, the widget outputs at most 40 | a press waits for the widget's next period (at most 25 ms), never lost | keep 44 (the newest wins). Note it in Patch's rate help |
-| U2 | the adapter is found by USB identity and name, not by asking label 3 | any FTDI `0403:6001` with no product name, or one named "DMX USB PRO", would be taken | ask label 3 once at open, before the first label 6 |
+| U2 | the adapter is found by USB identity and name. Label 3 is asked at each new port (#318), but a port that never answers is still taken | any FTDI `0403:6001` with no product name, or one named "DMX USB PRO", would be taken | refuse a port that never answers label 3 |
 | U3 | the adapter is numbered by USB serial, not by the widget serial | not measured whether the two orders agree; only matters with two adapters | keep |

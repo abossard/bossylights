@@ -76,7 +76,9 @@ use engine_core::{
     Channels, End, LightRun, Lights, LookCommand, PLAYS, ProjectEffect, ProjectEvent, stops, unkept,
 };
 
-pub use outputs::{Device, after_handoff};
+pub use outputs::Device;
+mod readings;
+pub use readings::Readings;
 mod cutover;
 use cutover::{Effect as CutoverEffect, Event as CutoverEvent, State as CutoverState};
 mod lane;
@@ -164,6 +166,7 @@ pub struct Engine {
     free: Option<JoinHandle<()>>,
     retry: Option<JoinHandle<()>>,
     universes: Universes,
+    readings: Readings,
     /// The machine's one engine slot in tests (#319). Free again after `drop` joined the threads.
     #[cfg(any(test, feature = "test-support"))]
     _slot: engine_slot::Slot,
@@ -328,6 +331,7 @@ impl Engine {
             let _unwinds = TickGuard(&life);
             ticker.run(priority)
         })?;
+        let (readings, open) = Readings::noting(open);
         let sender = Sender::new(
             universes,
             open,
@@ -344,10 +348,16 @@ impl Engine {
             free: Some(free),
             retry: Some(retry_worker),
             universes,
+            readings,
             #[cfg(any(test, feature = "test-support"))]
             _slot: slot,
         };
         Ok((engine, sender))
+    }
+
+    /// What each open device read about itself, for the Health reply. Off the tick.
+    pub fn readings(&self) -> Readings {
+        self.readings.clone()
     }
 
     pub fn universes(&self) -> Universes {

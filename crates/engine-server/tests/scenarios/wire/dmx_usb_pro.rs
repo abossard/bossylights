@@ -373,3 +373,69 @@ fn usb_dmx_refuses_a_rate_above_44() {
         assert_eq!(prepared.map(|_| ()), expected, "{rate:?}");
     }
 }
+
+/// #318 P1c2: an output removed and set again opens a new device; what follows its handoff
+/// counts what the new widget answered, never the old one's. Worked by hand, slots 1 to 50
+/// (ENTTEC API p.3, DMX512): break 20, mark 4, rate 30 wait up to 1 s / 30, 33,333.3 µs,
+/// and end the wire at 344.08 to 2,500.08 µs; break and mark 127 at rate 40 make the frame on
+/// the wire, 2 x 1,355.09 + 513 x 44 = 25,282.18 µs, the longest wait, and the wire 2,798.18
+/// to 4,954.18 µs. A message is 518 bytes x 11 bits at 500,000 baud: 11,396 µs.
+#[test]
+fn an_output_set_again_counts_what_its_new_widget_answered() {
+    use crate::wire_common::{Heard, find_answering};
+    use engine_core::health::{HandoffPart, HandoffSpan};
+
+    let stop = Arc::new(AtomicBool::new(false));
+    // each open of the adapter: a widget that answers the next settings
+    let answers = Arc::new(std::sync::Mutex::new(vec![[127, 127, 40], [20, 4, 30]]));
+    let open: Open = {
+        let (stop, answers) = (Arc::clone(&stop), Arc::clone(&answers));
+        Box::new(move |_| {
+            let next = answers.lock().unwrap().pop();
+            let find = find_answering(Some(Heard::default()), Arc::clone(&stop), next);
+            Ok(Box::new(DmxUsbPro::open(find)?) as Box<dyn Device>)
+        })
+    };
+    let (engine, mut sender) = Engine::start_with(Universes::ONE, open).unwrap();
+    let part = |stage, span| HandoffPart { stage, span };
+    let computed = |low_us, high_us, source| HandoffSpan::Computed {
+        low_us,
+        high_us,
+        source,
+    };
+    let read = |frame_high, wire_low, wire_high| {
+        vec![
+            part("HostToAdapter", HandoffSpan::NotKnown),
+            part("SerialLink", computed(11_396, 11_396, "Baud")),
+            part("AdapterFrame", computed(0, frame_high, "AdapterRead")),
+            part(
+                "DmxWire",
+                computed(wire_low, wire_high, "Dmx512AdapterRead"),
+            ),
+            part("SlotGap", HandoffSpan::NotKnown),
+        ]
+    };
+    let kind = OutputKind::DmxUsbPro {
+        adapter: Adapter::FIRST,
+    };
+    let until = |expected: Vec<HandoffPart>, case| {
+        let started = Instant::now();
+        loop {
+            let parts = engine.readings().after_handoff(Some(kind), Some(1..=50));
+            if parts.parts() == expected {
+                return;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "{case}: {parts:?}"
+            ); // guard
+            thread::sleep(Duration::from_millis(5)); // poll
+        }
+    };
+    assert_eq!(sender.send(set_output(1, None)), Ok(()));
+    until(read(33_334, 344, 2_501), "the first widget");
+    assert_eq!(sender.send(remove(1)), Ok(()));
+    assert_eq!(sender.send(set_output(1, None)), Ok(()));
+    until(read(25_283, 2_798, 4_955), "the new widget");
+    stop.store(true, Ordering::Relaxed);
+}

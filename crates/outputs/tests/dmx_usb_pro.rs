@@ -9,11 +9,11 @@
 
 mod common;
 
-use common::{Fake, NEVER, read_message};
-use outputs::dmx_usb_pro::{DmxUsbPro, FINISH_WITHIN, Find, MESSAGE, never_wait};
+use common::{ASKED, Fake, NEVER, read_message};
+use outputs::dmx_usb_pro::{DmxUsbPro, FINISH_WITHIN, Find, MESSAGE, Settings, never_wait};
 use outputs::{Device, Outcome};
 use serialport::TTYPort;
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
 use std::thread;
@@ -271,6 +271,10 @@ fn a_stop_in_the_middle_of_a_message_finishes_it_and_sends_what_the_driver_holds
         let mut device = DmxUsbPro::open(find).unwrap();
         let lost_with = device.lost_with();
         let mut end = fake.next_end();
+        // The widget answers at once: no ask holds the port thread while its pace is counted.
+        read_ask(&mut end);
+        end.write_all(&answer(9, 1, 40)).unwrap();
+        settings_read(&device);
         let Stuck {
             accepted,
             pace,
@@ -443,4 +447,129 @@ fn a_finish_the_opener_gave_up_on_still_ends_before_the_new_route_is_written() {
     assert_eq!(seen, [Outcome::Failed, Outcome::Accepted]);
     let mut end = fake.next_end();
     assert_eq!(read_message(&mut end)[5], 5);
+}
+
+/// A widget's answer to label 3 (API p.3): firmware 1.44, break, mark after break, rate.
+fn answer(break_steps: u8, mark_steps: u8, rate: u8) -> [u8; 10] {
+    [0x7E, 3, 5, 0, 44, 1, break_steps, mark_steps, rate, 0xE7]
+}
+
+/// Reads the next label 3 request on the test's end.
+fn read_ask(end: &mut TTYPort) {
+    let mut asked = [0; ASKED.len()];
+    end.read_exact(&mut asked).expect("a request");
+    assert_eq!(asked, ASKED, "label 3, no user memory");
+}
+
+/// The settings the device read, once it read some.
+fn settings_read(device: &DmxUsbPro) -> Settings {
+    let reading = device.reading();
+    let started = Instant::now();
+    loop {
+        if let Some(settings) = reading.settings() {
+            return settings;
+        }
+        assert!(started.elapsed() < NEVER, "never read"); // guard
+        thread::sleep(Duration::from_millis(1)); // poll
+    }
+}
+
+/// The Ask table of `docs/design/outputs.md`, on the wire: the widget's answer to each try
+/// the port thread makes, what the device keeps, and that a frame's message comes next:
+/// never a third try. Read and Done ask no more on this port, also after a route finish.
+#[test]
+fn the_port_thread_asks_the_widget_its_settings_at_most_twice_before_its_first_message() {
+    let in_range = Some(answer(20, 4, 30));
+    let garbled = Some([0x7E, 6, 5, 0, 44, 1, 20, 4, 30, 0xE7]);
+    let twenty = Settings::new(20, 4, 30);
+    // (case, the answer to each try, kept)
+    let cases: [(&str, &[Option<[u8; 10]>], _); 6] = [
+        ("answers try 1", &[in_range], twenty),
+        ("ignores try 1, answers try 2", &[None, in_range], twenty),
+        (
+            "out of range, then in range",
+            &[Some(answer(8, 4, 30)), in_range],
+            twenty,
+        ),
+        ("garbled, then in range", &[garbled, in_range], twenty),
+        ("never answers", &[None, None], None),
+        (
+            "out of range twice",
+            &[Some(answer(20, 0, 30)), Some(answer(20, 4, 41))],
+            None,
+        ),
+    ];
+    for (case, answers, kept) in cases {
+        let (find, mut fake) = Fake::new(true);
+        let mut device = DmxUsbPro::open(find).unwrap();
+        let mut end = fake.next_end();
+        for answered in answers {
+            read_ask(&mut end);
+            if let Some(answered) = answered {
+                end.write_all(answered).unwrap();
+            }
+        }
+        if kept.is_some() {
+            assert_eq!(Some(settings_read(&device)), kept, "{case}");
+        }
+        take_when_free(&mut device, &[7; 512]);
+        let mut message = [0; MESSAGE];
+        end.read_exact(&mut message).unwrap();
+        assert_eq!(
+            message[..6],
+            [0x7E, 6, 0x01, 0x02, 0, 7],
+            "{case}: label 6 next"
+        );
+        assert_eq!(device.reading().settings(), kept, "{case}");
+        device.finish_route();
+        take_when_free(&mut device, &[8; 512]);
+        end.read_exact(&mut message).unwrap();
+        let next = [0x7E, 6, 0x01, 0x02, 0, 8];
+        assert_eq!(message[..6], next, "{case}: no ask after a finish");
+        assert_eq!(device.reading().settings(), kept, "{case}, after a finish");
+    }
+}
+
+/// A lost port clears what its widget answered; the port found again is asked again.
+#[test]
+fn a_port_found_again_is_asked_again_and_keeps_nothing_until_it_answers() {
+    let (find, mut fake) = Fake::new(true);
+    let mut device = DmxUsbPro::open(find).unwrap();
+    let mut end = fake.next_end();
+    read_ask(&mut end);
+    end.write_all(&answer(20, 4, 30)).unwrap();
+    assert_eq!(Some(settings_read(&device)), Settings::new(20, 4, 30));
+
+    drop(end); // unplugged
+    let frame = [42; 512];
+    let started = Instant::now();
+    while device.take(&frame) != Outcome::Failed {
+        assert!(started.elapsed() < NEVER, "never lost"); // guard
+        thread::sleep(Duration::from_millis(5)); // poll
+    }
+    let mut end = fake.next_end();
+    read_ask(&mut end);
+    assert_eq!(
+        device.reading().settings(),
+        None,
+        "nothing kept from the lost port"
+    );
+    end.write_all(&answer(127, 127, 0)).unwrap();
+    assert_eq!(Some(settings_read(&device)), Settings::new(127, 127, 0));
+}
+
+/// A dropped device reads nothing.
+#[test]
+fn a_dropped_device_reads_nothing() {
+    let (find, mut fake) = Fake::new(true);
+    let device = DmxUsbPro::open(find).unwrap();
+    let mut end = fake.next_end();
+    read_ask(&mut end);
+    end.write_all(&answer(20, 4, 30)).unwrap();
+    let reading = device.reading();
+    assert_eq!(Some(settings_read(&device)), Settings::new(20, 4, 30));
+    assert!(reading.is_open());
+    drop(device);
+    assert!(!reading.is_open());
+    assert_eq!(reading.settings(), None);
 }

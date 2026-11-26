@@ -8,7 +8,7 @@ use futures_util::{SinkExt, Stream, StreamExt};
 use outputs::dmx_usb_pro::{DmxUsbPro, Find, MESSAGE, never_wait};
 use serde_json::Value;
 use serialport::{SerialPort, TTYPort};
-use std::io::Read;
+use std::io::{Read, Write};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -24,9 +24,14 @@ pub type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 /// Every complete message the fake adapter got, in order: its 512 channels.
 pub type Heard = Arc<Mutex<Vec<[u8; 512]>>>;
 
+/// Label 3, "get widget parameters", no user memory (API p.3), as the port thread asks it
+/// at each new port.
+const ASKED: [u8; 7] = [0x7E, 3, 2, 0, 0, 0, 0xE7];
+
 /// Reads the test's end of the fake port and keeps the channels of every full message.
-/// With no `heard`, nobody reads it: the port fills up and stays full.
-fn listen(mut end: TTYPort, heard: Option<Heard>, stop: Arc<AtomicBool>) {
+/// With no `heard`, nobody reads it: the port fills up and stays full. A widget that
+/// `answers` break, mark and rate answers each label 3 request with them.
+fn listen(mut end: TTYPort, heard: Option<Heard>, stop: Arc<AtomicBool>, answers: Option<[u8; 3]>) {
     let mut bytes = Vec::new();
     let mut chunk = [0; MESSAGE];
     while !stop.load(Ordering::Relaxed) {
@@ -40,6 +45,15 @@ fn listen(mut end: TTYPort, heard: Option<Heard>, stop: Arc<AtomicBool>) {
         // a message: 0x7E, label 6, length 513, start code 0, 512 channels, 0xE7
         while let Some(start) = bytes.iter().position(|b| *b == 0x7E) {
             bytes.drain(..start);
+            if bytes.starts_with(&ASKED) {
+                if let Some([break_steps, mark_steps, rate]) = answers {
+                    // firmware 1.44, then the settings (API p.3)
+                    let answer = [0x7E, 3, 5, 0, 44, 1, break_steps, mark_steps, rate, 0xE7];
+                    end.write_all(&answer).unwrap();
+                }
+                bytes.drain(..ASKED.len());
+                continue;
+            }
             if bytes.len() < MESSAGE {
                 break;
             }
@@ -60,13 +74,22 @@ fn listen(mut end: TTYPort, heard: Option<Heard>, stop: Arc<AtomicBool>) {
 /// nobody reads. Its first pseudo terminal is made now: the system makes them one at a
 /// time, and under load that takes seconds, which no API answer may wait for.
 pub fn find(heard: Option<Heard>, stop: Arc<AtomicBool>) -> Find {
+    find_answering(heard, stop, None)
+}
+
+/// [`find`], for a widget that `answers` label 3 with this break, mark and rate.
+pub fn find_answering(
+    heard: Option<Heard>,
+    stop: Arc<AtomicBool>,
+    answers: Option<[u8; 3]>,
+) -> Find {
     let mut first = Some(TTYPort::pair());
     Box::new(move || {
         let (mut end, port) = first.take().unwrap_or_else(TTYPort::pair)?;
         never_wait(&port)?;
         end.set_timeout(Duration::from_millis(20))?;
         let (heard, stop) = (heard.clone(), Arc::clone(&stop));
-        thread::spawn(move || listen(end, heard, stop));
+        thread::spawn(move || listen(end, heard, stop, answers));
         Ok(port)
     })
 }

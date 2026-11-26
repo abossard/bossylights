@@ -18,6 +18,7 @@ use engine::{
     Universes, Wakes,
 };
 use futures_util::StreamExt;
+use outputs::Reading;
 use outputs::dmx_usb_pro::DmxUsbPro;
 use serde_json::{Value, json};
 use std::net::SocketAddr;
@@ -53,6 +54,12 @@ struct Flaky {
 }
 
 impl Device for Flaky {
+    fn reading(&self) -> Reading {
+        self.port
+            .as_ref()
+            .map_or_else(Reading::default, Device::reading)
+    }
+
     fn take(&mut self, frame: &[u8]) -> Outcome {
         let fails = self.devices.fail.load(Ordering::SeqCst)
             || self.devices.fail_only.load(Ordering::SeqCst) == self.slot + 1;
@@ -71,13 +78,20 @@ impl Device for Flaky {
     }
 }
 
-fn open(heard: Heard, stop: Arc<AtomicBool>, devices: Arc<Devices>) -> Open {
+/// Adapter 1's widget `answers` label 3 with this break, mark and rate, or never.
+fn open(
+    heard: Heard,
+    stop: Arc<AtomicBool>,
+    devices: Arc<Devices>,
+    answers: Option<[u8; 3]>,
+) -> Open {
     Box::new(move |kind| {
         let OutputKind::DmxUsbPro { adapter } = kind else {
             return outputs::open(kind);
         };
+        let find = || common::find_answering(Some(heard.clone()), Arc::clone(&stop), answers);
         let port = (adapter == Adapter::FIRST)
-            .then(|| DmxUsbPro::open(common::find(Some(heard.clone()), Arc::clone(&stop))))
+            .then(|| DmxUsbPro::open(find()))
             .transpose()?;
         Ok(Box::new(Flaky {
             port,
@@ -110,11 +124,20 @@ const NOTHING_PATCHED: &str = "Dmx512AdapterDefaultNothingPatched";
 /// light's slot n ends at 96.03 + 10.67 + (n + 1) x 44 µs (DMX512, ENTTEC API p.3):
 /// slot 1 at 194.7, slot 50 at 2,350.7, slot 102 at 4,638.7, slot 512 at 22,678.7.
 fn usb_after_handoff(wire_low: u32, wire_high: u32, wire: &str) -> Value {
+    usb_parts((25_000, "AdapterDefault"), (wire_low, wire_high, wire))
+}
+
+/// The parts of a DMX USB Pro: the wait for the widget's frame (its high end, source) and
+/// the DMX wire (low, high, source).
+fn usb_parts(
+    (frame_high, frame): (u32, &str),
+    (wire_low, wire_high, wire): (u32, u32, &str),
+) -> Value {
     let computed = |low: u32, high: u32, source| json!({"Computed": {"low_us": low, "high_us": high, "source": source}});
     json!([
         {"stage": "HostToAdapter", "span": "NotKnown"},
         {"stage": "SerialLink", "span": computed(11_396, 11_396, "Baud")},
-        {"stage": "AdapterFrame", "span": computed(0, 25_000, "AdapterDefault")},
+        {"stage": "AdapterFrame", "span": computed(0, frame_high, frame)},
         {"stage": "DmxWire", "span": computed(wire_low, wire_high, wire)},
         {"stage": "SlotGap", "span": "NotKnown"},
     ])
@@ -260,12 +283,22 @@ struct Rig {
 impl Rig {
     /// Held before its first wake; the watcher subscribed. Its first `Picture`.
     async fn start() -> (Self, Value) {
+        Self::start_answering(None).await
+    }
+
+    /// [`Rig::start`], adapter 1's widget answering label 3 with `answers`.
+    async fn start_answering(answers: Option<[u8; 3]>) -> (Self, Value) {
         let heard = Heard::default();
         let stop = Arc::new(AtomicBool::new(false));
         let devices = Arc::new(Devices::default());
         let (engine, sender, wakes) = Engine::start_stepped(
             Universes::new(1).unwrap(),
-            open(Arc::clone(&heard), Arc::clone(&stop), Arc::clone(&devices)),
+            open(
+                Arc::clone(&heard),
+                Arc::clone(&stop),
+                Arc::clone(&devices),
+                answers,
+            ),
         )
         .unwrap();
         let address = serve(engine, sender, None).await;
@@ -574,6 +607,59 @@ async fn a_row_names_what_follows_its_handoff_for_its_kind_and_patched_slots() {
         rows[1]["after_handoff"],
         json!([{"stage": "NetworkAndController", "span": "NotKnown"}])
     );
+    rig.stop().await;
+}
+
+/// #318 P1c2: a widget that answers label 3 with break 20, mark 4 and rate 30 has its own
+/// numbers in its row, worked by hand: a frame every 1 s / 30, 33,333.3 µs; slot n ends at
+/// 20 x 10.67 + 4 x 10.67 + (n + 1) x 44 µs: slot 1 at 344.08, slot 50 at 2,500.08. The
+/// press is on the wire as with a widget that never answers.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_widget_that_answers_has_its_own_break_mark_and_rate_in_its_row() {
+    let (mut rig, _) = Rig::start_answering(Some([20, 4, 30])).await;
+    for (fixture, address) in [(1, 1), (2, 48)] {
+        let strip = json!({"PatchStrip": {"name": "Pixel", "pixels": 1, "color": "Rgb",
+            "at": {"universe": 1, "address": address}}});
+        let patched = json!({"Patched": {"fixture": fixture}});
+        assert_eq!(command(&mut rig.desk, strip).await, patched);
+    }
+    rig.attach(1).await;
+    let red = json!({"SetColour": {"target": {"Fixture": {"fixture": 1}},
+        "red": 65535, "green": 0, "blue": 0}});
+    let reply = command(&mut rig.desk, red).await;
+    assert!(reply.get("Grabbed").is_some(), "{reply}");
+    rig.step(ON_TIME).await;
+    assert_eq!(rig.wire().last(), Some(&255), "the press on the wire");
+    let read = usb_parts((33_334, "AdapterRead"), (344, 2_501, "Dmx512AdapterRead"));
+    let started = Instant::now();
+    loop {
+        let picture = rig.watcher.query().await;
+        let after_handoff = &picture["Picture"]["health"]["outputs"][0]["after_handoff"];
+        if *after_handoff == read {
+            break;
+        }
+        assert!(started.elapsed() < GIVE_UP, "never read: {after_handoff}"); // guard
+        rig.step(ON_TIME).await;
+    }
+
+    // A second output opens a device of another kind: the widget's row keeps its reading.
+    let udp = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    let ddp = json!({"SetOutput": {"output": 2,
+        "kind": {"Ddp": {"address": udp.local_addr().unwrap().to_string(), "color": "Rgb"}},
+        "universes": {"first": 1, "count": 1}, "rate": "30"}});
+    assert_eq!(command(&mut rig.desk, ddp).await, json!("Accepted"));
+    // output 2's hand-overs: kept, never drained, its device is no fake adapter
+    rig.handed.push(vec![]);
+    let started = Instant::now();
+    let rows = loop {
+        assert!(started.elapsed() < GIVE_UP, "no row for the DDP output"); // guard
+        rig.step(ON_TIME).await;
+        let rows = rig.watcher.query().await["Picture"]["health"]["outputs"].clone();
+        if !rows[1].is_null() {
+            break rows;
+        }
+    };
+    assert_eq!(rows[0]["after_handoff"], read);
     rig.stop().await;
 }
 

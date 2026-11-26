@@ -1,8 +1,10 @@
 //! The reader turns cumulative engine snapshots into health rows and a bounded event log.
 //! Only the view travels with a picture. The sampling history stays with this reader.
 
-use engine_core::health::{AfterHandoff, HealthSample, Timed, Tracker, WINDOW_DURATION};
-use engine_core::{MAX_OUTPUTS, OutputNumber, Status};
+use engine::Readings;
+use engine_core::health::{HealthSample, Timed, Tracker, WINDOW_DURATION};
+use engine_core::{MAX_OUTPUTS, OutputKind, OutputNumber, Status};
+use std::ops::RangeInclusive;
 use std::time::Duration;
 use wire::{Health, OutputHealth, OutputHealthEvent, OutputHealthState, OutputRow};
 
@@ -16,7 +18,8 @@ pub(super) struct Reader {
 }
 
 impl Reader {
-    pub(super) fn new() -> Self {
+    /// Its views count what each open device read about itself (`readings`).
+    pub(super) fn new(readings: Readings) -> Self {
         let outputs = (1..)
             .take(MAX_OUTPUTS)
             .filter_map(|n| OutputNumber::try_from(n).ok())
@@ -26,7 +29,10 @@ impl Reader {
             outputs,
             sample: Box::new(HealthSample::new(Duration::ZERO, 0, Status::NotFound)),
             events_at_read: Vec::with_capacity(3 * MAX_OUTPUTS),
-            view: View::default(),
+            view: View {
+                readings,
+                ..View::default()
+            },
         }
     }
 
@@ -105,6 +111,8 @@ pub(super) struct View {
     count: usize,
     revision: u64,
     log: Log,
+    /// What each open device read about itself: read when the rows are sent.
+    readings: Readings,
 }
 
 impl View {
@@ -113,16 +121,20 @@ impl View {
         self.rows.as_ref().map_or(&[], |rows| &rows[..self.count])
     }
 
-    /// The rows as the API sends them: each with what follows its output's handoff.
+    /// The rows as the API sends them: each with what follows its output's handoff, for
+    /// the output's kind over its patched channels (`output`), with what its device read.
     pub(super) fn rows(
         &self,
-        after_handoff: impl Fn(OutputNumber) -> AfterHandoff,
+        output: impl Fn(OutputNumber) -> (Option<OutputKind>, Option<RangeInclusive<u32>>),
     ) -> Vec<OutputRow> {
         self.measured()
             .iter()
-            .map(|&health| OutputRow {
-                health,
-                after_handoff: after_handoff(health.output),
+            .map(|&health| {
+                let (kind, patched) = output(health.output);
+                OutputRow {
+                    health,
+                    after_handoff: self.readings.after_handoff(kind, patched),
+                }
             })
             .collect()
     }
@@ -166,6 +178,7 @@ impl Log {
 #[cfg(test)]
 mod tests {
     use super::Reader;
+    use engine::Readings;
     use engine_core::health::HealthSample;
     use engine_core::{OutputNumber, Status};
     use std::time::Duration;
@@ -229,7 +242,7 @@ mod tests {
     #[test]
     fn a_crossed_endpoint_uses_the_last_read_before_it() {
         for (offset_ms, expected_end, expected_frames) in [(0, 4_500, 320), (10, 4_500, 288)] {
-            let mut reader = Reader::new();
+            let mut reader = Reader::new(Readings::default());
             // Quadratic counts distinguish a read on either side of each endpoint.
             for i in 0..=18 {
                 observe(&mut reader, Some(&sample(i * 250 + offset_ms, i * i)));
@@ -244,7 +257,7 @@ mod tests {
 
     #[test]
     fn a_repeat_replaces_the_sample_and_keeps_the_verdict_for_four_seconds_later() {
-        let mut reader = Reader::new();
+        let mut reader = Reader::new(Readings::default());
         for i in 0..=16 {
             observe(&mut reader, Some(&sample(i * 250, i * 2)));
         }
@@ -287,7 +300,7 @@ mod tests {
     fn unavailable_status_resets_timing_even_on_a_second_read_of_the_endpoint() {
         let lost = Status::Reconnecting { failures: 1 };
         for (ms, status) in [(4_000, lost), (4_010, lost), (4_000, Status::NotFound)] {
-            let mut reader = Reader::new();
+            let mut reader = Reader::new(Readings::default());
             for i in 0..=16 {
                 let mut clean = sample(i * 250, i * 2);
                 clean.lateness.swap(0, 20);
@@ -328,7 +341,7 @@ mod tests {
                 vec![HealthEvent::OutputLost],
             ),
         ] {
-            let mut reader = Reader::new();
+            let mut reader = Reader::new(Readings::default());
             for i in 0..=31 {
                 observe(&mut reader, Some(&sample(i * 250, i * 2)));
             }
@@ -366,7 +379,7 @@ mod tests {
                 vec![event(8_000, back), event(8_000, late)],
             ),
         ] {
-            let mut reader = Reader::new();
+            let mut reader = Reader::new(Readings::default());
             for i in 0..=31 {
                 observe(&mut reader, Some(&sample(i * 250, i * 2)));
             }
@@ -397,7 +410,7 @@ mod tests {
                 OutputHealthState::Measuring,
             ),
         ] {
-            let mut reader = Reader::new();
+            let mut reader = Reader::new(Readings::default());
             for i in 0..=32 {
                 let mut read = sample(i * 250, i * 2);
                 if i == 16 {
@@ -449,7 +462,7 @@ mod tests {
                 .map(|i| i * 250)
                 .chain(at_4s.iter().copied())
                 .chain((17..=32).map(|i| i * 250));
-            let mut reader = Reader::new();
+            let mut reader = Reader::new(Readings::default());
             for (index, ms) in times.enumerate() {
                 let mut read = sample(ms, ms / 125);
                 read.outages = u64::from(lost_from.is_some_and(|from| index >= from));
@@ -469,7 +482,7 @@ mod tests {
             (true, 4_000, reconnecting),
             (true, 4_000, Status::Running),
         ] {
-            let mut reader = Reader::new();
+            let mut reader = Reader::new(Readings::default());
             for i in 0..16 {
                 observe(&mut reader, Some(&sample(i * 250, i * 2)));
             }
@@ -515,7 +528,7 @@ mod tests {
     #[test]
     fn a_reader_gap_needs_four_seconds_of_new_grid_samples_for_a_window() {
         for (gap_at, first_window) in [(4_500, 8_500), (4_510, 9_000)] {
-            let mut reader = Reader::new();
+            let mut reader = Reader::new(Readings::default());
             for ms in (0..=4_000).step_by(250) {
                 observe(&mut reader, Some(&sample(ms, ms / 25)));
             }
@@ -556,7 +569,7 @@ mod tests {
             (Status::Running, 0, 0, vec![]),
             (down, 1, 1, vec![]),
         ] {
-            let mut reader = Reader::new();
+            let mut reader = Reader::new(Readings::default());
             let mut before = sample(0, 2);
             before.status = was;
             before.outages = u64::from(was == down);
@@ -584,7 +597,7 @@ mod tests {
 
     #[test]
     fn replacement_and_removal_end_the_old_generation_without_an_event() {
-        let mut reader = Reader::new();
+        let mut reader = Reader::new(Readings::default());
         for i in 0..=32 {
             observe(&mut reader, Some(&sample(i * 250, i * 2)));
         }
@@ -630,7 +643,7 @@ mod tests {
 
     #[test]
     fn every_event_of_a_partly_filled_log_is_delivered_in_order() {
-        let mut reader = Reader::new();
+        let mut reader = Reader::new(Readings::default());
         observe(&mut reader, Some(&sample(0, 0)));
         let mut expected = Vec::new();
         for ms in 1_u64..=63 {
@@ -660,6 +673,7 @@ mod tests {
     fn the_largest_health_reply_fits_in_28_kib() {
         use engine_core::health::{AfterHandoff, HandoffPart, HandoffSpan};
         use engine_core::{Adapter, Color, MAX_OUTPUTS, OutputKind};
+        use outputs::dmx_usb_pro::Settings;
         use std::net::{Ipv4Addr, SocketAddrV4};
         use wire::{Health, LatenessWindow, OutputRow, PressWindow, Reply};
 
@@ -671,10 +685,16 @@ mod tests {
             address: SocketAddrV4::new(Ipv4Addr::LOCALHOST, 4048),
             color: Color::Rgb,
         };
+        // Each kind, nothing patched and every slot, with nothing read and with each kind of
+        // answer a widget gives.
+        let read = [None, Settings::new(9, 1, 40), Settings::new(9, 1, 0)];
         let named: Vec<HandoffPart> = [Some(usb), Some(ddp), None]
             .into_iter()
             .flat_map(|kind| [(kind, None), (kind, Some(1..=512))])
-            .flat_map(|(kind, patched)| engine::after_handoff(kind, patched).parts().to_vec())
+            .flat_map(|(kind, patched)| read.map(|read| (kind, patched.clone(), read)))
+            .flat_map(|(kind, patched, read)| {
+                outputs::after_handoff(kind, patched, read).parts().to_vec()
+            })
             .collect();
         let stage = named.iter().map(|part| part.stage);
         let source = named.iter().filter_map(|part| match part.span {
@@ -740,7 +760,7 @@ mod tests {
 
     #[test]
     fn cursors_count_overwritten_events_and_keep_the_newest_64_in_order() {
-        let mut reader = Reader::new();
+        let mut reader = Reader::new(Readings::default());
         observe(&mut reader, Some(&sample(0, 0)));
         let mut expected = Vec::new();
         for ms in 1..=40 {
