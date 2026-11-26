@@ -1,0 +1,47 @@
+name: Mutants of a diff
+run-name: mutants ${{ inputs.commit }}
+
+# The mutants of one slice's diff on GitHub's machine, so the Mac runs none (#340). `npm run verify -- <sha> --mutants`
+# starts it with main's version of this file and reads the artifact: mutants.out and the exit code of cargo-mutants.
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: the pushed commit to mutate
+        required: true
+      base:
+        description: the diff is base..commit
+        required: true
+
+jobs:
+  mutants:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.commit }}
+          fetch-depth: 0
+      - run: rustup toolchain install  # the pin in rust-toolchain.toml
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants
+      - name: Mutants of base..commit
+        # The checkout is thrown away, so mutate it in place with the cached build.
+        # A mutant can make a test allocate without end. The cap kills that test, not the runner (#272).
+        env:
+          BASE: ${{ inputs.base }}
+          COMMIT: ${{ inputs.commit }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/out"
+          git diff "$BASE" "$COMMIT" > "$RUNNER_TEMP/slice.diff"
+          set +e
+          sudo env "PATH=$PATH" "HOME=$HOME" "CARGO_INCREMENTAL=$CARGO_INCREMENTAL" \
+            systemd-run --scope --quiet --uid="$(id -u)" --gid="$(id -g)" \
+            -p MemoryMax=12G -p MemorySwapMax=0 -p OOMPolicy=continue \
+            cargo mutants --no-shuffle --in-place --in-diff "$RUNNER_TEMP/slice.diff" --output "$RUNNER_TEMP/out"
+          echo $? > "$RUNNER_TEMP/out/exit"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mutants
+          path: ${{ runner.temp }}/out
