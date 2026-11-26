@@ -106,6 +106,16 @@ export function ciAfterPush(run, sha) {
   };
 }
 
+/**
+ * The step that moves the checkout land runs from onto the landed commit, so the next land runs these scripts as main
+ * has them, or why it stays. hereBranch: its branch, or null when detached. git refuses the step when local changes
+ * are in the way; the checkout then stays as it is.
+ */
+export function checkoutStep({ here, hereBranch, landed }) {
+  if (hereBranch === "main") return { step: ["-C", here, "merge", "--ff-only", "-q", landed], stays: null };
+  return { step: null, stays: `${here} is on ${hereBranch ?? "no branch"}, not main: it stays where it is` };
+}
+
 /** What a refused push of main says: a moved main is the usual reason, anything else in full. */
 export function pushFailure(stderr) {
   return /\[rejected\]|non-fast-forward|fetch first/.test(stderr) ? `main moved, run land again\n${stderr.trim()}` : stderr.trim();

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ciAfterPush, ciRefusal, cleanupSteps, namesIncident, parseArgs, pushFailure, recordRefusal, refusal, worktreeOf } from "./land.mjs";
+import { checkoutStep, ciAfterPush, ciRefusal, cleanupSteps, namesIncident, parseArgs, pushFailure, recordRefusal, refusal, worktreeOf } from "./land.mjs";
 
 // [argv, parsed or null]
 const argCases = [
@@ -186,5 +186,21 @@ for (const [name, differs, said] of afterPushCases) {
     if (!said) return assert.equal(ci, null);
     assert.equal(ci.green, said[0]);
     assert.match(ci.text, said[1]);
+  });
+}
+
+// [name, this checkout's branch, the step that moves it or null, why it stays or null]
+const checkoutCases = [
+  ["on main: fast-forward onto the landed commit", "main", ["-C", "/p/bossylights", "merge", "--ff-only", "-q", landed], null],
+  ["on a branch whose name starts with main: it stays", "main-old", null, /is on main-old, not main/],
+  ["on another branch: it stays", "wip/y", null, /\/p\/bossylights is on wip\/y, not main: it stays where it is/],
+  ["detached: it stays", null, null, /is on no branch, not main/],
+];
+for (const [name, hereBranch, step, stays] of checkoutCases) {
+  test(`land checkout: ${name}`, () => {
+    const moved = checkoutStep({ here: "/p/bossylights", hereBranch, landed });
+    assert.deepEqual(moved.step, step);
+    if (stays) assert.match(moved.stays, stays);
+    else assert.equal(moved.stays, null);
   });
 }

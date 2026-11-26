@@ -50,9 +50,9 @@ flowchart LR
 | 2 | Set up | own worktree on `wip/<ticket>`, `npm install`. Never write in the main checkout |
 | 3 | Plan | a ticket that changes behaviour or a module edge: `crew/plans/<ticket>.md` (files, order, state machine rows, expected answers from outside the code, how `npm test` stays green). Real-time core: mail the planner, wait for its answer. Others: one Opus explain-back against `docs/design/theory.md`. Test, CI and doc fixes skip this |
 | 4 | Build | red tests first. Every feature has an end-to-end test that checks DMX output |
-| 5 | Check | `npm test` green, commit, push the branch. `npm run verify -- <sha> --mutants`: every missed mutant is killed or explained. Then one `checker` pass with planted breaks, report to `crew/reports/<ticket>-check.md` |
+| 5 | Check | the tests of what you changed green, commit, push the branch. `npm run verify -- <sha> --mutants` in your worktree: every missed mutant is killed, or pinned where it lives with why (`#[mutants::skip]`, `.cargo/mutants.toml`). A missed one blocks the landing. Then one `checker` pass with planted breaks, report to `crew/reports/<ticket>-check.md` |
 | 6 | Fix | at most two fix rounds. A third finding of the same kind: stop, mail the lead. It becomes one rule or a question to the owner |
-| 7 | Land | from the main checkout, because land refuses inside the branch's own worktree: `npm run land -- wip/<ticket> <message-file>`. One commit on `main`, the worktree goes with it |
+| 7 | Land | from the main checkout, because land refuses inside the branch's own worktree: `npm run land -- wip/<ticket> <message-file>`, `--last` on the last slice. One commit on `main`. Run it in the background: it waits for CI on `main` (6 to 16 minutes), longer than one tool call may run |
 | 8 | Issue | tick the boxes, post the evidence (table: what ran, numbers, checker verdict, what was not checked), close it |
 | 9 | Report | mail the lead, `tuios set-agent-state done -m '<ticket>: landed <sha>'`, stop |
 
@@ -65,7 +65,7 @@ flowchart LR
 | What `npm run verify` and `npm run land` do | |
 |---|---|
 | `verify -- <sha> [--mutants]` | in your own worktree, clean and at the commit: what the change can reach. Changed crates and the crates that depend on them (clippy, tests), `test:checks` always, the UI, e2e and catalog suites when `ui/`, `e2e/`, `shell` or `wire` is reached. Everything when `Cargo.*`, the toolchain, `.cargo/`, `scripts/`, `package*.json`, `.github/` or a file no rule names changed. It prints what it left to CI. Mutants on what the branch adds since it left `origin/main` (missed lines listed). All suites green and no mutant missed: it records the commit's tree in the shared git folder. Any other run removes that tree's record |
-| `land -- wip/<ticket> <message-file> [--last]` | squashes the branch onto `origin/main` and lands it only when that tree has a record: no check again. Another tree (main moved): merge `origin/main`, push, verify again. Then pushes and moves the branch and its worktree onto the landed commit, build kept, for the next slice. `--last` (the ticket's last slice) removes them. Last it waits for CI on `main` for its commit and says green or red. Red: open a `CI red on main:` issue, then fix forward or revert, each a landing that names it. Refuses while CI on `main` is running, missing or cancelled. A red run is passed only when the message names the open `CI red on main:` issue |
+| `land -- wip/<ticket> <message-file> [--last]` | squashes the branch onto `origin/main` and lands it only when that tree has a record: no check again. Another tree (main moved): merge `origin/main`, push, verify again. Then pushes and moves the branch and its worktree onto the landed commit, build kept, for the next slice, and deletes origin's branch (the next push makes it again). It moves the checkout it runs from onto the landed commit when that is on `main`; when git refuses (local changes in the way), land exits 1 and says how to move it. `--last` (the ticket's last slice) removes branch and worktree. Last it waits for CI on `main` for its commit and says green or red. Red: open a `CI red on main:` issue, then fix forward or revert, each a landing that names it. Refuses while CI on `main` is running, missing or cancelled. A red run is passed only when the message names the open `CI red on main:` issue |
 
 ## Mail
 
@@ -147,8 +147,8 @@ At the end of a road step the planner reviews the repository fresh, without the 
 |---|---|
 | A worker waited on a run that had already ended | check the process and its expected end, not only a notification |
 | A frame-rate assertion failed on a CI runner | CI judges what is sent, a real machine judges timing. No test asserts a time under one second (`scripts/check-timing.mjs`) |
-| Waiting for CI slows every ticket | nobody waits for CI while building: `npm test` is what CI runs. Only `npm run land` checks CI on `main` |
-| Local checks passed while CI was red | one command: CI runs `npm test`, the Rust version is pinned in `rust-toolchain.toml` |
+| Waiting for CI slows every ticket | nobody waits for CI while building: `verify` checks what the change reaches. Only `npm run land` waits for CI on `main` |
+| Local checks passed while CI was red | CI on `main` runs `npm test`, everything; `verify` checks what the change reaches and names what it leaves to CI. The Rust version is pinned in `rust-toolchain.toml` |
 | A serial link looked on time and was minutes behind | count what the device accepted |
 | A capture of a hidden window was blank | a hidden web view does not draw. Say what was not seen |
 | Workers ended with a chat answer, nobody heard | the ticket ends with tuios mail to the lead |

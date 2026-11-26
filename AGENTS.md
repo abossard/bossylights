@@ -10,8 +10,8 @@ Rust engine, web UI in a Tauri shell, Apache-2.0. Where the project stands: the 
 | Install | `npm install` |
 | Run (desktop app, dev) | `npm run dev` |
 | Test and check everything (lints, layers, generated types, tests, scorecard). CI runs the same | `npm test` |
-| The same on one commit, in a clean copy | `npm run verify -- <commit>` |
-| Land a reviewed `wip/` branch on `main` | `npm run land -- wip/<ticket> <message-file>` |
+| Check what a commit can reach, in your own clean worktree, and record it for `land`. Names what it leaves to CI | `npm run verify -- <commit> --mutants` |
+| Land a reviewed `wip/` branch on `main` (`--last` on a ticket's last slice) | `npm run land -- wip/<ticket> <message-file> [--last]` |
 | Scorecard with timings / mutation score | `npm run scorecard` / `npm run mutants` (needs `cargo-mutants`) |
 | What each test reaches and kills, which tests overlap (`docs/testing.md`) | `npm run test-reach -- rust\|node\|kills <crate>\|report` |
 | Build | `npm run build` |
@@ -76,8 +76,8 @@ The owner has ADHD and is a visual learner. This applies to every output: docs, 
 | Rule | How |
 |---|---|
 | One ticket, one branch | `wip/<ticket>` in its own worktree, folder named like the branch: `git worktree add -b wip/<ticket> ../wip-<ticket> origin/main`. Push the branch, never `main` |
-| Lands as one commit | after the clean-copy check and the Opus review: `npm run land -- wip/<ticket> <message-file>` squashes it onto `main`, checks that commit again, pushes it, removes the branch and its worktree. Same day |
-| `main` stays green | `land` waits for a finished green CI run on `main`. Only a red run can be passed, by naming the open `CI red on main:` issue in the message. Never force-push or rewrite `main` |
+| Lands as one commit | after `npm run verify -- <sha> --mutants` passed and the Opus review: `npm run land -- wip/<ticket> <message-file>` lands that same tree with no second check. Main moved: merge `origin/main`, push, verify again. The worktree stays, moved onto `main`, build kept; `--last` removes it. Same day |
+| `main` stays green | CI on `main` is the full check. `land` starts only on a finished green run, or a red one when the message names the open `CI red on main:` issue, and waits for the run of its own commit. Red: open a `CI red on main:` issue, then fix forward or revert, each a landing that names it. Never force-push or rewrite `main` |
 | Plan before code | a ticket that changes behaviour or a module edge starts with an Opus explain-back of the plan against the theory (`docs/design/theory.md`). Test, CI and doc fixes skip it |
 | State machines first | written in the design doc before code. The tests walk every row |
 | Expected answers from outside the code | charts, QLC+, hand-worked tables, saved real output |

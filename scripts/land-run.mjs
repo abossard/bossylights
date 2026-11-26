@@ -1,12 +1,13 @@
-// `npm run land -- <wip/branch> <message-file>`: a reviewed WIP branch becomes one commit on main.
+// `npm run land -- <wip/branch> <message-file> [--last]`: a reviewed WIP branch becomes one commit on main.
 // Reads every fact first (land.mjs decides), then writes: squash onto origin/main without a working tree
 // (merge-tree, commit-tree), a plain push (a moved main refuses it), then the branch and its worktree move onto
-// the landed commit, build kept (`--last`: they go). Last it waits for CI on main for its commit: green or red.
+// the landed commit, build kept (`--last`: they go), and this checkout moves onto it when it is on main.
+// Last it waits for CI on main for its commit: green or red.
 // It runs no check: it lands only a tree that `npm run verify --mutants` passed and recorded.
 // Nothing in any checkout is touched before the push.
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { ciAfterPush, cleanupSteps, parseArgs, pushFailure, refusal, worktreeOf } from "./land.mjs";
+import { checkoutStep, ciAfterPush, cleanupSteps, parseArgs, pushFailure, refusal, worktreeOf } from "./land.mjs";
 import { recordPath } from "./verify.mjs";
 
 const run = (command, args) => spawnSync(command, args, { encoding: "utf8", maxBuffer: 1 << 26 });
@@ -78,6 +79,15 @@ try {
   for (const line of kept) console.error(`land: ${line}`);
   if (kept.length === 0) console.log(`land: ${after.done}`);
   else process.exitCode = 1;
+  const hereBranch = run("git", ["symbolic-ref", "--short", "-q", "HEAD"]).stdout.trim() || null;
+  const moved = checkoutStep({ here: facts.here, hereBranch, landed: sha });
+  const step = moved.step && run("git", moved.step);
+  if (!moved.step) console.log(`land: ${moved.stays}`);
+  else if (step.status === 0) console.log(`land: ${facts.here} is on ${sha.slice(0, 7)}: the next land runs these scripts`);
+  else {
+    console.error(`land: ${facts.here} stays where it is: ${failure("git", moved.step, step)}\nmove it before the next land: git -C ${facts.here} merge --ff-only origin/main`);
+    process.exitCode = 1;
+  }
 
   console.log(`land: waiting for CI on main for ${sha.slice(0, 7)}`);
   const pause = new Int32Array(new SharedArrayBuffer(4));
