@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { test } from "node:test";
@@ -214,6 +214,34 @@ test("the load tables say what the press to frame leaves out, and are not measur
   assert.match(loadTables([]), /## Press to frame and load\n\nNot measured on CI/);
 });
 
+/** One window of a `delay_agreement` run: statistics in µs, p50, p95, worst. */
+const agreed = (reported, outside, presses = 34, left = 400) => ({ end_ms: 8000, presses, probes: 300, left_out_us: left, reported_us: reported, outside_us: outside });
+const agreementRun = {
+  outputs: [
+    { output: 1, frames_per_second: 44, windows: [agreed([11_000, 21_000, 22_200], [11_100, 21_200, 22_300]), agreed([12_000, 22_000, 23_000], [12_100, 22_100, 23_100], 33)] },
+    { output: 2, frames_per_second: 60, windows: [agreed([8_000, 16_000, 17_000], [8_100, 16_100, 17_100], 35, 200)] },
+    { output: 3, frames_per_second: 44, windows: [agreed([10_000, 20_000, 22_900], [10_300, 20_300, 23_000], 36, 600)] },
+  ],
+};
+
+// [rate, the row: windows of every output at that rate, the fewest presses, and the window with the highest reported worst]
+for (const [hz, row] of [
+  [44, "| idle | 44 | 3 | 33 | 12.0 / 12.1 | 22.0 / 22.1 | 23.0 / 23.1 | 0.4 |"],
+  [60, "| idle | 60 | 1 | 35 | 8.0 / 8.1 | 16.0 / 16.1 | 17.0 / 17.1 | 0.2 |"],
+]) {
+  test(`the delay table shows each load at ${hz} a second by its window with the highest reported worst`, async () => {
+    const { agreementTable } = await import("./scorecard.mjs");
+    const table = agreementTable([["idle", agreementRun]]);
+    assert.ok(table.split("\n").includes(row), table);
+    assert.ok(table.split("\n").includes("| Load | Hz | Windows | Fewest presses in a window | Median reported / outside (ms) | p95 reported / outside (ms) | Worst reported / outside (ms) | Left out (ms) |"), table);
+  });
+}
+
+test("the delay table is not measured on CI", async () => {
+  const { agreementTable } = await import("./scorecard.mjs");
+  assert.match(agreementTable([]), /## Delay, reported and from outside\n\nNot measured on CI/);
+});
+
 // [what is wrong with the run, the error]
 const brokenLoads = [
   [{ workload: "show" }, /expected workload idle/],
@@ -257,14 +285,20 @@ test("a burst row requires complete batches of raw channel sends and plan swaps"
   }
 });
 
-test("the scorecard command prints the normal show, the biggest show, the burst and the load at full load, the example rig and idle, and fails only on an incomplete measurement", (t) => {
+test("the scorecard command prints the normal show, the biggest show, the burst, and the load and the delay check at full load, the example rig and idle, and fails only on an incomplete measurement or a delay that disagrees", (t) => {
   const dir = mkdtempSync(join(tmpdir(), "scorecard-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   // Feed the command recorded numbers in place of starting a real-time measurement on CI.
   // A workload without a recorded file prints nothing, so an extra rig fails the command.
   writeFileSync(join(dir, "cargo"), `#!/bin/sh
 if [ "$1" = metadata ]; then echo '{"packages":[]}'; exit 0; fi
-while [ "$#" -gt 0 ] && [ "$1" != -- ]; do shift; done
+example=
+while [ "$#" -gt 0 ] && [ "$1" != -- ]; do [ "$1" = --example ] && example=$2; shift; done
+if [ "$example" = delay_agreement ]; then
+  [ -f "$SCORECARD_FIXTURES/agreement.json" ] || { echo "delay_agreement: output 2, window to 8000 ms: p95 reported 900 µs is less than outside minus what it leaves out" >&2; exit 1; }
+  echo "$2 $3" >> "$SCORECARD_FIXTURES/agreed"
+  cat "$SCORECARD_FIXTURES/agreement.json"; exit 0
+fi
 case "$2" in
   normal|limits) cat "$SCORECARD_FIXTURES/lateness" ;;
   baseline) cat "$SCORECARD_FIXTURES/baseline" ;;
@@ -275,11 +309,16 @@ esac
   delete env.CI;
   delete env.GITHUB_STEP_SUMMARY;
   const rigRow = /^\| ([^|]+) \| \d+ \| (?:44|60) \|/;
-  // [seconds, the burst's output 2: as measured, 2 ms late or missing a number, every time over the old limits, exit]
-  for (const [seconds, second, late, expectedExit] of [
-    [59, { p99: 2_000_000 }, false, 0], [60, {}, false, 0], [60, { p99: 2_000_000 }, false, 0], [120, { p99: 2_000_000 }, false, 0],
-    [60, {}, true, 0], [60, { p95: null }, false, 1],
+  // [seconds, the burst's output 2: as measured, 2 ms late or missing a number, every time over the old limits,
+  //  the delay reported and from outside agree, the error or null]
+  for (const [seconds, second, late, agrees, error] of [
+    [59, { p99: 2_000_000 }, false, true, null], [60, {}, false, true, null], [60, { p99: 2_000_000 }, false, true, null], [120, { p99: 2_000_000 }, false, true, null],
+    [60, {}, true, true, null], [60, { p95: null }, false, true, /incomplete measurement for output 2/],
+    [60, {}, false, false, /p95 reported 900 µs is less than outside minus what it leaves out/],
   ]) {
+    rmSync(join(dir, "agreed"), { force: true });
+    if (agrees) writeFileSync(join(dir, "agreement.json"), JSON.stringify(agreementRun));
+    else rmSync(join(dir, "agreement.json"), { force: true });
     // Late: lateness 1 to 4 ms (the old limit was 1 ms), send to handoff p95 and press worst 30 ms (a period + 5 ms is 27.7 ms at most).
     const scale = late ? 1000 : 1;
     const p95 = late ? 30_000_000 : 1;
@@ -304,10 +343,14 @@ esac
     const { stdout, stderr, status } = spawnSync(process.execPath, ["scripts/print-scorecard.mjs", "--seconds", String(seconds)], {
       encoding: "utf8", env,
     });
-    assert.equal(status, expectedExit, `${seconds} s, ${JSON.stringify(second)}, late=${late}: ${stderr}`);
-    if (expectedExit) {
-      assert.match(stderr, /incomplete measurement for output 2/);
+    assert.equal(status, error ? 1 : 0, `${seconds} s, ${JSON.stringify(second)}, late=${late}, agrees=${agrees}: ${stderr}`);
+    if (error) {
+      assert.match(stderr, error);
       continue;
+    }
+    assert.equal(readFileSync(join(dir, "agreed"), "utf8"), ["biggest", "show", "idle"].map((rig) => `${rig} ${seconds}\n`).join(""));
+    for (const load of ["full load", "example rig", "idle"]) {
+      assert.ok(stdout.includes(`| ${load} | 44 | 3 | 33 | 12.0 / 12.1 | 22.0 / 22.1 | 23.0 / 23.1 | 0.4 |`), load);
     }
     const rigs = new Set(stdout.split("\n").map((line) => rigRow.exec(line)?.[1]).filter(Boolean));
     assert.deepEqual([...rigs], ["normal show", "biggest show", "biggest show plus burst"]);

@@ -24,6 +24,10 @@ test = true # its pixel arithmetic has a test
 name = "send_to_frame"
 test = true
 
+[[example]]
+name = "delay_agreement"
+test = true
+
 [[test]]
 name = "admit"
 required-features = ["test-support"]
@@ -55,3 +59,4 @@ serialport = { version = "4.10.1", default-features = false } # a fake serial po
 futures-util = { version = "0.3.34", default-features = false, features = ["sink"] }
 tokio-tungstenite = "0.29.0"
 tokio = { version = "1.54.1", features = ["rt-multi-thread"] } # one test runs on threads
+nix = { version = "0.26.4", default-features = false, features = ["net", "uio"] } # delay_agreement reads the system's receive stamp

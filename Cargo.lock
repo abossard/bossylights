@@ -881,6 +881,7 @@ dependencies = [
  "engine-core",
  "fixture-library",
  "futures-util",
+ "nix",
  "outputs",
  "rtrb",
  "serde_json",

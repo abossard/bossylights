@@ -6,7 +6,7 @@ import { appendFileSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { arch, cpus, release, type } from "node:os";
 import { CRATES } from "./layers.mjs";
-import { codeLines, crateSource, crateSurface, escapeHatches, loadRow, loadTables, measurement, performanceRows, performanceTable, scorecard, withoutTests } from "./scorecard.mjs";
+import { agreementTable, codeLines, crateSource, crateSurface, escapeHatches, loadRow, loadTables, measurement, performanceRows, performanceTable, scorecard, withoutTests } from "./scorecard.mjs";
 
 const args = process.argv.slice(2);
 const seconds = args.length === 0 ? undefined : Number(args[1]);
@@ -78,7 +78,12 @@ const loads = measured ? [
   ["example rig", loadRow(reports.show, "show")],
   ["idle", loadRow(idle, "idle")],
 ] : [];
+// The delay each output reports, checked from outside: a disagreement stops the scorecard.
+const windowSeconds = String(Math.max(duration, 4));
+const agreements = measured ? [["full load", "biggest"], ["example rig", "show"], ["idle", "idle"]].map(([name, rig]) => [
+  name, JSON.parse(example("delay_agreement", rig, windowSeconds)),
+]) : [];
 const host = measured ? `\nMeasured on ${type()} ${release()}, ${arch()}, ${cpus()[0]?.model ?? "unknown CPU"}.\n` : "";
-const markdown = `${summary}\n${performanceTable(runs)}\n${loadTables(loads)}${host}`;
+const markdown = `${summary}\n${performanceTable(runs)}\n${loadTables(loads)}\n${agreementTable(agreements)}${host}`;
 console.log(markdown);
 if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, markdown);

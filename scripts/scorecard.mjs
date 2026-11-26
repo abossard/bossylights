@@ -186,6 +186,30 @@ export function loadTables(rows) {
   ].join("\n");
 }
 
+/**
+ * The delay check of each load (`delay_agreement`): one row for each load and rate, from the
+ * window with the highest reported worst of its outputs.
+ */
+export function agreementTable(runs) {
+  if (runs.length === 0) return "## Delay, reported and from outside\n\nNot measured on CI.\n";
+  const ms = (us) => (us / 1000).toFixed(1);
+  return [
+    "## Delay, reported and from outside",
+    "",
+    "Press to light as Health reports it to every caller, beside the same statistic measured from outside: from just before the command is sent to the arrival of the first packet of the frame that carries it. Every output and every 4 s window agreed, or the scorecard stops. Each row is the window with the highest reported worst. Left out: the slowest trip after the handoff in that window, which the engine cannot see.",
+    "",
+    "| Load | Hz | Windows | Fewest presses in a window | Median reported / outside (ms) | p95 reported / outside (ms) | Worst reported / outside (ms) | Left out (ms) |",
+    "|---|---:|---:|---:|---:|---:|---:|---:|",
+    ...runs.flatMap(([name, run]) => [...new Set(run.outputs.map((o) => o.frames_per_second))].map((hz) => {
+      const windows = run.outputs.filter((o) => o.frames_per_second === hz).flatMap((o) => o.windows);
+      const top = windows.reduce((a, b) => (b.reported_us[2] > a.reported_us[2] ? b : a));
+      const pair = (i) => `${ms(top.reported_us[i])} / ${ms(top.outside_us[i])}`;
+      return `| ${name} | ${hz} | ${windows.length} | ${Math.min(...windows.map((w) => w.presses))} | ${pair(0)} | ${pair(1)} | ${pair(2)} | ${ms(top.left_out_us)} |`;
+    })),
+    "",
+  ].join("\n");
+}
+
 /** Places that switch a check off. */
 export function escapeHatches(source) {
   const count = (pattern) => [...source.matchAll(pattern)].length;
