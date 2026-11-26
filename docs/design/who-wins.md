@@ -43,8 +43,8 @@ flowchart LR
 
 | Modifier slot | Level | Who follows | Today |
 |---|---|---|---|
-| 0 Master | a command, default 255 | dimmers, and emitters no dimmer carries (from the fixture file) | no command, always full (#251) |
-| 1 Blackout | 0 while on, 255 while off | as Master, plus a shutter with a Closed range | built, every channel follows (rules from the file: #251); a channel the file has follow it goes to the file's dark (#250) |
+| 0 Master | a command, default 255 | dimmers (a shared dimmer beside head dimmers: not, it follows Blackout only), and emitters no dimmer carries (from the fixture file) | no command, always full (#251) |
+| 1 Blackout | 0 while on, 255 while off. A step of its own after Master and the virtual dimmers | as Master, plus a shutter with a Closed range and a shared dimmer beside head dimmers | built: the followers the file gives, to the file's dark (#251) |
 | 2 to 7 virtual dimmers | the value of a control channel | the channels the user picks in Patch. None by default | none yet (#251) |
 
 A source may offer nothing at a moment (a gap). Then the next one down shows through.
@@ -105,7 +105,7 @@ Decided with the owner on 2026-11-19 (decision 48). Nothing decides between two 
 | A v11 brightness | baked into the colour of a light without its own dimmer; alone it offers nothing; a colour alone shows as it is (rule B, [channel-model.md](channel-model.md)) | #253 |
 | Rest | the file's rest per channel, from the lowering (#250): an open shutter, a wheel's bypass, the default; 0 where nothing is patched | overrides in Patch (#251) |
 | One pass per channel: raw hold, Blackout (#247) | built | |
-| Blackout | every channel follows; to the file's dark where the file has it follow (a shutter closes, CMY on a fixture without a dimmer goes to 255), else 0 | followers from the file (#251) |
+| Blackout | only the channels the file has follow it, to their dark: dimmers, emitters no dimmer carries, a shutter with a Closed range (it closes), CMY on a fixture without a dimmer (255). Fog, motion, wheels and a channel nobody patched stay. The pass visits the follower index only, a pair as one word | |
 | Master, virtual dimmers | none | #251 |
 | Grabs and kept offers when a light moves | follow it: they hold a light index, the new field table gives the new channels. Unpatch lets its grabs go | fixture refs (#253) |
 | Identify | none | #254 |

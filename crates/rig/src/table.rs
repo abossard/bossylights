@@ -12,14 +12,18 @@
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use core::fmt;
-use engine_core::{Configured, Field, LightRun, MAX_DEPTH};
+use engine_core::{Configured, Field, LightRun, MAX_DEPTH, PatchedChannels};
 
 /// The patch as the tick needs it, made off the tick for each patch edit and swapped in
-/// whole: every patched channel as its file says, the dimmer channels (`highest` sets
-/// them), each light's fields and fades, and the scratch a timed plan samples into.
+/// whole: every patched channel as its file says, the channels that follow a modifier,
+/// the dimmer channels (`highest` sets them), each light's fields and fades, and the
+/// scratch a timed plan samples into.
 #[derive(Clone, Default, PartialEq, Eq)]
 pub struct FieldPlan {
     configured: Vec<Configured>,
+    /// The follower index: every channel that follows a modifier, in channel order, a
+    /// pair as one word. The modifier pass visits only these.
+    followers: Vec<Field>,
     dimmers: Vec<u32>,
     /// By light index: where its fields start, and how many.
     spans: Vec<(u32, u16)>,
@@ -60,15 +64,21 @@ impl<'a> Targets<'a> {
 
 impl FieldPlan {
     /// The table of `lights`, by index: each light's fields, its fades (from the flags of
-    /// `configured`) and which are dimmers.
+    /// `configured`) and which are dimmers; and `followers`, put in channel order.
     pub(crate) fn new<'a>(
         configured: Vec<Configured>,
+        mut followers: Vec<Field>,
         lights: impl Iterator<Item = (u16, &'a crate::LightFields)>,
     ) -> Self {
         let fades_at: BTreeMap<u32, bool> =
             configured.iter().map(|c| (c.at, c.flags.fades())).collect();
+        followers.sort_unstable_by_key(|field| match field {
+            Field::Byte(at) => *at,
+            Field::Word(pair) => pair.coarse,
+        });
         let mut plan = Self {
             configured,
+            followers,
             ..Self::default()
         };
         let mut most = 0;
@@ -111,6 +121,12 @@ impl FieldPlan {
         &self.configured
     }
 
+    /// The follower index: the channels that follow a modifier, in channel order, a pair
+    /// as one word, for [`engine_core::frame`].
+    pub fn followers(&self) -> &[Field] {
+        &self.followers
+    }
+
     /// The dimmer channels, for [`engine_core::Channels::highest`].
     pub fn dimmers(&self) -> &[u32] {
         &self.dimmers
@@ -122,11 +138,11 @@ impl FieldPlan {
         (targets, scratch)
     }
 
-    /// Every patched channel, each light's fields, and the scratch to sample one light
-    /// into: what a frame needs at once.
-    pub fn parts(&mut self) -> (&[Configured], Targets<'_>, &mut [Option<u16>]) {
+    /// Every patched channel and the followers, each light's fields, and the scratch to
+    /// sample one light into: what a frame needs at once.
+    pub fn parts(&mut self) -> (PatchedChannels<'_>, Targets<'_>, &mut [Option<u16>]) {
         (
-            &self.configured,
+            (&self.configured, &self.followers),
             Targets {
                 spans: &self.spans,
                 fields: &self.fields,

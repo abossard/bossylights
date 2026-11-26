@@ -565,11 +565,66 @@ fn a_prepared_patch_frames_each_channel_at_its_files_rest() {
         &state,
         &Grabs::NONE,
         (&[Levels::ZERO], &[ChannelSet::NONE]),
-        plan.configured(),
+        (plan.configured(), plan.followers()),
         &mut channels,
         |_| {},
     );
     assert_eq!(channels.values()[0].0[5], 11);
+}
+
+/// The prepared plan lists every channel that follows a modifier, in channel order, a
+/// pair as one word, with the file's dark (#251). Martin Rush MH6 Wash, Standard, at 1:1:
+/// 0 Strobe (a Closed range: Blackout), 1 and 2 Dimmer and its fine (Master and
+/// Blackout), 3 to 6 R G B W (the dimmer carries them), then colour presets, zoom, pan,
+/// tilt, control. A Generic RGB PAR at 1:101: R G B follow both, no dimmer carries them.
+/// The PAR is patched first, so the index is put in channel order; then it moves to
+/// 1:201 and its followers move with it.
+#[test]
+fn a_prepared_patch_lists_its_followers_a_pair_as_one_word() {
+    use engine_core::{Field, Follows, Pair};
+    let library = vec![
+        fixture("Martin-Rush-MH6-Wash.qxf"),
+        fixture("Generic-Generic-RGB.qxf"),
+    ];
+    let mh6 = PatchCommand::Patch {
+        name: text("Wash"),
+        maker: text("Martin"),
+        model: text("Rush MH6 Wash"),
+        mode: text("Standard"),
+        at: at(1, 1),
+    };
+    let mut patched = Patch::new(Universes::ONE, Lights::new(16).unwrap(), common::whole());
+    for command in [par("PAR", 1, 101), mh6] {
+        let (next, _) = patched.update(command, &library).unwrap();
+        patched = next.unwrap();
+    }
+    let wash = [Field::Byte(0), Field::Word(Pair { coarse: 1, fine: 2 })];
+    let plan = patched.prepare();
+    let mut expected = wash.to_vec();
+    expected.extend([100, 101, 102].map(Field::Byte));
+    assert_eq!(plan.followers(), expected, "patched");
+    // (channel, what it follows): the file's rules reach the tick
+    let both = Follows::MASTER.with(Follows::BLACKOUT);
+    let cases = [
+        (0, Follows::BLACKOUT),
+        (1, both),
+        (2, both),
+        (3, Follows::NONE),
+        (9, Follows::NONE),
+        (100, both),
+    ];
+    for (at, follows) in cases {
+        let config = plan.configured().iter().find(|c| c.at == at).unwrap();
+        assert_eq!(config.follows, follows, "channel {at}");
+    }
+    let moved = PatchCommand::Move {
+        fixture: 1,
+        at: at(1, 201),
+    };
+    let (moved, _) = patched.update(moved, &library).unwrap();
+    let mut expected = wash.to_vec();
+    expected.extend([200, 201, 202].map(Field::Byte));
+    assert_eq!(moved.unwrap().prepare().followers(), expected, "moved");
 }
 
 #[test]

@@ -168,7 +168,7 @@ fn frames_of(
             &state,
             &grabs,
             (&raw, &holds),
-            plan.configured(),
+            (plan.configured(), plan.followers()),
             channels,
             |offers| {
                 if let Some(now) = now {

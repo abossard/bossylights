@@ -156,7 +156,7 @@ fn main() {
             &state,
             &grabs,
             (&raw, &holds),
-            plan.configured(),
+            (plan.configured(), plan.followers()),
             &mut channels,
             |offers| {
                 for (words, &entry) in kind.iter().zip(&entries) {

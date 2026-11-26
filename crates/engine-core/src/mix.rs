@@ -317,8 +317,8 @@ fn byte(rows: &[Levels], at: usize) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use crate::channel::{
-        ADDRESSES, BLACKOUT, ChannelNumbers, ChannelSet, Channels, Configured, Flags, Follows,
-        Levels, MODIFIERS, Scale, SourceTag, Universes, scale_of,
+        ADDRESSES, BLACKOUT, ChannelNumbers, ChannelSet, Channels, Configured, Field, Flags,
+        Follows, Levels, MODIFIERS, Scale, SourceTag, Universes, scale_of,
     };
 
     /// The modifier levels with Blackout on or off, the others full.
@@ -389,15 +389,18 @@ mod tests {
         }
         .check(Universes::ONE)
         .unwrap();
-        // channels 7 and 8 of universe 1 are patched, at rest 0
+        // channels 7 and 8 of universe 1 are patched, at rest 0, following Blackout
         let patched = [6, 7].map(|at| Configured {
             at,
             rest: 0,
             dark: 0,
             flags: Flags::NONE,
+            follows: Follows::BLACKOUT,
         });
+        let followers = [6, 7].map(Field::Byte);
         for (row, wrote, hold, dark, out, source) in cases {
             let mut all = Box::new(Channels::NEW);
+            all.configure(&[], &patched);
             all.value[0].0[7] = 3; // whatever the frame before left
             all.reset(&patched);
             if let Some(byte) = wrote {
@@ -409,7 +412,7 @@ mod tests {
                 raw[0].0[6] = level;
                 at.mark(&mut holds, true);
             }
-            all.apply_winners(&patched, &raw, &holds, blackout(dark));
+            all.apply_winners(&followers, &raw, &holds, blackout(dark));
             assert_eq!(
                 (all.values()[0].0[6], all.source(at)),
                 (out, source),
@@ -423,7 +426,8 @@ mod tests {
     }
 
     #[test]
-    fn blackout_reaches_every_channel_of_the_space() {
+    fn blackout_reaches_every_follower_of_the_space() {
+        use crate::channel::CHANNELS;
         let space = Universes::new(crate::MAX_UNIVERSES).unwrap();
         let (raw, mut holds) = (
             [Levels([255; ADDRESSES]); crate::MAX_UNIVERSES as usize],
@@ -435,12 +439,30 @@ mod tests {
                 channel.mark(&mut holds, true);
             }
         }
-        // (blackout, the byte of every channel)
-        let cases = [(false, 255), (true, 0)];
-        for (dark, out) in cases {
+        // every channel patched; a channel nobody patched follows nothing (cx-3)
+        let followers: Vec<Field> = (0..CHANNELS as u32).map(Field::Byte).collect();
+        let patched = |follows| -> Vec<Configured> {
+            (0..CHANNELS as u32)
+                .map(|at| Configured {
+                    at,
+                    rest: 0,
+                    dark: 0,
+                    flags: Flags::NONE,
+                    follows,
+                })
+                .collect()
+        };
+        // (blackout, what every channel follows, the byte of every channel)
+        let cases = [
+            (false, Follows::BLACKOUT, 255),
+            (true, Follows::BLACKOUT, 0),
+            (true, Follows::NONE, 255),
+        ];
+        for (dark, follows, out) in cases {
             let mut all = Box::new(Channels::NEW);
+            all.configure(&[], &patched(follows));
             all.reset(&[]);
-            all.apply_winners(&[], &raw, &holds, blackout(dark));
+            all.apply_winners(&followers, &raw, &holds, blackout(dark));
             let missed = all
                 .values()
                 .iter()
@@ -448,7 +470,7 @@ mod tests {
                 .position(|byte| *byte != out);
             assert_eq!(
                 missed, None,
-                "blackout {dark}: the first channel not at {out}"
+                "blackout {dark}, {follows:?}: the first channel not at {out}"
             );
         }
     }
@@ -486,13 +508,14 @@ mod tests {
 
     #[test]
     fn a_patched_channel_a_raw_hold_sets_moves_by_its_levels_once() {
-        // channel 7 of universe 1, patched, fades, follows Blackout at half: the held 200
+        // channel 7 of universe 1, patched, fades, follows Master at half: the held 200
         // shows 200 x 128 / 255 = 100.4, so 100; moved twice it would be 50
         let patched = [Configured {
             at: 6,
             rest: 0,
             dark: 0,
             flags: Flags::FADE,
+            follows: Follows::MASTER,
         }];
         let at = ChannelNumbers {
             universe: 1,
@@ -506,13 +529,148 @@ mod tests {
         let (mut raw, mut holds) = ([Levels::ZERO], [ChannelSet::NONE]);
         raw[0].0[6] = 200;
         at.mark(&mut holds, true);
-        let mut levels = [u8::MAX; MODIFIERS];
-        levels[BLACKOUT] = 128;
-        all.apply_winners(&patched, &raw, &holds, levels);
+        all.apply_winners(&[Field::Byte(6)], &raw, &holds, levels(&[(0, 128)]));
         assert_eq!(
             (all.values()[0].0[6], all.source(at)),
             (100, SourceTag::RAW)
         );
+    }
+
+    /// The levels with `slots` set, the others full.
+    fn levels(slots: &[(usize, u8)]) -> [u8; MODIFIERS] {
+        let mut levels = [u8::MAX; MODIFIERS];
+        for (slot, level) in slots {
+            levels[*slot] = *level;
+        }
+        levels
+    }
+
+    #[test]
+    fn a_pair_follower_moves_as_one_word() {
+        use crate::channel::Pair;
+        // Master at 128 (half) is slot 0. Worked by hand (docs/design/channel-model.md,
+        // Rules): 0xB333 = 45,875; x 128 / 255 = 23,027.45, so 0x59F3: 89, 243. Byte by
+        // byte it would be 90, 26. A reverse dimmer, dark 0xFFFF, at 0x4C00 = 19,456:
+        // 65,535 - round(46,079 x 128 / 255) = 42,405 = 0xA5A5.
+        let both = Follows::MASTER.with(Follows::BLACKOUT);
+        let (fade, jump) = (Flags::FADE.with(Flags::PAIR), Flags::PAIR);
+        let master = levels(&[(0, 128)]);
+        // (case, flags, dark bytes, value bytes, levels, out)
+        let cases = [
+            ("master half", fade, [0, 0], [0xB3, 0x33], master, [89, 243]),
+            (
+                "blackout",
+                fade,
+                [0, 0],
+                [0xB3, 0x33],
+                blackout(true),
+                [0, 0],
+            ),
+            (
+                "master and blackout full",
+                fade,
+                [0, 0],
+                [0xB3, 0x33],
+                blackout(false),
+                [0xB3, 0x33],
+            ),
+            (
+                "reverse, master half",
+                fade,
+                [255, 255],
+                [0x4C, 0],
+                master,
+                [165, 165],
+            ),
+            (
+                "reverse, blackout",
+                fade,
+                [255, 255],
+                [0x4C, 0],
+                blackout(true),
+                [255, 255],
+            ),
+            (
+                "jump, master half",
+                jump,
+                [0, 0],
+                [0xB3, 0x33],
+                master,
+                [0xB3, 0x33],
+            ),
+            (
+                "jump, master 0",
+                jump,
+                [3, 0],
+                [0xB3, 0x33],
+                levels(&[(0, 0)]),
+                [3, 0],
+            ),
+        ];
+        for (case, flags, dark, value, levels, out) in cases {
+            let pair = [0, 1].map(|at| Configured {
+                at,
+                rest: 0,
+                dark: dark[at as usize],
+                flags,
+                follows: both,
+            });
+            let followers = [Field::Word(Pair { coarse: 0, fine: 1 })];
+            let mut all = Box::new(Channels::NEW);
+            all.configure(&[], &pair);
+            all.reset(&pair);
+            all.value[0].0[..2].copy_from_slice(&value);
+            all.apply_winners(&followers, &[Levels::ZERO], &[ChannelSet::NONE], levels);
+            assert_eq!(all.values()[0].0[..2], out, "{case}");
+        }
+    }
+
+    #[test]
+    fn a_channel_follows_only_the_slots_it_names() {
+        // channels 1 to 4 patched at 200, fading, following nothing, Master, Blackout,
+        // both; channel 5 unpatched under a raw hold of 200
+        let follows = [
+            Follows::NONE,
+            Follows::MASTER,
+            Follows::BLACKOUT,
+            Follows::MASTER.with(Follows::BLACKOUT),
+        ];
+        let patched: Vec<Configured> = (0..4)
+            .map(|at| Configured {
+                at,
+                rest: 200,
+                dark: 0,
+                flags: Flags::FADE,
+                follows: follows[at as usize],
+            })
+            .collect();
+        let followers = [1, 2, 3].map(Field::Byte);
+        let held = ChannelNumbers {
+            universe: 1,
+            address: 5,
+        }
+        .check(Universes::ONE)
+        .unwrap();
+        // (case, levels, bytes of channels 1 to 5): 200 x 128 / 255 = 100.4
+        let cases = [
+            ("all full", levels(&[]), [200, 200, 200, 200, 200]),
+            (
+                "master half",
+                levels(&[(0, 128)]),
+                [200, 100, 200, 100, 200],
+            ),
+            ("blackout", blackout(true), [200, 200, 0, 0, 200]),
+        ];
+        for (case, levels, out) in cases {
+            let mut all = Box::new(Channels::NEW);
+            all.configure(&[], &patched);
+            all.reset(&patched);
+            let (mut raw, mut holds) = ([Levels::ZERO], [ChannelSet::NONE]);
+            raw[0].0[4] = 200;
+            held.mark(&mut holds, true);
+            all.apply_winners(&followers, &raw, &holds, levels);
+            assert_eq!(all.values()[0].0[..5], out, "{case}");
+        }
     }
 
     #[test]
@@ -697,28 +855,42 @@ mod tests {
                 255,
             ),
             (
+                // Blackout is on only at 0: 255 x (254 / 255)^7 = 248.08
                 "all eight at 254",
                 255,
                 0,
                 fade,
                 Follows(0xff),
                 [254; MODIFIERS],
-                247,
+                248,
+            ),
+            (
+                // one rounding: 1 x 128 x 128 / 255^2 = 0.25; one per level gives 1
+                "one rounding for all levels",
+                1,
+                0,
+                fade,
+                master_and_group,
+                with(&[(0, 128), (2, 128)]),
+                0,
+            ),
+            (
+                "blackout after master and group",
+                200,
+                9,
+                fade,
+                Follows(0xff),
+                with(&[(0, 128), (1, 0), (2, 128)]),
+                9,
             ),
         ];
         for (case, value, dark, flags, follows, levels, out) in cases {
-            // one channel as the resolver left it, through the frame's own pass
+            // one channel as the mixer left it, through the frame's own pass
             let mut all = Box::new(Channels::NEW);
             all.value[0].0[6] = value;
             (all.dark[6], all.flags[6], all.follows[6]) = (dark, flags, follows);
             let (raw, holds) = ([Levels::ZERO], [ChannelSet::NONE]);
-            let patched = [Configured {
-                at: 6,
-                rest: 0,
-                dark,
-                flags,
-            }];
-            all.apply_winners(&patched, &raw, &holds, levels);
+            all.apply_winners(&[Field::Byte(6)], &raw, &holds, levels);
             assert_eq!(all.values()[0].0[6], out, "{case}");
         }
     }
@@ -761,7 +933,7 @@ mod tests {
 mod offers {
     use super::*;
     use crate::Brightness;
-    use crate::channel::{Configured, Flags};
+    use crate::channel::{Configured, Flags, Follows};
     use crate::clock::{Clock, When};
     use crate::playback::{Launches, PlayId};
     use Rank::{Autopilot, Show};
@@ -795,6 +967,7 @@ mod offers {
             rest: 7,
             dark,
             flags,
+            follows: Follows::NONE,
         })
     }
 
@@ -1037,7 +1210,7 @@ mod offers {
         let (mut raw, mut holds) = ([Levels::ZERO], [ChannelSet::NONE]);
         raw[0].0[2] = 0x99;
         fine.mark(&mut holds, true);
-        channels.apply_winners(&config, &raw, &holds, [u8::MAX; MODIFIERS]);
+        channels.apply_winners(&[], &raw, &holds, [u8::MAX; MODIFIERS]);
         assert_eq!(
             [1, 2].map(|at| (channels.value[0].0[at], channels.source[at])),
             [(0x12, tag(Play(1, Show))), (0x99, SourceTag::RAW)]

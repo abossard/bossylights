@@ -425,36 +425,50 @@ const CMY: &str = r#"<?xml version="1.0"?>
  </Mode>
 </FixtureDefinition>"#;
 
-/// Where Blackout takes a channel while every channel still follows it (#251 narrows
-/// that): the dark its file gives where the file has it follow Blackout, else 0
+/// Each channel carries its file's dark and what it follows to the tick (#251): a
+/// channel that follows nothing keeps its dark, which a rule change in Patch would use
 /// (docs/design/channel-model.md, Rules).
 #[test]
-fn a_channel_goes_to_its_files_dark_only_where_the_file_has_it_follow_blackout() {
+fn a_channel_carries_its_files_dark_and_what_it_follows() {
+    use engine_core::Follows;
     let cmy = fixture_library::parse("cmy.qxf", CMY.as_bytes())
         .unwrap()
         .modes[0]
         .clone();
-    // (case, mode, channel counted from 1, dark)
+    let both = Follows::MASTER.with(Follows::BLACKOUT);
+    // (case, mode, channel counted from 1, dark, follows)
     let cases = [
         (
             "a shutter, Closed at 3 to 5",
             mode("Vari-Lite-VL2202-Spot.qxf", "Standard 8bit"),
             8,
             3,
+            Follows::BLACKOUT,
         ),
-        ("cyan without a dimmer: subtractive", cmy, 1, 255),
+        ("cyan without a dimmer: subtractive", cmy, 1, 255, both),
         (
-            "cyan its dimmer carries: no follow",
+            "cyan its dimmer carries: follows nothing",
             mode("Ayrton-Mistral.qxf", "Standard"),
             16,
-            0,
+            255,
+            Follows::NONE,
         ),
-        ("a dimmer", mode("Ayrton-Mistral.qxf", "Standard"), 7, 0),
+        (
+            "a dimmer",
+            mode("Ayrton-Mistral.qxf", "Standard"),
+            7,
+            0,
+            both,
+        ),
     ];
-    for (case, mode, channel, dark) in cases {
+    for (case, mode, channel, dark, follows) in cases {
         let rigged = compile(&mode, at(1), light(0), Universes::ONE, lights()).unwrap();
         let configured = rigged.configured.iter().find(|c| c.at + 1 == channel);
-        assert_eq!(configured.map(|c| c.dark), Some(dark), "{case}");
+        assert_eq!(
+            configured.map(|c| (c.dark, c.follows)),
+            Some((dark, follows)),
+            "{case}"
+        );
     }
 }
 

@@ -923,7 +923,8 @@ fn a_channel_on_a_shorter_buffer_changes_nothing() {
     assert_eq!((one, holds), ([Levels::ZERO], [ChannelSet::NONE]));
 }
 
-/// Both universes patched, at rest 0, but channel 1/2 at 200 (a shutter held open).
+/// Both universes patched, at rest 0, but channel 1/2 at 200 (a shutter held open),
+/// each following Blackout.
 fn two() -> Vec<Configured> {
     (0..2 * 512)
         .map(|at| Configured {
@@ -931,6 +932,7 @@ fn two() -> Vec<Configured> {
             rest: if at == 1 { 200 } else { 0 },
             dark: 0,
             flags: Flags::NONE,
+            follows: Follows::BLACKOUT,
         })
         .collect()
 }
@@ -1005,12 +1007,13 @@ fn frame_says_who_set_each_channel_and_a_release_gives_it_back() {
         }
         let mut channels = Box::new(Channels::NEW);
         let patched = two();
+        let followers: Vec<Field> = patched.iter().map(|c| Field::Byte(c.at)).collect();
         channels.configure(&[], &patched);
         frame(
             &state,
             &grabs,
             (&universes, &holds),
-            &patched,
+            (&patched, &followers),
             &mut channels,
             |offers| offers.grab(entry, Field::Byte(0), 0xff00),
         );

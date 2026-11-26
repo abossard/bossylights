@@ -276,6 +276,28 @@ fn each_channel_gets_rules_from_its_declared_role() {
         }],
         &[],
     );
+    // a shared dimmer beside head dimmers (#251, owner 2026-11-21): Master follows the
+    // head dimmers only, the shared dimmer keeps its value and follows Blackout
+    let shared_and_heads = hand(
+        vec![
+            channel("IntensityMasterDimmer"),
+            channel("IntensityDimmer"),
+            channel("IntensityRed"),
+            channel("IntensityDimmer"),
+            channel("IntensityRed"),
+        ],
+        &[&[1, 2], &[3, 4]],
+    );
+    // and one head without a dimmer: Master reaches its emitter on the emitter itself
+    let shared_and_one_head = hand(
+        vec![
+            channel("IntensityMasterDimmer"),
+            channel("IntensityDimmer"),
+            channel("IntensityRed"),
+            channel("IntensityRed"),
+        ],
+        &[&[1, 2], &[3]],
+    );
     let lone_cyan = hand(vec![fine("IntensityCyan")], &[]);
     let pan = hand(
         vec![
@@ -346,6 +368,31 @@ fn each_channel_gets_rules_from_its_declared_role() {
         // a fine byte with no coarse byte is a channel of its own
         (&lone_fine, 0, "rest 7, dark 0, fade, none"),
         (&lone_cyan, 0, "rest 0, dark 255, fade, master and blackout"),
+        (&shared_and_heads, 0, "rest 0, dark 0, fade, blackout"),
+        (
+            &shared_and_heads,
+            1,
+            "rest 0, dark 0, fade, master and blackout",
+        ),
+        (&shared_and_heads, 2, "rest 0, dark 0, fade, none"),
+        (
+            &shared_and_heads,
+            3,
+            "rest 0, dark 0, fade, master and blackout",
+        ),
+        (&shared_and_heads, 4, "rest 0, dark 0, fade, none"),
+        (&shared_and_one_head, 0, "rest 0, dark 0, fade, blackout"),
+        (
+            &shared_and_one_head,
+            1,
+            "rest 0, dark 0, fade, master and blackout",
+        ),
+        (&shared_and_one_head, 2, "rest 0, dark 0, fade, none"),
+        (
+            &shared_and_one_head,
+            3,
+            "rest 0, dark 0, fade, master and blackout",
+        ),
     ];
     for (mode, index, expected) in cases {
         let lowered = lower(mode, 100, SPACE).unwrap();
@@ -1473,11 +1520,14 @@ fn an_emitter_follows_modifiers_only_when_no_dimmer_carries_it() {
             vec![&[0, 1][..], &[0, 2], &[3]],
             vec![3, 0, 0, 3],
         ),
-        // A shared dimmer, plus a head with a dimmer of its own.
+        // A shared dimmer, plus a head with a dimmer of its own (owner, 2026-11-21, #251):
+        // the shared dimmer keeps its value under Master and follows Blackout. Master
+        // reaches each emitter once: the emitter in no head through the head dimmers, the
+        // one in a head without a dimmer on itself.
         (
             Vec::from([dimmer, red, red, dimmer, red].map(channel)),
             vec![&[2], &[3, 4]],
-            vec![3, 0, 0, 3, 0],
+            vec![2, 0, 3, 3, 0],
         ),
         // The second head also lists the first head's emitter. The last emitter has no head.
         (

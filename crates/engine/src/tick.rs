@@ -985,12 +985,12 @@ impl Ticker {
             ..
         } = self;
         let count = usize::from(universes.count());
-        let (configured, targets, scratch) = table.parts();
+        let (patch, targets, scratch) = table.parts();
         let raw = (
             held.get(..count).unwrap_or_default(),
             holds.get(..count).unwrap_or_default(),
         );
-        engine_core::frame(state, grabs, raw, configured, channels, |offers| {
+        engine_core::frame(state, grabs, raw, patch, channels, |offers| {
             for play in state.sounding_plays() {
                 let slot = play.play.slot();
                 let at = match play.state {

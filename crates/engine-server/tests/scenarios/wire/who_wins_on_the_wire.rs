@@ -259,11 +259,14 @@ async fn rank_stop_and_release_decide_each_light_on_dmx() {
     until_dmx(&heard, DARK, BLUE).await;
     accepted(s, json!({"ReleaseHold": {"play": zero}})).await;
     until_dmx(&heard, BLUE, BLUE).await;
-    // blackout: every channel at zero, everything comes back
+    // blackout: what follows it goes dark (PAR 1's colour; PAR 2's dimmer, which carries
+    // its colour, so that stays), everything comes back (#251)
     accepted(s, json!({"Blackout": {"on": true}})).await;
-    until_dmx(&heard, DARK, DARK).await;
+    until_dmx(&heard, DARK, BLUE).await;
+    until_dimmer(&heard, 0).await;
     accepted(s, json!({"Blackout": {"on": false}})).await;
     until_dmx(&heard, BLUE, BLUE).await;
+    until_dimmer(&heard, 255).await;
     // ReleaseChannels: the raw channels go, a Manual play stays
     let manual = start(s, 3, "Manual").await;
     accepted(s, raw(3, 9)).await;

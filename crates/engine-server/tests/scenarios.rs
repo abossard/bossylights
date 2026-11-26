@@ -6,6 +6,8 @@ mod output_stream;
 #[path = "common/mod.rs"]
 mod wire_common;
 
+#[path = "scenarios/wire/blackout_on_the_wire.rs"]
+mod blackout_on_the_wire;
 #[path = "scenarios/wire/channels_won_one_by_one.rs"]
 mod channels_won_one_by_one;
 #[path = "scenarios/reroute/cutover.rs"]

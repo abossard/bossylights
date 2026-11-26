@@ -82,8 +82,32 @@ impl Desk {
     }
 }
 
+/// A Generic RGB PAR: red, green and blue follow Master and Blackout (no dimmer
+/// carries them).
+const RGB: &[u8] =
+    include_bytes!("../../fixture-library/tests/definitions/Generic-Generic-RGB.qxf");
+
+/// Patches a Generic RGB PAR at `at`, and lets a wake take the patch.
+fn par(desk: &mut Desk, at: ChannelNumbers) {
+    let library = [fixture_library::parse("Generic-Generic-RGB.qxf", RGB).unwrap()];
+    let patch = Command::Patch {
+        name: Text::new("PAR").unwrap(),
+        maker: Text::new("Generic").unwrap(),
+        model: Text::new("Generic RGB").unwrap(),
+        mode: Text::new("RGB").unwrap(),
+        at,
+    };
+    let begun = desk.sender.begin(patch, &library);
+    assert!(
+        matches!(begun, Ok(Begun::Patched { .. })),
+        "patched at {at:?}"
+    );
+    desk.wake(&[], Sent::Before);
+}
+
 #[test]
 fn a_raw_hold_and_blackout_are_in_the_frame_after_the_cutoff() {
+    // the first channel is a PAR's red, the last a PAR's blue: both follow Blackout
     let hold = |channel, value| Command::SetChannel { channel, value };
     let release = |channel| Command::ReleaseChannel { channel };
     let blackout = |on| Command::Blackout { on };
@@ -130,9 +154,53 @@ fn a_raw_hold_and_blackout_are_in_the_frame_after_the_cutoff() {
     ];
     for rate in [Rate::FortyFour, Rate::Sixty] {
         let mut desk = Desk::new(rate);
+        par(&mut desk, FIRST);
+        par(&mut desk, last_par());
         for (step, commands, sent, frame) in &steps {
             assert_eq!(desk.wake(commands, *sent), *frame, "{rate:?}: {step}");
         }
+    }
+}
+
+/// A channel nobody patched follows nothing (#251, cx-3: unknown channels start
+/// independent): Blackout leaves its raw hold.
+#[test]
+fn blackout_leaves_a_raw_hold_nobody_patched() {
+    let mut desk = Desk::new(Rate::FortyFour);
+    par(&mut desk, last_par());
+    // (step, commands, the first channel (unpatched) and the last (a PAR's blue))
+    let steps = [
+        (
+            "both held",
+            vec![
+                Command::SetChannel {
+                    channel: FIRST,
+                    value: 91,
+                },
+                Command::SetChannel {
+                    channel: LAST,
+                    value: 91,
+                },
+            ],
+            (91, 91),
+        ),
+        ("blackout", vec![Command::Blackout { on: true }], (91, 0)),
+        (
+            "blackout off",
+            vec![Command::Blackout { on: false }],
+            (91, 91),
+        ),
+    ];
+    for (step, commands, frame) in &steps {
+        assert_eq!(desk.wake(commands, Sent::Before), *frame, "{step}");
+    }
+}
+
+/// The PAR whose blue is the last channel.
+const fn last_par() -> ChannelNumbers {
+    ChannelNumbers {
+        universe: 2,
+        address: 510,
     }
 }
 

@@ -43,9 +43,9 @@ use alloc::vec::Vec;
 use core::mem::size_of;
 use core::num::NonZeroU16;
 use engine_core::{
-    ChannelNumbers, Configured, EngineCommand, Grouped, Light, LightNumber, LightRun, Lights,
-    Member, OutputKind, PatchCommand, Patched, Project, Property, Refusal, SavedLook, Step, Target,
-    Universes, Value, WaveTarget,
+    ChannelNumbers, Configured, EngineCommand, Field, Grouped, Light, LightNumber, LightRun,
+    Lights, Member, OutputKind, PatchCommand, Patched, Project, Property, Refusal, SavedLook, Step,
+    Target, Universes, Value, WaveTarget,
 };
 use fixture_library::{Fixture, Mode};
 
@@ -128,6 +128,8 @@ struct Entry {
     writers: Vec<Writer>,
     /// Its channels as its file says.
     configured: Vec<Configured>,
+    /// Its channels that follow a modifier, a pair as one word.
+    followers: Vec<Field>,
     /// One per light, in light order.
     fields: Vec<LightFields>,
 }
@@ -314,6 +316,7 @@ impl Patch {
                     entry.at = at;
                     entry.writers = rigged.writers;
                     entry.configured = rigged.configured;
+                    entry.followers = rigged.followers;
                     entry.fields = rigged.fields;
                 });
                 let writers = PatchEffect::Fields(patch.prepare());
@@ -413,6 +416,7 @@ impl Patch {
                 lights: rigged.lights,
                 writers: rigged.writers,
                 configured: rigged.configured,
+                followers: rigged.followers,
                 fields: rigged.fields,
             };
             if fixtures
@@ -469,6 +473,7 @@ impl Patch {
             lights: rigged.lights,
             writers: rigged.writers,
             configured: rigged.configured,
+            followers: rigged.followers,
             fields: rigged.fields,
         };
         let mut fixtures = self.fixtures.clone();
@@ -737,6 +742,10 @@ impl Patch {
                 fixtures
                     .iter()
                     .flat_map(|e| e.configured.iter().copied())
+                    .collect(),
+                fixtures
+                    .iter()
+                    .flat_map(|e| e.followers.iter().copied())
                     .collect(),
                 fixtures
                     .iter()

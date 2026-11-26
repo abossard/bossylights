@@ -118,30 +118,11 @@ pub enum Ties {
     Highest,
 }
 
-/// The modifiers a channel follows, one bit per slot.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Follows(u8);
+/// The modifiers a channel follows, one bit per slot: the tick's own type.
+pub use engine_core::Follows;
 
-impl Follows {
-    pub const NONE: Self = Self(0);
-    /// Slot 0.
-    pub const MASTER: Self = Self(1);
-    /// Slot 1.
-    pub const BLACKOUT: Self = Self(1 << 1);
-    const BOTH: Self = Self(0b11);
-
-    /// Whether every slot of `other` is followed.
-    #[must_use]
-    pub const fn has(self, other: Self) -> bool {
-        self.0 & other.0 == other.0
-    }
-
-    /// The byte of the channel.
-    #[must_use]
-    pub const fn bits(self) -> u8 {
-        self.0
-    }
-}
+/// Master and Blackout.
+const BOTH: Follows = Follows::MASTER.with(Follows::BLACKOUT);
 
 /// The bytes a channel's values run over, and which way.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -223,7 +204,7 @@ pub fn lower(mode: &Mode, first: u32, space: u32) -> Result<Lowered, PastTheEnd>
     }
     // below `end`, so it fits
     let at = |index: usize| first.saturating_add(u32::try_from(index).unwrap_or(u32::MAX));
-    let carried = carried_by_dimmers(&mode.channels, &mode.pixels);
+    let carried = carries(&mode.channels, &mode.pixels);
     let heads = heads(mode);
     let mut groups: BTreeMap<Option<usize>, Vec<(usize, &Channel)>> = BTreeMap::new();
     for ((index, channel), head) in mode.channels.iter().enumerate().zip(&heads) {
@@ -255,7 +236,7 @@ pub fn lower(mode: &Mode, first: u32, space: u32) -> Result<Lowered, PastTheEnd>
             let (follows, dark) = rule(
                 channel,
                 &role,
-                carried.get(index).copied().unwrap_or(false),
+                carried.get(index).copied().unwrap_or(Carry::Lit),
                 travel,
             );
             let [dark_coarse, _] = dark.to_be_bytes();
@@ -650,10 +631,26 @@ fn pair_bytes(mode: &Mode) -> BTreeMap<usize, usize> {
     fine_of
 }
 
-/// Every channel listed alongside a coarse dimmer, or carried by the shared dimmer.
-fn carried_by_dimmers(channels: &[Channel], pixels: &[Vec<u16>]) -> Vec<bool> {
+/// What carries a channel's light, for its rule.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Carry {
+    /// Nothing: an emitter follows Master and Blackout itself.
+    Lit,
+    /// A dimmer in its head, or the shared dimmer when no head has one.
+    Carried,
+    /// The shared dimmer beside head dimmers: Master follows the head dimmers only, it
+    /// keeps its value and follows Blackout (owner, 2026-11-21, #251).
+    SharedBesideHeads,
+}
+
+/// Per channel, what carries it. A coarse dimmer in a head carries that head. A dimmer in
+/// no head is shared: it carries every channel when no head has a dimmer. Beside head
+/// dimmers (Cameo HydraBeam 4000: a master dimmer and one RGBW for four dimmed heads)
+/// Master moves the head dimmers only, so a channel in no head stays carried and an
+/// emitter in a head without a dimmer of its own follows itself.
+fn carries(channels: &[Channel], pixels: &[Vec<u16>]) -> Vec<Carry> {
     let dimmer = |c: &Channel| c.byte == Byte::Coarse && c.role() == Function::Dimmer;
-    let mut carried = vec![false; channels.len()];
+    let mut carried = vec![Carry::Lit; channels.len()];
     for head in pixels {
         if head
             .iter()
@@ -661,37 +658,60 @@ fn carried_by_dimmers(channels: &[Channel], pixels: &[Vec<u16>]) -> Vec<bool> {
         {
             for &index in head {
                 if let Some(in_head) = carried.get_mut(usize::from(index)) {
-                    *in_head = true;
+                    *in_head = Carry::Carried;
                 }
             }
         }
     }
-    // A dimmer in any head marked its own channel above. An unmarked dimmer is shared
-    // and carries every emitter that a head dimmer did not already carry.
-    if channels
+    // A dimmer in any head marked its own channel above. An unmarked dimmer is shared.
+    let head_dimmers = channels
         .iter()
         .zip(&carried)
-        .any(|(c, in_head)| dimmer(c) && !in_head)
-    {
-        carried.fill(true);
+        .any(|(c, carry)| dimmer(c) && *carry == Carry::Carried);
+    let shared: Vec<usize> = channels
+        .iter()
+        .zip(&carried)
+        .enumerate()
+        .filter(|(_, (c, carry))| dimmer(c) && **carry == Carry::Lit)
+        .map(|(index, _)| index)
+        .collect();
+    if shared.is_empty() {
+        return carried;
+    }
+    if !head_dimmers {
+        carried.fill(Carry::Carried);
+        return carried;
+    }
+    for (index, carry) in carried.iter_mut().enumerate() {
+        let in_a_head = pixels
+            .iter()
+            .any(|head| head.iter().any(|&at| usize::from(at) == index));
+        if *carry == Carry::Lit && shared.contains(&index) {
+            *carry = Carry::SharedBesideHeads;
+        } else if *carry == Carry::Lit && !in_a_head {
+            *carry = Carry::Carried;
+        }
     }
     carried
 }
 
 /// What a channel follows and its dark word. A joined fine inherits its coarse rule.
 /// Of the unpaired fines only a declared emitter carries light on its own.
-fn rule(channel: &Channel, role: &Function, carried: bool, travel: Travel) -> (Follows, u16) {
+fn rule(channel: &Channel, role: &Function, carry: Carry, travel: Travel) -> (Follows, u16) {
     if channel.byte == Byte::Fine && !is_colour(role) {
         return (Follows::NONE, 0);
     }
-    let unless_carried = if carried {
-        Follows::NONE
-    } else {
-        Follows::BOTH
+    let unless_carried = match carry {
+        Carry::Lit => BOTH,
+        Carry::Carried | Carry::SharedBesideHeads => Follows::NONE,
+    };
+    let dimmer = match carry {
+        Carry::SharedBesideHeads => Follows::BLACKOUT,
+        Carry::Lit | Carry::Carried => BOTH,
     };
     match role {
         Function::Dimmer => (
-            Follows::BOTH,
+            dimmer,
             match travel.sense {
                 Sense::Rising => 0,
                 Sense::Falling => u16::from_be_bytes(

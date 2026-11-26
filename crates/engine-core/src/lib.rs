@@ -51,7 +51,7 @@ pub use api::{
 };
 pub use channel::{
     ADDRESSES, CHANNELS, Channel, ChannelLevel, ChannelNumbers, ChannelSet, Channels, Configured,
-    Field, Flags, Levels, MAX_UNIVERSES, Pair, SourceTag, Universes, changes,
+    Field, Flags, Follows, Levels, MAX_UNIVERSES, Pair, SourceTag, Universes, changes,
 };
 use channel::{BLACKOUT, MODIFIERS};
 pub use model_failure::{OpenFailure, Refusal};
@@ -759,16 +759,21 @@ impl State {
     }
 }
 
+/// The patched channels as their files say, and the follower index: the channels that
+/// follow a modifier, a pair as one word.
+pub type PatchedChannels<'a> = (&'a [Configured], &'a [Field]);
+
 /// The bytes that go out now, written into `channels`, which the caller owns. Every
 /// `patched` channel starts at its rest; `offer` makes each sounding play and grab offer
-/// its words ([`Offers`]), and who wins takes each channel; then one pass decides each
-/// channel: the raw channels held (`raw` at `holds`) replace their bytes, and every
-/// follower moves by its modifiers, Blackout among them. Allocates nothing.
+/// its words ([`Offers`]), and who wins takes each channel; then the raw channels held
+/// (`raw` at `holds`) replace their bytes, and each of `followers` (a pair as one word)
+/// moves by its modifiers: Master and the virtual dimmers, then Blackout. Allocates
+/// nothing.
 pub fn frame(
     state: &State,
     grabs: &Grabs,
     (raw, holds): (&[Levels], &[ChannelSet]),
-    patched: &[Configured],
+    (patched, followers): PatchedChannels<'_>,
     channels: &mut Channels,
     offer: impl FnOnce(&mut Offers<'_>),
 ) {
@@ -778,7 +783,7 @@ pub fn frame(
         plays: &state.plays,
         grabs,
     });
-    channels.apply_winners(patched, raw, holds, modifiers(state));
+    channels.apply_winners(followers, raw, holds, modifiers(state));
 }
 
 /// The level of each modifier slot this frame: Master full until `SetMaster` comes,

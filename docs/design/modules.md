@@ -5,7 +5,8 @@ Read [theory.md](theory.md) first: the engine knows channels, the Rig and the sc
 | Module | State |
 |---|---|
 | Engine, Mixer (per channel, #250), Sources (steps, sequences, Wave), Clock, Rig, Fixture library, Output (DMX USB, DDP), Project | built |
-| Rig rules from the file, Master | designed (#251) |
+| Rig rules from the file | built (#251) |
+| Master, typed grabs, rules in Patch, virtual dimmers | designed (#251) |
 | Surface, Controllers, Show, Music, Autopilot | design |
 
 ## The rule: deep modules
@@ -126,7 +127,7 @@ flowchart LR
 
 ### Rig: a mode becomes channels (channel model, #239)
 
-`rig::channels::lower` is a calculation off the tick. Since #250 L1 it gives every patched channel its rest, dark, fade and pair on the tick, and the writers join a fine only where it pairs.
+`rig::channels::lower` is a calculation off the tick. Since #250 L1 it gives every patched channel its rest, dark, fade and pair on the tick, and the writers join a fine only where it pairs. Since #251 also what each channel follows, and the follower index: the channels that follow a modifier, a pair as one word, so the modifier pass visits only those.
 
 The field table (`rig::FieldPlan`, #250 L3) is the interim step from a light index to channels: each light's fields (a channel, or a pair as one word), which fade, the dimmer channels. Swapped whole per patch edit, so a Move keeps a playing look. #253 replaces it with fixture refs.
 
@@ -140,7 +141,7 @@ flowchart LR
 
 | Hides | Rule |
 |---|---|
-| which channels follow Master and Blackout | from the function: dimmers, emitters no dimmer carries, a shutter with a closed range. Fog and unknown channels stay independent |
+| which channels follow Master and Blackout | from the function: dimmers, emitters no dimmer carries, a shutter with a closed range (Blackout only). A shared dimmer beside head dimmers follows Blackout only. Fog and unknown channels stay independent |
 | where a pair is | only when certain, from the file: what the fine acts on, then its preset, then the coarse right before it. Any other fine stays a single byte, joined by the user in Patch. The definition is the truth: no rule for one fixture |
 | what a typed value is set on | one compound per head, every channel in one Byte or Word |
 | the helpers | `word_split`, `word_join`, `to_native`, `rgb_to_rgbw`, `slot_byte`, `degrees` |

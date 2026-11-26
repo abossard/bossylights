@@ -62,7 +62,8 @@ fn a_command_reaches_the_frame_and_the_state() {
             0,
             0,
         ),
-        (vec![set(1, 5, 9), blackout(true)], 1, 5, 9, 0),
+        // nobody patched 1/5: it follows nothing, Blackout leaves it (#251, cx-3)
+        (vec![set(1, 5, 9), blackout(true)], 1, 5, 9, 9),
         (
             vec![set(1, 5, 9), blackout(true), blackout(false)],
             1,

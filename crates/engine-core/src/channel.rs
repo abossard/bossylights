@@ -63,6 +63,8 @@ pub const CHANNELS: usize = MAX_UNIVERSES as usize * ADDRESSES;
 /// Modifier slots: how much shows, one level each. 0 Master (full until `SetMaster`
 /// comes), 1 Blackout, 2 to 7 free.
 pub const MODIFIERS: usize = 8;
+/// The Master slot.
+pub const MASTER: usize = 0;
 /// The Blackout slot: 0 while Blackout is on, 255 while off.
 pub const BLACKOUT: usize = 1;
 
@@ -108,13 +110,38 @@ pub enum Field {
     Word(Pair),
 }
 
-/// Which modifier slots a channel follows, one bit per slot.
+/// Which modifier slots a channel follows, one bit per slot. From the fixture's file
+/// (the Rig's rules): a channel nobody patched follows nothing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Follows(pub(crate) u8);
 
 impl Follows {
-    /// Every channel follows Blackout, until the patch sets rules per channel.
-    pub const BLACKOUT: Self = Self(1 << BLACKOUT);
+    pub const NONE: Self = Self(0);
+    pub const MASTER: Self = Self::slot(MASTER);
+    pub const BLACKOUT: Self = Self::slot(BLACKOUT);
+
+    /// The bit of `slot`.
+    const fn slot(slot: usize) -> Self {
+        Self(1 << slot)
+    }
+
+    /// These slots and `other`'s.
+    #[must_use]
+    pub const fn with(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+
+    /// Whether every slot of `other` is followed.
+    #[must_use]
+    pub const fn has(self, other: Self) -> bool {
+        self.0 & other.0 == other.0
+    }
+
+    /// The byte of the channel: one bit per slot.
+    #[must_use]
+    pub const fn bits(self) -> u8 {
+        self.0
+    }
 }
 
 /// How a channel moves: bit 0 fades (else jumps), bit 1 highest wins (else latest),
@@ -146,8 +173,8 @@ impl Flags {
 }
 
 /// One patched channel as its fixture's file says (the Rig's lowering): what shows when
-/// nothing plays, where a modifier at 0 takes it, how it moves. Every channel nobody
-/// patched rests at 0, dark 0, jumping.
+/// nothing plays, where a modifier at 0 takes it, how it moves, which modifiers it
+/// follows. Every channel nobody patched rests at 0, dark 0, jumping, following nothing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Configured {
     /// The channel, counted from 0 over the whole space.
@@ -155,6 +182,7 @@ pub struct Configured {
     pub rest: u8,
     pub dark: u8,
     pub flags: Flags,
+    pub follows: Follows,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -187,15 +215,17 @@ pub(crate) fn scale_of(follows: Follows, levels: [u8; MODIFIERS]) -> Scale {
     }
 }
 
-fn scale(value: u8, dark: u8, flags: Flags, scale: Scale) -> u8 {
+/// A byte, or a pair's word, moved toward `dark` by `scale`, with one rounding at the end
+/// (half away from `dark`). A jump channel moves all or nothing.
+fn scale(value: u16, dark: u16, fades: bool, scale: Scale) -> u16 {
     match scale {
         Scale::Full => value,
         Scale::Dark => dark,
-        Scale::Part { .. } if !flags.fades() => value,
+        Scale::Part { .. } if !fades => value,
         Scale::Part { product, whole } => {
             let distance = (i128::from(value) - i128::from(dark)) * product;
             let moved = (2 * distance.abs() + whole) / (2 * whole);
-            u8::try_from(i128::from(dark) + distance.signum() * moved).unwrap_or(dark)
+            u16::try_from(i128::from(dark) + distance.signum() * moved).unwrap_or(dark)
         }
     }
 }
@@ -234,13 +264,13 @@ pub(crate) struct Raw {
 }
 
 impl Channels {
-    /// At rest 0, dark 0, jumping, following Blackout, nobody's.
+    /// At rest 0, dark 0, jumping, following nothing, nobody's.
     pub const NEW: Self = Self {
         value: [Levels::ZERO; MAX_UNIVERSES as usize],
         rest: [0; CHANNELS],
         dark: [0; CHANNELS],
         flags: [Flags::NONE; CHANNELS],
-        follows: [Follows::BLACKOUT; CHANNELS],
+        follows: [Follows::NONE; CHANNELS],
         source: [SourceTag::REST; CHANNELS],
         reserved: [0; CHANNELS],
         raw: Raw {
@@ -262,12 +292,19 @@ impl Channels {
             .unwrap_or(SourceTag::REST)
     }
 
-    /// The patch's channels: those of `old` go back to rest 0, dark 0, jumping, and show 0;
-    /// then each of `new` takes its rest, dark and flags. Every channel still follows
-    /// Blackout (rules per channel: #251). Called when the patch changes, not each frame.
+    /// The patch's channels: those of `old` go back to rest 0, dark 0, jumping, following
+    /// nothing, and show 0; then each of `new` takes its rest, dark, flags and follows.
+    /// Called when the patch changes, not each frame.
     pub fn configure(&mut self, old: &[Configured], new: &[Configured]) {
+        const NOBODYS: Configured = Configured {
+            at: 0,
+            rest: 0,
+            dark: 0,
+            flags: Flags::NONE,
+            follows: Follows::NONE,
+        };
         for at in old.iter().filter_map(|c| usize::try_from(c.at).ok()) {
-            self.set(at, 0, 0, Flags::NONE);
+            self.set(at, NOBODYS);
             if let Some(value) = byte(&mut self.value, at) {
                 *value = 0;
             }
@@ -277,18 +314,19 @@ impl Channels {
         }
         for c in new {
             if let Ok(at) = usize::try_from(c.at) {
-                self.set(at, c.rest, c.dark, c.flags);
+                self.set(at, *c);
             }
         }
     }
 
-    fn set(&mut self, at: usize, rest: u8, dark: u8, flags: Flags) {
-        if let (Some(r), Some(d), Some(f)) = (
+    fn set(&mut self, at: usize, c: Configured) {
+        if let (Some(r), Some(d), Some(f), Some(w)) = (
             self.rest.get_mut(at),
             self.dark.get_mut(at),
             self.flags.get_mut(at),
+            self.follows.get_mut(at),
         ) {
-            (*r, *d, *f) = (rest, dark, flags);
+            (*r, *d, *f, *w) = (c.rest, c.dark, c.flags, c.follows);
         }
     }
 
@@ -322,9 +360,12 @@ impl Channels {
         }
     }
 
+    /// The raw holds over the winners, then every follower moves by its modifiers: Master
+    /// and the virtual dimmers with one rounding, then Blackout to `dark` as a step of
+    /// its own. A pair moves as one 16-bit word.
     pub(crate) fn apply_winners(
         &mut self,
-        patched: &[Configured],
+        followers: &[Field],
         raw: &[Levels],
         holds: &[ChannelSet],
         levels: [u8; MODIFIERS],
@@ -359,24 +400,79 @@ impl Channels {
         if levels == [u8::MAX; MODIFIERS] {
             return;
         }
-        // each channel once: a held one in the second pass, the other patched in the first
-        let by = scales(levels);
-        let patched = patched
-            .iter()
-            .filter_map(|c| usize::try_from(c.at).ok())
-            .filter(|at| self.source.get(*at) != Some(&SourceTag::RAW));
-        for at in patched.chain(held(&self.raw)) {
-            if let (Some(value), Some(dark), Some(flags), Some(follows)) = (
-                byte(&mut self.value, at),
-                self.dark.get(at),
-                self.flags.get(at),
-                self.follows.get(at),
-            ) && let Some(by) = by.get(usize::from(follows.0))
-            {
-                *value = scale(*value, *dark, *flags, *by);
+        // Blackout is on or off: 0 or 255
+        let blackout = levels.get(BLACKOUT) == Some(&0);
+        let mut scaled = levels;
+        if let Some(level) = scaled.get_mut(BLACKOUT) {
+            *level = u8::MAX;
+        }
+        let by = scales(scaled);
+        for field in followers {
+            let (coarse, fine) = match *field {
+                Field::Byte(at) => (at, None),
+                Field::Word(pair) => (pair.coarse, Some(pair.fine)),
+            };
+            let (Ok(coarse), Ok(fine)) = (
+                usize::try_from(coarse),
+                fine.map(usize::try_from).transpose(),
+            ) else {
+                continue;
+            };
+            let (Some(&follows), Some(&flags)) = (self.follows.get(coarse), self.flags.get(coarse))
+            else {
+                continue;
+            };
+            let Some(by) = by.get(usize::from(follows.0)) else {
+                continue;
+            };
+            let dark = word_of(&self.dark, coarse, fine);
+            let out = if blackout && follows.has(Follows::BLACKOUT) {
+                dark
+            } else {
+                let value = self.value_word(coarse, fine);
+                scale(value, dark, flags.fades(), *by)
+            };
+            self.put(coarse, fine, out);
+        }
+    }
+
+    /// The value at `coarse`, or with `fine` the pair's word.
+    fn value_word(&mut self, coarse: usize, fine: Option<usize>) -> u16 {
+        let mut at = |at: usize| byte(&mut self.value, at).map_or(0, |b| *b);
+        match fine {
+            Some(fine) => u16::from_be_bytes([at(coarse), at(fine)]),
+            None => u16::from(at(coarse)),
+        }
+    }
+
+    /// Writes `out` at `coarse`, or with `fine` as a pair's word split last.
+    fn put(&mut self, coarse: usize, fine: Option<usize>, out: u16) {
+        let [high, low] = out.to_be_bytes();
+        match fine {
+            Some(fine) => {
+                if let Some(value) = byte(&mut self.value, coarse) {
+                    *value = high;
+                }
+                if let Some(value) = byte(&mut self.value, fine) {
+                    *value = low;
+                }
+            }
+            None => {
+                if let Some(value) = byte(&mut self.value, coarse) {
+                    *value = low;
+                }
             }
         }
     }
+}
+
+/// The byte at `coarse` of `bytes`, or with `fine` the pair's word.
+fn word_of(bytes: &[u8], coarse: usize, fine: Option<usize>) -> u16 {
+    let at = |at: usize| bytes.get(at).copied().unwrap_or(0);
+    fine.map_or_else(
+        || u16::from(at(coarse)),
+        |fine| u16::from_be_bytes([at(coarse), at(fine)]),
+    )
 }
 
 /// The byte of channel `at` (counted from 0 over the space) in rows of a universe.
@@ -647,12 +743,51 @@ mod tests {
     }
 
     #[test]
+    fn follows_holds_one_bit_per_slot() {
+        let both = Follows::MASTER.with(Follows::BLACKOUT);
+        // (case, follows, its byte, has Master, has Blackout)
+        let cases = [
+            ("none", Follows::NONE, 0b00, false, false),
+            ("master", Follows::MASTER, 0b01, true, false),
+            ("blackout", Follows::BLACKOUT, 0b10, false, true),
+            ("both", both, 0b11, true, true),
+            (
+                "master with master",
+                Follows::MASTER.with(Follows::MASTER),
+                0b01,
+                true,
+                false,
+            ),
+            (
+                "both with blackout",
+                both.with(Follows::BLACKOUT),
+                0b11,
+                true,
+                true,
+            ),
+        ];
+        for (case, follows, bits, master, blackout) in cases {
+            let seen = (
+                follows.bits(),
+                follows.has(Follows::MASTER),
+                follows.has(Follows::BLACKOUT),
+            );
+            assert_eq!(seen, (bits, master, blackout), "{case}");
+        }
+        assert!(
+            both.has(both) && !Follows::MASTER.has(both),
+            "has every slot of both"
+        );
+    }
+
+    #[test]
     fn the_brightness_rule_turns_highest_on_and_off_on_the_dimmers_only() {
         let one = |at, flags| Configured {
             at,
             rest: 0,
             dark: 0,
             flags,
+            follows: Follows::NONE,
         };
         let pair = Flags::FADE.with(Flags::PAIR);
         // channels 0 and 1 are dimmers, 2 and 3 are not
@@ -679,35 +814,44 @@ mod tests {
 
     #[test]
     fn a_patch_configures_its_channels_and_gives_the_old_ones_back() {
-        let one = |at, rest, dark, flags| Configured {
+        let one = |at, rest, dark, flags, follows| Configured {
             at,
             rest,
             dark,
             flags,
+            follows,
         };
-        let old = [one(0, 200, 3, Flags::NONE), one(1, 7, 0, Flags::FADE)];
+        let both = Follows::MASTER.with(Follows::BLACKOUT);
+        let old = [
+            one(0, 200, 3, Flags::NONE, Follows::BLACKOUT),
+            one(1, 7, 0, Flags::FADE, both),
+        ];
         let pair = Flags::FADE.with(Flags::PAIR);
-        let new = [one(1, 9, 255, pair), one(2, 4, 0, Flags::HIGHEST)];
+        let new = [
+            one(1, 9, 255, pair, Follows::MASTER),
+            one(2, 4, 0, Flags::HIGHEST, Follows::NONE),
+        ];
         let mut all = Box::new(Channels::NEW);
         all.configure(&[], &old);
         all.reset(&old);
         assert_eq!(all.values()[0].0[..3], [200, 7, 0], "the old patch at rest");
         all.configure(&old, &new);
-        // (channel, byte out before the next frame, rest, dark, flags)
+        // (channel, byte out before the next frame, rest, dark, flags, follows)
         let cases = [
-            (0, 0, 0, 0, Flags::NONE),
-            (1, 0, 9, 255, pair),
-            (2, 0, 4, 0, Flags::HIGHEST),
-            (3, 0, 0, 0, Flags::NONE),
+            (0, 0, 0, 0, Flags::NONE, Follows::NONE),
+            (1, 0, 9, 255, pair, Follows::MASTER),
+            (2, 0, 4, 0, Flags::HIGHEST, Follows::NONE),
+            (3, 0, 0, 0, Flags::NONE, Follows::NONE),
         ];
-        for (at, out, rest, dark, flags) in cases {
+        for (at, out, rest, dark, flags, follows) in cases {
             let seen = (
                 all.value[0].0[at],
                 all.rest[at],
                 all.dark[at],
                 all.flags[at],
+                all.follows[at],
             );
-            assert_eq!(seen, (out, rest, dark, flags), "channel {at}");
+            assert_eq!(seen, (out, rest, dark, flags, follows), "channel {at}");
         }
         all.reset(&new);
         assert_eq!(

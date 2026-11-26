@@ -84,6 +84,8 @@ pub struct Rigged {
     pub lights: u16,
     /// Each channel of the mode as its file says ([`channels::lower`]), in channel order.
     pub configured: Vec<Configured>,
+    /// Its channels that follow a modifier, in channel order, a pair as one word.
+    pub followers: Vec<Field>,
     /// One per light, in light order: its fields and what a value offers on them.
     pub fields: Vec<LightFields>,
 }
@@ -199,13 +201,13 @@ pub fn compile(
         writers: writers.into_iter().map(|(_, writer)| writer).collect(),
         lights: u16::try_from(needs).unwrap_or(u16::MAX),
         configured: configured(&lowered),
+        followers: followers(&lowered),
         fields,
     })
 }
 
-/// The channels of a lowered mode as the tick keeps them. Every channel still follows
-/// Blackout until rules per channel come (#251): one the file does not have follow it
-/// goes dark at 0, as before.
+/// The channels of a lowered mode as the tick keeps them: rest, dark, flags and what
+/// each follows, all from the file.
 fn configured(lowered: &channels::Lowered) -> Vec<Configured> {
     let paired = |at: u32| lowered.pairs.iter().any(|p| p.coarse == at || p.fine == at);
     lowered
@@ -221,13 +223,35 @@ fn configured(lowered: &channels::Lowered) -> Vec<Configured> {
             } else {
                 Flags::NONE
             };
-            let follows = c.follows.has(channels::Follows::BLACKOUT);
             Configured {
                 at: c.at,
                 rest: c.rest,
-                dark: if follows { c.dark } else { 0 },
+                dark: c.dark,
                 flags: fade.with(pair),
+                follows: c.follows,
             }
+        })
+        .collect()
+}
+
+/// The channels of a lowered mode that follow a modifier, in channel order: a pair as
+/// one word at its coarse byte, so the modifiers move it as one 16-bit value.
+fn followers(lowered: &channels::Lowered) -> Vec<Field> {
+    lowered
+        .channels
+        .iter()
+        .filter(|c| c.follows != channels::Follows::NONE)
+        .filter_map(|c| {
+            if lowered.pairs.iter().any(|p| p.fine == c.at) {
+                return None;
+            }
+            Some(
+                lowered
+                    .pairs
+                    .iter()
+                    .find(|p| p.coarse == c.at)
+                    .map_or(Field::Byte(c.at), |pair| Field::Word(*pair)),
+            )
         })
         .collect()
 }

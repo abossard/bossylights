@@ -806,13 +806,17 @@ fn check_mode(file: &str, mode: &Mode, kind: &Kind, result: &Lowered) -> Vec<Str
         .filter_map(|(i, c)| (c.byte == Byte::Coarse && roles[i] == Light::Dimmer).then_some(i))
         .collect();
     let both = Follows::MASTER.bits() | Follows::BLACKOUT.bits();
-    // A dimmer carries the emitters of its own heads. A dimmer in no head is shared.
-    let carried = |i| {
-        dimmers
-            .iter()
-            .any(|&d| heads[d].is_empty() || share_head(i, d))
+    // A dimmer carries the emitters of its own heads. A dimmer in no head is shared: it
+    // carries everything, but beside head dimmers only what is in no head, and it keeps
+    // its value under Master (owner, 2026-11-21, #251).
+    let head_dimmers = dimmers.iter().any(|&d| !heads[d].is_empty());
+    let carried = |i: usize| {
+        dimmers.iter().any(|&d| {
+            share_head(i, d) || (heads[d].is_empty() && (heads[i].is_empty() || !head_dimmers))
+        })
     };
     let expected_mask = |i: usize| match roles[i] {
+        Light::Dimmer if heads[i].is_empty() && head_dimmers => Follows::BLACKOUT.bits(),
         Light::Dimmer => both,
         Light::Emitter if carried(i) => 0,
         Light::Emitter => both,

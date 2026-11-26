@@ -1,6 +1,6 @@
 # The channel model: the engine manages channels
 
-Issue #239. Replaces the light record. Built so far: the channel core, routes, the lowering and one mixer per channel (#247 to #250). The rest is design. Owner answers: the decisions page, 2026-11-20 (ch-1 to ch-9, chk-1 to chk-10, cx-1 to cx-6, s1-*).
+Issue #239. Replaces the light record. Built so far: the channel core, routes, the lowering and one mixer per channel (#247 to #250), the rules from the file on the tick with the follower index (#251, slice 1). The rest is design. Owner answers: the decisions page, 2026-11-20 (ch-1 to ch-9, chk-1 to chk-10, cx-1 to cx-6, s1-*).
 
 ## The idea in one picture
 
@@ -150,7 +150,7 @@ For a channel with value `v`, dark `d`, following modifiers with levels `m1..mn`
 - Blackout at 0 gives `d` exactly. For a shutter, `d` is the first byte of its Closed range.
 - A **jump** channel (`fade` clear) follows all or nothing: `d` when the combined level is 0, else `v`. A shutter on Master at 50% therefore never passes through a strobe range.
 - A control channel cannot follow a modifier (refused at patch), so there are no cycles.
-- **Owner (cm-master-scale-or-cap, cm-master-ceiling, 2026-11-21): Master scales, with the formula above** (like QLC+'s default and ONYX): a dimmer at 70% under Master 50% sends 35%. On a fixture with head dimmers and a shared dimmer, Master follows the head dimmers only and the shared dimmer keeps its value. On a fixture with no dimmer, Master scales the colour bytes, so the hue stays. T5 builds it. Sources: #251.
+- **Owner (cm-master-scale-or-cap, cm-master-ceiling, 2026-11-21): Master scales, with the formula above** (like QLC+'s default and ONYX): a dimmer at 70% under Master 50% sends 35%. On a fixture with head dimmers and a shared dimmer, Master follows the head dimmers only and the shared dimmer keeps its value (it follows Blackout). An emitter in a head without a dimmer of its own then follows Master itself, so Master reaches each emitter once (this last rule: plan #251, from the Cameo HydraBeam 4000, not an owner answer). On a fixture with no dimmer, Master scales the colour bytes, so the hue stays. T5 builds it. Sources: #251.
 - Master and the virtual dimmers apply to the winner and the raw hold. Identify is written after them and before Blackout, so a low Master never hides it, and Blackout always does. A raw hold on one byte of a pair under Master shows the assembled, scaled word. Explain gives both the held byte and the sent one.
 
 Default rules, from the fixture file (cx-3: unknown channels start independent). The table says what follows Master and Blackout, not where a v11 brightness goes:
@@ -159,7 +159,7 @@ Default rules, from the fixture file (cx-3: unknown channels start independent).
 |---|---|---|---|
 | Dimmer | yes | yes | 0, or the closed value of a reverse dimmer |
 | Emitters (R, G, B, White, Amber, UV, Lime, Indigo) that **no dimmer channel controls** | yes | yes | 0 |
-| Emitters that a dimmer controls (the dimmer is in the same head, or is the fixture's shared dimmer and the emitter's head has no dimmer of its own) | no | no | the dimmer carries it |
+| Emitters that a dimmer controls (the dimmer is in the same head; or it is the fixture's shared dimmer and no head has a dimmer; or it is the shared dimmer beside head dimmers and the emitter is in no head, like the one RGBW of the Cameo HydraBeam 4000's four dimmed heads) | no | no | the dimmer carries it |
 | C, M, Y on a fixture without a dimmer | yes | yes | 255 (subtractive) |
 | Shutter | no | yes | the first byte of its Closed range. A shutter with no Closed range does not follow Blackout |
 | Strobe, pan, tilt, zoom, focus, iris, wheels, prism | no | no | |
