@@ -24,6 +24,9 @@ exclude_re = [
   'engine/src/readings\.rs:\d+:\d+: replace Readings::note with \(\)',
   'engine/src/readings\.rs:\d+:\d+: replace != with == in Readings::note',
   'engine/src/readings\.rs:\d+:\d+: replace == with != in Readings::after_handoff',
+  # Parks after bytes came and spins while none waits: every answer is the same, only how
+  # soon a long burst is read changes, which no test can show without load (#347).
+  'outputs/src/dmx_usb_pro\.rs:714:\d+: replace == with != in PortThread::try_ask',
   # Debug of the field table prints its name only, for diagnostics.
   'rig/src/table\.rs:34:9: replace <impl fmt::Debug for FieldPlan>::fmt -> fmt::Result with Ok\(Default::default\(\)\)',
 ]

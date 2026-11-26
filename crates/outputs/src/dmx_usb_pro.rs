@@ -687,9 +687,11 @@ impl PortThread {
             ) {
                 return Tried::Cut;
             }
+            let mut came = 0;
             if let Some(free) = heard.get_mut(length..)
                 && let Ok(read) = nix::unistd::read(port.as_raw_fd(), free)
             {
+                came = read;
                 length += read;
             }
             if let Some(settings) = settings_of(heard.get(..length).unwrap_or_default()) {
@@ -708,7 +710,10 @@ impl PortThread {
             if left.is_zero() {
                 return Tried::Nothing;
             }
-            thread::park_timeout(left.min(QUEUE_FULL));
+            // Bytes came: more may wait, read them before waiting (#347).
+            if came == 0 {
+                thread::park_timeout(left.min(QUEUE_FULL));
+            }
         }
     }
 
