@@ -279,7 +279,7 @@ impl<const N: usize> Times<N> {
 #[test]
 fn snapshot_has_one_press_histogram_and_six_counts_per_output() {
     // Tests see the frame's bytes through one more pointer.
-    const BEFORE: usize = 75_176 + if cfg!(feature = "test-support") { 8 } else { 0 };
+    const BEFORE: usize = 75_184 + if cfg!(feature = "test-support") { 8 } else { 0 };
     let added = MAX_OUTPUTS * (size_of::<Times<LATENCY_BUCKETS>>() + 6 * size_of::<u64>());
     assert_eq!(size_of::<Snapshot>(), BEFORE + added);
 }

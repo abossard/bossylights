@@ -8,6 +8,8 @@
 //! counting window. The stepped clock takes full command bursts, replans 32 live roots
 //! near the visit limit and ends all 32 while retirement is stalled. It also reads
 //! output health through a device loss, return, refused restart and replacement with all frees counted.
+//! Blackout is held by the engine's hand and by a connection's hand that drops, latched
+//! and let go, and Master moves, on every value.
 //! Every grab entry is live and let go by `ReleaseAll`, and a burst grabs and releases in
 //! one frame: the front keeps each box until the tick applied the command that let it go.
 //! The tick frees nothing: the old writers, runs, plans and a replaced device with its thread go to
@@ -222,6 +224,12 @@ fn main() {
             let _ = sender.send(Command::ReleaseChannel { channel });
         }
         let _ = sender.send(Command::Blackout { on: value % 2 == 0 });
+        // a connection's hand holds Blackout and drops; the latch flips; Master moves
+        let hand = sender.hand();
+        let _ = sender.begin_as(hand, Command::Blackout { on: true }, &[]);
+        let _ = sender.drop_hand(hand);
+        let _ = sender.send(Command::SetBlackoutLatch { on: value % 4 == 1 });
+        let _ = sender.send(Command::SetMaster { level: value });
         let light = u16::from(value) * 2;
         let colour = Command::SetColour {
             target: Target::Light { light: light + 1 },
@@ -1149,9 +1157,9 @@ fn linked_ends() {
             ));
         }
         // The two revisions queue one swap per root. Fill the remaining FIFO
-        // exactly; a refused blackout must not replace the last accepted one.
+        // exactly; a refused Blackout changes nothing.
         for _ in (sender.sent() - sent) as usize..engine::QUEUE {
-            assert!(send(&mut sender, Command::Blackout { on: false }, &[]));
+            assert!(send(&mut sender, Command::SetMaster { level: 255 }, &[]));
         }
         let full = sender.sent();
         assert!(matches!(

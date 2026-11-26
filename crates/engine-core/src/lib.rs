@@ -89,8 +89,10 @@ pub struct State {
     /// What the system gave the output thread. Asked once, when the thread starts.
     pub priority: Priority,
     /// While on, every channel that follows Blackout goes to its dark. The held levels
-    /// stay.
+    /// stay. On while the latch is on or any connection holds it (`blackout_hold`).
     pub blackout: bool,
+    /// Who keeps Blackout on: the latch and how many connections hold it.
+    pub blackout_hold: BlackoutHold,
     /// How much shows of every channel that follows Master: 255 full.
     pub master: u8,
     /// The outputs, by number. `None` where no output is set.
@@ -129,6 +131,7 @@ impl State {
             frame: 0,
             priority,
             blackout: false,
+            blackout_hold: BlackoutHold::NONE,
             master: u8::MAX,
             outputs: [None; MAX_OUTPUTS],
             now: Duration::ZERO,
@@ -297,6 +300,37 @@ pub enum BestEffort {
     NotSupported,
 }
 
+/// Who keeps Blackout on: the latch, and how many connections hold it. The front counts
+/// them (`docs/design/channel-model.md`, slot 1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct BlackoutHold {
+    pub latched: bool,
+    pub holders: u32,
+}
+
+impl BlackoutHold {
+    /// Nobody keeps it on.
+    pub const NONE: Self = Self {
+        latched: false,
+        holders: 0,
+    };
+
+    /// Dark while the latch is on or any connection holds it.
+    pub const fn dark(self) -> bool {
+        self.latched || self.holders > 0
+    }
+}
+
+/// What a connection asks of Blackout. The front decides with who asks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BlackoutAsk {
+    /// Its own hold: `Command::Blackout`.
+    Hold { on: bool },
+    /// The latch, whoever asks: `Command::SetBlackoutLatch`.
+    Latch { on: bool },
+}
+
 /// What a client may send: the closed list, numbers as sent. The engine front checks it
 /// against the project ([`Project::update`]); only that makes an [`EngineCommand`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
@@ -316,10 +350,15 @@ pub enum Command {
     /// Let every Manual play, every direct hold and every raw channel go. Show,
     /// Autopilot, blackout, Master and tempo stay.
     ReleaseAll,
-    /// While on, every channel that follows Blackout goes to its dark: dimmers, emitters
-    /// no dimmer carries, shutters with a Closed range. Fog, motion and the rest stay.
-    /// The held levels stay and come back when off.
+    /// This connection holds Blackout, or lets it go. While the latch is on or any
+    /// connection holds, every channel that follows Blackout goes to its dark: dimmers,
+    /// emitters no dimmer carries, shutters with a Closed range. Fog, motion and the rest
+    /// stay. The held levels stay and come back when off. A connection that closes lets
+    /// its hold go in the next frame.
     Blackout { on: bool },
+    /// The Blackout latch: on until a `SetBlackoutLatch` off, whoever sent it. No
+    /// connection's hold changes it.
+    SetBlackoutLatch { on: bool },
     /// How much shows of every channel that follows Master, 255 full: a dimmer at 70%
     /// under Master at 50% sends 35%. Full when the engine starts.
     SetMaster { level: u8 },
@@ -497,8 +536,9 @@ pub enum EngineCommand {
     /// Every raw channel, every direct hold and every Manual play let go; the plans of
     /// the plays go back to be freed.
     ReleaseAll,
+    /// Who keeps Blackout on now, as the front counts them: dark while latched or held.
     Blackout {
-        on: bool,
+        hold: BlackoutHold,
     },
     Master {
         level: u8,
@@ -664,8 +704,9 @@ impl State {
                 plays.release_where(|play| play.rank == Rank::Manual);
                 State { plays, ..state }
             }
-            EngineCommand::Blackout { on } => State {
-                blackout: on,
+            EngineCommand::Blackout { hold } => State {
+                blackout: hold.dark(),
+                blackout_hold: hold,
                 ..state
             },
             EngineCommand::Master { level } => State {

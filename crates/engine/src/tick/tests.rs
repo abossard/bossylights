@@ -1017,7 +1017,15 @@ fn a_command_is_a_press_unless_it_only_manages_outputs() {
         (EngineCommand::ReleaseChannel { channel }, 1),
         (EngineCommand::ReleaseChannels, 1),
         (EngineCommand::ReleaseAll, 1),
-        (EngineCommand::Blackout { on: true }, 1),
+        (
+            EngineCommand::Blackout {
+                hold: engine_core::BlackoutHold {
+                    latched: false,
+                    holders: 1,
+                },
+            },
+            1,
+        ),
         (EngineCommand::Fields, 1),
         (
             EngineCommand::Grab {

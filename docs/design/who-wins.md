@@ -44,7 +44,7 @@ flowchart LR
 | Modifier slot | Level | Who follows | Today |
 |---|---|---|---|
 | 0 Master | a command, default 255 | dimmers (a shared dimmer beside head dimmers: not, it follows Blackout only), and emitters no dimmer carries (from the fixture file) | built: `SetMaster`, full at start (#251) |
-| 1 Blackout | 0 while on, 255 while off. A step of its own after Master and the virtual dimmers | as Master, plus a shutter with a Closed range and a shared dimmer beside head dimmers | built: the followers the file gives, to the file's dark (#251) |
+| 1 Blackout | 0 while on, 255 while off: while the latch is on or any connection holds (`Blackout`, `SetBlackoutLatch`). A step of its own after Master and the virtual dimmers | as Master, plus a shutter with a Closed range and a shared dimmer beside head dimmers | built: the followers the file gives, to the file's dark; the latch and one hold per connection (#251) |
 | 2 to 7 virtual dimmers | the value of a control channel | the channels the user picks in Patch. None by default | none yet (#251) |
 
 A source may offer nothing at a moment (a gap). Then the next one down shows through.

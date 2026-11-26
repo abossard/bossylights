@@ -173,7 +173,7 @@ fn an_explicit_reroute_refused_by_a_full_queue_keeps_sending_the_old_route() {
     wakes.wake().unwrap();
     assert_eq!(packet(&socket, 0x41, 0x0B, 0, 3).2[0], 11);
 
-    while sender.send(Command::Blackout { on: false }).is_ok() {}
+    while sender.send(Command::SetMaster { level: 255 }).is_ok() {}
     let new_route = Route::new(outputs::limits(kind), &[span(123, 3)]).unwrap();
     let result = sender.attach_route(
         output(1),

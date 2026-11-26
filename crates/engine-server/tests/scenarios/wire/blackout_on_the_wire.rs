@@ -12,6 +12,10 @@
 //! | 41 to 43 | Generic RGB, RGB | R G B to 0 | |
 //! | 100 | nothing patched | | a raw hold follows nothing |
 //!
+//! Blackout is held by each connection, and latched by any (#251, `crew/plans/251.md`,
+//! Blackout): dark while the latch is on or any connection holds it. A connection that
+//! closes lets its hold go in the next frame. The picture reads back `{latched, holders}`.
+//!
 //! Master scales what follows it (owner, 2026-11-21, #251): `out = dark + (v - dark) x m /
 //! 255`, one rounding. Master 50% is level 128. Worked by hand:
 //!
@@ -25,9 +29,10 @@
 
 use crate::wire_common as common;
 
-use common::{Heard, Socket, command, connect, serve};
+use common::{Heard, Socket, answer, command, connect, send, serve};
 use engine::{Engine, Universes};
 use serde_json::{Value, json};
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -160,6 +165,7 @@ fn folder() -> PathBuf {
 
 /// A served engine on universe 1 of a fake DMX USB Pro, these fixtures patched.
 struct Desk {
+    address: SocketAddr,
     socket: Socket,
     heard: Heard,
     stop: Arc<AtomicBool>,
@@ -200,6 +206,7 @@ impl Desk {
             );
         }
         Self {
+            address,
             socket,
             heard,
             stop,
@@ -335,4 +342,73 @@ async fn master_scales_only_what_follows_it() {
     desk.heard(at.clone(), zero, "master at 0").await;
     desk.accepted(master(255)).await;
     desk.heard(at, held, "master full").await;
+}
+
+/// Waits until the picture reads back `want` as `state.blackout_hold`.
+async fn until_read(socket: &mut Socket, want: Value, step: &str) {
+    let started = Instant::now();
+    loop {
+        send(socket, &json!("Query")).await;
+        let read = answer(socket).await["Picture"]["state"]["blackout_hold"].clone();
+        if read == want {
+            return;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "{step}: read back {read}, want {want}"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await; // poll
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn two_hands_hold_blackout_until_both_let_go() {
+    let mut a = Desk::new(&[("Generic", "Generic RGB", "RGB", 41)]).await;
+    a.hold(&[(41, 200), (42, 200), (43, 200)]).await;
+    let mut b = connect(a.address).await;
+    let at = || vec![41, 42, 43];
+    let (lit, dark) = (vec![200; 3], vec![0; 3]);
+    let blackout = |on| json!({"Blackout": {"on": on}});
+    let latch = |on| json!({"SetBlackoutLatch": {"on": on}});
+    let hold = |latched, holders| json!({"latched": latched, "holders": holders});
+    a.heard(at(), lit.clone(), "held at 200").await;
+    // (step, who sends, command, bytes after, read back after)
+    let steps = [
+        ("A on", true, blackout(true), &dark, hold(false, 1)),
+        ("B on", false, blackout(true), &dark, hold(false, 2)),
+        (
+            "A off: B still holds",
+            true,
+            blackout(false),
+            &dark,
+            hold(false, 1),
+        ),
+        ("B off", false, blackout(false), &lit, hold(false, 0)),
+    ];
+    for (step, from_a, command_, bytes, read) in steps {
+        let socket = if from_a { &mut a.socket } else { &mut b };
+        assert_eq!(command(socket, command_).await, json!("Accepted"), "{step}");
+        a.heard(at(), bytes.clone(), step).await;
+        until_read(&mut a.socket, read, step).await;
+    }
+    // a third connection holds, then its socket closes
+    let mut c = connect(a.address).await;
+    assert_eq!(command(&mut c, blackout(true)).await, json!("Accepted"));
+    a.heard(at(), dark.clone(), "C on").await;
+    drop(c);
+    a.heard(at(), lit.clone(), "C closed: its hold let go")
+        .await;
+    until_read(&mut a.socket, hold(false, 0), "C closed").await;
+    // the latch is nobody's: it stays when a holder closes, until any connection lets it go
+    a.accepted(latch(true)).await;
+    let mut d = connect(a.address).await;
+    assert_eq!(command(&mut d, blackout(true)).await, json!("Accepted"));
+    until_read(&mut a.socket, hold(true, 1), "latched, D on").await;
+    drop(d);
+    until_read(&mut a.socket, hold(true, 0), "D closed").await;
+    a.heard(at(), dark, "D closed: the latch keeps it dark")
+        .await;
+    assert_eq!(command(&mut b, latch(false)).await, json!("Accepted"));
+    a.heard(at(), lit, "B lets the latch go").await;
+    until_read(&mut a.socket, hold(false, 0), "unlatched").await;
 }

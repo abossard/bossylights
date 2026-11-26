@@ -904,7 +904,7 @@ fn a_restart_with_a_full_fifo_commits_only_a_working_replacement() {
         let Ok(Begun::Opening(restart)) = sender.begin(set(3), &[]) else {
             panic!("changing the route length must retire the current lane");
         };
-        while sender.send(Command::Blackout { on: false }).is_ok() {}
+        while sender.send(Command::SetMaster { level: 255 }).is_ok() {}
         assert_eq!(sender.finish(restart.open()), answer, "fresh {fresh}");
         let run = RunNumbers { first: 1, count }.check(universes).unwrap();
         let expected = Some(ProjectOutput::Kind {
@@ -1540,9 +1540,9 @@ fn a_grab_box_outlives_the_command_that_lets_it_go_until_the_tick_applied_it() {
         blue: 0,
     };
     let release = Command::ReleaseColour { target: light };
-    let next = Command::Blackout { on: false };
+    let next = Command::SetMaster { level: 255 };
     // (step, a wake before the command, boxes waiting for the tick after it, the grabs'
-    // revision: one more for the grab and for the release, none for Blackout)
+    // revision: one more for the grab and for the release, none for Master)
     let steps = [
         ("the grab sent: its change list", grab, false, 1, 1),
         (
@@ -1655,4 +1655,232 @@ fn a_kept_wave_keeps_its_bytes_when_the_tempo_doubles() {
         "the tempo doubled, the kept bytes stay"
     );
     wakes.run();
+}
+
+/// A strip of three pixels at 1, each channel held at 200: all nine follow Blackout.
+#[expect(clippy::unwrap_used, reason = "a test that cannot set itself up fails")]
+fn lit_strip() -> (Engine, Sender, Arc<Heard>) {
+    let (engine, mut sender) = Engine::start(Universes::ONE).unwrap();
+    let heard = Arc::new(Heard {
+        frames: AtomicU64::new(0),
+        levels: Default::default(),
+    });
+    let run = RunNumbers { first: 1, count: 1 }
+        .check(sender.universes)
+        .unwrap();
+    let output = OutputNumber::try_from(1).unwrap();
+    let hears = Box::new(Hears(Arc::clone(&heard)));
+    sender.attach(output, hears, run, Rate::Sixty).unwrap();
+    let strip = Command::PatchStrip {
+        name: Text::new("strip").unwrap(),
+        pixels: engine_core::Pixels::try_from(3).unwrap(),
+        color: Color::Rgb,
+        at: ChannelNumbers {
+            universe: 1,
+            address: 1,
+        },
+    };
+    sender.send(strip).unwrap();
+    for address in 1..=9 {
+        let channel = ChannelNumbers {
+            universe: 1,
+            address,
+        };
+        sender
+            .send(Command::SetChannel {
+                channel,
+                value: 200,
+            })
+            .unwrap();
+    }
+    (engine, sender, heard)
+}
+
+/// `crew/plans/251.md`, Blackout: the rule's cases on the bytes of the next frame, and
+/// what the picture reads back. Each hand that holds keeps one place in the queue.
+#[test]
+#[expect(clippy::unwrap_used, reason = "a test whose tick failed fails")]
+fn two_hands_and_the_latch_keep_blackout_on_the_bytes() {
+    let (mut engine, mut sender, heard) = lit_strip();
+    let (a, b) = (sender.hand(), sender.hand());
+    assert_ne!(a, b, "each connection its own hand");
+    assert!(![a, b].contains(&Hand::ENGINE), "never the engine's own");
+    let (lit, dark) = ([200; 9], [0; 9]);
+    let blackout = |on| Command::Blackout { on };
+    let latch = |on| Command::SetBlackoutLatch { on };
+    // (step, hand, command or its drop, bytes after, latched, holders)
+    let steps = [
+        ("A on", a, Some(blackout(true)), dark, false, 1),
+        ("B on", b, Some(blackout(true)), dark, false, 2),
+        (
+            "A off: B still holds",
+            a,
+            Some(blackout(false)),
+            dark,
+            false,
+            1,
+        ),
+        ("B off", b, Some(blackout(false)), lit, false, 0),
+        ("A on twice", a, Some(blackout(true)), dark, false, 1),
+        ("", a, Some(blackout(true)), dark, false, 1),
+        ("A drops: lit", a, None, lit, false, 0),
+        ("latch on", b, Some(latch(true)), dark, true, 0),
+        ("B on", b, Some(blackout(true)), dark, true, 1),
+        ("B drops: the latch stays", b, None, dark, true, 0),
+        (
+            "the engine's hand lets the latch go",
+            Hand::ENGINE,
+            Some(latch(false)),
+            lit,
+            false,
+            0,
+        ),
+        ("A on again", a, Some(blackout(true)), dark, false, 1),
+        ("latch on again", b, Some(latch(true)), dark, true, 1),
+        (
+            "ReleaseAll keeps the latch and the hold",
+            Hand::ENGINE,
+            Some(Command::ReleaseAll),
+            dark,
+            true,
+            1,
+        ),
+    ];
+    assert_eq!(heard.after(&mut engine, &sender), lit, "held at 200");
+    for (step, hand, command, bytes, latched, holders) in steps {
+        match command {
+            Some(command) => drop(sender.begin_as(hand, command, &[]).unwrap()),
+            None => sender.drop_hand(hand).unwrap(),
+        }
+        assert_eq!(heard.after(&mut engine, &sender), bytes, "{step}");
+        let hold = engine.fresh().unwrap().performance().blackout_hold;
+        let want = engine_core::BlackoutHold { latched, holders };
+        assert_eq!(hold, want, "{step}: read back");
+        assert_eq!(
+            sender.commands.held, holders as usize,
+            "{step}: let-go places"
+        );
+    }
+}
+
+/// A hand's let-go keeps its place in the queue from its first hold: with the tick
+/// gone, the queue fills, and the let-go still goes in.
+#[test]
+#[expect(clippy::unwrap_used, reason = "a test that cannot set itself up fails")]
+fn a_hands_let_go_keeps_its_place_in_the_queue() {
+    let (engine, mut sender) = Engine::start(Universes::ONE).unwrap();
+    drop(engine); // nothing drains the queue now
+    let (a, b) = (sender.hand(), sender.hand());
+    let raw = Command::SetChannel {
+        channel: ChannelNumbers {
+            universe: 1,
+            address: 1,
+        },
+        value: 1,
+    };
+    let fill = |sender: &mut Sender, free: usize| {
+        while sender.commands.slots() > free {
+            sender.send(raw).unwrap();
+        }
+    };
+    let on = Command::Blackout { on: true };
+    let full = Err(Refusal::QueueFull);
+    fill(&mut sender, 1);
+    let refused = sender.begin_as(a, on, &[]).map(drop);
+    assert_eq!(refused, full, "one place: none for the let-go");
+    assert_eq!(
+        (sender.blackout.hold().holders, sender.commands.held),
+        (0, 0),
+        "refused: nothing changes"
+    );
+    assert_eq!(sender.commands.slots(), 1, "the place is still free");
+    // the hold and its let-go: two places
+    let (engine, mut sender) = Engine::start(Universes::ONE).unwrap();
+    drop(engine);
+    let a = sender.hand();
+    fill(&mut sender, 2);
+    sender.begin_as(a, on, &[]).unwrap();
+    assert_eq!((sender.commands.slots(), sender.commands.held), (0, 1));
+    assert_eq!(sender.send(raw), Err(Unsent::Refused(Refusal::QueueFull)));
+    let latch = Command::SetBlackoutLatch { on: true };
+    assert_eq!(sender.begin_as(b, latch, &[]).map(drop), full);
+    assert_eq!(
+        sender.blackout.hold(),
+        engine_core::BlackoutHold {
+            latched: false,
+            holders: 1
+        },
+        "a refused latch changes nothing"
+    );
+    assert_eq!(
+        sender.begin_as(a, on, &[]).map(drop),
+        Ok(()),
+        "A holds already: nothing to queue"
+    );
+    assert_eq!(
+        sender
+            .begin_as(b, Command::Blackout { on: false }, &[])
+            .map(drop),
+        Ok(()),
+        "B holds nothing: nothing to queue"
+    );
+    assert_eq!(sender.begin_as(b, on, &[]).map(drop), full);
+    sender.drop_hand(a).unwrap();
+    assert_eq!(sender.blackout.hold().holders, 0, "A let go");
+    assert_eq!((sender.commands.slots(), sender.commands.held), (0, 0));
+    // the let-go by a press, with the queue full
+    let (engine, mut sender) = Engine::start(Universes::ONE).unwrap();
+    drop(engine);
+    let a = sender.hand();
+    fill(&mut sender, 2);
+    sender.begin_as(a, on, &[]).unwrap();
+    assert_eq!(sender.commands.slots(), 0);
+    sender
+        .begin_as(a, Command::Blackout { on: false }, &[])
+        .unwrap();
+    assert_eq!(sender.blackout.hold().holders, 0, "A let go by a press");
+}
+
+/// The 17th hand to hold finds the book's first room full: it holds like the first.
+#[test]
+#[expect(clippy::unwrap_used, reason = "a test whose tick failed fails")]
+fn seventeen_hands_hold_blackout() {
+    let (mut engine, mut sender, heard) = lit_strip();
+    let hands: Vec<Hand> = (0..17).map(|_| sender.hand()).collect();
+    for hand in &hands {
+        sender
+            .begin_as(*hand, Command::Blackout { on: true }, &[])
+            .unwrap();
+    }
+    assert_eq!(heard.after(&mut engine, &sender), [0; 9]);
+    let hold = engine.fresh().unwrap().performance().blackout_hold;
+    assert_eq!(hold.holders, 17);
+    for hand in hands {
+        sender.drop_hand(hand).unwrap();
+    }
+    assert_eq!(heard.after(&mut engine, &sender), [200; 9]);
+}
+
+/// A let-go the queue refuses changes nothing: the hand still holds and keeps its place.
+/// Its kept place makes this unreachable; the test fills the queue past it.
+#[test]
+#[expect(clippy::unwrap_used, reason = "a test that cannot set itself up fails")]
+fn a_refused_let_go_changes_nothing() {
+    let (engine, mut sender) = Engine::start(Universes::ONE).unwrap();
+    drop(engine); // nothing drains the queue now
+    let a = sender.hand();
+    sender
+        .begin_as(a, Command::Blackout { on: true }, &[])
+        .unwrap();
+    let filler = || Sent {
+        command: EngineCommand::ReleaseChannels,
+        at: Duration::ZERO,
+        brings: Brings::Nothing,
+    };
+    while sender.commands.fifo.push(filler()).is_ok() {}
+    assert_eq!(sender.drop_hand(a), Err(Refusal::QueueFull));
+    assert_eq!(
+        (sender.blackout.hold().holders, sender.commands.held),
+        (1, 1)
+    );
 }

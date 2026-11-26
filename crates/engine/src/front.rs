@@ -1,6 +1,7 @@
 //! Command admission and installation. This is the engine front: it owns the project,
 //! patch, plays reserved for admission, and output openings before the tick sees them.
 
+use crate::blackout::{self, Blackout};
 use crate::grabs::{Change as GrabSet, Changes, Grabs};
 use crate::lane::Lane;
 use crate::*;
@@ -14,6 +15,18 @@ use opening::{
 };
 pub use opening::{Handoff, Open, Opened, Opening};
 pub(crate) use opening::{LaneDelivery, free, recover};
+
+/// Who sends: one per connection ([`Sender::hand`]), and the engine's own. What a hand
+/// holds is its own, and goes in the next frame once the hand drops
+/// ([`Sender::drop_hand`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Hand(pub(crate) u64);
+
+impl Hand {
+    /// The engine's own: [`Sender::begin`], [`Sender::send`] and [`Sender::admit`] send
+    /// with it. Never given to a connection.
+    pub const ENGINE: Self = Self(0);
+}
 
 pub struct Sender {
     /// `None` while an [`Opening`] has it: one device opens at a time.
@@ -49,6 +62,10 @@ pub struct Sender {
     grabs: Grabs,
     /// The generation of the last grab.
     grabbed: u32,
+    /// The last hand given to a connection.
+    hands: u64,
+    /// Who keeps Blackout on.
+    blackout: Blackout,
     /// Boxes this sender sent back from the tick thread, so far. The free thread counts
     /// the ones it freed in `Shared::freed`.
     retired: u64,
@@ -81,11 +98,16 @@ pub(crate) struct Sent {
 struct CommandQueue {
     fifo: rtrb::Producer<Sent>,
     reserved: bool,
+    /// One place for the let-go of each hand that holds something: a hand's let-go is
+    /// never refused.
+    held: usize,
 }
 
 impl CommandQueue {
     fn slots(&self) -> usize {
-        self.fifo.slots().saturating_sub(usize::from(self.reserved))
+        self.fifo
+            .slots()
+            .saturating_sub(usize::from(self.reserved) + self.held)
     }
 
     fn write_chunk_uninit(
@@ -321,6 +343,8 @@ pub struct Prepared {
 enum Change {
     Nothing,
     Send(EngineCommand),
+    /// Who keeps Blackout on: the front decides with who asks.
+    Blackout(engine_core::BlackoutAsk),
     Open {
         output: OutputNumber,
         kind: OutputKind,
@@ -505,7 +529,12 @@ impl Base {
                 Some(project.update(ProjectEvent::Opened { output, kind })?.0)
             }
             Some(ProjectEffect::Send(EngineCommand::RemoveOutput { .. })) => Some(project),
-            Some(ProjectEffect::Send(_) | ProjectEffect::Look(_) | ProjectEffect::Patch(_))
+            Some(
+                ProjectEffect::Send(_)
+                | ProjectEffect::Blackout(_)
+                | ProjectEffect::Look(_)
+                | ProjectEffect::Patch(_),
+            )
             | None => None,
         };
         if let Some((fixture, _)) = checked.and_then(|p| self.patch.unstreamed(&p)) {
@@ -514,6 +543,7 @@ impl Base {
         let change = match effect {
             None => Change::Nothing,
             Some(ProjectEffect::Send(command)) => Change::Send(command),
+            Some(ProjectEffect::Blackout(ask)) => Change::Blackout(ask),
             Some(ProjectEffect::Look(command)) => self.look(command)?,
             Some(ProjectEffect::Patch(engine_core::PatchCommand::Release { target, property })) => {
                 Change::ReleaseProperty {
@@ -781,6 +811,7 @@ impl Sender {
             commands: CommandQueue {
                 fifo: commands,
                 reserved: false,
+                held: 0,
             },
             project: Project::new(universes),
             routed: Arc::default(),
@@ -796,6 +827,8 @@ impl Sender {
             generation: 0,
             grabs: Grabs::new(),
             grabbed: 0,
+            hands: 0,
+            blackout: Blackout::new(),
             retired: 0,
             devices: 0,
             sent: 0,
@@ -840,9 +873,60 @@ impl Sender {
     /// one step: a caller that shares the front behind a lock prepares without it
     /// ([`Sender::base`], [`Base::prepare`], [`Sender::admit`]).
     pub fn begin(&mut self, command: Command, library: &[Fixture]) -> Result<Begun, Refusal> {
+        self.begin_as(Hand::ENGINE, command, library)
+    }
+
+    /// [`Sender::begin`], sent by `hand`: what it holds is its own.
+    pub fn begin_as(
+        &mut self,
+        hand: Hand,
+        command: Command,
+        library: &[Fixture],
+    ) -> Result<Begun, Refusal> {
         self.take_back_abandoned();
         let prepared = self.base().prepare(command, library)?;
-        self.admit(prepared)
+        self.admit_as(hand, prepared)
+    }
+
+    /// A new hand, for one connection.
+    pub fn hand(&mut self) -> Hand {
+        self.hands += 1;
+        Hand(self.hands)
+    }
+
+    /// `hand` is gone: what it holds goes in the next frame. Its let-go kept a place in
+    /// the queue since it first held something, so it is never refused for room.
+    pub fn drop_hand(&mut self, hand: Hand) -> Result<(), Refusal> {
+        self.blackout(hand, blackout::Event::Drops)
+    }
+
+    /// Tells the tick who keeps Blackout on after `event` from `hand`, when that changes.
+    /// A hand that starts holding keeps a place for its let-go too; refused
+    /// (`QueueFull`), nothing changes.
+    fn blackout(&mut self, hand: Hand, event: blackout::Event) -> Result<(), Refusal> {
+        let step = self.blackout.step(hand, event);
+        match step {
+            blackout::Step::Same => {}
+            blackout::Step::Latch(hold) => {
+                self.push(EngineCommand::Blackout { hold }, Brings::Nothing)?
+            }
+            blackout::Step::Holds(hold) => {
+                if self.commands.slots() < 2 {
+                    return Err(Refusal::QueueFull);
+                }
+                self.push(EngineCommand::Blackout { hold }, Brings::Nothing)?;
+                self.commands.held += 1;
+            }
+            blackout::Step::LetsGo(hold) => {
+                self.commands.held -= 1;
+                if let Err(refused) = self.push(EngineCommand::Blackout { hold }, Brings::Nothing) {
+                    self.commands.held += 1;
+                    return Err(refused);
+                }
+            }
+        }
+        self.blackout.take(hand, step);
+        Ok(())
     }
 
     /// What a command is checked against now: the project, the patch and the looks.
@@ -862,6 +946,11 @@ impl Sender {
     /// replaced its base since: nothing changes, prepare it again. Checks here only what
     /// a play or the queue decides: which plays a change touches, a play slot, room.
     pub fn admit(&mut self, prepared: Prepared) -> Result<Begun, Refusal> {
+        self.admit_as(Hand::ENGINE, prepared)
+    }
+
+    /// [`Sender::admit`], sent by `hand`.
+    pub fn admit_as(&mut self, hand: Hand, prepared: Prepared) -> Result<Begun, Refusal> {
         let Prepared {
             base,
             project,
@@ -880,6 +969,10 @@ impl Sender {
         self.reap();
         let begun = match change {
             Change::Nothing => Begun::Queued,
+            Change::Blackout(ask) => {
+                self.blackout(hand, blackout::Event::Ask(ask))?;
+                Begun::Queued
+            }
             Change::Send(command) => {
                 if let EngineCommand::Attach { output, .. }
                 | EngineCommand::RemoveOutput { output } = command

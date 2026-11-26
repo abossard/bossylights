@@ -11,7 +11,7 @@
 //! in the table "An output in the project" in `docs/engine.md`, walked by a test.
 
 use crate::{
-    Command, EngineCommand, LookCommand, MAX_OUTPUTS, MemberList, Members, OutputKind,
+    BlackoutAsk, Command, EngineCommand, LookCommand, MAX_OUTPUTS, MemberList, Members, OutputKind,
     OutputNumber, PatchCommand, Property, Rate, Refusal, Rgb, Run, Universes, Value,
 };
 use serde::Serialize;
@@ -173,6 +173,8 @@ pub enum ProjectEvent {
 pub enum ProjectEffect {
     /// Send this to the tick thread.
     Send(EngineCommand),
+    /// The front counts who keeps Blackout on and tells the tick (`BlackoutHold`).
+    Blackout(BlackoutAsk),
     /// The patch checks this and says what follows (`crates/rig`).
     Patch(PatchCommand),
     /// The saved looks and the plays check this and say what follows (`crates/looks`).
@@ -231,7 +233,14 @@ impl Project {
                     channel: channel.check(universes)?,
                 }),
                 Command::ReleaseChannels => send(EngineCommand::ReleaseChannels),
-                Command::Blackout { on } => send(EngineCommand::Blackout { on }),
+                Command::Blackout { on } => Ok((
+                    self,
+                    Some(ProjectEffect::Blackout(BlackoutAsk::Hold { on })),
+                )),
+                Command::SetBlackoutLatch { on } => Ok((
+                    self,
+                    Some(ProjectEffect::Blackout(BlackoutAsk::Latch { on })),
+                )),
                 Command::SetMaster { level } => send(EngineCommand::Master { level }),
                 Command::SetOutput {
                     output,
@@ -600,7 +609,7 @@ mod tests {
         let name = Text::new("front").unwrap();
         let members =
             Members::new(&[Member::Fixture { fixture: 3 }, Member::Light { light: 1 }]).unwrap();
-        let cases: [(Vec<ProjectEvent>, ProjectEvent, Done, Option<ProjectOutput>); 24] = [
+        let cases: [(Vec<ProjectEvent>, ProjectEvent, Done, Option<ProjectOutput>); 27] = [
             // the patch checks what names a fixture or a light
             (
                 vec![],
@@ -713,8 +722,32 @@ mod tests {
             (
                 vec![],
                 Client(Command::Blackout { on: true }),
-                Ok(Some(ProjectEffect::Send(EngineCommand::Blackout {
+                Ok(Some(ProjectEffect::Blackout(BlackoutAsk::Hold {
                     on: true,
+                }))),
+                None,
+            ),
+            (
+                vec![],
+                Client(Command::Blackout { on: false }),
+                Ok(Some(ProjectEffect::Blackout(BlackoutAsk::Hold {
+                    on: false,
+                }))),
+                None,
+            ),
+            (
+                vec![],
+                Client(Command::SetBlackoutLatch { on: true }),
+                Ok(Some(ProjectEffect::Blackout(BlackoutAsk::Latch {
+                    on: true,
+                }))),
+                None,
+            ),
+            (
+                vec![],
+                Client(Command::SetBlackoutLatch { on: false }),
+                Ok(Some(ProjectEffect::Blackout(BlackoutAsk::Latch {
+                    on: false,
                 }))),
                 None,
             ),

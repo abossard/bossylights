@@ -128,7 +128,7 @@ fn retired_plan_bytes_refuse_the_next_live_edit_until_reclaimed() {
     // The last two FIFO places take a release then a press. The first pixel
     // reveals the last admitted red and the second takes Manual green.
     for _ in 2..engine::QUEUE {
-        sender.send(Command::Blackout { on: false }).unwrap();
+        sender.send(Command::SetMaster { level: 255 }).unwrap();
     }
     sender
         .send(Command::ReleaseIntensity { target: one })

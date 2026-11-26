@@ -34,8 +34,8 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use engine::{
-    Begun, ChannelLevel, Command, Engine, Grouped, Looks, Patch, Patched, Project, ProjectOutput,
-    ProjectView, Refusal, SavedLook, Sender, Snapshot,
+    Begun, ChannelLevel, Command, Engine, Grouped, Hand, Looks, Patch, Patched, Project,
+    ProjectOutput, ProjectView, Refusal, SavedLook, Sender, Snapshot,
 };
 use engine_core::{HeldLight, ShowFile, Text};
 use library::Shelf;
@@ -411,11 +411,16 @@ enum Later {
 /// the connection's worker, one after another; a press runs at once (the socket table in
 /// docs/engine.md, API).
 async fn talk(mut socket: WebSocket, api: Arc<Api>) {
+    let hand = api.hand().await;
+    let _holding = Holding {
+        api: Arc::clone(&api),
+        hand,
+    };
     let mut pictures = api.pictures.clone();
     // What a subscribed connection sent last.
     let mut subscription: Option<Subscription> = None;
     let mut stopped = api.stop.subscribe();
-    let (jobs, mut results) = worker(Arc::clone(&api));
+    let (jobs, mut results) = worker(Arc::clone(&api), hand);
     let mut waiting: VecDeque<Slot> = VecDeque::with_capacity(WAITING);
     loop {
         while let Some(slot) = waiting.pop_front() {
@@ -459,7 +464,7 @@ async fn talk(mut socket: WebSocket, api: Arc<Api>) {
             }
             message = socket.recv(), if waiting.len() < WAITING => match message {
                 Some(Ok(Message::Text(text))) => {
-                    let slot = take(&api, &text, &jobs).await;
+                    let slot = take(&api, &text, &jobs, hand).await;
                     waiting.push_back(slot);
                 }
                 Some(Ok(Message::Binary(_))) => {
@@ -480,6 +485,23 @@ async fn talk(mut socket: WebSocket, api: Arc<Api>) {
                     return;
                 }
             }
+        }
+    }
+}
+
+/// A connection's hand. However the connection ends (closed, failed, the server stops,
+/// its task panics), what the hand holds goes in the next frame.
+struct Holding {
+    api: Arc<Api>,
+    hand: Hand,
+}
+
+impl Drop for Holding {
+    fn drop(&mut self) {
+        let (api, hand) = (Arc::clone(&self.api), self.hand);
+        // `talk` runs on the runtime, so does its end
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            runtime.spawn(async move { api.let_go(hand).await });
         }
     }
 }
@@ -505,7 +527,12 @@ async fn deliver(
 /// The slot of one request of a connection. A press is admitted here, at once, even
 /// behind a pending edit of this connection; every edit goes to the worker, behind what
 /// is there. Replies keep the order of the requests. `Stop` stops the engine at once.
-async fn take(api: &Arc<Api>, text: &str, jobs: &mpsc::UnboundedSender<Command>) -> Slot {
+async fn take(
+    api: &Arc<Api>,
+    text: &str,
+    jobs: &mpsc::UnboundedSender<Command>,
+    hand: Hand,
+) -> Slot {
     let Ok(request) = serde_json::from_str::<Request>(text) else {
         return Slot::Ready(json(&Reply::Refused {
             reason: Refusal::NotACommand,
@@ -513,7 +540,7 @@ async fn take(api: &Arc<Api>, text: &str, jobs: &mpsc::UnboundedSender<Command>)
     };
     match request {
         Request::Send { command } if !is_edit(&command) => {
-            Slot::Ready(json(&replied(send(api, command).await)))
+            Slot::Ready(json(&replied(send(api, command, hand).await)))
         }
         Request::Send { command } => match jobs.send(command) {
             Ok(()) => Slot::Working,
@@ -536,6 +563,7 @@ async fn take(api: &Arc<Api>, text: &str, jobs: &mpsc::UnboundedSender<Command>)
 /// connection closes is dropped.
 fn worker(
     api: Arc<Api>,
+    hand: Hand,
 ) -> (
     mpsc::UnboundedSender<Command>,
     mpsc::UnboundedReceiver<Option<String>>,
@@ -550,7 +578,7 @@ fn worker(
             // Its own task: a panic in it answers `Failed`, and the next command runs.
             let job = tokio::spawn({
                 let api = Arc::clone(&api);
-                async move { send(&api, command).await }
+                async move { send(&api, command, hand).await }
             });
             let reply = match job.await {
                 Ok(sent) => replied(sent),
@@ -710,6 +738,7 @@ impl Press {
             | Command::ReleaseChannel { .. }
             | Command::ReleaseChannels
             | Command::Blackout { .. }
+            | Command::SetBlackoutLatch { .. }
             | Command::SetMaster { .. }
             | Command::StartLook { .. }
             | Command::StopLook { .. }
@@ -745,15 +774,15 @@ fn reserve(history: &Arc<Semaphore>, bytes: usize) -> Result<OwnedSemaphorePermi
 /// without the front (a patch measures its show file, a look compiles), and admitted
 /// under it: every other client is answered meanwhile. So is a device it needs opened.
 /// The answer when it is taken, `Stopping` when the engine stops first: nothing changed.
-async fn send(api: &Arc<Api>, command: Command) -> Result<Reply<'static>, Refusal> {
+async fn send(api: &Arc<Api>, command: Command, hand: Hand) -> Result<Reply<'static>, Refusal> {
     let shelf = Arc::clone(&api.shelf.borrow());
     let mut credit = None;
     let begun = if is_edit(&command) {
-        edit(api, command, &shelf, &mut credit).await
+        edit(api, command, &shelf, &mut credit, hand).await
     } else {
         credit = Press::of(&command).credit(api)?;
         api.changing(&mut credit, |sender| {
-            sender.begin(command, shelf.fixtures())
+            sender.begin_as(hand, command, shelf.fixtures())
         })
         .await
         .map_or(Edited::Stopped, Edited::from_result)
@@ -834,6 +863,7 @@ async fn edit(
     command: Command,
     shelf: &Arc<Shelf>,
     opening_credit: &mut Option<OwnedSemaphorePermit>,
+    hand: Hand,
 ) -> Edited {
     let mut begun = Edited::Refused(Refusal::Stale);
     let waiting_since = Instant::now();
@@ -886,7 +916,7 @@ async fn edit(
             Ok(Ok((prepared, credit))) => {
                 let mut credit = Some(credit);
                 let admitted = api
-                    .changing(&mut credit, |sender| sender.admit(prepared))
+                    .changing(&mut credit, |sender| sender.admit_as(hand, prepared))
                     .await;
                 if matches!(admitted, Some(Ok(Begun::Opening(_)))) {
                     // The pending open has no visible change yet. Keep its place
@@ -946,6 +976,21 @@ impl Api {
             publisher.through.store(sent, Ordering::Release);
         }
         Some(changed)
+    }
+
+    /// A new hand, for one connection.
+    async fn hand(&self) -> Hand {
+        self.sender.lock().await.sender.hand()
+    }
+
+    /// `hand` is gone: what it holds goes in the next frame. Nothing once the engine
+    /// stops.
+    async fn let_go(&self, hand: Hand) {
+        let mut credit = None;
+        // never refused for room: its let-go kept a place in the queue
+        let _ = self
+            .changing(&mut credit, |sender| sender.drop_hand(hand))
+            .await;
     }
 
     /// Stops the engine: under the front, so every change admitted before is one the
@@ -1728,13 +1773,16 @@ mod tests {
             };
             for at in 0..behind {
                 let at = u16::try_from(at).unwrap();
-                assert!(send(&api, hold(fixture, at)).await.is_ok(), "{case}");
+                assert!(
+                    send(&api, hold(fixture, at), Hand::ENGINE).await.is_ok(),
+                    "{case}"
+                );
                 wakes.wake().unwrap();
             }
             if history == "behind, full, spare used" {
                 let first = Target::Light { light: 1 };
                 assert_eq!(
-                    send(&api, release(first)).await,
+                    send(&api, release(first), Hand::ENGINE).await,
                     Ok(Reply::Accepted),
                     "{case}"
                 );
@@ -1757,7 +1805,7 @@ mod tests {
                 "releases a hold" => release(fixture),
                 _ => raw(3, 7),
             };
-            let answer = send(&api, command).await.map(|_| ());
+            let answer = send(&api, command, Hand::ENGINE).await.map(|_| ());
             assert_eq!(answer, reply, "{case}");
             assert_eq!(free(&api), left, "{case}: history, {before} free before");
             let made = waiting(&mut front);
@@ -1780,6 +1828,71 @@ mod tests {
                 assert_eq!(free(&api), ALL, "{case}: all free again");
             }
             wakes.run();
+        }
+    }
+
+    /// However a connection ends (closed, a failed write, the server stops, its task
+    /// panics), `talk` drops its guard, and the guard lets the hand go.
+    #[tokio::test]
+    async fn a_connections_hand_lets_go_when_its_guard_drops() {
+        let (mut engine, wakes, api, _front) = desk(1, &[], []);
+        let holders = |engine: &mut Engine| {
+            let _ = engine.latest(); // asks for the next wake's picture
+            wakes.wake().unwrap();
+            engine.latest().performance().blackout_hold.holders
+        };
+        let hand = api.hand().await;
+        let holding = Holding {
+            api: Arc::clone(&api),
+            hand,
+        };
+        let on = Command::Blackout { on: true };
+        assert_eq!(send(&api, on, hand).await, Ok(Reply::Accepted));
+        assert_eq!(holders(&mut engine), 1, "held");
+        let sent = api.sender.lock().await.sender.sent();
+        drop(holding);
+        let started = Instant::now();
+        while api.sender.lock().await.sender.sent() == sent {
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
+                "the let-go is queued"
+            );
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(holders(&mut engine), 0, "let go");
+    }
+
+    /// The socket table in docs/engine.md: a press is answered where it is read, an edit
+    /// goes to the connection's worker.
+    #[tokio::test]
+    async fn a_press_is_answered_at_once_and_an_edit_goes_to_the_worker() {
+        let (_engine, _wakes, api, _front) = desk(1, &[], []);
+        let (jobs, mut worker) = mpsc::unbounded_channel();
+        let edit = Command::RemoveGroup {
+            name: Text::new("front").unwrap(),
+        };
+        // (request, its reply now, what the worker gets)
+        let cases = [
+            (
+                serde_json::json!({"Send": {"command": {"SetMaster": {"level": 128}}}}),
+                Some(serde_json::json!("Accepted")),
+                None,
+            ),
+            (
+                serde_json::json!({"Send": {"command": {"RemoveGroup": {"name": "front"}}}}),
+                None,
+                Some(edit),
+            ),
+        ];
+        for (request, now, job) in cases {
+            let slot = take(&api, &request.to_string(), &jobs, Hand::ENGINE).await;
+            let replied = match slot {
+                Slot::Ready(Some(reply)) => Some(serde_json::from_str::<Value>(&reply).unwrap()),
+                Slot::Working => None,
+                Slot::Ready(None) | Slot::Later(_) => panic!("{request}: no reply"),
+            };
+            assert_eq!(replied, now, "{request}");
+            assert_eq!(worker.try_recv().ok(), job, "{request}");
         }
     }
 
@@ -1837,6 +1950,10 @@ mod tests {
             (serde_json::json!({"Blackout": {"on": true}}), Press::Free),
             (
                 serde_json::json!({"SetMaster": {"level": 128}}),
+                Press::Free,
+            ),
+            (
+                serde_json::json!({"SetBlackoutLatch": {"on": true}}),
                 Press::Free,
             ),
             (serde_json::json!({"StartLook": {"look": 1}}), Press::Free),
@@ -1915,7 +2032,10 @@ mod tests {
         let mut kept = Vec::new();
         for at in 0..PAID_MOMENTS {
             let at = u16::try_from(at).unwrap();
-            assert!(send(&api, hold(all, at)).await.is_ok(), "press {at}");
+            assert!(
+                send(&api, hold(all, at), Hand::ENGINE).await.is_ok(),
+                "press {at}"
+            );
             wakes.wake().unwrap();
             kept.extend(waiting(&mut front));
         }
@@ -1928,7 +2048,7 @@ mod tests {
         assert!(held <= ALL, "{held} bytes of held lights");
         assert_eq!(free(&api), REVISION, "only the release's spare is left");
         assert_eq!(
-            send(&api, hold(all, u16::MAX)).await,
+            send(&api, hold(all, u16::MAX), Hand::ENGINE).await,
             Err(Refusal::WorkLimit)
         );
         assert!(
@@ -1937,7 +2057,10 @@ mod tests {
         );
         // a release still goes, paid from the spare, and keeps all lights but one
         let first = Target::Light { light: 1 };
-        assert_eq!(send(&api, release(first)).await, Ok(Reply::Accepted));
+        assert_eq!(
+            send(&api, release(first), Hand::ENGINE).await,
+            Ok(Reply::Accepted)
+        );
         let released = waiting(&mut front);
         assert_eq!(
             released
@@ -1948,13 +2071,16 @@ mod tests {
         );
         assert_eq!(free(&api), 0);
         // a press that changes no hold is still in the next frame
-        assert_eq!(send(&api, raw(1, 7)).await, Ok(Reply::Accepted));
+        assert_eq!(
+            send(&api, raw(1, 7), Hand::ENGINE).await,
+            Ok(Reply::Accepted)
+        );
         assert_eq!(next_frame(&mut engine, &wakes, 1), 7);
         // the reader passes: every byte comes back, a hold press is taken again
         front.kept.extend(kept.into_iter().chain(released));
         pass(&mut engine, &wakes, &mut front, "stalled");
         assert_eq!(free(&api), ALL);
-        assert!(send(&api, hold(all, u16::MAX)).await.is_ok());
+        assert!(send(&api, hold(all, u16::MAX), Hand::ENGINE).await.is_ok());
         wakes.run();
     }
 }

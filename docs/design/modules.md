@@ -119,7 +119,7 @@ flowchart LR
 
 | Owner | Keeps |
 |---|---|
-| **Front** | project, patch, saved looks, command admission, prepared output openings, the grab book (what each grab holds, the held lights of the picture) |
+| **Front** | project, patch, saved looks, command admission, prepared output openings, the grab book (what each grab holds, the held lights of the picture), the hands (one per connection) and who keeps Blackout on (the latch, each hand's hold) |
 | **Tick** | mutable performance state, the field table, grab boxes, kept plays' frozen moments, cutover stamps, scheduling, frame measurements |
 | **Lane** | worker control, queued frames, returned-frame accounting |
 | **Snapshot** | immutable performance, channel levels, health and revision reads |

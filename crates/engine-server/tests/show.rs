@@ -980,7 +980,7 @@ fn a_show_opens_whole_or_not_at_all() {
             Holds::ADimmerAndALook => std::fs::write(&path, &dimmer).unwrap(),
         }
         for _ in 0..taken {
-            sender.send(Command::Blackout { on: false }).unwrap();
+            sender.send(Command::SetMaster { level: 255 }).unwrap();
         }
         let opened = engine_server::show::open(&path, &mut sender);
         if path.is_dir() {

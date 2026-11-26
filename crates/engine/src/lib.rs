@@ -58,6 +58,7 @@ use engine_core::{
 pub use fixture_library::Fixture;
 pub use looks::{Looks, PLAN_BYTES};
 pub use rig::Patch;
+mod blackout;
 mod front;
 mod grabs;
 mod publication;
@@ -67,7 +68,7 @@ mod tick;
 mod timing;
 
 pub use front::{
-    Base, Begun, Handoff, Open, Opened, Opening, Prepared, ProjectView, Sender, Unsent,
+    Base, Begun, Hand, Handoff, Open, Opened, Opening, Prepared, ProjectView, Sender, Unsent,
 };
 use front::{free, recover};
 use tick::{Ticker, TickerStart};
@@ -137,6 +138,7 @@ pub const fn edits(command: &Command) -> bool {
         | Command::ReleaseChannels
         | Command::ReleaseAll
         | Command::Blackout { .. }
+        | Command::SetBlackoutLatch { .. }
         | Command::SetMaster { .. }
         | Command::SetOutput { .. }
         | Command::RemoveOutput { .. }
@@ -406,6 +408,7 @@ mod tests {
             (Command::Unpatch { fixture: 1 }, true),
             (Command::ReleaseAll, false),
             (Command::Blackout { on: true }, false),
+            (Command::SetBlackoutLatch { on: true }, false),
             (Command::SetMaster { level: 128 }, false),
         ];
         for (command, edit) in cases {

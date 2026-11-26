@@ -9,10 +9,16 @@ const CALM: State = State {
     frame: 7,
     ..State::new(Priority::RealTime)
 };
+/// Dark: one connection holds Blackout.
 const DARK: State = State {
     blackout: true,
+    blackout_hold: hold(false, 1),
     ..CALM
 };
+
+const fn hold(latched: bool, holders: u32) -> BlackoutHold {
+    BlackoutHold { latched, holders }
+}
 
 /// Two universes, with these (universe, address, level) set; counted from 1.
 fn held(levels: &[(u16, u16, u8)]) -> [Levels; 2] {
@@ -786,16 +792,63 @@ fn update_turns_a_command_into_a_new_state() {
         (
             CALM,
             raw(&[(1, 1, 80)]),
-            EngineCommand::Blackout { on: true },
+            EngineCommand::Blackout {
+                hold: hold(false, 1),
+            },
+            DARK,
+            raw(&[(1, 1, 80)]),
+        ),
+        (
+            // the latch alone keeps it dark
+            CALM,
+            raw(&[(1, 1, 80)]),
+            EngineCommand::Blackout {
+                hold: hold(true, 0),
+            },
+            State {
+                blackout: true,
+                blackout_hold: hold(true, 0),
+                ..CALM
+            },
+            raw(&[(1, 1, 80)]),
+        ),
+        (
+            // one of two holders lets go: still dark
+            State {
+                blackout_hold: hold(false, 2),
+                ..DARK
+            },
+            raw(&[(1, 1, 80)]),
+            EngineCommand::Blackout {
+                hold: hold(false, 1),
+            },
             DARK,
             raw(&[(1, 1, 80)]),
         ),
         (
             DARK,
             raw(&[(1, 1, 80)]),
-            EngineCommand::Blackout { on: false },
+            EngineCommand::Blackout {
+                hold: BlackoutHold::NONE,
+            },
             CALM,
             raw(&[(1, 1, 80)]),
+        ),
+        (
+            // ReleaseAll lets holds go, never the latch or a connection's Blackout
+            State {
+                blackout: true,
+                blackout_hold: hold(true, 2),
+                ..CALM
+            },
+            raw(&[(1, 1, 1)]),
+            EngineCommand::ReleaseAll,
+            State {
+                blackout: true,
+                blackout_hold: hold(true, 2),
+                ..CALM
+            },
+            raw(&[]),
         ),
         (
             CALM,
@@ -991,7 +1044,9 @@ fn frame_says_who_set_each_channel_and_a_release_gives_it_back() {
     let release = |universe, address| EngineCommand::ReleaseChannel {
         channel: channel(universe, address),
     };
-    let blackout = |on| EngineCommand::Blackout { on };
+    let blackout = |on| EngineCommand::Blackout {
+        hold: hold(false, u32::from(on)),
+    };
     let master = |level| EngineCommand::Master { level };
     use SourceTag as S;
     // (row, commands, channels 1/1, 1/2 and 2/512: byte and source)

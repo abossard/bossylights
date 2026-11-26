@@ -118,7 +118,7 @@ fn a_grab_update_can_fill_the_last_place_left_by_an_output_resize() {
         panic!("a longer route needs a new lane");
     };
     let opened = resize.open();
-    let filler = Command::Blackout { on: false };
+    let filler = Command::SetMaster { level: 255 };
     let update = |red| Command::UpdateGrab {
         grab,
         value: Value::Colour(Rgb {

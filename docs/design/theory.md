@@ -138,6 +138,7 @@ Until #253 a plan or a grab still names a light by index. The field table (Rig, 
 |---|---|
 | Blackout at 0 gives `dark` exactly | built: only the channels that follow it. Rest, dark, fade and pair come from the fixture file (#250) |
 | Master scales: a dimmer at 70% under Master 50% sends 35% | built (#251): `SetMaster`, full at start |
+| Blackout is dark while the latch is on or any connection holds; a closed connection lets go in the next frame | built (#251): `Blackout`, `SetBlackoutLatch` |
 | A jump channel (wheel, shutter) is all or nothing, so it never passes through a strobe range | built (#251) |
 | Which channels follow comes from the fixture file; unknown channels start independent | built (#251): a channel nobody patched follows nothing |
 | Patch can change any rule | designed (#251) |

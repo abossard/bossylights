@@ -163,11 +163,12 @@ mod tests {
     use super::*;
     use engine_core::health::{AfterHandoff, HandoffPart, HandoffSpan};
     use engine_core::{
-        Adapter, AuthoredStep, BestEffort, Bpm, Brightness, ChannelNumbers, Color, Counters, Gobo,
-        Layout, Light, ManualEnd, Member, MixRules, OpenFailure, OtherEnd, Output, OutputKind,
-        OutputNumber, Palette, Pattern, Pixels, Play, PlayState, Position, Priority, ProjectOutput,
-        Property, Rank, Rate, Reading, Repeat, Rgb, Run, RunNumbers, Saved, Sequence, SequenceItem,
-        Speed, Status, Step, Swatches, Target, Unopened, Use, Value, WaveTarget, Wheel, When,
+        Adapter, AuthoredStep, BestEffort, BlackoutHold, Bpm, Brightness, ChannelNumbers, Color,
+        Counters, Gobo, Layout, Light, ManualEnd, Member, MixRules, OpenFailure, OtherEnd, Output,
+        OutputKind, OutputNumber, Palette, Pattern, Pixels, Play, PlayState, Position, Priority,
+        ProjectOutput, Property, Rank, Rate, Reading, Repeat, Rgb, Run, RunNumbers, Saved,
+        Sequence, SequenceItem, Speed, Status, Step, Swatches, Target, Unopened, Use, Value,
+        WaveTarget, Wheel, When,
     };
     use engine_core::{Percent, Period, Width};
     use fixture_library::{Problem, Refused};
@@ -254,6 +255,7 @@ mod tests {
                 Refusal::decl(&config),
                 OpenFailure::decl(&config),
                 State::decl(&config),
+                BlackoutHold::decl(&config),
                 Priority::decl(&config),
                 BestEffort::decl(&config),
                 Levels::decl(&config),

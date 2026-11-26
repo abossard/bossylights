@@ -11,9 +11,9 @@
 //! `cargo run -q --release -p rig --example frame_lateness -- [seconds, 60] [PARs, 10000]`
 
 use engine_core::{
-    ChannelNumbers, ChannelSet, Channels, EngineCommand, GrabChange, GrabEntry, Grabs, Levels,
-    Light, LightNumber, LightRun, Lights, MAX_LIGHTS, MAX_UNIVERSES, Priority, Rgb, State,
-    Universes, frame, next_frame, sleep_before, update,
+    BlackoutHold, ChannelNumbers, ChannelSet, Channels, EngineCommand, GrabChange, GrabEntry,
+    Grabs, Levels, Light, LightNumber, LightRun, Lights, MAX_LIGHTS, MAX_UNIVERSES, Priority, Rgb,
+    State, Universes, frame, next_frame, sleep_before, update,
 };
 use rig::{FieldPlan, Patch, Placed, Whole, Words};
 use std::hint;
@@ -160,7 +160,10 @@ fn frames_of(
         }
         let woke = start.elapsed();
         let blackout = EngineCommand::Blackout {
-            on: frame_number % 2 == 1,
+            hold: BlackoutHold {
+                latched: false,
+                holders: u32::from(frame_number % 2 == 1),
+            },
         };
         state = update(state, &mut raw, &mut holds, &mut grabs, blackout);
         let now = words.get(frame_number as usize % words.len());

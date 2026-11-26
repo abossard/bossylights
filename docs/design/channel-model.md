@@ -139,7 +139,7 @@ A **modifier** is a level `m` in `0..255`, "how much shows". A follower channel 
 | Slot | Modifier | Level comes from |
 |---|---|---|
 | 0 | Master | a command (`SetMaster`), default 255 |
-| 1 | Blackout | one boolean on the tick: 0 while on, 255 while off. The front owns who asked: a latch and one hold per connection. It sends `on` when the first asks and `off` when the last lets go, so A on, B on, A off stays dark |
+| 1 | Blackout | 0 while on, 255 while off. The front owns who asked: a latch and one hold per connection. It sends the tick `{latched, holders}` at each change of it; the tick is dark while latched or holders > 0, so A on, B on, A off stays dark. The picture reads both back. A hand that holds keeps a place in the queue for its let-go (built, #251) |
 | 2 to 7 | Virtual dimmers, created in the console (cx-4) | the mixed value of control channel `k`, played like any channel. A seventh is refused (`NoSlot`) |
 
 For a channel with value `v`, dark `d`, following modifiers with levels `m1..mn` (all in `0..255`):
