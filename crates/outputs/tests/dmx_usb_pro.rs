@@ -177,7 +177,8 @@ struct Stuck {
     /// The levels accepted, in order.
     accepted: Vec<u8>,
     /// The port thread's pace, in polls: the longest run of drops between two accepted
-    /// frames while it was healthy (it takes the queued frame once a message is out).
+    /// frames on the current port while it was healthy (it takes the queued frame once a
+    /// message is out).
     pace: u32,
     /// The port was lost on the way: `lost_with` already holds a time out.
     lost: bool,
@@ -191,24 +192,29 @@ struct Stuck {
 /// drops more than three times the pace, at least 6 polls, is a write that waits. A slow runner polls less often
 /// and so counts a shorter pace: the wait stays a few link times, far inside the 500 ms a
 /// stall may take. A runner that pauses past that loses the port on the way; the port
-/// thread opens a new one, which fills the same way, and `end` becomes its end.
+/// thread opens a new one, which fills the same way, and `end` becomes its end. The new
+/// port counts its pace again from its first accepted frame: one long run (a late port
+/// thread, a runner that paused through a stall) raises the pace of one port only, never
+/// above what every later stall can reach before it is lost.
 fn take_until_stuck(device: &mut DmxUsbPro, fake: &mut Fake, end: &mut TTYPort) -> Stuck {
     let (mut accepted, mut pace, mut run, started) = (vec![], 0, 0, Instant::now());
-    let mut lost = false;
+    // (the port was lost on the way, `pace` was counted on the current port)
+    let (mut lost, mut paced_here) = (false, true);
     loop {
         assert!(started.elapsed() < NEVER, "never stuck"); // guard
+        while let Some(newer) = fake.new_end() {
+            *end = newer;
+            (lost, paced_here, run) = (true, false, 0);
+        }
         let level = accepted.last().map_or(1, |last: &u8| last.wrapping_add(1));
         match device.take(&[level; 512]) {
             Outcome::Accepted => {
                 accepted.push(level);
-                pace = pace.max(run);
-                run = 0;
+                pace = if paced_here { pace.max(run) } else { run };
+                (paced_here, run) = (true, 0);
             }
             Outcome::Dropped => run += 1,
-            Outcome::Failed => {
-                run = 0;
-                lost = true;
-            }
+            Outcome::Failed => (lost, paced_here, run) = (true, false, 0),
         }
         if accepted.len() >= 3 && run > 3 * pace.max(2) {
             return Stuck {
@@ -216,9 +222,6 @@ fn take_until_stuck(device: &mut DmxUsbPro, fake: &mut Fake, end: &mut TTYPort) 
                 pace,
                 lost,
             };
-        }
-        while let Some(newer) = fake.new_end() {
-            *end = newer;
         }
         thread::sleep(Duration::from_millis(1)); // poll
     }
