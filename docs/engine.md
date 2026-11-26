@@ -120,7 +120,8 @@ The list is `ORIGINS` in `crates/engine-server/src/lib.rs`. No pairing or token 
 | `{"Send": {"command": {"SetChannel": {"channel": {"universe": 1, "address": 1}, "value": 255}}}}` | `"Accepted"`, or `{"Refused": {"reason": "NoSuchAddress"}}` and nothing changes |
 | `{"Send": {"command": {"Patch": ...}}}` | `{"Patched": {"fixture": 1}}`: its number |
 | any `Send` | `"Stopping"` when the engine stops first: nothing changed. `"Failed"` when the server failed while working on it (API 12): the picture says what is live |
-| `"Query"` | `{"Picture": {"state": ..., "project": ..., "library": ..., "patch": [...], "universes": [[...512 levels]], "health": ...}}`. Each `project.outputs` entry is `null`, `{"Kind": {"kind": ..., "universes": {"first": 1, "count": 3}}}` or `{"Attached": {"universes": ...}}` for a test device. |
+| `"Query"` | `{"Picture": {"state": ..., "project": ..., "library": ..., "patch": [...], "universes": [[...512 levels]], "health": ...}}`. Each `project.outputs` entry is `null`, `{"Kind": {"kind": ..., "universes": {"first": 1, "count": 3}}}` or `{"Attached": {"universes": ...}}` for a test device. `project.acceptable_delays_us` holds each output's acceptable delay in µs, by number, `null` where none is set. |
+| `{"Send": {"command": {"SetAcceptableDelay": {"output": 1, "delay_us": 80000}}}}` | `"Accepted"`: from a press to the light, this much is acceptable on output 1, as the user set it on its card (`null` clears it). `{"Refused": {"reason": "NoSuchOutput"}}` while the output shows nothing. 0, a negative or more than 4,294,967,295: `NotACommand`. An output that becomes empty loses its number; a replace or a restore keeps it (table "An output in the project") |
 | In every `Picture` | `health` gives each attached output's status and timing over four seconds. With no outputs it is `{"window_ms":4000,"outputs":[]}`. |
 | After the handoff | each row's `after_handoff` lists, in order, what follows the moment its frame is handed to the device, which the measured `press_to_light` leaves out: each `stage` with a `span` either `{"Computed": {"low_us", "high_us", "source"}}` (from a spec, rounded outward) or `"NotKnown"`. A DMX USB Pro: `HostToAdapter` not known, `SerialLink` 11,396 µs (`Baud`), `AdapterFrame` 0 to one period of the widget's rate (or its frame on the wire, when longer) and `DmxWire` from the end of the lowest patched slot to the end of the highest, after its break and mark, `SlotGap` (between slots and frames) not known. Both from the settings the widget answered at its port's open (`AdapterRead`, `Dmx512AdapterRead`; rate 0: `AdapterReadAsFastAsItCan`), else at the API's defaults, 0 to 25,000 µs (`AdapterDefault`, `Dmx512AdapterDefault`). With nothing patched, `DmxWire` spans all 512 slots, source `...NothingPatched`: a channel set by hand reaches lights the patch does not know. DDP: `NetworkAndController` not known. A test's own device: `Device` not known. The delay ends when the light has its value: its own reaction is not counted. |
 | `lights` in a `Picture` or `Changed` | what grabs hold, from the front's grab book: each held light with its `intensity` and `colour` (`null` where not held), not what plays. `Changed` lists only the lights whose holds changed. The first picture whose frame has the press shows them |
@@ -135,7 +136,7 @@ Health pacing per subscriber (`HealthPacing` in `crates/engine-server/src/lib.rs
 | AwaitingSample | same | Since (that picture's engine time) | same |
 | Since | same | same | send health, Sending |
 
-One connection (`talk` in `crates/engine-server/src/lib.rs`). An edit is a command that is prepared off the front or opens a device (`SetOutput`, `RemoveOutput`, patch, groups, looks). Replies go out in the order of their requests; pictures and health are no replies and never wait.
+One connection (`talk` in `crates/engine-server/src/lib.rs`). An edit is a command that is prepared off the front or opens a device (`SetOutput`, `RemoveOutput`, `SetAcceptableDelay`, patch, groups, looks). Replies go out in the order of their requests; pictures and health are no replies and never wait.
 
 | Event \ connection | Idle (nothing waiting) | Editing (an edit of this connection is pending) |
 |---|---|---|
@@ -392,6 +393,21 @@ The front's project holds each output as one machine (`Setup` in `engine-core/sr
 |---|---|
 | on the wire | Kind as `Kind`; Attached and Routed as `Attached`; switching states as `was` |
 | streams (patch checks) | Kind, Attached: their run. Routed, Empty: nothing (a route can have holes). Switching: `was` and the new run must both cover it |
+
+An output keeps its acceptable delay (`acceptable_delays_us`, #318 P1e), walked by `an_output_keeps_its_acceptable_delay`. The number is the output's (its card's), not its device's: a replace or a restore keeps it. Nothing judges by it yet.
+
+| Output 1 \ event | SetAcceptableDelay n | SetAcceptableDelay none | SetOutput, same kind and run | SetOutput, other kind | RemoveOutput | Opened | OpenFailed | Attached | Routed | Restore |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Empty | refused `NoSuchOutput` | refused `NoSuchOutput` | none | none | none | none | none | none | none | refused `Stale` |
+| Kind, no number | n | none | none | none | none | none | none | none | none | none |
+| Kind, m (opened from Empty) | n | none | m | m | none | m | m | m | m | none: back to Empty |
+| Attached, m | n | none | m | m | none | m | m | m | m | none: back to Empty |
+| Routed, m | n | none | m | m | none | m | m | m | m | none: back to Empty |
+| Opening from Empty | refused `NoSuchOutput` | refused `NoSuchOutput` | refused `Opening`, none | refused `Opening`, none | refused `Opening`, none | none | none | refused `Opening`, none | refused `Opening`, none | none |
+| Restarting, m (before: Kind) | n | none | refused `Opening`, m | refused `Opening`, m | refused `Opening`, m | m | m | refused `Opening`, m | refused `Opening`, m | m |
+| Opening from Kind, m (another kind) | n | none | refused `Opening`, m | refused `Opening`, m | refused `Opening`, m | m | m | refused `Opening`, m | refused `Opening`, m | m |
+
+An output that shows nothing (Empty, or opening from Empty) has no number: so no `OpenFailed` or `Restore` leaves one behind. Each output keeps its own number (`two_outputs_keep_their_own_acceptable_delays`).
 
 "Before" is the settled state the output's last switch replaced (an open, a restart, an attach). `Restore` goes back to it once, and only to it: the engine shows the project as it was until the switch is visible on the tick (`ProjectView`), and checks a patch against both sides. A failed open or a removal clears it. A new switch cannot start while the old lane still waits to serve (`Opening`), so "before" is never replaced under a switch in flight.
 

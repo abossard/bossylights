@@ -626,7 +626,9 @@ fn answer(
 fn is_edit(command: &Command) -> bool {
     matches!(
         command,
-        Command::SetOutput { .. } | Command::RemoveOutput { .. }
+        Command::SetOutput { .. }
+            | Command::RemoveOutput { .. }
+            | Command::SetAcceptableDelay { .. }
     ) || engine::edits(command)
 }
 
@@ -734,6 +736,7 @@ impl Press {
             | Command::SetMixRules { .. }
             | Command::SetOutput { .. }
             | Command::RemoveOutput { .. }
+            | Command::SetAcceptableDelay { .. }
             | Command::SetChannel { .. }
             | Command::ReleaseChannel { .. }
             | Command::ReleaseChannels

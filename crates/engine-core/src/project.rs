@@ -14,6 +14,7 @@ use crate::{
     BlackoutAsk, Command, EngineCommand, LookCommand, MAX_OUTPUTS, MemberList, Members, OutputKind,
     OutputNumber, PatchCommand, Property, Rate, Refusal, Rgb, Run, Universes, Value,
 };
+use core::num::NonZeroU32;
 use serde::Serialize;
 
 /// What the front owns. Only [`Project::update`] changes it.
@@ -24,6 +25,10 @@ pub struct Project {
     /// The outputs, by number. `None` where none is set.
     #[cfg_attr(feature = "ts", ts(type = "Array<ProjectOutput | null>"))]
     outputs: [Option<ProjectOutput>; MAX_OUTPUTS],
+    /// Each output's acceptable delay in µs, by number, as the user set it
+    /// (`SetAcceptableDelay`). `None` where none is set: an empty output has none.
+    #[cfg_attr(feature = "ts", ts(type = "Array<number | null>"))]
+    acceptable_delays_us: [Option<NonZeroU32>; MAX_OUTPUTS],
     /// The engine's universes: what a command is checked against.
     #[serde(skip)]
     #[cfg_attr(feature = "ts", ts(skip))]
@@ -208,6 +213,7 @@ impl Project {
     pub const fn new(universes: Universes) -> Self {
         Self {
             outputs: [None; MAX_OUTPUTS],
+            acceptable_delays_us: [None; MAX_OUTPUTS],
             universes,
             slots: [Slot {
                 setup: Setup::Settled(Settled::Empty),
@@ -414,6 +420,16 @@ impl Project {
                         Some(ProjectEffect::Send(EngineCommand::RemoveOutput { output })),
                     ))
                 }
+                Command::SetAcceptableDelay { output, delay_us } => {
+                    if self.settled(output) == Settled::Empty {
+                        return Err(Refusal::NoSuchOutput);
+                    }
+                    let mut project = self;
+                    if let Some(delay) = project.acceptable_delays_us.get_mut(output.slot()) {
+                        *delay = delay_us;
+                    }
+                    Ok((project, None))
+                }
             },
             ProjectEvent::Opened { output, kind } => {
                 let project = self.with(output, |slot| match slot.setup {
@@ -469,6 +485,11 @@ impl Project {
     /// The outputs, by number, as the wire shows them.
     pub const fn outputs(&self) -> &[Option<ProjectOutput>; MAX_OUTPUTS] {
         &self.outputs
+    }
+
+    /// Each output's acceptable delay in µs, by number, as the wire shows them.
+    pub const fn acceptable_delays_us(&self) -> &[Option<NonZeroU32>; MAX_OUTPUTS] {
+        &self.acceptable_delays_us
     }
 
     /// Whether one output streams every universe from `first` to `last` as one run. An
@@ -555,6 +576,12 @@ impl Project {
         if let (Some(wire), Some(slot)) = (self.outputs.get_mut(index), self.slots.get_mut(index)) {
             *slot = change(*slot);
             *wire = slot.setup.settled().wire();
+            // an output that shows nothing has no acceptable delay
+            if wire.is_none()
+                && let Some(delay) = self.acceptable_delays_us.get_mut(index)
+            {
+                *delay = None;
+            }
         }
         self
     }
@@ -1148,6 +1175,269 @@ mod tests {
             restored.update(Restore { output: output(1) }),
             Err(Refusal::Stale)
         );
+    }
+
+    /// Every cell of "An output keeps its acceptable delay" (`docs/engine.md`), for output 1:
+    /// what an event did, and output 1's number after it.
+    #[test]
+    fn an_output_keeps_its_acceptable_delay() {
+        use ProjectEvent::{Attached, Client, OpenFailed, Opened, Restore, Routed};
+        let two = Universes::new(2).unwrap();
+        let numbers = |count| RunNumbers { first: 1, count };
+        let two_run = numbers(2).check(two).unwrap();
+        let (kind, other) = (crate::EXAMPLE, crate::OTHER);
+        let set_output = |kind, count| {
+            Client(Command::SetOutput {
+                output: output(1),
+                kind,
+                universes: numbers(count),
+                rate: None,
+            })
+        };
+        let delay = |us| {
+            Client(Command::SetAcceptableDelay {
+                output: output(1),
+                delay_us: NonZeroU32::new(us),
+            })
+        };
+        let opened = Opened {
+            output: output(1),
+            kind,
+        };
+        let attached = Attached {
+            output: output(1),
+            universes: two_run,
+        };
+        let routed = Routed {
+            output: output(1),
+            bounds: two_run,
+        };
+        let events = [
+            ("SetAcceptableDelay n", delay(80_000)),
+            ("SetAcceptableDelay none", delay(0)),
+            ("SetOutput, same kind and run", set_output(kind, 1)),
+            ("SetOutput, other kind", set_output(other, 1)),
+            (
+                "RemoveOutput",
+                Client(Command::RemoveOutput { output: output(1) }),
+            ),
+            ("Opened", opened),
+            ("OpenFailed", OpenFailed { output: output(1) }),
+            ("Attached", attached),
+            ("Routed", routed),
+            ("Restore", Restore { output: output(1) }),
+        ];
+        let did = |done: &Result<(Project, Option<ProjectEffect>), Refusal>| match done {
+            Ok(_) => "-",
+            Err(Refusal::NoSuchOutput) => "refused NoSuchOutput",
+            Err(Refusal::Opening) => "refused Opening",
+            Err(Refusal::Stale) => "refused Stale",
+            Err(_) => "refused",
+        };
+        let (n, m) = (NonZeroU32::new(80_000), NonZeroU32::new(5_000));
+        let (no, refused) = ("refused NoSuchOutput", "refused Opening");
+        type Cell = (&'static str, Option<NonZeroU32>);
+        let rows: [(&str, Vec<ProjectEvent>, [Cell; 10]); 8] = [
+            (
+                "Empty",
+                vec![],
+                [
+                    (no, None),
+                    (no, None),
+                    ("-", None),
+                    ("-", None),
+                    ("-", None),
+                    ("-", None),
+                    ("-", None),
+                    ("-", None),
+                    ("-", None),
+                    ("refused Stale", None),
+                ],
+            ),
+            (
+                "Kind, no number",
+                vec![set_output(kind, 1), opened],
+                [
+                    ("-", n),
+                    ("-", None),
+                    ("-", None),
+                    ("-", None),
+                    ("-", None),
+                    ("-", None),
+                    ("-", None),
+                    ("-", None),
+                    ("-", None),
+                    ("-", None),
+                ],
+            ),
+            (
+                "Kind, m (opened from empty)",
+                vec![set_output(kind, 1), opened, delay(5_000)],
+                [
+                    ("-", n),
+                    ("-", None),
+                    ("-", m),
+                    ("-", m),
+                    ("-", None),
+                    ("-", m),
+                    ("-", m),
+                    ("-", m),
+                    ("-", m),
+                    ("-", None),
+                ],
+            ),
+            (
+                "Attached, m",
+                vec![attached, delay(5_000)],
+                [
+                    ("-", n),
+                    ("-", None),
+                    ("-", m),
+                    ("-", m),
+                    ("-", None),
+                    ("-", m),
+                    ("-", m),
+                    ("-", m),
+                    ("-", m),
+                    ("-", None),
+                ],
+            ),
+            (
+                "Routed, m",
+                vec![routed, delay(5_000)],
+                [
+                    ("-", n),
+                    ("-", None),
+                    ("-", m),
+                    ("-", m),
+                    ("-", None),
+                    ("-", m),
+                    ("-", m),
+                    ("-", m),
+                    ("-", m),
+                    ("-", None),
+                ],
+            ),
+            (
+                "Opening from empty",
+                vec![set_output(kind, 1)],
+                [
+                    (no, None),
+                    (no, None),
+                    (refused, None),
+                    (refused, None),
+                    (refused, None),
+                    ("-", None),
+                    ("-", None),
+                    (refused, None),
+                    (refused, None),
+                    ("-", None),
+                ],
+            ),
+            (
+                "Restarting, m (before: Kind)",
+                vec![
+                    set_output(kind, 1),
+                    opened,
+                    delay(5_000),
+                    set_output(kind, 2),
+                ],
+                [
+                    ("-", n),
+                    ("-", None),
+                    (refused, m),
+                    (refused, m),
+                    (refused, m),
+                    ("-", m),
+                    ("-", m),
+                    (refused, m),
+                    (refused, m),
+                    ("-", m),
+                ],
+            ),
+            (
+                "Opening from Kind, m (another kind)",
+                vec![
+                    set_output(kind, 1),
+                    opened,
+                    delay(5_000),
+                    set_output(other, 1),
+                ],
+                [
+                    ("-", n),
+                    ("-", None),
+                    (refused, m),
+                    (refused, m),
+                    (refused, m),
+                    ("-", m),
+                    ("-", m),
+                    (refused, m),
+                    (refused, m),
+                    ("-", m),
+                ],
+            ),
+        ];
+        for (state, making, cells) in rows {
+            let project = making
+                .into_iter()
+                .fold(Project::new(two), |p, e| p.update(e).unwrap().0);
+            for ((event, happens), (expected, number)) in events.iter().zip(cells) {
+                let done = project.update(*happens);
+                let after = done.map_or(project, |(after, _)| after);
+                assert_eq!(
+                    (did(&done), after.acceptable_delays_us[0]),
+                    (expected, number),
+                    "{state} + {event}"
+                );
+            }
+        }
+    }
+
+    /// Each output keeps its own number: setting one, or emptying another, leaves the rest.
+    #[test]
+    fn two_outputs_keep_their_own_acceptable_delays() {
+        let universes = RunNumbers { first: 1, count: 1 }
+            .check(Universes::ONE)
+            .unwrap();
+        let attach = |n| ProjectEvent::Attached {
+            output: output(n),
+            universes,
+        };
+        let delay = |n, us| {
+            ProjectEvent::Client(Command::SetAcceptableDelay {
+                output: output(n),
+                delay_us: NonZeroU32::new(us),
+            })
+        };
+        let remove = |n| ProjectEvent::Client(Command::RemoveOutput { output: output(n) });
+        let mut both = [None; MAX_OUTPUTS];
+        both[0] = NonZeroU32::new(80_000);
+        both[1] = NonZeroU32::new(5_000);
+        let mut first = [None; MAX_OUTPUTS];
+        first[0] = NonZeroU32::new(80_000);
+        // (events, the numbers after them)
+        let cases = [
+            (
+                vec![attach(1), attach(2), delay(1, 80_000), delay(2, 5_000)],
+                both,
+            ),
+            (
+                vec![
+                    attach(1),
+                    attach(2),
+                    delay(1, 80_000),
+                    delay(2, 5_000),
+                    remove(2),
+                ],
+                first,
+            ),
+        ];
+        for (events, numbers) in cases {
+            let project = events
+                .iter()
+                .fold(Project::new(Universes::ONE), |p, e| p.update(*e).unwrap().0);
+            assert_eq!(project.acceptable_delays_us(), &numbers, "{events:?}");
+        }
     }
 
     #[test]

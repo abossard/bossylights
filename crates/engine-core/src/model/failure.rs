@@ -93,6 +93,8 @@ pub enum Refusal {
     },
     /// No look is saved with that number.
     NoSuchLook,
+    /// No output is set with that number.
+    NoSuchOutput,
     WrongLookKind,
     LookCycle,
     InvalidTiming,

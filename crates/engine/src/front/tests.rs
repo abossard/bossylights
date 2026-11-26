@@ -1657,6 +1657,41 @@ fn a_kept_wave_keeps_its_bytes_when_the_tempo_doubles() {
     wakes.run();
 }
 
+/// #318 P1e-1: a picture is published when an output's descriptor or its acceptable delay
+/// changes, and only then.
+#[test]
+#[expect(clippy::unwrap_used, reason = "a test whose set-up fails fails")]
+fn a_changed_output_or_acceptable_delay_is_not_the_same_outputs() {
+    let output = OutputNumber::try_from(1).unwrap();
+    let universes = RunNumbers { first: 1, count: 1 }
+        .check(Universes::ONE)
+        .unwrap();
+    let view = |project| ProjectView {
+        project,
+        previous: [None; MAX_OUTPUTS],
+    };
+    let empty = Project::new(Universes::ONE);
+    let attached = empty
+        .update(ProjectEvent::Attached { output, universes })
+        .unwrap()
+        .0;
+    let delayed = attached
+        .update(ProjectEvent::Client(Command::SetAcceptableDelay {
+            output,
+            delay_us: core::num::NonZeroU32::new(5_000),
+        }))
+        .unwrap()
+        .0;
+    // (before, after, the same outputs)
+    for (case, before, after, same) in [
+        ("nothing changed", attached, attached, true),
+        ("an output added", empty, attached, false),
+        ("its acceptable delay set", attached, delayed, false),
+    ] {
+        assert_eq!(view(before).same_outputs(&view(after)), same, "{case}");
+    }
+}
+
 /// A strip of three pixels at 1, each channel held at 200: all nine follow Blackout.
 #[expect(clippy::unwrap_used, reason = "a test that cannot set itself up fails")]
 fn lit_strip() -> (Engine, Sender, Arc<Heard>) {

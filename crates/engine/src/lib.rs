@@ -142,6 +142,7 @@ pub const fn edits(command: &Command) -> bool {
         | Command::SetMaster { .. }
         | Command::SetOutput { .. }
         | Command::RemoveOutput { .. }
+        | Command::SetAcceptableDelay { .. }
         | Command::SetIntensity { .. }
         | Command::SetColour { .. }
         | Command::ReleaseIntensity { .. }

@@ -313,9 +313,11 @@ pub struct ProjectView {
 }
 
 impl ProjectView {
-    /// Whether publishing these two revisions changes an output descriptor.
+    /// Whether publishing these two revisions changes an output descriptor or an output's
+    /// acceptable delay.
     pub fn same_outputs(&self, other: &Self) -> bool {
         self.project.outputs() == other.project.outputs()
+            && self.project.acceptable_delays_us() == other.project.acceptable_delays_us()
     }
 
     pub fn at(&self, snapshot: &Snapshot) -> Project {

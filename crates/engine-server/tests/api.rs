@@ -547,6 +547,18 @@ async fn a_request_that_cannot_be_right_is_refused_and_changes_nothing() {
             json!({"Search": {"text": "dimmer", "limit": 1}}),
             refused(json!("NotACommand")),
         ),
+        // an acceptable delay: on an output that is set, and never 0 or below
+        (delay(2, json!(5_000)), refused(json!("NoSuchOutput"))),
+        (delay(1, json!(0)), refused(json!("NotACommand"))),
+        (delay(1, json!(-1)), refused(json!("NotACommand"))),
+        (
+            delay(1, json!(4_294_967_296_u64)),
+            refused(json!("NotACommand")),
+        ),
+        (
+            json!({"Send": {"command": {"SetAcceptableDelay": {"output": 1, "delay_ms": 5}}}}),
+            refused(json!("NotACommand")),
+        ),
         (
             json!({"Fixture": {"maker": "Generic", "model": "Dimmer", "mode": "1"}}),
             refused(json!("NotACommand")),
@@ -568,6 +580,11 @@ async fn a_request_that_cannot_be_right_is_refused_and_changes_nothing() {
     assert_eq!(state["blackout"], json!(false));
     assert_eq!(state["master"], json!(255), "Master full at start");
     assert_eq!(state["outputs"][1], json!(null), "no second output");
+    assert_eq!(
+        picture["Picture"]["project"]["acceptable_delays_us"],
+        json!(vec![Value::Null; 16]),
+        "no acceptable delay"
+    );
     let master = json!({"Send": {"command": {"SetMaster": {"level": 128}}}});
     send(&mut socket, &master).await;
     assert_eq!(answer(&mut socket).await, json!("Accepted"));
@@ -594,6 +611,51 @@ fn output(kind: Value, universes: Value, rate: Value) -> Value {
     json!({"Send": {"command": {"SetOutput": {
         "output": 2, "kind": kind, "universes": universes, "rate": rate,
     }}}})
+}
+
+/// A request that sets the acceptable delay of `output`.
+fn delay(output: u8, delay_us: Value) -> Value {
+    json!({"Send": {"command": {"SetAcceptableDelay": {"output": output, "delay_us": delay_us}}}})
+}
+
+/// #318 P1e-1: the number a user sets on an output is in the project with it, until it
+/// is cleared or the output goes.
+#[tokio::test]
+async fn an_outputs_acceptable_delay_is_in_the_project_until_cleared_or_removed() {
+    let mut socket = connect().await;
+    let (_udp, add) = receiver().await;
+    send(&mut socket, &add).await;
+    assert_eq!(answer(&mut socket).await, json!("Accepted"));
+    let remove = json!({"Send": {"command": {"RemoveOutput": {"output": 1}}}});
+    // (request, output 1's acceptable delay after it)
+    let steps = [
+        (delay(1, json!(80_000)), json!(80_000)),
+        (delay(1, json!(null)), json!(null)),
+        (delay(1, json!(4_294_967_295_u32)), json!(4_294_967_295_u32)),
+        (remove, json!(null)),
+    ];
+    for (request, number) in steps {
+        send(&mut socket, &request).await;
+        assert_eq!(answer(&mut socket).await, json!("Accepted"), "{request}");
+        let started = Instant::now();
+        loop {
+            send(&mut socket, &json!("Query")).await;
+            let picture = answer(&mut socket).await;
+            if picture["Picture"]["project"]["acceptable_delays_us"][0] == number {
+                break;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "{request}: the picture never showed {number}"
+            );
+        }
+    }
+    send(&mut socket, &delay(1, json!(5_000))).await;
+    assert_eq!(
+        answer(&mut socket).await,
+        json!({"Refused": {"reason": "NoSuchOutput"}}),
+        "a removed output takes no number"
+    );
 }
 
 #[tokio::test]

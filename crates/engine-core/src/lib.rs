@@ -76,6 +76,7 @@ pub use playback::{LOOKS, Launches, LookCommand, PLAYS, Play, PlayId, PlayState,
 pub use project::{Project, ProjectEffect, ProjectEvent, ProjectOutput};
 pub use show::{ShowFile, Unopened};
 
+use core::num::NonZeroU32;
 use core::time::Duration;
 use serde::{Deserialize, Serialize};
 
@@ -372,6 +373,14 @@ pub enum Command {
     },
     /// Remove an output. Nothing happens if there is none.
     RemoveOutput { output: OutputNumber },
+    /// How long from a press to the light is acceptable on this output, in µs, as the
+    /// user sets it on its card. `None` clears it. 0 is not a number this takes.
+    /// Refused (`NoSuchOutput`) while the output shows nothing.
+    SetAcceptableDelay {
+        output: OutputNumber,
+        #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+        delay_us: Option<NonZeroU32>,
+    },
     /// Add a fixture of the library in one of its modes, from `at` on. The reply carries
     /// its number. A fixture on any of the same channels is refused (`Overlaps`).
     Patch {
