@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::{Error, Message};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
@@ -29,9 +29,15 @@ pub type Heard = Arc<Mutex<Vec<[u8; 512]>>>;
 const ASKED: [u8; 7] = [0x7E, 3, 2, 0, 0, 0, 0xE7];
 
 /// Reads the test's end of the fake port and keeps the channels of every full message.
-/// With no `heard`, nobody reads it: the port fills up and stays full. A widget that
-/// `answers` break, mark and rate answers each label 3 request with them.
+/// With no `heard`, nobody reads it once the widget answered: the port fills up and stays
+/// full. A widget that `answers` break, mark and rate answers each label 3 request with
+/// them.
 fn listen(mut end: TTYPort, heard: Option<Heard>, stop: Arc<AtomicBool>, answers: Option<[u8; 3]>) {
+    if heard.is_none()
+        && let Some(settings) = answers
+    {
+        answer_first_ask(&mut end, &stop, settings);
+    }
     let mut bytes = Vec::new();
     let mut chunk = [0; MESSAGE];
     while !stop.load(Ordering::Relaxed) {
@@ -46,10 +52,8 @@ fn listen(mut end: TTYPort, heard: Option<Heard>, stop: Arc<AtomicBool>, answers
         while let Some(start) = bytes.iter().position(|b| *b == 0x7E) {
             bytes.drain(..start);
             if bytes.starts_with(&ASKED) {
-                if let Some([break_steps, mark_steps, rate]) = answers {
-                    // firmware 1.44, then the settings (API p.3)
-                    let answer = [0x7E, 3, 5, 0, 44, 1, break_steps, mark_steps, rate, 0xE7];
-                    end.write_all(&answer).unwrap();
+                if let Some(settings) = answers {
+                    end.write_all(&widget_answer(settings)).unwrap();
                 }
                 bytes.drain(..ASKED.len());
                 continue;
@@ -70,11 +74,35 @@ fn listen(mut end: TTYPort, heard: Option<Heard>, stop: Arc<AtomicBool>, answers
     }
 }
 
+/// A widget's answer to label 3 (API p.3): firmware 1.44, then break, mark after break and
+/// rate.
+fn widget_answer([break_steps, mark_steps, rate]: [u8; 3]) -> [u8; 10] {
+    [0x7E, 3, 5, 0, 44, 1, break_steps, mark_steps, rate, 0xE7]
+}
+
+/// Reads the test's end until the label 3 request, then answers it.
+fn answer_first_ask(end: &mut TTYPort, stop: &AtomicBool, settings: [u8; 3]) {
+    let mut bytes = Vec::new();
+    let mut chunk = [0; ASKED.len()];
+    while !stop.load(Ordering::Relaxed) {
+        if let Ok(n) = end.read(&mut chunk) {
+            bytes.extend_from_slice(&chunk[..n]);
+        }
+        if bytes.windows(ASKED.len()).any(|window| window == ASKED) {
+            end.write_all(&widget_answer(settings)).unwrap();
+            return;
+        }
+    }
+}
+
+/// The API's defaults (API p.3): break 9, mark after break 1, rate 40.
+pub const DEFAULTS: [u8; 3] = [9, 1, 40];
+
 /// A fake serial port for the adapter: `listen` reads its other end into `heard`, or
 /// nobody reads. Its first pseudo terminal is made now: the system makes them one at a
 /// time, and under load that takes seconds, which no API answer may wait for.
 pub fn find(heard: Option<Heard>, stop: Arc<AtomicBool>) -> Find {
-    find_answering(heard, stop, None)
+    find_answering(heard, stop, Some(DEFAULTS))
 }
 
 /// [`find`], for a widget that `answers` label 3 with this break, mark and rate.
@@ -96,7 +124,8 @@ pub fn find_answering(
 
 /// The engine's `open`: DDP as the engine opens it, adapter 1 a fake serial port whose
 /// other end `listen` reads into `heard`, or nobody reads. The port of its first open
-/// is made now ([`find`]).
+/// is made now ([`find`]). Adapter 1 is handed over once its widget answered label 3:
+/// until then `take` drops every frame (#293), and these tests count each frame.
 pub fn open(heard: Option<Heard>, stop: Arc<AtomicBool>) -> Open {
     let mut first = Some(find(heard.clone(), Arc::clone(&stop)));
     Box::new(move |kind| match kind {
@@ -106,7 +135,15 @@ pub fn open(heard: Option<Heard>, stop: Arc<AtomicBool>) -> Open {
             let find = first
                 .take()
                 .unwrap_or_else(|| find(heard.clone(), Arc::clone(&stop)));
-            Ok(Box::new(DmxUsbPro::open(find)?) as Box<dyn Device>)
+            let device = DmxUsbPro::open(find)?;
+            let started = Instant::now();
+            while device.reading().settings().is_none() {
+                if started.elapsed() > Duration::from_secs(10) {
+                    return Err(std::io::ErrorKind::TimedOut.into()); // guard
+                }
+                thread::sleep(Duration::from_millis(1)); // poll
+            }
+            Ok(Box::new(device) as Box<dyn Device>)
         }
         OutputKind::Ddp { .. } | OutputKind::DmxUsbPro { .. } => outputs::open(kind),
     })

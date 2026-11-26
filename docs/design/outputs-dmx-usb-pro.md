@@ -59,7 +59,7 @@ No checksum, no escaping: the length frames the data. An unknown label is ignore
 | | |
 |---|---|
 | USB identity | FTDI `0403:6001` (only in ENTTEC's example code). Shared by many FTDI cables |
-| What tells it apart | ENTTEC: send label 3, a Pro answers with label 3. We take `0403:6001` named "DMX USB PRO" or with no product name, skip `/dev/tty.*`, and order by USB serial number |
+| What tells it apart | ENTTEC: send label 3, a Pro answers with label 3. We take `0403:6001` named "DMX USB PRO" or with no product name, skip `/dev/tty.*`, and order by USB serial number. A port whose widget answers no label 3 in range after two tries is refused: "not a DMX USB Pro" (#293) |
 | Stable identity | the widget's serial (label 10), the number on its case |
 
 ## What we send
@@ -71,12 +71,12 @@ No checksum, no escaping: the length frames the data. An unknown label is ignore
 | Rate | 44 a second, or lower | the widget sends at most 40 (its default). At 44 about 4 messages a second are replaced before they go out |
 | Label 3 | asked at each new port, before its first label 6, at most twice ([outputs.md](outputs.md), "Ask") | optional |
 | Labels 4, 10 | never sent | optional |
-| Reading | label 3's answer: break, mark after break and rate set the delay Health shows after the handoff. No answer: the API's defaults, and Health says so | optional |
+| Reading | label 3's answer: break, mark after break and rate set the delay Health shows after the handoff. Before the answer (or with no port) Health counts the API's defaults and says so; no frame goes out then | optional |
 
 ## Gaps for the planner
 
 | # | Gap | Effect | Recommended |
 |---|---|---|---|
 | U1 | we send 44, the widget outputs at most 40 | a press waits for the widget's next period (at most 25 ms), never lost | keep 44 (the newest wins). Note it in Patch's rate help |
-| U2 | the adapter is found by USB identity and name. Label 3 is asked at each new port (#318), but a port that never answers is still taken | any FTDI `0403:6001` with no product name, or one named "DMX USB PRO", would be taken | refuse a port that never answers label 3 |
+| U2 | closed (#293): a port that never answers label 3 in range is refused, never opened again by its output | | |
 | U3 | the adapter is numbered by USB serial, not by the widget serial | not measured whether the two orders agree; only matters with two adapters | keep |

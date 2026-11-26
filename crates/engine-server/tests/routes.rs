@@ -111,10 +111,12 @@ fn attach_usb(sender: &mut Sender, from: u32) -> serialport::TTYPort {
     let route = Route::new(outputs::limits(kind), &[span(from, 512)]).unwrap();
     let (find, mut fake) = usb::Fake::new(true);
     let pro = Box::new(DmxUsbPro::open(find).unwrap());
+    let end = fake.next_end();
+    usb::until_answered(&pro);
     sender
         .attach_route(output(2), pro, route, Rate::FortyFour)
         .unwrap();
-    fake.next_end()
+    end
 }
 
 include!("routes/framing.rs");

@@ -42,17 +42,21 @@ stateDiagram-v2
   Stalled --> Lost: write error
   Lost --> Writing: found again
   Lost --> CannotOpen: refused
+  Writing --> NotAPro: two tries at<br/>label 3 heard nothing
 ```
 
-| link \ seen | Bytes | NoBytes | Whole | Error(e) | Found | Missing | Refused(e) |
-|---|---|---|---|---|---|---|---|
-| NotFound | NotFound | NotFound | NotFound | Lost{e} | Writing | NotFound | CannotOpen{e} |
-| CannotOpen{w} | same | same | same | Lost{e} | Writing | NotFound | CannotOpen{e} |
-| Writing | Writing | Stalled{now} | Writing | Lost{e} | n/a: no look with a port | n/a | n/a |
-| Stalled{s} | Stalled{s}, Lost{ETIMEDOUT} from s + 500 ms | as Bytes | Writing | Lost{e} | n/a | n/a | n/a |
-| Lost{w} | Lost{w} | Lost{w} | Lost{w} | Lost{e} | Writing | Lost{w}: still unplugged | CannotOpen{e} |
+| link \ seen | Bytes | NoBytes | Whole | Error(e) | Found | Missing | Refused(e) | Silent |
+|---|---|---|---|---|---|---|---|---|
+| NotFound | NotFound | NotFound | NotFound | Lost{e} | Writing | NotFound | CannotOpen{e} | n/a: no port to ask |
+| CannotOpen{w} | same | same | same | Lost{e} | Writing | NotFound | CannotOpen{e} | n/a |
+| Writing | Writing | Stalled{now} | Writing | Lost{e} | n/a: no look with a port | n/a | n/a | NotAPro |
+| Stalled{s} | Stalled{s}, Lost{ETIMEDOUT} from s + 500 ms | as Bytes | Writing | Lost{e} | n/a | n/a | n/a | n/a: an ask is written whole first |
+| Lost{w} | Lost{w} | Lost{w} | Lost{w} | Lost{e} | Writing | Lost{w}: still unplugged | CannotOpen{e} | n/a |
+| NotAPro | n/a: never written to nor looked for again, NotAPro | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
 
 Bytes never restart a stall's clock: a port that trickles a byte now and then is still lost after 500 ms.
+
+Silent: two tries at label 3 heard no answer in range ("Ask" below). NotAPro closes the port and never opens it again: opening a foreign FTDI port raises its DTR and holds it exclusive. Setting the output again opens a new device, which asks from try 1. The cause reads "not a DMX USB Pro" (`lost_with`; kept, like any cause, until a newer one).
 
 ### Not found or cannot open
 
@@ -75,11 +79,11 @@ One turn of the port thread: no port, it looks; a port not asked yet, one try; e
 | ask \ heard | an answer in range | out of range, garbled or none in time | a stop or a finish | the write loses the port |
 |---|---|---|---|---|
 | Try 1 | Read: settings kept | Try 2 | Try 1 again after it: a cut try does not count | Lost: nothing kept |
-| Try 2 | Read: settings kept | Done: nothing kept, the port stays in use | Try 2 again after it | Lost: nothing kept |
+| Try 2 | Read: settings kept | Refused: not a DMX USB Pro. The port is closed, link NotAPro | Try 2 again after it | Lost: nothing kept |
 | Read | n/a: no more tries on this port | n/a | n/a | Lost: the kept settings are cleared |
-| Done | n/a: no more tries on this port | n/a | n/a | Lost |
+| Refused | n/a: no port, never looked for again | n/a | n/a | n/a |
 
-A port found (at open, or found again) starts at Try 1 with nothing kept. Two tries: the widget ignores the first "get parameters" after another program's run, and answers the second in 3 ms ([dmx-timing spike](../spikes/dmx-timing.md), "What failed"). In range (API p.3): break 9 to 127 and mark after break 1 to 127 steps of 10.67 µs, rate 0 to 40. While it asks, `take` keeps one frame queued and drops the rest: at most 100 ms at a port open.
+A port found (at open, or found again) starts at Try 1 with nothing kept. Two tries: the widget ignores the first "get parameters" after another program's run, and answers the second in 3 ms ([dmx-timing spike](../spikes/dmx-timing.md), "What failed"). In range (API p.3): break 9 to 127 and mark after break 1 to 127 steps of 10.67 µs, rate 0 to 40. A full answer buffer keeps from its last `0x7E`: a widget in input mode may send DMX it received (label 5, up to 518 bytes) before its answer. Until the widget answered, `take` drops every frame (busy, not lost): at most 100 ms at a port open, and no frame ever goes out on the API's defaults.
 
 ### Life: the port thread's life
 

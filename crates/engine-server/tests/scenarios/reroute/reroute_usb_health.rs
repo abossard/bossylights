@@ -69,6 +69,7 @@ fn health_reports_a_usb_return_even_if_the_reader_missed_the_rerouted_outage() {
         Universes::new(2).unwrap(),
         Box::new(move |_| {
             let device = DmxUsbPro::open(find.take().unwrap())?;
+            usb::until_answered(&device);
             Ok(Box::new(device) as Box<dyn Device>)
         }),
     )

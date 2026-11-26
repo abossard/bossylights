@@ -20,7 +20,7 @@ use nix::unistd::read;
 use outputs::artnet::{Discovery, PortAddress, Presence};
 use outputs::dmx_usb_pro::{DmxUsbPro, never_wait};
 use outputs::{Color, Device, Outcome, OutputKind};
-use serialport::TTYPort;
+use serialport::{SerialPort, TTYPort};
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket};
 use std::os::fd::AsRawFd;
@@ -29,6 +29,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 // Drain the fake port so a full queue never sends the port thread looking for a lost adapter.
+// Its widget answers label 3 first, or the port thread refuses the port.
 fn fake_port() -> (TTYPort, thread::JoinHandle<()>) {
     let (mut end, mut port) = TTYPort::pair().unwrap();
     port.write_all(&[0]).unwrap();
@@ -37,6 +38,8 @@ fn fake_port() -> (TTYPort, thread::JoinHandle<()>) {
         let mut bytes = [0; 4096];
         end.read_exact(&mut bytes[..1]).unwrap();
         ready.send(()).unwrap();
+        end.set_timeout(NEVER).unwrap();
+        common::answer_ask(&mut end);
         // Read the blocking descriptor directly. TTYPort's idle timeouts allocate.
         loop {
             match read(end.as_raw_fd(), &mut bytes) {
@@ -133,6 +136,8 @@ fn main() {
             .ok_or_else(|| std::io::Error::other("one port only"))
     }))
     .unwrap();
+    // Its widget answered before any window: the ask allocates nothing in one.
+    common::until_answered(&pro);
     let ddp = outputs::open(OutputKind::Ddp {
         address,
         color: Color::Rgbw,

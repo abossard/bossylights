@@ -8,12 +8,17 @@
     clippy::disallowed_methods,
     reason = "the test polls for a port; it is not the output thread (only outputs bans sleep)"
 )]
+#![allow(
+    clippy::disallowed_types,
+    reason = "the widget's side hands each port's end over a channel, off the output thread"
+)]
 
-use outputs::dmx_usb_pro::{Find, MESSAGE, never_wait};
+use outputs::Device;
+use outputs::dmx_usb_pro::{DmxUsbPro, Find, MESSAGE, never_wait};
 use serialport::{SerialPort, TTYPort};
-use std::io::{self, Read};
-use std::sync::Arc;
+use std::io::{self, Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -24,15 +29,25 @@ pub const NEVER: Duration = Duration::from_secs(10);
 /// The test's side of a fake adapter.
 pub struct Fake {
     plugged: Arc<AtomicBool>,
-    ends: rtrb::Consumer<TTYPort>,
+    ends: mpsc::Receiver<TTYPort>,
 }
 
 impl Fake {
-    /// The finder for the device, and the test's side. A fake that is not `plugged` is not
-    /// found until it is.
+    /// The finder for a DMX USB Pro, and the test's side. Its widget answers the label 3
+    /// request at each new port ([`answer_ask`]) before the test gets the port's end. A
+    /// fake that is not `plugged` is not found until it is.
     pub fn new(plugged: bool) -> (Find, Self) {
+        Self::with(plugged, true)
+    }
+
+    /// [`Fake::new`] with a widget that answers nothing: the test plays the widget.
+    pub fn silent(plugged: bool) -> (Find, Self) {
+        Self::with(plugged, false)
+    }
+
+    fn with(plugged: bool, answers: bool) -> (Find, Self) {
         let plugged = Arc::new(AtomicBool::new(plugged));
-        let (mut give, ends) = rtrb::RingBuffer::new(8);
+        let (give, ends) = mpsc::channel();
         let find: Find = {
             let plugged = Arc::clone(&plugged);
             Box::new(move || {
@@ -41,8 +56,17 @@ impl Fake {
                 }
                 let (ours, port) = TTYPort::pair()?;
                 never_wait(&port)?;
-                give.push(end(ours)?)
-                    .map_err(|_| io::Error::other("too many ports"))?;
+                let mut ours = end(ours)?;
+                let give = give.clone();
+                if answers {
+                    // The port thread asks right after this find: answer it on the side.
+                    thread::spawn(move || {
+                        answer_ask(&mut ours);
+                        let _ = give.send(ours);
+                    });
+                } else {
+                    let _ = give.send(ours);
+                }
                 Ok(port)
             })
         };
@@ -56,19 +80,35 @@ impl Fake {
 
     /// The test's end of the next port the finder opens, once it did.
     pub fn next_end(&mut self) -> TTYPort {
-        let started = Instant::now();
-        loop {
-            if let Ok(end) = self.ends.pop() {
-                return end;
-            }
-            assert!(started.elapsed() < NEVER, "the finder opened no port"); // guard
-            thread::sleep(Duration::from_millis(5)); // poll
-        }
+        self.ends
+            .recv_timeout(NEVER)
+            .expect("the finder opened no port") // guard
     }
 
     /// The test's end of a port the finder opened, if it opened one not handed out yet.
     pub fn new_end(&mut self) -> Option<TTYPort> {
-        self.ends.pop().ok()
+        self.ends.try_recv().ok()
+    }
+}
+
+/// Returns once the widget on `device`'s port answered label 3: until then `take` drops
+/// every frame (#293), and a test that counts frames hands the device over after it.
+pub fn until_answered(device: &DmxUsbPro) {
+    let started = Instant::now();
+    while device.reading().settings().is_none() {
+        assert!(started.elapsed() < NEVER, "the widget never answered"); // guard
+        thread::yield_now();
+    }
+}
+
+/// The widget's side of a new port: reads the label 3 request and answers it with the
+/// API's defaults, break 9, mark after break 1, rate 40 (API p.3). A port closed before
+/// it asked is left as it is.
+pub fn answer_ask(end: &mut TTYPort) {
+    let mut asked = [0; ASKED.len()];
+    if end.read_exact(&mut asked).is_ok() && asked == ASKED {
+        // firmware 1.44, then break, mark after break, rate
+        let _ = end.write_all(&[0x7E, 3, 5, 0, 44, 1, 9, 1, 40, 0xE7]);
     }
 }
 

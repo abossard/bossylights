@@ -5,14 +5,14 @@
 
 use crate::output_common as common;
 
-use common::Fake;
+use common::{ASKED, Fake};
 use engine::{
     Adapter, ChannelNumbers, Command, Device, Engine, Open, Outcome, OutputKind, OutputNumber,
     Rate, Refusal, RunNumbers, Sender, Status, Universes,
 };
 use outputs::dmx_usb_pro::{DmxUsbPro, Find, MESSAGE, never_wait};
 use serialport::{SerialPort, TTYPort};
-use std::io::Read;
+use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
 use std::thread;
@@ -208,9 +208,11 @@ fn exclusive_adapter() -> (Open, TTYPort, String) {
 /// A pseudo terminal holds less than two messages (1024 bytes on macOS), and a port that
 /// takes no byte for half a second counts as lost: the next output that looks would get
 /// the adapter (#314). Says on `heard` once a frame with `level` on channel 1 arrived.
+/// Answers each opener's label 3 request with the API's defaults, as a widget does.
 fn take_all(mut end: TTYPort, level: u8, heard: &mpsc::Sender<()>, keep: &mpsc::Receiver<()>) {
     let wanted = [0x7E, 6, 0x01, 0x02, 0, level];
     let mut seen = Vec::new();
+    let mut tail = Vec::new();
     let mut chunk = [0; MESSAGE];
     end.set_timeout(Duration::from_millis(10)).unwrap();
     while keep.try_recv() == Err(mpsc::TryRecvError::Empty) {
@@ -219,6 +221,14 @@ fn take_all(mut end: TTYPort, level: u8, heard: &mpsc::Sender<()>, keep: &mpsc::
             thread::sleep(Duration::from_millis(5)); // poll
             continue;
         };
+        tail.extend_from_slice(chunk.get(..read).unwrap_or_default());
+        if tail.windows(ASKED.len()).any(|w| w == ASKED) {
+            let [break_steps, mark_steps, rate] = crate::wire_common::DEFAULTS;
+            let answer = [0x7E, 3, 5, 0, 44, 1, break_steps, mark_steps, rate, 0xE7];
+            end.write_all(&answer).unwrap();
+            tail.clear();
+        }
+        tail.drain(..tail.len().saturating_sub(ASKED.len()));
         if !seen.windows(wanted.len()).any(|w| w == wanted) {
             seen.extend_from_slice(chunk.get(..read).unwrap_or_default());
             if seen.windows(wanted.len()).any(|w| w == wanted) {

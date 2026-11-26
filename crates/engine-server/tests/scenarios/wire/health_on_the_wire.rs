@@ -93,6 +93,9 @@ fn open(
         let port = (adapter == Adapter::FIRST)
             .then(|| DmxUsbPro::open(find()))
             .transpose()?;
+        if let Some(pro) = &port {
+            crate::output_common::until_answered(pro);
+        }
         Ok(Box::new(Flaky {
             port,
             slot: usize::from(adapter.number() - 1),
@@ -115,16 +118,17 @@ fn ms(at: Duration) -> u64 {
     u64::try_from(at.as_millis()).unwrap()
 }
 
-/// The DMX wire's source: over the patched slots, or the whole universe with none.
-const PATCHED: &str = "Dmx512AdapterDefault";
-const NOTHING_PATCHED: &str = "Dmx512AdapterDefaultNothingPatched";
+/// The DMX wire's source: over the patched slots, or the whole universe with none. The
+/// widget answered the API's defaults (#293: a widget that never answers is refused).
+const PATCHED: &str = "Dmx512AdapterRead";
+const NOTHING_PATCHED: &str = "Dmx512AdapterReadNothingPatched";
 
 /// What follows a DMX USB Pro's handoff (#318 P1c), worked by hand: 518 bytes x 11 bits
-/// at 500,000 baud, 11,396 µs; the widget's default 40 frames a second, 25,000 µs; the
+/// at 500,000 baud, 11,396 µs; the widget answered the default 40 frames a second, 25,000 µs; the
 /// light's slot n ends at 96.03 + 10.67 + (n + 1) x 44 µs (DMX512, ENTTEC API p.3):
 /// slot 1 at 194.7, slot 50 at 2,350.7, slot 102 at 4,638.7, slot 512 at 22,678.7.
 fn usb_after_handoff(wire_low: u32, wire_high: u32, wire: &str) -> Value {
-    usb_parts((25_000, "AdapterDefault"), (wire_low, wire_high, wire))
+    usb_parts((25_000, "AdapterRead"), (wire_low, wire_high, wire))
 }
 
 /// The parts of a DMX USB Pro: the wait for the widget's frame (its high end, source) and
@@ -283,7 +287,7 @@ struct Rig {
 impl Rig {
     /// Held before its first wake; the watcher subscribed. Its first `Picture`.
     async fn start() -> (Self, Value) {
-        Self::start_answering(None).await
+        Self::start_answering(Some(common::DEFAULTS)).await
     }
 
     /// [`Rig::start`], adapter 1's widget answering label 3 with `answers`.
@@ -613,7 +617,7 @@ async fn a_row_names_what_follows_its_handoff_for_its_kind_and_patched_slots() {
 /// #318 P1c2: a widget that answers label 3 with break 20, mark 4 and rate 30 has its own
 /// numbers in its row, worked by hand: a frame every 1 s / 30, 33,333.3 µs; slot n ends at
 /// 20 x 10.67 + 4 x 10.67 + (n + 1) x 44 µs: slot 1 at 344.08, slot 50 at 2,500.08. The
-/// press is on the wire as with a widget that never answers.
+/// press is on the wire as with a widget that answers the API's defaults.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_widget_that_answers_has_its_own_break_mark_and_rate_in_its_row() {
     let (mut rig, _) = Rig::start_answering(Some([20, 4, 30])).await;
@@ -1070,6 +1074,7 @@ async fn a_return_after_the_grid_does_not_warn_at_the_unavailable_endpoint() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_fresh_engine_has_no_health_and_a_slow_socket_counts_what_it_missed_and_stays_open() {
     assert_eq!(wire::API_VERSION, 12);
+    // Output 16 is a test's device with no widget: nothing answered, the API's defaults.
     let (mut rig, picture) = Rig::start().await;
     let empty = json!({"window_ms": 4000, "outputs": []});
     assert_eq!(picture["Picture"]["health"], empty);
@@ -1089,7 +1094,8 @@ async fn a_fresh_engine_has_no_health_and_a_slow_socket_counts_what_it_missed_an
     assert_eq!(
         picture["Picture"]["health"]["outputs"][15],
         json!({"output": 16, "generation": 1, "status": "Running", "state": "Measuring",
-            "measurement": "Measuring", "after_handoff": usb_after_handoff(194, 22_679, NOTHING_PATCHED)})
+            "measurement": "Measuring", "after_handoff": usb_parts((25_000, "AdapterDefault"),
+                (194, 22_679, "Dmx512AdapterDefaultNothingPatched"))})
     );
 
     // 10 losses and returns on 16 outputs: 320 events, faster than one Health per 500 ms

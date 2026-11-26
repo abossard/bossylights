@@ -132,6 +132,8 @@ fn a_port_that_takes_no_bytes_is_lost_then_found_again() {
         })
     };
     let device = DmxUsbPro::open(find).unwrap();
+    common::answer_ask(&mut end);
+    settings_read(&device);
     let (done, seen) = mpsc::channel();
     let taking = {
         let reading = Arc::clone(&reading);
@@ -157,7 +159,20 @@ fn a_port_that_takes_no_bytes_is_lost_then_found_again() {
         while !reading.load(Ordering::Relaxed) {
             thread::yield_now();
         }
-        while end.read(&mut bytes).is_ok_and(|read| read > 0) {}
+        // The port found again asks label 3 behind what the stall left: answer it.
+        let mut last = Vec::new();
+        while let Ok(read) = end.read(&mut bytes) {
+            if read == 0 {
+                break;
+            }
+            last.extend_from_slice(&bytes[..read]);
+            if last.windows(ASKED.len()).any(|window| window == ASKED) {
+                end.write_all(&[0x7E, 3, 5, 0, 44, 1, 9, 1, 40, 0xE7])
+                    .unwrap();
+                last.clear();
+            }
+            last.drain(..last.len().saturating_sub(ASKED.len()));
+        }
     });
     let seen = seen
         .recv_timeout(NEVER)
@@ -202,7 +217,8 @@ fn take_until_stuck(device: &mut DmxUsbPro, fake: &mut Fake, end: &mut TTYPort) 
     let (mut lost, mut paced_here) = (false, true);
     loop {
         assert!(started.elapsed() < NEVER, "never stuck"); // guard
-        while let Some(newer) = fake.new_end() {
+        while let Some(mut newer) = fake.new_end() {
+            common::answer_ask(&mut newer); // the widget of the port found again
             *end = newer;
             (lost, paced_here, run) = (true, false, 0);
         }
@@ -267,7 +283,7 @@ fn a_stop_in_the_middle_of_a_message_finishes_it_and_sends_what_the_driver_holds
     let started = Instant::now();
     let (accepted, levels) = loop {
         assert!(started.elapsed() < NEVER, "every stop came after a loss"); // guard
-        let (find, mut fake) = Fake::new(true);
+        let (find, mut fake) = Fake::silent(true);
         let mut device = DmxUsbPro::open(find).unwrap();
         let lost_with = device.lost_with();
         let mut end = fake.next_end();
@@ -326,22 +342,18 @@ fn a_stop_in_the_middle_of_a_message_finishes_it_and_sends_what_the_driver_holds
 fn a_find_error_shows_why_an_adapter_that_is_there_cannot_open() {
     use nix::errno::Errno;
     use std::io::ErrorKind;
-    // (find answers at open, then on every look, the cause kept)
+    let (denied, busy) = (
+        Some(ErrorKind::PermissionDenied),
+        Some(ErrorKind::ResourceBusy),
+    );
+    // (find answers at open, then on every look, the cause kept at open, then after a look)
     let cases = [
-        (Errno::ENOENT, Errno::ENOENT, None),
-        (
-            Errno::EACCES,
-            Errno::EACCES,
-            Some(ErrorKind::PermissionDenied),
-        ),
-        (Errno::EBUSY, Errno::EBUSY, Some(ErrorKind::ResourceBusy)),
-        (
-            Errno::ENOENT,
-            Errno::EACCES,
-            Some(ErrorKind::PermissionDenied),
-        ),
+        (Errno::ENOENT, Errno::ENOENT, None, None),
+        (Errno::EACCES, Errno::EACCES, denied, denied),
+        (Errno::EBUSY, Errno::EBUSY, busy, busy),
+        (Errno::ENOENT, Errno::EACCES, None, denied),
     ];
-    for (at_open, on_look, expected) in cases {
+    for (at_open, on_look, kept_at_open, expected) in cases {
         let looks = Arc::new(std::sync::atomic::AtomicU32::new(0));
         let find: Find = {
             let looks = Arc::clone(&looks);
@@ -355,6 +367,9 @@ fn a_find_error_shows_why_an_adapter_that_is_there_cannot_open() {
             })
         };
         let mut device = DmxUsbPro::open(find).unwrap();
+        // The port thread's first look is a look time away: this is the open's own cause.
+        let kept = device.lost_with().get().map(|cause| cause.kind());
+        assert_eq!(kept, kept_at_open, "{at_open:?}, at open");
         assert_eq!(device.take(&[0; 512]), Outcome::Failed, "{at_open:?}");
         let started = Instant::now();
         while looks.load(Ordering::Relaxed) < 2 {
@@ -476,31 +491,24 @@ fn settings_read(device: &DmxUsbPro) -> Settings {
 
 /// The Ask table of `docs/design/outputs.md`, on the wire: the widget's answer to each try
 /// the port thread makes, what the device keeps, and that a frame's message comes next:
-/// never a third try. Read and Done ask no more on this port, also after a route finish.
+/// never a third try. Read asks no more on this port, also after a route finish.
 #[test]
 fn the_port_thread_asks_the_widget_its_settings_at_most_twice_before_its_first_message() {
     let in_range = Some(answer(20, 4, 30));
     let garbled = Some([0x7E, 6, 5, 0, 44, 1, 20, 4, 30, 0xE7]);
-    let twenty = Settings::new(20, 4, 30);
-    // (case, the answer to each try, kept)
-    let cases: [(&str, &[Option<[u8; 10]>], _); 6] = [
-        ("answers try 1", &[in_range], twenty),
-        ("ignores try 1, answers try 2", &[None, in_range], twenty),
+    let twenty = Settings::new(20, 4, 30).unwrap();
+    // (case, the answer to each try)
+    let cases: [(&str, &[Option<[u8; 10]>]); 4] = [
+        ("answers try 1", &[in_range]),
+        ("ignores try 1, answers try 2", &[None, in_range]),
         (
             "out of range, then in range",
             &[Some(answer(8, 4, 30)), in_range],
-            twenty,
         ),
-        ("garbled, then in range", &[garbled, in_range], twenty),
-        ("never answers", &[None, None], None),
-        (
-            "out of range twice",
-            &[Some(answer(20, 0, 30)), Some(answer(20, 4, 41))],
-            None,
-        ),
+        ("garbled, then in range", &[garbled, in_range]),
     ];
-    for (case, answers, kept) in cases {
-        let (find, mut fake) = Fake::new(true);
+    for (case, answers) in cases {
+        let (find, mut fake) = Fake::silent(true);
         let mut device = DmxUsbPro::open(find).unwrap();
         let mut end = fake.next_end();
         for answered in answers {
@@ -509,9 +517,7 @@ fn the_port_thread_asks_the_widget_its_settings_at_most_twice_before_its_first_m
                 end.write_all(answered).unwrap();
             }
         }
-        if kept.is_some() {
-            assert_eq!(Some(settings_read(&device)), kept, "{case}");
-        }
+        assert_eq!(settings_read(&device), twenty, "{case}");
         take_when_free(&mut device, &[7; 512]);
         let mut message = [0; MESSAGE];
         end.read_exact(&mut message).unwrap();
@@ -520,20 +526,101 @@ fn the_port_thread_asks_the_widget_its_settings_at_most_twice_before_its_first_m
             [0x7E, 6, 0x01, 0x02, 0, 7],
             "{case}: label 6 next"
         );
-        assert_eq!(device.reading().settings(), kept, "{case}");
         device.finish_route();
         take_when_free(&mut device, &[8; 512]);
         end.read_exact(&mut message).unwrap();
         let next = [0x7E, 6, 0x01, 0x02, 0, 8];
         assert_eq!(message[..6], next, "{case}: no ask after a finish");
-        assert_eq!(device.reading().settings(), kept, "{case}, after a finish");
+        assert_eq!(
+            device.reading().settings(),
+            Some(twenty),
+            "{case}, after a finish"
+        );
+    }
+}
+
+/// #293, the Ask table's Refused cell: two tries that hear no answer in range close the
+/// port. Not a DMX USB Pro: no label 6 ever reaches it, `take` fails, the cause says why,
+/// and the adapter is never looked for again (the finder is called no more).
+#[test]
+fn a_widget_that_never_answers_in_range_is_refused_as_not_a_dmx_usb_pro() {
+    // (case, the answer to each try)
+    let cases: [(&str, &[Option<[u8; 10]>]); 2] = [
+        ("never answers", &[None, None]),
+        (
+            "out of range twice",
+            &[Some(answer(20, 0, 30)), Some(answer(20, 4, 41))],
+        ),
+    ];
+    for (case, answers) in cases {
+        let (find, mut fake) = Fake::silent(true);
+        let mut device = DmxUsbPro::open(find).unwrap();
+        let mut end = fake.next_end();
+        assert_eq!(device.take(&[7; 512]), Outcome::Dropped, "{case}: asking");
+        for answered in answers {
+            read_ask(&mut end);
+            if let Some(answered) = answered {
+                end.write_all(answered).unwrap();
+            }
+        }
+        let started = Instant::now();
+        while device.take(&[7; 512]) != Outcome::Failed {
+            assert!(started.elapsed() < NEVER, "{case}: never refused"); // guard
+            thread::sleep(Duration::from_millis(1)); // poll
+        }
+        let why = device.lost_with().get().expect("a cause");
+        assert_eq!(why.to_string(), "not a DMX USB Pro", "{case}");
+        assert_eq!(device.reading().settings(), None, "{case}");
+        // The port is closed: its end reads the end of the file (or EIO), never waits out a
+        // time out, and no byte more came.
+        let mut rest = Vec::new();
+        let read = end.read_to_end(&mut rest);
+        let closed = read
+            .as_ref()
+            .map_or_else(|e| e.kind() != io::ErrorKind::TimedOut, |_| true);
+        assert!(closed, "{case}: the port is still open: {read:?}");
+        assert!(rest.is_empty(), "{case}: {rest:?}");
+        // Looked for every 500 ms if it were: three looks' time, no new port.
+        thread::sleep(Duration::from_millis(1_600));
+        assert!(fake.new_end().is_none(), "{case}: looked for again");
+        assert_eq!(device.take(&[7; 512]), Outcome::Failed, "{case}");
+    }
+}
+
+/// A widget that sends DMX it received (label 5, input mode) while it is asked is still
+/// heard: its answer before or after a message longer than the answer buffer, in one write.
+#[test]
+fn an_answer_beside_a_long_label_5_message_is_read() {
+    // label 5: status 0, start code 0, 512 slots (API p.4)
+    let [lsb, msb] = 514_u16.to_le_bytes();
+    let received = [&[0x7E, 5, lsb, msb, 0, 0][..], &[0x55; 512], &[0xE7]].concat();
+    let answered = answer(20, 4, 30).to_vec();
+    // (case, what the widget writes)
+    let cases = [
+        (
+            "label 5, then the answer",
+            [received.clone(), answered.clone()].concat(),
+        ),
+        ("the answer, then label 5", [answered, received].concat()),
+    ];
+    for (case, written) in cases {
+        let (find, mut fake) = Fake::silent(true);
+        let device = DmxUsbPro::open(find).unwrap();
+        let mut end = fake.next_end();
+        read_ask(&mut end);
+        end.write_all(&written).unwrap();
+        assert_eq!(
+            Some(settings_read(&device)),
+            Settings::new(20, 4, 30),
+            "{case}"
+        );
     }
 }
 
 /// A lost port clears what its widget answered; the port found again is asked again.
 #[test]
 fn a_port_found_again_is_asked_again_and_keeps_nothing_until_it_answers() {
-    let (find, mut fake) = Fake::new(true);
+    let (find, mut fake) = Fake::silent(true);
     let mut device = DmxUsbPro::open(find).unwrap();
     let mut end = fake.next_end();
     read_ask(&mut end);
@@ -561,7 +648,7 @@ fn a_port_found_again_is_asked_again_and_keeps_nothing_until_it_answers() {
 /// A dropped device reads nothing.
 #[test]
 fn a_dropped_device_reads_nothing() {
-    let (find, mut fake) = Fake::new(true);
+    let (find, mut fake) = Fake::silent(true);
     let device = DmxUsbPro::open(find).unwrap();
     let mut end = fake.next_end();
     read_ask(&mut end);

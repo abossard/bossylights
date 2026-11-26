@@ -165,6 +165,16 @@ fn settings_of(heard: &[u8]) -> Option<Settings> {
         })
 }
 
+/// Where a full answer buffer keeps from: its last start of a message, as that may be
+/// the answer still coming in; everything when the only start is at 0, a message longer
+/// than the buffer (label 5, DMX the widget received in input mode, API p.4).
+fn kept_from(heard: &[u8]) -> usize {
+    match heard.iter().rposition(|&byte| byte == 0x7E) {
+        Some(at) if at > 0 => at,
+        Some(_) | None => heard.len(),
+    }
+}
+
 /// What follows the handoff, part by part. `patched`: the output's lowest and highest
 /// patched slot. With none patched, a channel set by hand can still reach a light on any
 /// slot, so the wire part spans all 512 and its source says why. `read`: the widget's
@@ -253,7 +263,8 @@ pub(crate) struct Shared {
     /// The route finish the opener asked and the port thread has not answered: its
     /// number, 0 for none. `take` drops every frame while one is open.
     finish: AtomicU32,
-    /// The system error that lost the port, or refused to open it, last; 0 if none.
+    /// Why the port was lost, refused to open or closed last, [`Cause::packed`]; 0 if
+    /// none.
     lost_with: AtomicI32,
     /// The settings the widget on the current port answered, [`Settings::packed`]; 0 if
     /// none yet.
@@ -271,11 +282,44 @@ impl Shared {
 pub struct LostWith(Arc<Shared>);
 
 impl LostWith {
-    /// The last error that lost the port or refused to open it, if one did.
+    /// Why the port was lost, refused to open or closed last, if it was: the system's
+    /// error, or "not a DMX USB Pro" for a widget that never answered label 3.
     pub fn get(&self) -> Option<io::Error> {
-        match self.0.lost_with.load(Ordering::Relaxed) {
+        Cause::unpacked(self.0.lost_with.load(Ordering::Relaxed)).map(Cause::error)
+    }
+}
+
+/// Why a link has no port.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Cause {
+    /// The system's error.
+    Os(Errno),
+    /// The widget never answered label 3 in range: [`ASKS`] tries heard nothing.
+    NotAPro,
+}
+
+impl Cause {
+    /// The cause as one word for [`Shared`]: an errno, or -1, which no errno is.
+    const fn packed(self) -> i32 {
+        match self {
+            Self::Os(with) => with as i32,
+            Self::NotAPro => -1,
+        }
+    }
+
+    /// The cause a [`Cause::packed`] word holds; 0 holds none.
+    fn unpacked(word: i32) -> Option<Self> {
+        match word {
             0 => None,
-            code => Some(io::Error::from_raw_os_error(code)),
+            -1 => Some(Self::NotAPro),
+            code => Some(Self::Os(Errno::from_i32(code))),
+        }
+    }
+
+    fn error(self) -> io::Error {
+        match self {
+            Self::Os(with) => io::Error::from_raw_os_error(with as i32),
+            Self::NotAPro => io::Error::new(ErrorKind::InvalidData, "not a DMX USB Pro"),
         }
     }
 }
@@ -293,7 +337,7 @@ impl DmxUsbPro {
         let (answer, answers) = mpsc::sync_channel(1);
         let shared = Arc::new(Shared {
             lost: AtomicBool::new(port.is_none()),
-            lost_with: AtomicI32::new(cause(link).map_or(0, |with| with as i32)),
+            lost_with: AtomicI32::new(cause(link).map_or(0, Cause::packed)),
             ..Shared::default()
         });
         let port_thread = PortThread {
@@ -367,12 +411,20 @@ impl Device for DmxUsbPro {
         Limits::USB
     }
 
-    /// Hands the message to the port thread. While it has not taken the last one yet, or
-    /// a route finish is open, this frame is dropped; while the port is lost, it fails.
+    /// Hands the message to the port thread. While it has not taken the last one yet, a
+    /// route finish is open, or the widget has not answered label 3, this frame is
+    /// dropped; while there is no port, it fails.
     fn take(&mut self, stream: &[u8]) -> Outcome {
-        let lost = self.shared.lost.load(Ordering::Acquire);
+        let port = match (
+            self.shared.lost.load(Ordering::Acquire),
+            self.shared.settings(),
+        ) {
+            (true, _) => Port::None,
+            (false, None) => Port::Asking,
+            (false, Some(_)) => Port::Answered,
+        };
         let finishing = self.shared.finish.load(Ordering::Acquire) != 0;
-        if let Some(outcome) = gate(lost, finishing, self.to_port.is_full()) {
+        if let Some(outcome) = gate(port, finishing, self.to_port.is_full()) {
             return outcome;
         }
         message(stream, &mut self.message);
@@ -388,13 +440,27 @@ impl Device for DmxUsbPro {
     }
 }
 
-/// Whether `take` answers before it queues: a calculation. A lost port fails; an open
-/// route finish or a full queue drops the frame; `None` queues it.
-const fn gate(lost: bool, finishing: bool, full: bool) -> Option<Outcome> {
-    match (lost, finishing, full) {
-        (true, _, _) => Some(Outcome::Failed),
-        (false, true, _) | (false, false, true) => Some(Outcome::Dropped),
-        (false, false, false) => None,
+/// The port as `take` sees it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Port {
+    /// Not found yet, lost or refused.
+    None,
+    /// Found, its widget not answered label 3 yet.
+    Asking,
+    /// Its widget answered: a DMX USB Pro.
+    Answered,
+}
+
+/// Whether `take` answers before it queues: a calculation. No port fails; a widget that
+/// has not answered yet, an open route finish or a full queue drops the frame, so no
+/// frame is ever queued on the API's defaults; `None` queues it.
+const fn gate(port: Port, finishing: bool, full: bool) -> Option<Outcome> {
+    match (port, finishing, full) {
+        (Port::None, ..) => Some(Outcome::Failed),
+        (Port::Asking, ..) | (Port::Answered, true, _) | (Port::Answered, false, true) => {
+            Some(Outcome::Dropped)
+        }
+        (Port::Answered, false, false) => None,
     }
 }
 
@@ -463,8 +529,21 @@ struct PortThread {
 
 impl PortThread {
     fn lose(&mut self, with: Errno) {
-        self.link = Link::Lost { with };
-        self.shared.lost_with.store(with as i32, Ordering::Relaxed);
+        self.close(Link::Lost { with });
+    }
+
+    /// Closes the port: two tries heard nothing, so this is no DMX USB Pro. Never looked
+    /// for again: opening a foreign port is no harmless look.
+    fn refuse(&mut self) {
+        self.close(next(self.link, Seen::Silent, Instant::now()));
+    }
+
+    /// Closes the port and keeps why: `link` is one without a port.
+    fn close(&mut self, link: Link) {
+        self.link = link;
+        if let Some(why) = cause(link) {
+            self.shared.lost_with.store(why.packed(), Ordering::Relaxed);
+        }
         self.shared.settings.store(0, Ordering::Release);
         self.shared.lost.store(true, Ordering::Release);
         self.port = None;
@@ -539,8 +618,8 @@ impl PortThread {
         true
     }
 
-    /// One turn while running: looks for the adapter, asks the widget its settings, or
-    /// writes one whole message.
+    /// One turn while running: looks for the adapter (never after it was refused), asks
+    /// the widget its settings, or writes one whole message.
     fn step(&mut self) {
         if self.port.is_none() {
             // An adapter not found or lost is gone for a while; then look again.
@@ -556,13 +635,13 @@ impl PortThread {
             while Instant::now() < look_at && !asked() {
                 thread::park_timeout(look_at.saturating_duration_since(Instant::now()));
             }
-            if asked() {
+            if asked() || self.link == Link::NotAPro {
                 return;
             }
             let found = (self.find)();
             self.link = next(self.link, seen_of(&found), Instant::now());
-            if let Some(with) = cause(self.link) {
-                self.shared.lost_with.store(with as i32, Ordering::Relaxed);
+            if let Some(why) = cause(self.link) {
+                self.shared.lost_with.store(why.packed(), Ordering::Relaxed);
             }
             if let Ok(port) = found {
                 self.port = Some(port);
@@ -573,6 +652,9 @@ impl PortThread {
         }
         if let Ask::Try(n) = self.ask {
             self.ask = after_try(n, self.try_ask());
+            if self.ask == Ask::Refused {
+                self.refuse();
+            }
             return;
         }
         // The one that failed was taken before the one queued.
@@ -591,8 +673,8 @@ impl PortThread {
         };
         let _ = port.clear(ClearBuffer::Input);
         self.link = write_all(port, &ASK, self.link);
-        if let Some(with) = cause(self.link) {
-            self.lose(with);
+        if cause(self.link).is_some() {
+            self.close(self.link);
             return Tried::Lost;
         }
         let until = Instant::now() + ANSWER_WITHIN;
@@ -615,6 +697,12 @@ impl PortThread {
                     .settings
                     .store(settings.packed(), Ordering::Release);
                 return Tried::Answered;
+            }
+            // Only a buffer that holds no answer makes room.
+            if length == heard.len() {
+                let from = kept_from(&heard);
+                heard.copy_within(from.., 0);
+                length -= from;
             }
             let left = until.saturating_duration_since(Instant::now());
             if left.is_zero() {
@@ -644,8 +732,9 @@ impl PortThread {
                 self.unsent = Some(*message);
                 self.lose(with);
             }
-            // A write never leads here: the link was found before it.
-            Link::NotFound => {}
+            // A write never leads here: the link was found before it, and a refused port
+            // is closed.
+            Link::NotFound | Link::NotAPro => {}
         }
     }
 }
@@ -654,7 +743,7 @@ impl PortThread {
 /// `docs/design/outputs.md`, "Ask".
 ///
 /// ```text
-/// [*] --> Try(1) --nothing--> Try(2) --nothing--> Done
+/// [*] --> Try(1) --nothing--> Try(2) --nothing--> Refused
 /// Try(n) --answered--> Read; Try(n) --cut--> Try(n); a port found --> Try(1)
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -663,8 +752,9 @@ enum Ask {
     Try(u8),
     /// The widget answered: its settings are kept. No more tries on this port.
     Read,
-    /// [`ASKS`] tries heard nothing: the port stays in use. No more tries on this port.
-    Done,
+    /// [`ASKS`] tries heard nothing: no DMX USB Pro. The port is closed and never looked
+    /// for again.
+    Refused,
 }
 
 /// What one try heard.
@@ -685,7 +775,7 @@ enum Tried {
 const fn after_try(n: u8, tried: Tried) -> Ask {
     match tried {
         Tried::Answered => Ask::Read,
-        Tried::Nothing if n >= ASKS => Ask::Done,
+        Tried::Nothing if n >= ASKS => Ask::Refused,
         Tried::Nothing => Ask::Try(n + 1),
         Tried::Cut | Tried::Lost => Ask::Try(n),
     }
@@ -770,7 +860,9 @@ fn write_all(port: &TTYPort, message: &[u8], mut link: Link) -> Link {
                 thread::sleep(QUEUE_FULL);
             }
             Link::Writing | Link::Stalled { .. } => {}
-            Link::NotFound | Link::CannotOpen { .. } | Link::Lost { .. } => return link,
+            Link::NotFound | Link::CannotOpen { .. } | Link::Lost { .. } | Link::NotAPro => {
+                return link;
+            }
         }
     }
     next(link, Seen::Whole, Instant::now())
@@ -783,6 +875,7 @@ fn write_all(port: &TTYPort, message: &[u8], mut link: Link) -> Link {
 /// NotFound --refused--> CannotOpen --found--> Writing
 /// Stalled --STALLED_FOR after its first no byte--> Lost --found again--> Writing
 /// any write error --> Lost; a refused look --> CannotOpen
+/// Writing --two tries heard nothing--> NotAPro: never looked for again
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Link {
@@ -797,6 +890,9 @@ enum Link {
     Stalled { since: Instant },
     /// No port: closed after `with`, looked for every [`LOOK_EVERY`].
     Lost { with: Errno },
+    /// No port: closed after its widget never answered label 3. Never looked for again;
+    /// setting the output again opens a new device.
+    NotAPro,
 }
 
 /// What the port thread saw.
@@ -816,6 +912,8 @@ enum Seen {
     Missing,
     /// The finder found the adapter, but the system refused to open it.
     Refused(Errno),
+    /// [`ASKS`] tries at label 3 heard no answer in range.
+    Silent,
 }
 
 /// What a find says, as the link sees it: a calculation.
@@ -845,10 +943,11 @@ fn errno_of(error: &io::Error) -> Errno {
     }
 }
 
-/// The error a link without a port keeps, if it keeps one.
-const fn cause(link: Link) -> Option<Errno> {
+/// Why a link has no port, if it keeps why.
+const fn cause(link: Link) -> Option<Cause> {
     match link {
-        Link::CannotOpen { with } | Link::Lost { with } => Some(with),
+        Link::CannotOpen { with } | Link::Lost { with } => Some(Cause::Os(with)),
+        Link::NotAPro => Some(Cause::NotAPro),
         Link::NotFound | Link::Writing | Link::Stalled { .. } => None,
     }
 }
@@ -865,6 +964,17 @@ fn next(link: Link, seen: Seen, now: Instant) -> Link {
         }
     };
     match (link, seen) {
+        // Never written to nor looked for again: every seen is n/a.
+        (Link::NotAPro, _) => Link::NotAPro,
+        (Link::Writing, Seen::Silent) => Link::NotAPro,
+        // An ask needs a port and is written whole before it is heard.
+        (
+            same @ (Link::NotFound
+            | Link::CannotOpen { .. }
+            | Link::Lost { .. }
+            | Link::Stalled { .. }),
+            Seen::Silent,
+        ) => same,
         (_, Seen::Error(with)) => Link::Lost { with },
         (
             Link::NotFound | Link::CannotOpen { .. } | Link::Lost { .. } | Link::Writing,
@@ -1119,6 +1229,20 @@ mod tests {
             (lost(io), Seen::Found, t0, Link::Writing),
             (lost(io), Seen::Missing, t0, lost(io)), // still unplugged: the cause stays
             (lost(io), Seen::Refused(eacces), t0, refused(eacces)),
+            (Link::NotFound, Seen::Silent, t0, Link::NotFound), // n/a: no port to ask
+            (refused(eacces), Seen::Silent, t0, refused(eacces)), // n/a
+            (Link::Writing, Seen::Silent, t0, Link::NotAPro),
+            (stalled, Seen::Silent, t0, stalled), // n/a: an ask is written whole first
+            (lost(io), Seen::Silent, t0, lost(io)), // n/a
+            // Never written to nor looked for again: every seen is n/a.
+            (Link::NotAPro, Seen::Bytes, t0, Link::NotAPro),
+            (Link::NotAPro, Seen::NoBytes, t0, Link::NotAPro),
+            (Link::NotAPro, Seen::Whole, t0, Link::NotAPro),
+            (Link::NotAPro, Seen::Error(io), t0, Link::NotAPro),
+            (Link::NotAPro, Seen::Found, t0, Link::NotAPro),
+            (Link::NotAPro, Seen::Missing, t0, Link::NotAPro),
+            (Link::NotAPro, Seen::Refused(eacces), t0, Link::NotAPro),
+            (Link::NotAPro, Seen::Silent, t0, Link::NotAPro),
         ];
         for (link, seen, now, after) in cases {
             assert_eq!(next(link, seen, now), after, "{link:?} {seen:?}");
@@ -1229,23 +1353,27 @@ mod tests {
     }
 
     #[test]
-    fn take_fails_on_a_lost_port_and_drops_while_a_finish_is_open_or_the_queue_is_full() {
-        // (lost, a finish open, queue full, take answers before it queues)
+    fn take_fails_without_a_port_and_drops_while_asking_finishing_or_full() {
+        // (port, a finish open, queue full, take answers before it queues)
         let cases = [
-            (false, false, false, None),
-            (false, false, true, Some(Outcome::Dropped)),
-            (false, true, false, Some(Outcome::Dropped)),
-            (false, true, true, Some(Outcome::Dropped)),
-            (true, false, false, Some(Outcome::Failed)),
-            (true, false, true, Some(Outcome::Failed)),
-            (true, true, false, Some(Outcome::Failed)),
-            (true, true, true, Some(Outcome::Failed)),
+            (Port::Answered, false, false, None),
+            (Port::Answered, false, true, Some(Outcome::Dropped)),
+            (Port::Answered, true, false, Some(Outcome::Dropped)),
+            (Port::Answered, true, true, Some(Outcome::Dropped)),
+            (Port::Asking, false, false, Some(Outcome::Dropped)),
+            (Port::Asking, false, true, Some(Outcome::Dropped)),
+            (Port::Asking, true, false, Some(Outcome::Dropped)),
+            (Port::Asking, true, true, Some(Outcome::Dropped)),
+            (Port::None, false, false, Some(Outcome::Failed)),
+            (Port::None, false, true, Some(Outcome::Failed)),
+            (Port::None, true, false, Some(Outcome::Failed)),
+            (Port::None, true, true, Some(Outcome::Failed)),
         ];
-        for (lost, finishing, full, answer) in cases {
+        for (port, finishing, full, outcome) in cases {
             assert_eq!(
-                gate(lost, finishing, full),
-                answer,
-                "{lost} {finishing} {full}"
+                gate(port, finishing, full),
+                outcome,
+                "{port:?} {finishing} {full}"
             );
         }
     }
@@ -1435,36 +1563,45 @@ mod tests {
     }
 
     /// An answer that comes in two parts is read whole: the second part, written once the
-    /// port has read the first, joins it.
+    /// port has read the first, joins it. Also when the first part fills the answer buffer
+    /// (64 bytes): bytes before the answer's start make room, its start is kept.
     #[test]
     #[expect(
         clippy::disallowed_methods,
         reason = "the widget's side polls between the parts"
     )]
     fn an_answer_in_two_parts_is_read_whole() -> io::Result<()> {
-        let (mut port_thread, shared, mut widget) = on_a_pseudo_terminal()?;
-        // The port's own input queue, on a second handle: empty once the port read it.
-        let input = port_thread
-            .port
-            .as_ref()
-            .ok_or(ErrorKind::NotFound)?
-            .try_clone_native()?;
-        let widget = thread::spawn(move || -> io::Result<TTYPort> {
-            let mut asked = [0; ASK.len()];
-            widget.read_exact(&mut asked)?;
-            let answer = [0x7E, 3, 5, 0, 44, 1, 20, 4, 30, 0xE7];
-            let (first, rest) = answer.split_at(4);
-            widget.write_all(first)?;
-            let started = Instant::now();
-            while input.bytes_to_read()? > 0 && started.elapsed() < Duration::from_secs(1) {
-                thread::sleep(Duration::from_millis(1)); // poll
-            }
-            widget.write_all(rest)?;
-            Ok(widget)
-        });
-        assert_eq!(port_thread.try_ask(), Tried::Answered);
-        assert_eq!(shared.settings(), Settings::new(20, 4, 30));
-        drop(widget.join());
+        // (case, bytes before the answer, where the answer is cut)
+        let cases = [
+            ("in two parts", 0, 4),
+            ("its start at the end of a full buffer", 60, 4),
+        ];
+        for (case, before, cut) in cases {
+            let (mut port_thread, shared, mut widget) = on_a_pseudo_terminal()?;
+            // The port's own input queue, on a second handle: empty once the port read it.
+            let input = port_thread
+                .port
+                .as_ref()
+                .ok_or(ErrorKind::NotFound)?
+                .try_clone_native()?;
+            let widget = thread::spawn(move || -> io::Result<TTYPort> {
+                let mut asked = [0; ASK.len()];
+                widget.read_exact(&mut asked)?;
+                let answer = [0x7E, 3, 5, 0, 44, 1, 20, 4, 30, 0xE7];
+                let (first, rest) = answer.split_at(cut);
+                widget
+                    .write_all(&[[0x55; 64].get(..before).unwrap_or_default(), first].concat())?;
+                let started = Instant::now();
+                while input.bytes_to_read()? > 0 && started.elapsed() < Duration::from_secs(1) {
+                    thread::sleep(Duration::from_millis(1)); // poll
+                }
+                widget.write_all(rest)?;
+                Ok(widget)
+            });
+            assert_eq!(port_thread.try_ask(), Tried::Answered, "{case}");
+            assert_eq!(shared.settings(), Settings::new(20, 4, 30), "{case}");
+            drop(widget.join());
+        }
         Ok(())
     }
 
@@ -1536,12 +1673,57 @@ mod tests {
             (1, Tried::Cut, Ask::Try(1)),
             (1, Tried::Lost, Ask::Try(1)),
             (2, Tried::Answered, Ask::Read),
-            (2, Tried::Nothing, Ask::Done),
+            (2, Tried::Nothing, Ask::Refused),
             (2, Tried::Cut, Ask::Try(2)),
             (2, Tried::Lost, Ask::Try(2)),
         ];
         for (n, tried, next) in cases {
             assert_eq!(after_try(n, tried), next, "try {n}, {tried:?}");
+        }
+    }
+
+    /// A cause is kept as one word and read back as the error it was: errno values are
+    /// positive (errno(3)), so -1 is free for "not a DMX USB Pro".
+    #[test]
+    fn a_cause_reads_back_as_its_error() {
+        let cases = [
+            (
+                Cause::Os(Errno::EACCES),
+                Some(Errno::EACCES as i32),
+                "Permission denied",
+            ),
+            (
+                Cause::Os(Errno::ETIMEDOUT),
+                Some(Errno::ETIMEDOUT as i32),
+                "timed out",
+            ),
+            (Cause::NotAPro, None, "not a DMX USB Pro"),
+        ];
+        for (why, code, text) in cases {
+            assert_eq!(Cause::unpacked(why.packed()), Some(why));
+            let error = why.error();
+            assert_eq!(error.raw_os_error(), code, "{why:?}");
+            assert!(error.to_string().contains(text), "{why:?}: {error}");
+        }
+        assert_eq!(Cause::unpacked(0), None, "none kept");
+    }
+
+    /// A full answer buffer keeps the message that may still be coming in. Label 5 is up to
+    /// 518 bytes (API p.4).
+    #[test]
+    fn a_full_answer_buffer_keeps_from_its_last_start() {
+        let mut flood = [0x55; 64];
+        flood[0] = 0x7E;
+        let mut tail = flood;
+        tail[60] = 0x7E;
+        // (case, heard, kept from)
+        let cases = [
+            ("no start", [0x55; 64], 64),
+            ("one long message from 0", flood, 64),
+            ("a start near the end", tail, 60),
+        ];
+        for (case, heard, from) in cases {
+            assert_eq!(kept_from(&heard), from, "{case}");
         }
     }
 
