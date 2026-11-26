@@ -173,6 +173,15 @@ export function recordOf({ commit, tree, base, results, left, mutants }) {
   return { record: { tree, commit, base, suites: results.map((r) => r.suite), left, mutants: mutants.counts }, why: null };
 }
 
+/**
+ * What a run does with the record of its tree at its end (#335): the newest run of a tree decides, so a run that a newer
+ * one overtook leaves the record to it. me: this run, newest: the run that started last, or null. record: recordOf's.
+ */
+export function recordStep({ me, newest, record }) {
+  if (newest !== me) return "leave";
+  return record ? "write" : "remove";
+}
+
 /** Where the record of a tree lives: in the git folder every worktree shares, outside any tree. */
 export function recordPath(commonDir, tree) {
   return `${commonDir}/bossylights-verified/${tree}.json`;

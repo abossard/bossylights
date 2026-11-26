@@ -92,8 +92,8 @@ try {
   console.log(`land: waiting for CI on main for ${sha.slice(0, 7)}`);
   const pause = new Int32Array(new SharedArrayBuffer(4));
   let ci = null;
-  while (!ci) {
-    Atomics.wait(pause, 0, 0, 30_000);
+  for (let asked = false; !ci; asked = true) {
+    if (asked) Atomics.wait(pause, 0, 0, 30_000);
     const runs = run("gh", ["run", "list", "--workflow", "ci.yml", "--branch", "main", "--event", "push", "--commit", sha,
       "--limit", "1", "--json", "headSha,status,conclusion,url"]);
     if (runs.status !== 0) console.error(`land: ${failure("gh", ["run", "list"], runs)}: asking again`); // no answer yet

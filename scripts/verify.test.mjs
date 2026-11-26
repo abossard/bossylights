@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { firstFailure, leftovers, logPath, mutantsReport, mutantsSummary, parseArgs, reachOf, readsOf, recordOf, recordPath, runOf, rustCommands, stepsOf, suitesOf, testSummary } from "./verify.mjs";
+import { firstFailure, leftovers, logPath, mutantsReport, mutantsSummary, parseArgs, reachOf, readsOf, recordOf, recordPath, recordStep, runOf, rustCommands, stepsOf, suitesOf, testSummary } from "./verify.mjs";
 
 test("suites are the npm run parts of the test script", () => {
   assert.deepEqual(suitesOf("npm run test:checks && npm run test:rust && npm run test:ui"), ["test:checks", "test:rust", "test:ui"]);
@@ -161,6 +161,18 @@ for (const [name, differs, why] of recordCases) {
       assert.deepEqual(made, { record: { tree: run.tree, commit: run.commit, base: run.base, suites: ["test:checks", "test:rust"], left: ["test:scorecard"], mutants: (differs.mutants ?? run.mutants).counts }, why: null });
     }
   });
+}
+
+// [run, the newest run, its record, step]: the newest run of a tree decides (#335)
+const endCases = [
+  ["newest, passed", "b", { tree: "t" }, "write"],
+  ["newest, no record", "b", null, "remove"],
+  ["overtaken by a newer run, passed", "c", { tree: "t" }, "leave"],
+  ["overtaken by a newer run, no record", "c", null, "leave"],
+  ["the newest run ended already", null, { tree: "t" }, "leave"],
+];
+for (const [name, newest, record, step] of endCases) {
+  test(`record step: ${name}: ${step}`, () => assert.equal(recordStep({ me: "b", newest, record }), step));
 }
 
 test("a record lives in the shared git folder, named by its tree", () => {
