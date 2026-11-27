@@ -83,7 +83,7 @@ One turn of the port thread: no port, it looks; a port not asked yet, one try; e
 | Read | n/a: no more tries on this port | n/a | n/a | Lost: the kept settings are cleared |
 | Refused | n/a: no port, never looked for again | n/a | n/a | n/a |
 
-A port found (at open, or found again) starts at Try 1 with nothing kept. Two tries: the widget ignores the first "get parameters" after another program's run, and answers the second in 3 ms ([dmx-timing spike](../spikes/dmx-timing.md), "What failed"). In range (API p.3): break 9 to 127 and mark after break 1 to 127 steps of 10.67 µs, rate 0 to 40. A full answer buffer keeps from its last `0x7E`: a widget in input mode may send DMX it received (label 5, up to 518 bytes) before its answer. Until the widget answered, `take` drops every frame (busy, not lost): at most 100 ms at a port open, and no frame ever goes out on the API's defaults.
+A port found (at open, or found again) starts at Try 1 with nothing kept. Two tries: the widget ignores the first "get parameters" after another program's run, and answers the second in 3 ms ([dmx-timing spike](../spikes/dmx-timing.md), "What failed"). In range (API p.3): break 9 to 127 and mark after break 1 to 127 steps of 10.67 µs, rate 0 to 40. The answer buffer holds the longest message (605 bytes). Full, it keeps from its first message not all in yet, framed by its length (API p.2): a widget in input mode may send DMX it received (label 5, up to 519 bytes) before its answer, and a `0x7E` inside a message is data. Until the widget answered, `take` drops every frame (busy, not lost): at most 100 ms at a port open, and no frame ever goes out on the API's defaults.
 
 ### Life: the port thread's life
 

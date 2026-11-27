@@ -165,14 +165,25 @@ fn settings_of(heard: &[u8]) -> Option<Settings> {
         })
 }
 
-/// Where a full answer buffer keeps from: its last start of a message, as that may be
-/// the answer still coming in; everything when the only start is at 0, a message longer
-/// than the buffer (label 5, DMX the widget received in input mode, API p.4).
+/// The longest message: data up to 600 bytes (API p.2). The answer buffer holds one whole.
+const LONGEST: usize = 4 + 600 + 1;
+
+/// Where a full answer buffer keeps from: its first start whose message, by its length
+/// (API p.2), is not all in yet, as that may be the answer still coming in. A `0x7E`
+/// inside a message is data and its own length decides nothing (#353). A length over 600
+/// starts no message. Everything when no message is still coming. Never 0 in a full
+/// buffer: it holds the longest message whole, and [`settings_of`] read every whole one.
 fn kept_from(heard: &[u8]) -> usize {
-    match heard.iter().rposition(|&byte| byte == 0x7E) {
-        Some(at) if at > 0 => at,
-        Some(_) | None => heard.len(),
-    }
+    (0..heard.len())
+        .find(|&at| match heard.get(at..).unwrap_or_default() {
+            [0x7E, _, lsb, msb, ..] => {
+                let length = usize::from(u16::from_le_bytes([*lsb, *msb]));
+                length <= LONGEST - 5 && heard.len() - at < 4 + length + 1
+            }
+            [0x7E, ..] => true,
+            _ => false,
+        })
+        .unwrap_or(heard.len())
 }
 
 /// What follows the handoff, part by part. `patched`: the output's lowest and highest
@@ -678,7 +689,7 @@ impl PortThread {
             return Tried::Lost;
         }
         let until = Instant::now() + ANSWER_WITHIN;
-        let mut heard = [0; 64];
+        let mut heard = [0; LONGEST];
         let mut length = 0;
         loop {
             if cuts_look_short(
@@ -1569,7 +1580,7 @@ mod tests {
 
     /// An answer that comes in two parts is read whole: the second part, written once the
     /// port has read the first, joins it. Also when the first part fills the answer buffer
-    /// (64 bytes): bytes before the answer's start make room, its start is kept.
+    /// ([`LONGEST`] bytes): bytes before the answer's start make room, its start is kept.
     #[test]
     #[expect(
         clippy::disallowed_methods,
@@ -1579,7 +1590,7 @@ mod tests {
         // (case, bytes before the answer, where the answer is cut)
         let cases = [
             ("in two parts", 0, 4),
-            ("its start at the end of a full buffer", 60, 4),
+            ("its start at the end of a full buffer", LONGEST - 4, 4),
         ];
         for (case, before, cut) in cases {
             let (mut port_thread, shared, mut widget) = on_a_pseudo_terminal()?;
@@ -1594,8 +1605,7 @@ mod tests {
                 widget.read_exact(&mut asked)?;
                 let answer = [0x7E, 3, 5, 0, 44, 1, 20, 4, 30, 0xE7];
                 let (first, rest) = answer.split_at(cut);
-                widget
-                    .write_all(&[[0x55; 64].get(..before).unwrap_or_default(), first].concat())?;
+                widget.write_all(&[&vec![0x55; before][..], first].concat())?;
                 let started = Instant::now();
                 while input.bytes_to_read()? > 0 && started.elapsed() < Duration::from_secs(1) {
                     thread::sleep(Duration::from_millis(1)); // poll
@@ -1713,19 +1723,63 @@ mod tests {
         assert_eq!(Cause::unpacked(0), None, "none kept");
     }
 
-    /// A full answer buffer keeps the message that may still be coming in. Label 5 is up to
-    /// 518 bytes (API p.4).
+    /// A full answer buffer keeps the message that may still be coming in, framed by its
+    /// length (API p.2). Label 5 is up to 519 bytes (API p.4).
     #[test]
-    fn a_full_answer_buffer_keeps_from_its_last_start() {
-        let mut flood = [0x55; 64];
-        flood[0] = 0x7E;
-        let mut tail = flood;
-        tail[60] = 0x7E;
+    fn a_full_answer_buffer_keeps_its_first_message_not_all_in() {
+        // A full buffer of 0x55 with bytes put at their places, cut at its end.
+        let full = |put: &[(usize, [u8; 4])]| {
+            let mut heard = [0x55; LONGEST];
+            for &(at, bytes) in put {
+                for (slot, byte) in heard.iter_mut().skip(at).zip(bytes) {
+                    *slot = byte;
+                }
+            }
+            heard
+        };
+        let [lsb, msb] = 595_u16.to_le_bytes();
+        let [lsb_600, msb_600] = 600_u16.to_le_bytes();
+        let [lsb_601, msb_601] = 601_u16.to_le_bytes();
         // (case, heard, kept from)
         let cases = [
-            ("no start", [0x55; 64], 64),
-            ("one long message from 0", flood, 64),
-            ("a start near the end", tail, 60),
+            ("no start", full(&[]), LONGEST),
+            (
+                "a whole message of 600 from 0",
+                full(&[(0, [0x7E, 5, lsb_600, msb_600])]),
+                LONGEST,
+            ),
+            (
+                "an answer with firmware 1.126 crosses the end",
+                full(&[
+                    (0, [0x7E, 5, lsb, msb]),
+                    (600, [0x7E, 3, 5, 0]),
+                    (604, [0x7E; 4]),
+                ]),
+                600,
+            ),
+            (
+                "an answer missing only its end byte",
+                full(&[
+                    (LONGEST - 9, [0x7E, 3, 5, 0]),
+                    (LONGEST - 5, [0x7E, 1, 9, 1]),
+                ]),
+                LONGEST - 9,
+            ),
+            (
+                "a start in the last 3 bytes",
+                full(&[(LONGEST - 3, [0x7E; 4])]),
+                LONGEST - 3,
+            ),
+            (
+                "a length over 600 is no start",
+                full(&[(10, [0x7E, 5, lsb_601, msb_601])]),
+                LONGEST,
+            ),
+            (
+                "the first of two not all in",
+                full(&[(10, [0x7E, 5, lsb_600, msb_600]), (600, [0x7E, 3, 5, 0])]),
+                10,
+            ),
         ];
         for (case, heard, from) in cases {
             assert_eq!(kept_from(&heard), from, "{case}");

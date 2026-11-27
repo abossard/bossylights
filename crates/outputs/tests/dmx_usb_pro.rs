@@ -12,7 +12,7 @@ mod common;
 use common::{ASKED, Fake, NEVER, read_message};
 use outputs::dmx_usb_pro::{DmxUsbPro, FINISH_WITHIN, Find, MESSAGE, Settings, never_wait};
 use outputs::{Device, Outcome};
-use serialport::TTYPort;
+use serialport::{SerialPort, TTYPort};
 use std::io::{self, Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
@@ -659,4 +659,73 @@ fn a_dropped_device_reads_nothing() {
     drop(device);
     assert!(!reading.is_open());
     assert_eq!(reading.settings(), None);
+}
+
+/// DMX the widget received (label 5), then its answer, framed by length (#353, finding
+/// OUT-02 of #349): a `0x7E` in the answer's settings is data, not a start, also where
+/// the answer crosses the end of a full answer buffer.
+#[test]
+fn a_0x7e_in_an_answer_after_label_5_is_data_not_a_start() {
+    // (case, label 5 data length, the answer, its settings)
+    let cases = [
+        (
+            "firmware 1.126 with factory default settings (9, 1, 40)",
+            54_usize,
+            [0x7E, 3, 5, 0, 126, 1, 9, 1, 40, 0xE7],
+            Settings::new(9, 1, 40).unwrap(),
+        ),
+        (
+            "firmware 1.44 with valid break_steps 126 (126, 1, 40)",
+            52_usize,
+            [0x7E, 3, 5, 0, 44, 1, 126, 1, 40, 0xE7],
+            Settings::new(126, 1, 40).unwrap(),
+        ),
+        (
+            "firmware 1.126 where the answer crosses the end of a full answer buffer",
+            595_usize,
+            [0x7E, 3, 5, 0, 126, 1, 9, 1, 40, 0xE7],
+            Settings::new(9, 1, 40).unwrap(),
+        ),
+    ];
+
+    for (case, dmx_in_len, reply, expected) in cases {
+        let (find, mut fake) = Fake::silent(true);
+        let mut device = DmxUsbPro::open(find).unwrap();
+        let lost_with = device.lost_with();
+        let reading = device.reading();
+        let mut end = fake.next_end();
+
+        let [lsb, msb] = u16::try_from(dmx_in_len).unwrap().to_le_bytes();
+        let mut wire = vec![0x7E, 5, lsb, msb];
+        wire.resize(4 + dmx_in_len, 0);
+        wire.push(0xE7);
+        wire.extend_from_slice(&reply);
+
+        read_ask(&mut end);
+        end.write_all(&wire).unwrap();
+
+        // A second try is answered the same; a try not asked is waited for 5 ms.
+        end.set_timeout(Duration::from_millis(5)).unwrap();
+        let started = Instant::now();
+        while reading.settings().is_none() && lost_with.get().is_none() {
+            let mut extra = [0; ASKED.len()];
+            if end.read_exact(&mut extra).is_ok() && extra == ASKED {
+                let _ = end.write_all(&wire);
+            }
+            assert!(started.elapsed() < NEVER, "{case}: ask never settled"); // guard
+            thread::sleep(Duration::from_millis(5)); // poll
+        }
+
+        assert_eq!(
+            lost_with.get().map(|err| err.to_string()),
+            None,
+            "{case}: valid DMX USB Pro was permanently refused"
+        );
+        assert_eq!(reading.settings(), Some(expected), "{case}");
+        assert_ne!(
+            device.take(&[255; 512]),
+            Outcome::Failed,
+            "{case}: output failed after valid label-3 answers"
+        );
+    }
 }
