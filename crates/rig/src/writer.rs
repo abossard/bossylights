@@ -73,7 +73,7 @@ pub enum Place {
 ///
 /// | Channel | Take |
 /// |---|---|
-/// | a dimmer | intensity |
+/// | a dimmer | intensity, falling when the channel runs the other way, over the range it travels. None is the dark end of the run; where that is not the channel's dark (a Closed range beside it), Blackout still goes to dark |
 /// | red beside a dimmer | red |
 /// | red without a dimmer | red, times intensity |
 /// | red beside white | red, less shared |

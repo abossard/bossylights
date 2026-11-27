@@ -14,6 +14,8 @@ mod channels_won_one_by_one;
 mod cutover;
 #[path = "scenarios/wire/dmx_usb_pro.rs"]
 mod dmx_usb_pro;
+#[path = "scenarios/wire/falling_dimmer_on_the_wire.rs"]
+mod falling_dimmer_on_the_wire;
 #[path = "scenarios/wire/fog_and_haze.rs"]
 mod fog_and_haze;
 #[path = "scenarios/wire/health_on_the_wire.rs"]
