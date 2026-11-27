@@ -209,7 +209,7 @@ One function, `mix`, in `engine-core`, one panel in the app. Each channel is won
 |---|---|
 | 1 Offers | a live source offers `(channel, byte)`, or a whole word for a pair. A source may offer nothing at a moment (a gap), and then a lower source shows through. A channel nobody offers takes `rest` |
 | 2 Rank | Manual beats Show beats Autopilot. A direct grab is Manual |
-| 3 Among equals | latest start wins, first-in breaks an equal instant. If the channel has `highest`: the greater **brightness** wins, latest breaks a tie. Brightness is the distance from `dark` (so a reverse dimmer at 0 beats 255) and for a pair the 16-bit distance |
+| 3 Among equals | latest start wins, the later request breaks an equal instant. If the channel has `highest`: the greater **brightness** wins, latest breaks a tie. Brightness is the distance from `dark` (so a reverse dimmer at 0 beats 255) and for a pair the 16-bit distance |
 | 4 Raw hold | an explicit raw hold from the DMX screen replaces the addressed byte, including with 0. A pair is assembled after this step, so holding only the fine byte gives the winner's coarse and the held fine |
 | 5 Identify | Identify is its own source kind and row, above raw holds and under Blackout, so it blinks while a hand holds Manual. It offers brightness and colour channels only (emitters and the dimmer), never a shutter, strobe, motion or fog. It is refused when the shutter's `rest` is not a steady open value |
 | 6 Modifiers | followers move toward their dark value by the modifier levels: first Master and the virtual dimmers, then the Identify overlay, then Blackout |

@@ -23,7 +23,7 @@ flowchart LR
 |---|---|---|---|---|
 | 1 | What is decided | each channel on its own. A coarse and fine pair is one 16-bit word | fixed | built |
 | 2 | Rank | manual beats show, show beats autopilot. A direct grab is manual | fixed for now | built |
-| 3 | Among equals | the one that started last wins; first in breaks an equal instant | per channel: the highest wins (the greater distance from `dark`, so a reverse dimmer at 0 beats 255). The Who wins row sets it on every dimmer | built. A light without a dimmer has none: Highest leaves its colour latest-wins |
+| 3 | Among equals | the one that started last wins; at an equal instant the later request wins (owner, 27 Nov, #359) | per channel: the highest wins (the greater distance from `dark`, so a reverse dimmer at 0 beats 255). The Who wins row sets it on every dimmer | built. A light without a dimmer has none: Highest leaves its colour latest-wins |
 | 4 | Manual control ends | when you press **Release** | when the pad or fader stops | built |
 | 5 | When a show or autopilot look ends | what was underneath shows again | it stays as it was left, until released | built |
 
