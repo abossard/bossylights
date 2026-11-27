@@ -36,8 +36,9 @@ interface Shared extends Pressable {
   /**
    * A short press and a hold mean two things (Blackout, Learn): it reports down and up like a pad, and `onPress` is not called.
    * `heldMs`: how long it was down, 0 from the keyboard. The one who listens decides what was short.
+   * `onLost`: the system took the touch while it was down (a palm, a scroll): it never came up as a press.
    */
-  held?: { onDown: () => void; onUp: (heldMs: number) => void };
+  held?: { onDown: () => void; onUp: (heldMs: number) => void; onLost: () => void };
   /** Something is dragged over it and can be dropped here: it turns paper. */
   over?: boolean;
   onPress: () => void;
@@ -110,6 +111,11 @@ export function Button(props: ButtonProps) {
     isDown = false;
     props.held?.onUp(e.timeStamp - downAt);
   };
+  const lost = () => {
+    if (!isDown) return;
+    isDown = false;
+    props.held?.onLost();
+  };
   // A click with no pointer behind it (detail 0) is Enter or Space: a short press.
   const click = (e: MouseEvent) => {
     if (props.held !== undefined) {
@@ -140,7 +146,7 @@ export function Button(props: ButtonProps) {
       disabled={props.off !== undefined}
       onPointerDown={down}
       onPointerUp={up}
-      onPointerCancel={up}
+      onPointerCancel={lost}
       onClick={click}
     >
       <Show when={props.mapped}>

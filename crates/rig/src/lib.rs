@@ -444,9 +444,9 @@ fn coarse(
     })
 }
 
-/// What a channel takes from its light. `None` for what this slice does not write. Pan,
-/// tilt and zoom travel over the first range that says which way it runs, that way, else
-/// over every byte the way the channel runs.
+/// What a channel takes from its light. `None` for what this slice does not write. A
+/// dimmer, pan, tilt and zoom travel over the first range that says which way it runs,
+/// that way, else over every byte the way the channel runs.
 fn take(channel: &fixture_library::Channel, has: Has) -> Option<Take> {
     let runs = channel.ranges.iter().find_map(|range| match range.does {
         Some(Does::Runs(direction)) => Some((range, direction)),
@@ -498,7 +498,7 @@ fn take(channel: &fixture_library::Channel, has: Has) -> Option<Take> {
     let take = match &channel.function {
         // fog and haze never take a brightness (#295)
         Function::Dimmer if channel.runs_fog() => return None,
-        Function::Dimmer => Take::INTENSITY,
+        Function::Dimmer => travels(Part::Intensity),
         Function::Pan => travels(Part::Pan),
         Function::Tilt => travels(Part::Tilt),
         Function::Zoom => travels(Part::Zoom),

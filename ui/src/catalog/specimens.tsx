@@ -210,9 +210,9 @@ export const SHELVES: Record<Primitive, readonly Shelf[]> = {
       title: "Who runs it",
       note: "The body takes the colour of who started the look. The NOW flag says it runs. A finger down is a paper frame.",
       specimens: [
-        ...PAD_STATES.map(([state, says]): Specimen => ({ says, draw: () => <Pad label="Warm wash" colours={["#ff9d2e", "#ffd27a"]} state={state} onDown={nothing} onUp={nothing} /> })),
-        { says: "off, with the reason", draw: () => <Pad label="Warm wash" colours={["#ff9d2e", "#ffd27a"]} state="idle" off="Engine not connected" onDown={nothing} onUp={nothing} /> },
-        { says: "mapped", draw: () => <Pad label="Chase L-R" colours={["#20b2c9"]} state="idle" mapped onDown={nothing} onUp={nothing} /> },
+        ...PAD_STATES.map(([state, says]): Specimen => ({ says, draw: () => <Pad label="Warm wash" colours={["#ff9d2e", "#ffd27a"]} state={state} onDown={nothing} onUp={nothing} onLost={nothing} /> })),
+        { says: "off, with the reason", draw: () => <Pad label="Warm wash" colours={["#ff9d2e", "#ffd27a"]} state="idle" off="Engine not connected" onDown={nothing} onUp={nothing} onLost={nothing} /> },
+        { says: "mapped", draw: () => <Pad label="Chase L-R" colours={["#20b2c9"]} state="idle" mapped onDown={nothing} onUp={nothing} onLost={nothing} /> },
       ],
     },
   ],
