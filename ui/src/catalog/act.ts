@@ -14,6 +14,8 @@ export type Act =
   | { is: "down" }
   /** `long`: it was down for more than a short press. */
   | { is: "up"; long: boolean }
+  /** The system took the touch while it was down (a palm, a scroll): no press. */
+  | { is: "lost" }
   | { is: "release" }
   /** The key that holds: Space on Blackout. */
   | { is: "key"; down: boolean }
@@ -48,6 +50,7 @@ function gestureOf(act: Act): Gesture | undefined {
       return act.down ? "keyDown" : "keyUp";
     case "press":
     case "down":
+    case "lost":
     case "release":
     case "pick":
     case "lift":
@@ -88,7 +91,7 @@ function withMachine(control: Control, look: Look, gesture: Act): Result {
   const kind = gestureOf(gesture);
   const events = use && kind ? use.on[kind] : undefined;
   // A control with a machine that reports down and up: what its machine does not list does nothing.
-  if (use && !events && (gesture.is === "down" || gesture.is === "up")) return { look, sent: [] };
+  if (use && !events && (gesture.is === "down" || gesture.is === "up" || gesture.is === "lost")) return { look, sent: [] };
   // The gesture changes the look, the machine keeps its own place.
   // A drop where it started: a placed thing back at its place, any other thing that went nowhere.
   const stayed = gesture.is === "drop" && (placed(control.id) ? plain.look.sub === look.sub : gesture.by !== undefined && gesture.by.across === 0 && gesture.by.down === 0);
@@ -142,6 +145,9 @@ function plainAct(control: Control, look: Look, gesture: Act): Result {
       return { look: { ...look, variant: "flash", on: true }, sent: send() };
     case "up":
       return { look: { ...look, variant: gesture.long ? "idle" : "manual", on: !gesture.long }, sent: [] };
+    // A lost touch ends like a hold: no press.
+    case "lost":
+      return { look: { ...look, variant: "idle", on: false }, sent: [] };
     case "set":
       return { look: { ...look, value: gesture.value, value2: gesture.value2 }, sent: send(control.kit === "XY.position" ? `pan ${gesture.value}, tilt ${gesture.value2}` : String(gesture.value)) };
     case "pick":

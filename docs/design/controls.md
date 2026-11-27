@@ -343,7 +343,7 @@ stateDiagram-v2
 | --- | --- |
 | down | finger, mouse or mapped pad goes down |
 | upShort | it comes up within 350 ms |
-| upLong | it comes up later |
+| upLong | it comes up later, or the pointer is lost |
 | release | Release for this look, or Release all |
 
 | From | Event | To | Note |
@@ -394,7 +394,7 @@ stateDiagram-v2
 | --- | --- |
 | down | finger, mouse or mapped pad goes down |
 | upShort | it comes up within 350 ms |
-| upLong | it comes up later |
+| upLong | it comes up later, or the pointer is lost |
 | release | Release for this look, or Release all |
 
 | From | Event | To | Note |
@@ -443,7 +443,7 @@ stateDiagram-v2
 | --- | --- |
 | down | finger, mouse or mapped control goes down on Blackout |
 | upShort | it comes up within 350 ms |
-| upLong | it comes up later |
+| upLong | it comes up later, or the pointer is lost |
 | spaceDown | Space goes down, outside a text field |
 | spaceUp | Space comes up, or the window loses the keyboard |
 

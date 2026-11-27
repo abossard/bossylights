@@ -3,7 +3,7 @@
 import type { MachineName } from "../controls/machines.ts";
 
 /** The gestures a frame can report. `act.ts` lists what each one carries. */
-export type Gesture = "press" | "down" | "upShort" | "upLong" | "release" | "keyDown" | "keyUp" | "lift" | "drop" | "cancel" | "pick";
+export type Gesture = "press" | "down" | "upShort" | "upLong" | "lost" | "release" | "keyDown" | "keyUp" | "lift" | "drop" | "cancel" | "pick";
 
 export interface Use {
   machine: MachineName;
@@ -20,8 +20,8 @@ export interface Use {
 const lamp = (ready: string): Use => ({ machine: "indicator", on: { press: ["press"] }, shows: { ready, on: "on", off: "off", offLive: "off" } });
 const INDICATOR = lamp("ready");
 
-/** Down, then up short or long: the grammar of the pad. A `Button` that listens to these is drawn as one that is held. */
-const PAD_PRESS = { down: ["down"], upShort: ["upShort"], upLong: ["upLong"] } as const;
+/** Down, then up short or long: the grammar of the pad. A `Button` that listens to these is drawn as one that is held. A lost touch ends like a hold: no press. */
+const PAD_PRESS = { down: ["down"], upShort: ["upShort"], upLong: ["upLong"], lost: ["upLong"] } as const;
 const PAD_ON = { ...PAD_PRESS, release: ["release"] } as const;
 
 /** A control whose short press and hold mean two things: it reports down and up, never a press. */

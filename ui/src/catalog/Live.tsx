@@ -60,7 +60,7 @@ export function Live(props: { control: Control; look: Look; act: (act: Act) => v
     colour: l().colour,
     holds,
     onPress: press,
-    ...(r.props.held ? { held: { onDown: () => props.act({ is: "down" }), onUp: (heldMs: number) => props.act({ is: "up", long: heldMs > SHORT_PRESS_MS }) } } : {}),
+    ...(r.props.held ? { held: { onDown: () => props.act({ is: "down" }), onUp: (heldMs: number) => props.act({ is: "up", long: heldMs > SHORT_PRESS_MS }), onLost: () => props.act({ is: "lost" }) } } : {}),
     ...off(),
     ...some("sub", l().sub),
     ...some("fires", oneOrNone(r.props.fires, ["down"])),
@@ -111,6 +111,7 @@ export function Live(props: { control: Control; look: Look; act: (act: Act) => v
           {...off()}
           onDown={() => props.act({ is: "down" })}
           onUp={(heldMs) => props.act({ is: "up", long: heldMs > SHORT_PRESS_MS })}
+          onLost={() => props.act({ is: "lost" })}
         />
       );
     case "Fader.percent":

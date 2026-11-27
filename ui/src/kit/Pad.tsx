@@ -24,6 +24,8 @@ export interface PadProps extends Pressable {
   onDown: () => void;
   /** It came up. `heldMs`: how long it was down, 0 from the keyboard. */
   onUp: (heldMs: number) => void;
+  /** The system took the touch while it was down (a palm, a scroll): it never came up as a press. */
+  onLost: () => void;
 }
 
 /** Who runs it, in words: on tall pads and for screen readers. */
@@ -31,7 +33,7 @@ const RUNS: Record<PadState, string> = { idle: "", manual: "Manual", flash: "Fla
 
 /**
  * A look pad, the primary control. It fires on the way down so it feels instant. What a short press
- * and a long hold mean is decided by the one who listens, from `onDown` and `onUp(heldMs)`.
+ * and a long hold mean is decided by the one who listens, from `onDown` and `onUp(heldMs)`, or `onLost`.
  */
 export function Pad(props: PadProps) {
   const reason = createUniqueId();
@@ -51,6 +53,11 @@ export function Pad(props: PadProps) {
     down = false;
     props.onUp(e.timeStamp - downAt);
   };
+  const pointerLost = () => {
+    if (!down) return;
+    down = false;
+    props.onLost();
+  };
   // Enter: a click with no pointer behind it is a short press.
   const click = (e: MouseEvent) => {
     if (e.detail !== 0) return;
@@ -69,7 +76,7 @@ export function Pad(props: PadProps) {
       aria-describedby={props.off === undefined ? undefined : reason}
       onPointerDown={pointerDown}
       onPointerUp={pointerUp}
-      onPointerCancel={pointerUp}
+      onPointerCancel={pointerLost}
       onClick={click}
       onContextMenu={(e) => e.preventDefault()}
     >
