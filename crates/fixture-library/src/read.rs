@@ -298,6 +298,9 @@ fn mode<'a>(
         return Err((entry, Problem::SkippedNumber(number)));
     }
     let count = by_number.len();
+    if count == 0 {
+        return Err((node, Problem::NoChannel));
+    }
     if let Some((_, (_, Some(channel), entry))) = by_number
         .iter()
         .find(|(_, (_, acts_on, _))| acts_on.is_some_and(|on| usize::from(on) >= count))

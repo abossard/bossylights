@@ -41,7 +41,8 @@ pub enum Kind {
 #[serde(deny_unknown_fields)]
 pub struct Mode {
     pub name: String,
-    /// In DMX order: the first is address 1 of the fixture.
+    /// In DMX order: the first is address 1 of the fixture. Never empty: a mode without
+    /// a channel is refused (`Problem::NoChannel`).
     pub channels: Vec<Channel>,
     /// One entry per pixel of a bar or a panel, each the channel numbers (counted from 0)
     /// of that pixel. Empty for a fixture without pixels. A head that names a channel the
@@ -53,6 +54,54 @@ pub struct Mode {
     /// How far the head pans and tilts, from the mode or else the fixture. `None` when
     /// the definition says 0 for both, or nothing.
     pub degrees: Option<Degrees>,
+}
+
+impl Mode {
+    /// The rules every mode the library reads keeps: a mode from elsewhere (a show file)
+    /// that breaks one is refused with the same problem. The first broken rule, in the
+    /// order: a channel, heads, `ActsOn`, ranges, layout.
+    pub fn check(&self) -> Result<(), Problem> {
+        let channels = self.channels.len();
+        if channels == 0 {
+            return Err(Problem::NoChannel);
+        }
+        let past = |number: u16| usize::from(number) >= channels;
+        for (head, numbers) in self.pixels.iter().enumerate() {
+            if let Some(&channel) = numbers.iter().find(|&&number| past(number)) {
+                return Err(Problem::HeadPastEnd {
+                    head,
+                    channel,
+                    channels,
+                });
+            }
+        }
+        for channel in &self.channels {
+            if let Some(on) = channel.declared.acts_on.filter(|&on| past(on)) {
+                return Err(Problem::ActsOnPastEnd {
+                    channel: on,
+                    channels,
+                });
+            }
+            if let Some(range) = channel.ranges.iter().find(|range| range.min > range.max) {
+                return Err(Problem::BackwardsRange {
+                    min: range.min,
+                    max: range.max,
+                });
+            }
+        }
+        let heads = self.pixels.len();
+        match self.layout {
+            Some(Layout { width, height }) if heads > 0 => {
+                let cells = usize::from(width) * usize::from(height);
+                if cells == heads {
+                    Ok(())
+                } else {
+                    Err(Problem::LayoutCells { cells, heads })
+                }
+            }
+            _ => Ok(()),
+        }
+    }
 }
 
 /// The full pan and tilt range of a moving head or scanner, in degrees.
@@ -106,6 +155,14 @@ pub enum Problem {
     ActsOnPastEnd {
         channel: u16,
         channels: usize,
+    },
+    /// A mode without a channel (owner, 27 Nov, #354).
+    NoChannel,
+    /// A layout without exactly one cell for each head. Only from [`Mode::check`]: the
+    /// library leaves such a layout out, with a warning.
+    LayoutCells {
+        cells: usize,
+        heads: usize,
     },
     /// The file has no `<Mode>`.
     NoMode,

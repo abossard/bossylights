@@ -255,7 +255,7 @@ async fn patch_stop_start_the_patch_and_groups_are_there_and_light_up_without_th
 
 #[tokio::test]
 async fn a_file_the_engine_cannot_open_is_left_alone_and_the_picture_says_why() {
-    let mode = r#"{"name":"RGB","channels":[],"pixels":[],"layout":null,"degrees":null}"#;
+    let mode = r#"{"name":"Red","channels":[{"name":"Red","byte":"Coarse","function":"Red","default":0,"direction":null,"ranges":[]}],"pixels":[],"layout":null,"degrees":null}"#;
     let rules =
         r#""rules":{"brightness":"Latest","manual_end":"UntilRelease","other_end":"Reveal"}"#;
     let empty = format!(

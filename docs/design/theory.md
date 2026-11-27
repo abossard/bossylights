@@ -418,6 +418,7 @@ Owner answers live on the [decisions page](https://claude.ai/artifact/KBkqWhcVWn
 | Pair only when certain | a wrong pair moves the wrong thing | #249 |
 | The definition is the truth | no rule for one fixture; fix the file | #249 |
 | A mode with a broken head is refused, with the reason; the file's good modes stay | never allow and flag | Q18 |
+| A mode with no channel is refused, with the reason, by the library and by a show file | never allow and flag | owner 27 Nov, #354 |
 | Switching an output is one written machine | four rounds of fixes found the same lost or early frame | #248, [output-cutover.md](output-cutover.md) |
 | The tick on channels keeps the plan tree (option B); flat curves follow | one mixer lands first, the crossfade rounding is decided apart | #250, #258 |
 | The rate belongs to each output | DMX and DDP need different rates | 2026-11-18 |

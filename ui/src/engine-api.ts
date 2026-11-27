@@ -280,7 +280,7 @@ export type Why = { "CannotRead": { with: number | null, } } | "NotAFile" | { "D
 
 export type Asked = "Maker" | "Model";
 
-export type Problem = "NotText" | { "NotXml": string } | "Declarations" | { "TooLarge": { bytes: number, most: number, } } | { "WrongRoot": string } | { "Missing": string } | { "BadNumber": { what: string, text: string, } } | { "UnknownChannel": string } | { "DuplicateNumber": number } | { "SkippedNumber": number } | { "BackwardsRange": { min: number, max: number, } } | { "HeadPastEnd": { head: number, channel: number, channels: number, } } | { "ActsOnPastEnd": { channel: number, channels: number, } } | "NoMode" | { "NoModeKept": Array<Refused> };
+export type Problem = "NotText" | { "NotXml": string } | "Declarations" | { "TooLarge": { bytes: number, most: number, } } | { "WrongRoot": string } | { "Missing": string } | { "BadNumber": { what: string, text: string, } } | { "UnknownChannel": string } | { "DuplicateNumber": number } | { "SkippedNumber": number } | { "BackwardsRange": { min: number, max: number, } } | { "HeadPastEnd": { head: number, channel: number, channels: number, } } | { "ActsOnPastEnd": { channel: number, channels: number, } } | "NoChannel" | { "LayoutCells": { cells: number, heads: number, } } | "NoMode" | { "NoModeKept": Array<Refused> };
 
 export type Refused = { mode: string, 
 /**

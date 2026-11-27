@@ -449,25 +449,15 @@ struct GroupIn {
 struct DefinitionIn {
     maker: Text,
     model: Text,
-    #[serde(deserialize_with = "whole_heads")]
+    #[serde(deserialize_with = "whole")]
     mode: Mode,
 }
 
-/// A mode whose every head names a channel of the mode: one that names another is
-/// refused, as the library refuses it (owner decision Q18).
-fn whole_heads<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Mode, D::Error> {
+/// A mode that keeps every rule of a mode the library reads: one that breaks one is
+/// refused, as the library refuses it (owner decision Q18, #354).
+fn whole<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Mode, D::Error> {
     let mode = Mode::deserialize(deserializer)?;
-    let channels = mode.channels.len();
-    if mode
-        .pixels
-        .iter()
-        .flatten()
-        .any(|&channel| usize::from(channel) >= channels)
-    {
-        return Err(serde::de::Error::custom(
-            "a head names a channel the mode does not have",
-        ));
-    }
+    mode.check().map_err(serde::de::Error::custom)?;
     Ok(mode)
 }
 

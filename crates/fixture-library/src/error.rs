@@ -54,6 +54,13 @@ impl fmt::Display for Problem {
             Self::ActsOnPastEnd { channel, channels } => {
                 write!(f, "ActsOn names channel {channel}, the mode has {channels}")
             }
+            Self::NoChannel => write!(f, "the mode has no channel"),
+            Self::LayoutCells { cells, heads } => {
+                write!(
+                    f,
+                    "the layout has {cells} cells, the mode has {heads} heads"
+                )
+            }
             Self::NoMode => write!(f, "the file has no <Mode>"),
             Self::NoModeKept(refused) => {
                 write!(f, "no mode can be used")?;
